@@ -23,6 +23,8 @@ export interface ApprovalsDeps {
   post(agent: string, text: string): { chatId?: number; messageId: number };
   /** The chat changed outside a turn (question posted, answer recorded). */
   changed(chatId: number | undefined): void;
+  /** An answer (or timeout) for a request that belongs to a stored run. */
+  onParked?(runId: number, decision: ApprovalOutcome, note?: string): void;
 }
 
 interface ApprovalRow {
@@ -59,7 +61,8 @@ export class Approvals {
   constructor(db: Db, deps: ApprovalsDeps) {
     this.db = db;
     this.deps = deps;
-    db.prepare(`UPDATE workflow_approvals SET status = 'expired' WHERE status = 'pending'`).run();
+    // Requests of a stored run outlive a restart; in-memory waits do not.
+    db.prepare(`UPDATE workflow_approvals SET status = 'expired' WHERE status = 'pending' AND run_id IS NULL`).run();
   }
 
   request(request: ApprovalRequest): Promise<ApprovalDecision> {
@@ -96,10 +99,46 @@ export class Approvals {
     });
   }
 
+  /** Posts the question for a stored run; the answer resumes it through `onParked`. */
+  requestParked(request: Omit<ApprovalRequest, 'signal'> & { runId: number }): { chatId?: number } {
+    const timeoutMs = Math.min(30 * MAX_APPROVAL_MS, Math.max(1000, request.timeoutMs));
+    const now = new Date();
+    const id = Number(
+      this.db
+        .prepare('INSERT INTO workflow_approvals (workflow, agent, text, created_at, expires_at, run_id) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(request.workflow, request.agent, request.text, now.toISOString(), new Date(now.getTime() + timeoutMs).toISOString(), request.runId).lastInsertRowid,
+    );
+    const where = this.deps.post(request.agent, request.text);
+    this.db.prepare('UPDATE workflow_approvals SET chat_id = ?, message_id = ? WHERE id = ?').run(where.chatId ?? null, where.messageId, id);
+    this.deps.changed(where.chatId);
+    return { chatId: where.chatId };
+  }
+
+  /** Stored-run requests past their time: marked timed out; their runs are returned to resume. */
+  expireParked(now = new Date()): number[] {
+    const rows = this.db
+      .prepare(`SELECT id, run_id, chat_id FROM workflow_approvals WHERE status = 'pending' AND run_id IS NOT NULL AND expires_at <= ?`)
+      .all(now.toISOString()) as Array<{ id: number; run_id: number; chat_id: number | null }>;
+    for (const row of rows) {
+      this.db.prepare(`UPDATE workflow_approvals SET status = 'timeout', decided_at = ? WHERE id = ?`).run(now.toISOString(), row.id);
+      this.deps.changed(row.chat_id ?? undefined);
+    }
+    return rows.map((row) => row.run_id);
+  }
+
   /** The user's answer; false when the request is no longer waiting. */
   decide(id: number, approved: boolean, note?: string): boolean {
     const entry = this.pending.get(id);
-    if (!entry) return false;
+    if (!entry) {
+      // A stored run's request: record the answer and wake the run.
+      const row = this.db.prepare(`SELECT run_id, chat_id FROM workflow_approvals WHERE id = ? AND status = 'pending' AND run_id IS NOT NULL`).get(id) as { run_id: number; chat_id: number | null } | undefined;
+      if (!row) return false;
+      const text = note?.trim() || undefined;
+      this.db.prepare('UPDATE workflow_approvals SET status = ?, note = ?, decided_at = ? WHERE id = ?').run(approved ? 'approved' : 'rejected', text ?? null, new Date().toISOString(), id);
+      this.deps.changed(row.chat_id ?? undefined);
+      this.deps.onParked?.(row.run_id, approved ? 'approved' : 'rejected', text);
+      return true;
+    }
     const text = note?.trim() || undefined;
     this.finish(id, approved ? 'approved' : 'rejected', text);
     entry.resolve({ decision: approved ? 'approved' : 'rejected', ...(text ? { note: text } : {}) });

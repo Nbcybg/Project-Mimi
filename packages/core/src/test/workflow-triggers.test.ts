@@ -262,15 +262,18 @@ test('core: an approval node waits for the answer in the chat, then goes on', as
       ],
     }),
   );
-  const running = target.core.runWorkflow('mimi', 'pay', { amount: 300 });
-  await until(() => target.core.approvals.waiting().length === 1);
+  // The run pauses (stored) at the question; the answer resumes it.
+  const paused = await target.core.runWorkflow('mimi', 'pay', { amount: 300 });
+  assert.equal(paused.suspended!.kind, 'approval');
   const chat = target.core.chats.directChat('mimi');
   const [session] = target.core.chats.sessions(chat.id, 1);
   const question = target.core.deps.messages.page(session!.thread, undefined, 5).at(-1)!;
   assert.equal(question.text, 'จ่าย 300?');
-  assert.equal(target.core.approvals.byMessages([question.id]).get(question.id)!.status, 'pending');
-  target.core.approvals.decide(target.core.approvals.waiting()[0]!, true);
-  const run = await running;
+  const approval = target.core.approvals.byMessages([question.id]).get(question.id)!;
+  assert.equal(approval.status, 'pending');
+  target.core.approvals.decide(approval.id, true);
+  await until(() => target.core.workflowRuns.list('mimi/pay').length === 2);
+  const run = target.core.workflowRuns.get(target.core.workflowRuns.list('mimi/pay')[0]!.id)!;
   assert.equal(run.ok, true);
   assert.deepEqual(run.nodes.map((node) => node.title), ['ถาม', 'paid']);
   assert.equal(run.nodes[1]!.output[0]!.json.paid, true);

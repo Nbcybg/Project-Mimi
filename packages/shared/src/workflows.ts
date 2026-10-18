@@ -96,7 +96,8 @@ export interface WorkflowRunNodeView {
   id: string;
   title: string;
   type: string;
-  status: 'ok' | 'error';
+  /** "waiting": the run paused here (an approval, a long wait) and goes on later. */
+  status: 'ok' | 'error' | 'waiting';
   /** What flowed in and out (raw items), exactly as the expressions saw it. */
   input: FlowItem[];
   output: FlowItem[];
@@ -139,6 +140,8 @@ export interface WorkflowRunResult {
   result: string;
   /** Present when a `respond` node shaped the webhook answer. */
   response?: WorkflowResponse;
+  /** Set when the run paused: it is stored and finishes when the answer or the time comes. */
+  suspended?: { id: number; nodeId: string; kind: 'approval' | 'wait'; resumeAt?: string };
   nodes: WorkflowRunNodeView[];
 }
 
@@ -361,10 +364,10 @@ export const NODE_TYPES: NodeTypeView[] = [
   {
     type: 'wait',
     label: 'wait (หน่วงเวลา)',
-    description: 'รอตามเวลาก่อนไปต่อ (สูงสุด 1 ชั่วโมง)',
+    description: 'รอตามเวลาก่อนไปต่อ · เกิน 1 นาที run จะถูกพักเก็บไว้แล้วปลุกเมื่อถึงเวลา (สูงสุด 30 วัน แม้ปิดแอประหว่างนั้น)',
     fields: [
       { key: 'amount', label: 'จำนวน', type: 'number', required: true, placeholder: '1' },
-      { key: 'unit', label: 'หน่วย', type: 'string', options: ['seconds', 'minutes', 'hours'] },
+      { key: 'unit', label: 'หน่วย', type: 'string', options: ['seconds', 'minutes', 'hours', 'days'] },
     ],
     outputs: [{ key: 'main', label: 'main' }],
   },
@@ -456,11 +459,11 @@ export const NODE_TYPES: NodeTypeView[] = [
   {
     type: 'approval',
     label: 'รออนุมัติ (ถามในแชต)',
-    description: 'หยุดรอให้คุณกด "อนุมัติ" / "ไม่อนุมัติ" ในแชตของ agent แล้วไปต่อตามคำตอบ; ถ้าเกินเวลาจะไปทาง "หมดเวลา" (ถ้าแอปปิดระหว่างรอ run นั้นจะหยุด)',
+    description: 'หยุดรอให้คุณกด "อนุมัติ" / "ไม่อนุมัติ" ในแชตของ agent แล้วไปต่อตามคำตอบ; ถ้าเกินเวลาจะไปทาง "หมดเวลา" · run ถูกพักเก็บไว้ ปิด/เปิดแอปก็ยังตอบได้',
     fields: [
       { key: 'agent', label: 'ถามในแชตของ (เว้นว่าง = เจ้าของ workflow)', type: 'string' },
       { key: 'message', label: 'ข้อความที่ถาม', type: 'text', required: true, placeholder: 'อนุมัติจ่าย {{ $json.amount }} บาท ให้ {{ $json.vendor }} ไหม?' },
-      { key: 'timeoutMinutes', label: 'รอได้นานสุด (นาที, สูงสุด 1440)', type: 'number', placeholder: '60' },
+      { key: 'timeoutMinutes', label: 'รอได้นานสุด (นาที, สูงสุด 43200 = 30 วัน)', type: 'number', placeholder: '60' },
     ],
     outputs: [
       { key: 'approved', label: 'อนุมัติ' },

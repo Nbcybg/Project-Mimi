@@ -265,6 +265,7 @@ kbd { font: 11px var(--mono); padding: 1px 6px; border: 1px solid var(--line); b
 .panel a { color: var(--info); }
 .pill { font-size: 11px; padding: 2px 9px; border-radius: 999px; white-space: nowrap; }
 .pill.ok { background: rgba(116,201,145,.14); color: var(--ok); } .pill.todo { background: rgba(223,178,90,.14); color: var(--warn); }
+.pill.warn { background: rgba(125,179,232,.14); color: var(--info); }
 .stackv { display: flex; flex-direction: column; gap: 14px; }
 
 /* chat: day dividers, replies, forwards, context menu, emoji */
@@ -363,6 +364,7 @@ kbd { font: 11px var(--mono); padding: 1px 6px; border: 1px solid var(--line); b
 .wcv-node.g-5 { border-left-color: rgba(116,201,145,.9); }
 .wcv-node.ok { border-left-color: var(--ok, #74c991); }
 .wcv-node.err { border-left-color: var(--bad); }
+.wcv-node.wait { border-left-color: var(--warn); border-left-width: 6px; }
 .wcv-node.ok, .wcv-node.err { border-left-width: 6px; }
 .wcv-head { padding: 7px 10px 0; display: flex; flex-direction: column; gap: 1px; height: 46px; box-sizing: border-box; }
 .wcv-head b { font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

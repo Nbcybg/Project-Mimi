@@ -85,13 +85,12 @@ test('core: approvals and reminders land in the inbox with their chat', async ()
     webhook: null,
     nodes: [{ id: 'n1', type: 'approval', config: { message: 'จ่ายไหม?' }, links: { approved: [], rejected: [] } }],
   });
-  const running = target.core.runWorkflow('mimi', 'pay', {});
-  await until(() => target.core.approvals.waiting().length === 1);
+  const paused = await target.core.runWorkflow('mimi', 'pay', {});
+  assert.equal(paused.suspended!.kind, 'approval');
   const [stored] = target.core.notifications.list().items;
   assert.equal(stored!.kind, 'approval');
   assert.equal(stored!.chatId, target.core.chats.directChat('mimi').id);
   assert.equal((live[0] as { id: number }).id, stored!.id);
-  target.core.approvals.decide(target.core.approvals.waiting()[0]!, true);
-  await running;
+  await target.core.resumeParked(paused.suspended!.id, { kind: 'approval', decision: 'approved' });
   await target.cleanup();
 });

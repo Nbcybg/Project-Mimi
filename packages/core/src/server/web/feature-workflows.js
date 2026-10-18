@@ -753,10 +753,14 @@
     const when = runResult.startedAt ? ` #${runResult.id} · ${runResult.mode} · ${M().fmtDate(runResult.startedAt)}` : runResult.runId ? ` #${runResult.runId}` : '';
     box.append(el('h4', '', `ผลการรัน${when}${running ? ' (กำลังรัน…)' : ''}`));
     if (runResult.startedAt) box.append(el('p', runResult.ok ? 'hint' : 'hint badtxt', runResult.result));
+    if (runResult.suspended) {
+      box.append(el('p', 'hint', runResult.suspended.kind === 'approval' ? '⏸ run นี้พักรอคำตอบในแชต — ตอบแล้วจะทำต่อเอง (ปิดแอประหว่างนั้นได้)' : `⏸ run นี้พักไว้ จะทำต่อเองตอน ${M().fmtDate(runResult.suspended.resumeAt)}`));
+    }
     for (const node of runResult.nodes) {
       const row = el('div', `wrun ${node.status}`);
       const head = el('div', 'whead');
-      head.append(el('span', `pill ${node.status === 'ok' ? 'ok' : 'todo'}`, node.status === 'ok' ? 'ok' : 'error'), el('b', '', node.title), el('span', 'faint', node.type));
+      const label = node.status === 'ok' ? 'ok' : node.status === 'waiting' ? '⏸ รอ' : 'error';
+      head.append(el('span', `pill ${node.status === 'ok' ? 'ok' : node.status === 'waiting' ? 'warn' : 'todo'}`, label), el('b', '', node.title), el('span', 'faint', node.type));
       row.append(head);
       if (node.error) row.append(el('p', 'hint badtxt', node.error));
       row.append(jsonBlock(`input (${node.input.length})`, node.input.map((item) => item.json)), jsonBlock(`output (${node.output.length})`, node.output.map((item) => item.json)));

@@ -51,12 +51,13 @@ import { createToolRegistry } from './tools/index.ts';
 import { ToolPool } from './tools/pool.ts';
 import { ToolStore } from './tools/tool-store.ts';
 import { UsageLogger } from './usage/logger.ts';
-import { runWorkflow as runWorkflowNodes, runWorkflowNode, triggerItems, WorkflowState, type WorkflowRunnerDeps } from './workflows/runner.ts';
+import { resumeWorkflow, type ResumeOutcome, runWorkflow as runWorkflowNodes, runWorkflowNode, triggerItems, WorkflowState, type WorkflowRunnerDeps } from './workflows/runner.ts';
 import { KnowledgeStore } from './knowledge/store.ts';
 import { UserProfileStore } from './profile/user-profile.ts';
 import { NotificationCenter } from './notify/notifications.ts';
 import { loadOrCreateVapid, type VapidKeys } from './notify/web-push.ts';
 import { Approvals } from './workflows/approvals.ts';
+import { ParkedRuns } from './workflows/parked-runs.ts';
 import { allowedPath, documentText, htmlToText, kindOfFile } from './workflows/file-nodes.ts';
 import { WorkflowRunStore } from './workflows/run-history.ts';
 import { DEFAULT_TOKEN_SECRET, TelegramHub, type TelegramListener } from './workflows/telegram.ts';
@@ -117,6 +118,10 @@ export interface Core {
   triggerPool: TriggerPool;
   /** Past runs of every workflow, with node input/output. */
   workflowRuns: WorkflowRunStore;
+  /** Workflow runs paused at an approval or a long wait. */
+  parkedRuns: ParkedRuns;
+  /** Finishes a paused run now (tests; normally the answer or the timer does it). */
+  resumeParked(runId: number, outcome: ResumeOutcome): Promise<WorkflowRunResult | undefined>;
   /** Files as they were before agents wrote them (restored on rewind). */
   fileSnapshots: FileSnapshots;
   /** Estimated model spending since midnight (configured zone). */
@@ -382,11 +387,13 @@ export async function createCore(
     const item = notifications.add(notification);
     listeners.notification?.({ ...notification, id: item.id });
   };
+  const parkedRuns = new ParkedRuns(db);
   const approvals = new Approvals(db, {
     post: (agent, text) => postAs(agent, text, `approval:${randomUUID()}`),
     changed: (chatId) => {
       if (chatId !== undefined) listeners.chatChanged?.(chatId);
     },
+    onParked: (runId, decision, note) => void resumeParked(runId, { kind: 'approval', decision, ...(note ? { note } : {}) }),
   });
 
   const compactor = new Compactor({
@@ -486,6 +493,15 @@ export async function createCore(
       return decision;
     },
     secret: (name) => secrets.get(name),
+    // Approvals and long waits store the run; it finishes later, also after a restart.
+    park: (parked) => {
+      const id = parkedRuns.add(parked);
+      if (parked.wait.kind === 'approval') {
+        const { chatId } = approvals.requestParked({ workflow: `${parked.workflow.agent}/${parked.workflow.name}`, agent: parked.wait.agent, text: parked.wait.text, timeoutMs: parked.wait.timeoutMs, runId: id });
+        notify({ kind: 'approval', title: 'รออนุมัติ', body: parked.wait.text, ...(chatId !== undefined ? { chatId } : {}) });
+      }
+      return id;
+    },
     permissions: settings.permission,
     knowledge,
     readMedia: async ({ agent: agentName, data, mime, name, instruction, signal }) => {
@@ -580,7 +596,13 @@ export async function createCore(
     const outcome = await runWorkflowNodes(workflow, items, workflowRunner, undefined, mode);
     // Every top-level run lands in the history, whatever started it.
     outcome.runId = workflowRuns.record(`${workflow.agent}/${workflow.name}`, mode, startedAt, outcome);
-    if (!outcome.ok && workflow.errorWorkflow && workflow.errorWorkflow !== workflow.name) {
+    if (!outcome.ok) await runErrorWorkflow(workflow, outcome);
+    return outcome;
+  }
+
+  /** Runs the workflow's error workflow once with what failed; its own failure never masks the first. */
+  async function runErrorWorkflow(workflow: StoredWorkflow, outcome: WorkflowRunResult): Promise<void> {
+    if (workflow.errorWorkflow && workflow.errorWorkflow !== workflow.name) {
       const handler = workflows.get(workflow.agent, workflow.errorWorkflow);
       if (handler) {
         const failed = outcome.nodes.find((view) => view.status === 'error');
@@ -594,7 +616,6 @@ export async function createCore(
         }
       }
     }
-    return outcome;
   }
 
   /** Enabled workflows whose trigger is of this kind. */
@@ -695,6 +716,40 @@ export async function createCore(
     chats.touch(session.id);
     return { sessionId: session.id, id, createdAt: messages.get(id)?.createdAt ?? new Date().toISOString() };
   }
+
+  /** Finishes a stored run: its waiting node ends with `outcome`, the rest runs, history records it. */
+  async function resumeParked(runId: number, outcome: ResumeOutcome): Promise<WorkflowRunResult | undefined> {
+    const parked = parkedRuns.take(runId);
+    if (!parked) return undefined;
+    const workflow = workflows.get(parked.workflow.agent, parked.workflow.name);
+    if (!workflow) return undefined;
+    const startedAt = new Date();
+    try {
+      const outcomeRun = await resumeWorkflow(workflow, parked, outcome, workflowRunner);
+      outcomeRun.runId = workflowRuns.record(`${workflow.agent}/${workflow.name}`, `${parked.state.execution.mode} (ต่อ)`, startedAt, outcomeRun);
+      if (!outcomeRun.ok) await runErrorWorkflow(workflow, outcomeRun);
+      return outcomeRun;
+    } catch (error) {
+      console.error(`resuming ${workflow.agent}/${workflow.name} failed: ${(error as Error).message}`);
+      return undefined;
+    }
+  }
+
+  /** Wakes stored runs whose wait is over, and times out stored approvals nobody answered. */
+  let closed = false;
+  async function wakeParked(): Promise<void> {
+    if (closed) return;
+    try {
+      for (const id of parkedRuns.due()) await resumeParked(id, { kind: 'wait' });
+      for (const runId of approvals.expireParked()) await resumeParked(runId, { kind: 'approval', decision: 'timeout' });
+    } catch (error) {
+      if (!closed) console.error(`waking paused runs failed: ${(error as Error).message}`);
+    }
+  }
+  const wakeTimer = setInterval(() => void wakeParked(), 30_000);
+  wakeTimer.unref();
+  const firstWake = setTimeout(() => void wakeParked(), 2000);
+  firstWake.unref();
 
   /** Keeps the workflow's schedule row in the triggers table in step with its settings. */
   function syncWorkflowSchedule(workflow: StoredWorkflow): void {
@@ -986,6 +1041,8 @@ export async function createCore(
     notifications,
     spentToday,
     fileSnapshots,
+    parkedRuns,
+    resumeParked,
     approvals,
     telegram,
     chatTriggers,
@@ -1029,6 +1086,9 @@ export async function createCore(
       })),
     async close() {
       scheduler.stop();
+      closed = true;
+      clearInterval(wakeTimer);
+      clearTimeout(firstWake);
       approvals.close();
       await telegram.close();
       await jobs.idle();

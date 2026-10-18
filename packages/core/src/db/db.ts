@@ -18,6 +18,7 @@ const MIGRATIONS = [
   '010-notifications.sql',
   '011-knowledge-agents.sql',
   '012-file-snapshots.sql',
+  '013-parked-runs.sql',
 ];
 
 function migrate(db: Db): void {

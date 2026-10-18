@@ -737,6 +737,7 @@ export async function startServer(
         core.workflows.delete(String(message.agent), String(message.name));
         core.clearWorkflowSchedule(id);
         core.workflowRuns.forget(id);
+        core.parkedRuns.forget(id);
         broadcast({ type: 'workflows', workflows: core.workflows.list(), pool: core.triggerPool.list(), nodeTypes: NODE_TYPES });
         broadcast(triggersMessage());
         break;
@@ -956,6 +957,7 @@ export async function startServer(
           for (const name of core.workflows.forgetAgent(gone)) {
             core.clearWorkflowSchedule(`${gone}/${name}`);
             core.workflowRuns.forget(`${gone}/${name}`);
+            core.parkedRuns.forget(`${gone}/${name}`);
           }
           broadcast(chatApi.chatsMessage());
         }
@@ -1037,7 +1039,8 @@ export async function startServer(
   };
   const backupTimer = setInterval(() => void autoBackup(), 3600_000);
   backupTimer.unref();
-  setTimeout(() => void autoBackup(), 60_000).unref();
+  const firstBackup = setTimeout(() => void autoBackup(), 60_000);
+  firstBackup.unref();
   let appIcon: Buffer | undefined;
   const server = http.createServer(async (request, response) => {
     const url = new URL(request.url ?? '/', 'http://localhost');
@@ -1168,6 +1171,7 @@ export async function startServer(
     async close() {
       clearInterval(heartbeat);
       clearInterval(backupTimer);
+      clearTimeout(firstBackup);
       active?.abort();
       for (const socket of wss.clients) socket.terminate();
       await new Promise<void>((resolve) => wss.close(() => resolve()));

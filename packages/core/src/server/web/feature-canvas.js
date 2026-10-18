@@ -128,7 +128,7 @@
       for (const node of nodes) {
         const outputs = ctx.outputsOf(node);
         const run = runOf(node.id);
-        const box = el('div', `wcv-node g-${ctx.groupOf(node.type)}${state.selected === node.id ? ' sel' : ''}${run ? (run.status === 'ok' ? ' ok' : ' err') : ''}`);
+        const box = el('div', `wcv-node g-${ctx.groupOf(node.type)}${state.selected === node.id ? ' sel' : ''}${run ? (run.status === 'ok' ? ' ok' : run.status === 'waiting' ? ' wait' : ' err') : ''}`);
         box.dataset.id = node.id;
         box.style.left = `${node.position[0]}px`;
         box.style.top = `${node.position[1]}px`;
@@ -137,7 +137,7 @@
         const head = el('div', 'wcv-head');
         head.append(el('b', '', ctx.titleOf(node.id)), el('small', '', ctx.typeLabel(node.type)));
         box.append(head);
-        if (run) box.append(el('span', 'wcv-badge', run.status === 'ok' ? `${run.input.length} → ${run.output.length}` : 'error'));
+        if (run) box.append(el('span', 'wcv-badge', run.status === 'ok' ? `${run.input.length} → ${run.output.length}` : run.status === 'waiting' ? '⏸ รอ' : 'error'));
         const input = el('span', 'wcv-port in');
         input.style.top = `${HEAD / 2}px`;
         box.append(input);

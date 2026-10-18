@@ -71,6 +71,8 @@ export interface WorkflowRunnerDeps {
   timezone?: string;
   /** Runs another workflow of the same agent (the `workflow` node). */
   runSubWorkflow?(agent: string, name: string, items: FlowItem[], depth: number): Promise<FlowItem[]>;
+  /** Stores a paused run (approval / long wait) and returns its id; without it nodes wait in memory. */
+  park?(parked: ParkedRun): number;
   /** One direct model call (llm / classify / extract nodes); returns the answer's text. */
   complete?(request: ModelRequest): Promise<string>;
   /** Posts a question into an agent's chat and waits for the user's answer (the approval node). */
@@ -180,13 +182,15 @@ interface NodeContext {
   /** The items the run started with, exposed as `$trigger`. */
   trigger: NodeOutput;
   /** Items routed to each node, per source node — what the merge node joins. */
-  incoming: Map<string, Map<string, FlowItem[]>>;
+  incoming: Record<string, Record<string, FlowItem[]>>;
   vars: Record<string, JsonValue>;
   today: string;
   /** How many sub-workflows deep this run is. */
   depth: number;
   /** The HTTP answer a `respond` node shaped; sent by the webhook endpoint. */
   response?: WorkflowResponse;
+  /** Approvals and long waits pause the run (stored) instead of waiting in memory. */
+  suspendable?: boolean;
 }
 
 /** Waits, but lets an abort end the wait immediately. */
@@ -571,7 +575,7 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
       return { main: out };
     }
     case 'merge': {
-      const streams = [...(ctx.incoming.get(node.id)?.values() ?? [])];
+      const streams = Object.values(ctx.incoming[node.id] ?? {});
       const mode = asText(node.config.mode || 'append');
       if (mode === 'append' || streams.length <= 1) return { main: items };
       if (mode === 'combine') {
@@ -607,9 +611,12 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
       const config = resolveValue(node.config, contextAt(ctx, firstOrEmpty(items), 0, items)) as Record<string, JsonValue>;
       const amount = Math.max(0, Number(config.amount ?? 0));
       const unit = asText(config.unit || 'seconds');
-      const factor = unit === 'hours' ? 3600 : unit === 'minutes' ? 60 : 1;
-      const ms = Math.min(3_600_000, amount * factor * 1000);
-      if (!Number.isFinite(ms)) throw new Error('wait node: "amount" must be a number');
+      const factor = unit === 'days' ? 86_400 : unit === 'hours' ? 3600 : unit === 'minutes' ? 60 : 1;
+      const wanted = amount * factor * 1000;
+      if (!Number.isFinite(wanted)) throw new Error('wait node: "amount" must be a number');
+      // Over a minute, a stored run is paused and woken up later (up to 30 days); in memory the cap is an hour.
+      if (ctx.suspendable && wanted > 60_000) throw new RunSuspended({ kind: 'wait', resumeAt: new Date(Date.now() + Math.min(wanted, 30 * 86_400_000)).toISOString() });
+      const ms = Math.min(3_600_000, wanted);
       if (ms > 0) await sleep(ms, ctx.signal);
       return { main: items };
     }
@@ -724,12 +731,15 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
     }
     case 'approval': {
       const config = resolveValue(node.config, contextAt(ctx, firstOrEmpty(items), 0, items)) as Record<string, JsonValue>;
-      if (!deps.requestApproval) throw new Error('approval node: approvals are not available here');
+      if (!deps.requestApproval && !ctx.suspendable) throw new Error('approval node: approvals are not available here');
       const text = asText(config.message).trim();
       if (!text) throw new Error('approval node: write the question to ask');
       const minutes = Number(config.timeoutMinutes);
-      const timeoutMs = Math.min(1440, Number.isFinite(minutes) && minutes > 0 ? minutes : 60) * 60_000;
-      const answer = await deps.requestApproval({
+      const timeoutMs = Math.min(1440 * 30, Number.isFinite(minutes) && minutes > 0 ? minutes : 60) * 60_000;
+      // A stored run survives a restart: the answer resumes it whenever it comes.
+      if (ctx.suspendable) throw new RunSuspended({ kind: 'approval', agent: asText(config.agent) || workflow.agent, text, timeoutMs });
+      if (timeoutMs > 1440 * 60_000) throw new Error('approval node: waiting longer than a day needs a top-level run (not a sub-workflow or a node test)');
+      const answer = await deps.requestApproval!({
         workflow: `${workflow.agent}/${workflow.name}`,
         agent: asText(config.agent) || workflow.agent,
         text,
@@ -920,89 +930,138 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
 const MAX_NODES = 60;
 
 /**
- * Runs a workflow as a DAG: trigger items enter at the node(s) nothing links into;
- * a node waits until every predecessor has finished, then runs once with all items
- * routed its way. Every node's input and output is kept for the run view.
+ * Everything a run needs to go on: plain JSON, so a run that pauses (an approval, a
+ * long wait) can be stored in the database and finished after a restart.
  */
-export async function runWorkflow(
-  workflow: WorkflowView,
-  initialItems: FlowItem[],
-  deps: WorkflowRunnerDeps,
-  signal?: AbortSignal,
-  mode = 'manual',
-  depth = 0,
-): Promise<WorkflowRunResult> {
-  const thread = `workflow:${workflow.agent}/${workflow.name}:${randomUUID().slice(0, 8)}`;
-  const context: NodeContext = {
+export interface RunState {
+  thread: string;
+  execution: { id: string; mode: string };
+  depth: number;
+  trigger: NodeOutput;
+  outputs: Record<string, NodeOutput>;
+  /** Items routed to each node so far. */
+  collected: Record<string, FlowItem[]>;
+  /** Predecessors each node still waits for. */
+  remaining: Record<string, number>;
+  /** Items routed to each node, per source node (what merge joins). */
+  incoming: Record<string, Record<string, FlowItem[]>>;
+  queue: string[];
+  views: WorkflowRunNodeView[];
+  startIds: string[];
+  failed: boolean;
+  response?: WorkflowResponse;
+}
+
+/** What a paused node waits for. */
+export type SuspendWait =
+  | { kind: 'approval'; agent: string; text: string; timeoutMs: number }
+  | { kind: 'wait'; resumeAt: string };
+
+/** Thrown by a node that waits for something outside the run; the run is stored instead. */
+export class RunSuspended extends Error {
+  readonly wait: SuspendWait;
+  constructor(wait: SuspendWait) {
+    super(wait.kind === 'approval' ? 'waiting for approval' : `waiting until ${wait.resumeAt}`);
+    this.wait = wait;
+  }
+}
+
+/** A stored, paused run: the state plus the node that waits and the items it got. */
+export interface ParkedRun {
+  workflow: { agent: string; name: string };
+  nodeId: string;
+  input: FlowItem[];
+  wait: SuspendWait;
+  state: RunState;
+}
+
+/** How a paused node ends: the approval's answer, or the wait being over. */
+export type ResumeOutcome = { kind: 'approval'; decision: 'approved' | 'rejected' | 'timeout'; note?: string } | { kind: 'wait' };
+
+function contextFrom(workflow: WorkflowView, state: RunState, deps: WorkflowRunnerDeps, signal?: AbortSignal): NodeContext {
+  return {
     workflow,
     deps,
     signal,
-    thread,
-    execution: { id: randomUUID(), mode },
-    outputs: {},
-    trigger: { json: initialItems[0]?.json ?? {}, items: initialItems.map((item) => item.json) },
-    incoming: new Map(),
+    thread: state.thread,
+    execution: state.execution,
+    outputs: state.outputs,
+    trigger: state.trigger,
+    incoming: state.incoming,
     vars: workflow.vars ?? {},
     today: todayIn(deps.timezone),
-    depth,
+    depth: state.depth,
+    suspendable: Boolean(deps.park) && state.depth === 0,
   };
-  const nodes = workflow.nodes;
-  const linkedIn = new Set(Object.values(nodes.flatMap((node) => Object.values(node.links ?? {}))).flat());
-  const starts = nodes.filter((node) => !linkedIn.has(node.id));
-  if (starts.length === 0) return { name: workflow.name, ok: false, result: 'the workflow has no start node', nodes: [] };
+}
 
-  const collected = new Map<string, FlowItem[]>();
-  const remaining = new Map<string, number>();
-  for (const node of nodes) remaining.set(node.id, 0);
-  for (const node of nodes) {
-    for (const targets of Object.values(node.links ?? {})) {
-      for (const target of new Set(targets)) remaining.set(target, (remaining.get(target) ?? 0) + 1);
-    }
-  }
-  const queue: string[] = [];
-  for (const start of starts) {
-    collected.set(start.id, initialItems.map((item) => ({ json: { ...item.json } })));
-    queue.push(start.id);
-  }
+function recordOutput(state: RunState, node: WorkflowNode, view: WorkflowRunNodeView): void {
+  if (view.output.length === 0) return;
+  // Later nodes can read this one's output through `$node` (by title and by id).
+  const record: NodeOutput = { json: view.output[0]?.json ?? {}, items: view.output.map((entry) => entry.json) };
+  state.outputs[node.title?.trim() || node.id] = record;
+  state.outputs[node.id] = record;
+}
 
-  const views: WorkflowRunNodeView[] = [];
-  const startIds = new Set(starts.map((node) => node.id));
-  const settle = (node: WorkflowNode, outputs: Record<string, FlowItem[]>): void => {
-    for (const [outputKey, targets] of Object.entries(node.links ?? {})) {
-      const routed = outputs[outputKey] ?? [];
-      for (const target of new Set(targets)) {
-        if (routed.length > 0) {
-          collected.set(target, [...(collected.get(target) ?? []), ...routed]);
-          const perSource = context.incoming.get(target) ?? new Map<string, FlowItem[]>();
-          perSource.set(node.id, [...(perSource.get(node.id) ?? []), ...routed]);
-          context.incoming.set(target, perSource);
-        }
-        const left = (remaining.get(target) ?? 1) - 1;
-        remaining.set(target, left);
-        if (left <= 0 && !queue.includes(target)) queue.push(target);
+function settle(state: RunState, node: WorkflowNode, outputs: Record<string, FlowItem[]>): void {
+  for (const [outputKey, targets] of Object.entries(node.links ?? {})) {
+    const routed = outputs[outputKey] ?? [];
+    for (const target of new Set(targets)) {
+      if (routed.length > 0) {
+        state.collected[target] = [...(state.collected[target] ?? []), ...routed];
+        const perSource = (state.incoming[target] ??= {});
+        perSource[node.id] = [...(perSource[node.id] ?? []), ...routed];
       }
+      const left = (state.remaining[target] ?? 1) - 1;
+      state.remaining[target] = left;
+      if (left <= 0 && !state.queue.includes(target)) state.queue.push(target);
     }
+  }
+}
+
+function resultOf(workflow: WorkflowView, state: RunState, suspended?: WorkflowRunResult['suspended']): WorkflowRunResult {
+  const views = state.views;
+  if (suspended) {
+    return {
+      name: workflow.name,
+      ok: true,
+      result: suspended.kind === 'approval' ? '⏸ รออนุมัติ' : `⏸ รอถึง ${suspended.resumeAt}`,
+      suspended,
+      ...(state.response ? { response: state.response } : {}),
+      nodes: views,
+    };
+  }
+  const last = views.findLast((view) => view.status === 'ok' && view.output.length > 0) ?? views.at(-1);
+  const finalItem = last?.output[0]?.json ?? {};
+  const result = finalItem.text !== undefined ? asText(finalItem.text) : asText(finalItem);
+  const error = views.find((view) => view.status === 'error')?.error;
+  return {
+    name: workflow.name,
+    ok: !state.failed,
+    result: error ? `error: ${error}` : `${last?.title ?? ''}: ${result}`.trim().slice(0, 500),
+    ...(state.response ? { response: state.response } : {}),
+    nodes: views,
   };
-  let failed = false;
-  while (queue.length > 0 && views.length < MAX_NODES) {
-    if (failed) break;
-    const id = queue.shift()!;
-    const node = nodes.find((entry) => entry.id === id)!;
-    const input = collected.get(id) ?? [];
+}
+
+/** Runs queued nodes until the run ends or a node pauses it. */
+async function drive(workflow: WorkflowView, state: RunState, deps: WorkflowRunnerDeps, signal?: AbortSignal): Promise<WorkflowRunResult> {
+  const context = contextFrom(workflow, state, deps, signal);
+  const nodes = workflow.nodes;
+  const startIds = new Set(state.startIds);
+  while (state.queue.length > 0 && state.views.length < MAX_NODES) {
+    if (state.failed) break;
+    const id = state.queue.shift()!;
+    const node = nodes.find((entry) => entry.id === id);
+    if (!node) continue; // the workflow changed while the run was paused
+    const input = state.collected[id] ?? [];
     // Nothing reached this node (the other branch of an if, an empty poll): it does not
     // run, but its successors still settle so a merge-style node downstream can finish.
     if (input.length === 0 && !startIds.has(id)) {
-      settle(node, {});
+      settle(state, node, {});
       continue;
     }
-    const view: WorkflowRunNodeView = {
-      id,
-      title: node.title?.trim() || node.id,
-      type: node.type,
-      status: 'ok',
-      input,
-      output: [],
-    };
+    const view: WorkflowRunNodeView = { id, title: node.title?.trim() || node.id, type: node.type, status: 'ok', input, output: [] };
     // A failing node retries first; what happens after that is its onError policy.
     let outputs: Record<string, FlowItem[]> = {};
     let error: string | undefined;
@@ -1013,6 +1072,15 @@ export async function runWorkflow(
         error = undefined;
         break;
       } catch (caught) {
+        if (caught instanceof RunSuspended && deps.park) {
+          // The run is stored and ends here; it goes on when the answer / time comes.
+          view.status = 'waiting';
+          state.views.push(view);
+          state.response = context.response;
+          const parked: ParkedRun = { workflow: { agent: workflow.agent, name: workflow.name }, nodeId: id, input, wait: caught.wait, state };
+          const parkedId = deps.park(parked);
+          return resultOf(workflow, state, { id: parkedId, nodeId: id, kind: caught.wait.kind, ...(caught.wait.kind === 'wait' ? { resumeAt: caught.wait.resumeAt } : {}) });
+        }
         error = (caught as Error).message;
         if (attempt < attempts - 1 && Number(node.retryWaitMs ?? 0) > 0) {
           await sleep(Number(node.retryWaitMs), context.signal);
@@ -1025,30 +1093,96 @@ export async function runWorkflow(
       const onError = node.onError ?? 'stop';
       if (onError === 'continue') outputs = { main: input };
       else if (onError === 'branch') outputs = { error: input };
-      else failed = true;
+      else state.failed = true;
     }
     view.output = outputs.main ?? Object.values(outputs).flat();
-    views.push(view);
-    if (view.output.length > 0) {
-      // Later nodes can read this one's output through `$node` (by title and by id).
-      const record: NodeOutput = { json: view.output[0]?.json ?? {}, items: view.output.map((entry) => entry.json) };
-      context.outputs[node.title?.trim() || node.id] = record;
-      context.outputs[node.id] = record;
-    }
-    settle(node, outputs);
+    state.views.push(view);
+    recordOutput(state, node, view);
+    settle(state, node, outputs);
   }
+  state.response = context.response ?? state.response;
+  return resultOf(workflow, state);
+}
 
-  const last = views.findLast((view) => view.status === 'ok' && view.output.length > 0) ?? views.at(-1);
-  const finalItem = last?.output[0]?.json ?? {};
-  const result = finalItem.text !== undefined ? asText(finalItem.text) : asText(finalItem);
-  const error = views.find((view) => view.status === 'error')?.error;
-  return {
-    name: workflow.name,
-    ok: !failed,
-    result: error ? `error: ${error}` : `${last?.title ?? ''}: ${result}`.trim().slice(0, 500),
-    ...(context.response ? { response: context.response } : {}),
-    nodes: views,
+/**
+ * Runs a workflow as a DAG: trigger items enter at the node(s) nothing links into;
+ * a node waits until every predecessor has finished, then runs once with all items
+ * routed its way. Every node's input and output is kept for the run view.
+ */
+export async function runWorkflow(
+  workflow: WorkflowView,
+  initialItems: FlowItem[],
+  deps: WorkflowRunnerDeps,
+  signal?: AbortSignal,
+  mode = 'manual',
+  depth = 0,
+): Promise<WorkflowRunResult> {
+  const nodes = workflow.nodes;
+  const linkedIn = new Set(Object.values(nodes.flatMap((node) => Object.values(node.links ?? {}))).flat());
+  const starts = nodes.filter((node) => !linkedIn.has(node.id));
+  if (starts.length === 0) return { name: workflow.name, ok: false, result: 'the workflow has no start node', nodes: [] };
+  const state: RunState = {
+    thread: `workflow:${workflow.agent}/${workflow.name}:${randomUUID().slice(0, 8)}`,
+    execution: { id: randomUUID(), mode },
+    depth,
+    trigger: { json: initialItems[0]?.json ?? {}, items: initialItems.map((item) => item.json) },
+    outputs: {},
+    collected: {},
+    remaining: Object.fromEntries(nodes.map((node) => [node.id, 0])),
+    incoming: {},
+    queue: [],
+    views: [],
+    startIds: starts.map((node) => node.id),
+    failed: false,
   };
+  for (const node of nodes) {
+    for (const targets of Object.values(node.links ?? {})) {
+      for (const target of new Set(targets)) state.remaining[target] = (state.remaining[target] ?? 0) + 1;
+    }
+  }
+  for (const start of starts) {
+    state.collected[start.id] = initialItems.map((item) => ({ json: { ...item.json } }));
+    state.queue.push(start.id);
+  }
+  return drive(workflow, state, deps, signal);
+}
+
+/** Finishes a paused run: the waiting node ends with `outcome`, then the rest runs. */
+export async function resumeWorkflow(
+  workflow: WorkflowView,
+  parked: ParkedRun,
+  outcome: ResumeOutcome,
+  deps: WorkflowRunnerDeps,
+  signal?: AbortSignal,
+): Promise<WorkflowRunResult> {
+  const state = parked.state;
+  const node = workflow.nodes.find((entry) => entry.id === parked.nodeId);
+  const at = state.views.findIndex((view) => view.id === parked.nodeId && view.status === 'waiting');
+  if (!node) {
+    state.failed = true;
+    if (at >= 0) state.views[at] = { ...state.views[at]!, status: 'error', error: 'the node was removed while the run was paused' };
+    return resultOf(workflow, state);
+  }
+  let outputs: Record<string, FlowItem[]>;
+  if (outcome.kind === 'approval') {
+    const approval: Record<string, JsonValue> = { decision: outcome.decision, at: new Date().toISOString(), ...(outcome.note ? { note: outcome.note } : {}) };
+    outputs = { [outcome.decision]: parked.input.map((item) => ({ json: { ...item.json, approval } })) };
+  } else {
+    outputs = { main: parked.input };
+  }
+  const view: WorkflowRunNodeView = {
+    id: node.id,
+    title: node.title?.trim() || node.id,
+    type: node.type,
+    status: 'ok',
+    input: parked.input,
+    output: outputs.main ?? Object.values(outputs).flat(),
+  };
+  if (at >= 0) state.views[at] = view;
+  else state.views.push(view);
+  recordOutput(state, node, view);
+  settle(state, node, outputs);
+  return drive(workflow, state, deps, signal);
 }
 
 /** The local-network guard; a custom fetch (tests) brings its own network and skips it. */
@@ -1138,7 +1272,7 @@ export async function runWorkflowNode(
     execution: { id: randomUUID(), mode: 'test' },
     outputs: {},
     trigger: { json: input[0]?.json ?? {}, items: input.map((item) => item.json) },
-    incoming: new Map(),
+    incoming: {},
     vars: workflow.vars ?? {},
     today: todayIn(deps.timezone),
     depth: 0,

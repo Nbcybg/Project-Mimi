@@ -62,7 +62,7 @@
       const row = el('div');
       const name = el('span', 'nm2');
       name.append(el('b', 'mono', tool.name));
-      name.append(el('small', `badge${tool.builtin ? '' : ' custom'}`, tool.builtin ? 'builtin' : 'custom'));
+      name.append(el('small', `badge${tool.builtin ? '' : ' custom'}`, tool.mcp ? `MCP · ${tool.mcp}` : tool.builtin ? 'builtin' : 'custom'));
       if (tool.settings && tool.settings.length > 0) name.append(el('small', 'badge', `${tool.settings.length} settings`));
       const risk = el('span');
       risk.append(el('span', `risk${tool.risk === 'read' ? '' : ' w'}`, tool.risk));
@@ -73,13 +73,155 @@
       }
       if ((tool.presets || []).length === 0) chips.append(el('span', 'faint', '—'));
       const actions = el('span', 'hstack');
-      if (tool.target === 'core') actions.append(button('btn ghost', '+ preset', () => go({ mode: 'preset-new', base: tool.name }), 'สร้าง preset จากเครื่องมือนี้'));
-      if (!tool.builtin) actions.append(button('btn ghost', 'แก้ไข', () => go({ mode: 'custom', name: tool.name, base: tool.name })));
+      if (tool.mcp) actions.append(button('btn ghost', 'server', () => go({ mode: 'mcp', name: tool.mcp })));
+      else {
+        if (tool.target === 'core') actions.append(button('btn ghost', '+ preset', () => go({ mode: 'preset-new', base: tool.name }), 'สร้าง preset จากเครื่องมือนี้'));
+        if (!tool.builtin) actions.append(button('btn ghost', 'แก้ไข', () => go({ mode: 'custom', name: tool.name, base: tool.name })));
+      }
       row.append(name, risk, el('span', 'muted', tool.target === 'pc' ? 'PC' : 'core'), chips, actions);
       rows.append(row);
     }
     panel.append(rows);
+    panel.append(mcpList());
     return panel;
+  }
+
+  // ---------- MCP servers ----------
+  function mcpList() {
+    const box = el('div');
+    const servers = M().state.toolMcp || [];
+    box.append(el('h3', '', `MCP server (${servers.length})`));
+    box.append(el('p', 'hint', 'ต่อเครื่องมือจาก MCP server ภายนอก (คำสั่งในเครื่อง หรือ URL) · เครื่องมือจะชื่อ mcp_<server>_<tool> · ใส่ mcp_<server> ใน agent = ได้ทุกตัวของ server นั้น'));
+    const add = button('btn', '+ MCP server', () => go({ mode: 'mcp-new' }));
+    add.style.margin = '0 0 10px';
+    box.append(add);
+    for (const server of servers) {
+      const row = el('div', 'hstack');
+      row.style.margin = '4px 0';
+      const state = !server.enabled ? 'ปิดอยู่' : server.error ? 'ต่อไม่ได้' : server.checkedAt ? `${server.tools.length} เครื่องมือ` : 'ยังไม่ได้ต่อ';
+      row.append(
+        button('chip', `${server.title || server.name} · ${server.transport}`, () => go({ mode: 'mcp', name: server.name })),
+        el('span', server.error ? 'badtxt' : 'muted', state),
+      );
+      box.append(row);
+    }
+    return box;
+  }
+
+  const linesOf = (text) => text.split('\n').map((line) => line.trim()).filter(Boolean);
+  function pairsOf(text, sep) {
+    const out = {};
+    for (const line of linesOf(text)) {
+      const at = line.indexOf(sep);
+      if (at > 0) out[line.slice(0, at).trim()] = line.slice(at + 1).trim();
+    }
+    return out;
+  }
+  const pairsText = (pairs, sep) => Object.entries(pairs || {}).map(([key, value]) => `${key}${sep}${value}`).join('\n');
+
+  function mcpEditor(spec, isNew) {
+    const form = el('div', 'panel form');
+    form.oninput = markDirty;
+    form.append(el('h3', '', isNew ? 'MCP server ใหม่' : `MCP: ${spec.title || spec.name}`));
+    const name = M().textInput(spec.name, 'เช่น github');
+    const title = M().textInput(spec.title || '', 'ชื่อที่โชว์ (ไม่บังคับ)');
+    const top = el('div', 'grid2');
+    top.append(M().labelled('ชื่อ (a-z 0-9 -)', name), M().labelled('ชื่อที่โชว์', title));
+    const transport = select(['stdio', 'http'], spec.transport || 'stdio');
+    const risk = select(['write', 'read', 'network', 'shell', 'delete'], spec.risk || 'write');
+    const mid = el('div', 'grid2');
+    mid.append(M().labelled('ต่อแบบ', transport), M().labelled('ระดับของเครื่องมือที่ไม่ได้บอกว่าอ่านอย่างเดียว', risk));
+    form.append(top, mid);
+
+    const command = M().textInput(spec.command || '', 'เช่น npx');
+    const args = textarea((spec.args || []).join('\n'), '-y\n@modelcontextprotocol/server-filesystem\nC:\\Users\\me\\Documents');
+    const cwd = M().textInput(spec.cwd || '', 'เว้นว่างได้');
+    const env = textarea(pairsText(spec.env, '='), 'GITHUB_TOKEN={{secret.GITHUB_TOKEN}}');
+    const stdioBox = el('div');
+    stdioBox.append(M().labelled('คำสั่ง', command), M().labelled('อาร์กิวเมนต์ (บรรทัดละตัว)', args), M().labelled('โฟลเดอร์ทำงาน', cwd), M().labelled('ตัวแปร env (KEY=ค่า บรรทัดละตัว)', env));
+    const url = M().textInput(spec.url || '', 'https://example.com/mcp');
+    const headers = textarea(pairsText(spec.headers, ': '), 'Authorization: Bearer {{secret.MY_KEY}}');
+    const httpBox = el('div');
+    httpBox.append(M().labelled('URL', url), M().labelled('Headers (ชื่อ: ค่า บรรทัดละตัว)', headers));
+    const showTransport = () => {
+      stdioBox.hidden = transport.value !== 'stdio';
+      httpBox.hidden = transport.value !== 'http';
+    };
+    transport.onchange = showTransport;
+    showTransport();
+    form.append(stdioBox, httpBox);
+
+    const check = (label, checked, hint) => {
+      const wrap = el('label', 'hstack');
+      const box = el('input');
+      box.type = 'checkbox';
+      box.checked = checked;
+      wrap.append(box, el('span', '', label));
+      if (hint) wrap.title = hint;
+      form.append(wrap);
+      return box;
+    };
+    const enabled = check('เปิดใช้', spec.enabled !== false);
+    const untrusted = check('ผลลัพธ์อาจมีข้อความจากคนอื่น (เว็บ / อีเมล)', spec.untrusted !== false, 'ติ๊กไว้ = agent ที่ใช้ตัวนี้จะมีเครื่องมือ shell ไม่ได้');
+    form.append(el('p', 'hint', 'ค่าลับ (token) ใส่ในหน้าค่าลับ แล้วอ้างด้วย {{secret.ชื่อ}} · server แบบคำสั่งจะได้ env แค่ที่ระบุ ไม่เห็น API key ของ Mimi'));
+
+    if (!isNew) {
+      const status = el('div');
+      if (spec.error) status.append(el('p', 'hint badtxt', `ต่อไม่ได้: ${spec.error}`));
+      if (spec.checkedAt) status.append(el('p', 'hint', `อ่านรายการล่าสุด ${M().fmtDate(spec.checkedAt)}`));
+      if (spec.tools.length > 0) {
+        const list = el('div', 'tbl');
+        for (const tool of spec.tools) {
+          const row = el('div');
+          const risk = el('span');
+          risk.append(el('span', `risk${tool.risk === 'read' ? '' : ' w'}`, tool.risk));
+          const description = el('span', 'muted', tool.description);
+          description.title = tool.description;
+          row.append(el('span', 'mono', tool.name), risk, description);
+          list.append(row);
+        }
+        status.append(el('h4', '', `เครื่องมือ (${spec.tools.length})`), list);
+      }
+      form.append(status);
+    }
+
+    const foot = el('div', 'foot');
+    foot.append(el('span', 'msg'));
+    if (!isNew) {
+      foot.append(
+        button('btn danger', 'ลบ', () => {
+          if (confirm(`ลบ MCP server "${spec.name}" ?`)) {
+            M().send({ type: 'mcp-delete', name: spec.name });
+            sel = null;
+          }
+        }),
+        button('btn', 'ต่อใหม่ / อ่านรายการ', () => {
+          M().send({ type: 'mcp-refresh', name: spec.name });
+          M().toast('MCP', 'กำลังต่อ server…');
+        }),
+      );
+    }
+    foot.append(
+      button('btn pri', 'บันทึก', () => {
+        if (!name.value.trim()) return M().toast('กรอกไม่ครบ', 'ต้องมีชื่อ', true);
+        const server = { name: name.value.trim(), enabled: enabled.checked, transport: transport.value, risk: risk.value, untrusted: untrusted.checked };
+        if (title.value.trim()) server.title = title.value.trim();
+        if (transport.value === 'stdio') {
+          server.command = command.value.trim();
+          server.args = linesOf(args.value);
+          if (cwd.value.trim()) server.cwd = cwd.value.trim();
+          server.env = pairsOf(env.value, '=');
+        } else {
+          server.url = url.value.trim();
+          server.headers = pairsOf(headers.value, ':');
+        }
+        sel = { mode: 'mcp', name: server.name };
+        M().ui.toolDirty = false;
+        M().send({ type: 'mcp-save', server, renameFrom: isNew ? undefined : spec.name });
+      }),
+    );
+    form.append(foot);
+    return form;
   }
 
   // ---------- custom tool editor ----------
@@ -383,6 +525,15 @@
       );
       return panel;
     }
+    if (sel.mode === 'mcp-new') return mcpEditor({ name: '', enabled: true, transport: 'stdio', tools: [] }, true);
+    if (sel.mode === 'mcp') {
+      const server = (M().state.toolMcp || []).find((entry) => entry.name === sel.name);
+      if (!server) {
+        sel = null;
+        return editor();
+      }
+      return mcpEditor(server, false);
+    }
     if (sel.mode === 'custom-new') {
       return customEditor({ name: '', description: '', kind: 'http', params: [], settings: [], config: {} }, true);
     }
@@ -425,6 +576,7 @@
     // A refresh: drop a selection whose item is gone.
     if (sel && sel.mode === 'custom' && !(message.custom || []).some((entry) => entry.name === sel.name)) sel = null;
     if (sel && sel.mode === 'preset' && !(message.presets || []).some((entry) => entry.name === sel.name)) sel = null;
+    if (sel && sel.mode === 'mcp' && !(message.mcp || []).some((entry) => entry.name === sel.name)) sel = null;
   }
 
   window.MimiHooks = window.MimiHooks || {};

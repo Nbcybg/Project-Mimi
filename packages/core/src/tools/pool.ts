@@ -1,5 +1,6 @@
 import type { CustomToolSpec, ToolPreset, ToolView } from '@mimi/shared';
 import { presetSecretKey, type SecretStore } from '../app/secrets.ts';
+import type { McpHub } from '../mcp/hub.ts';
 import { buildCustomTool } from './custom-tools.ts';
 import { type ToolDefinition, ToolRegistry, type ToolSource } from './registry.ts';
 import { ToolStore } from './tool-store.ts';
@@ -23,21 +24,33 @@ export class ToolPool implements ToolSource {
   private readonly registry: ToolRegistry;
   private readonly store: ToolStore;
   private readonly secrets: SecretStore;
+  /** Tools of the user's MCP servers (`mcp_<server>_<tool>`). */
+  readonly mcp?: McpHub;
 
-  constructor(registry: ToolRegistry, store: ToolStore, secrets: SecretStore) {
+  constructor(registry: ToolRegistry, store: ToolStore, secrets: SecretStore, mcp?: McpHub) {
     this.registry = registry;
     this.store = store;
     this.secrets = secrets;
+    this.mcp = mcp;
   }
 
   /** Every name an agent file may list. */
   names(): string[] {
-    return [...this.registry.names(), ...this.store.listCustom().map((spec) => spec.name), ...this.store.listPresets().map((preset) => preset.name)].sort();
+    return [
+      ...this.registry.names(),
+      ...this.store.listCustom().map((spec) => spec.name),
+      ...this.store.listPresets().map((preset) => preset.name),
+      ...(this.mcp?.names() ?? []),
+    ].sort();
   }
 
   get(name: string): ToolDefinition | undefined {
     const builtin = this.registry.get(name);
     if (builtin) return builtin;
+    if (name.startsWith('mcp_')) {
+      const tool = this.mcp?.get(name);
+      if (tool) return tool;
+    }
     const custom = this.store.custom(name);
     if (custom) return this.customTool(custom);
     const preset = this.store.preset(name);
@@ -48,7 +61,9 @@ export class ToolPool implements ToolSource {
   }
 
   select(names: string[]): ToolDefinition[] {
-    const selected = names.map((name) => {
+    // `mcp_<server>` stands for every tool of that server.
+    const expanded = [...new Set(names.flatMap((name) => this.mcp?.expand(name) ?? [name]))];
+    const selected = expanded.map((name) => {
       const tool = this.get(name);
       if (!tool) throw new Error(`Unknown tool "${name}". Available: ${this.names().join(', ')}`);
       return tool;
@@ -93,7 +108,17 @@ export class ToolPool implements ToolSource {
         presets: presetsByTool.get(tool.name) ?? [],
       };
     });
-    return [...builtins, ...customs];
+    const mcp = (this.mcp?.toolViews() ?? []).map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      risk: tool.risk,
+      target: 'core' as const,
+      builtin: false,
+      settings: [],
+      presets: [],
+      mcp: tool.server.name,
+    }));
+    return [...builtins, ...customs, ...mcp];
   }
 
   presetViews(): ToolPreset[] {

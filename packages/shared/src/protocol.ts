@@ -1,7 +1,7 @@
 import type { AgentEvent } from './events.ts';
 import type { MessageRole } from './messages.ts';
 import type { PermissionDecision, PermissionRequest } from './permissions.ts';
-import type { CustomToolSpec, ToolPreset, ToolSettingField } from './tools.ts';
+import type { CustomToolSpec, McpServerSpec, McpServerView, ToolPreset, ToolSettingField } from './tools.ts';
 
 /**
  * WebSocket protocol between the core and everything that connects to it. Every
@@ -257,6 +257,8 @@ export interface ToolView {
   settings: ToolSettingField[];
   /** The presets that instantiate this tool. */
   presets?: string[];
+  /** The MCP server the tool comes from. */
+  mcp?: string;
 }
 
 /** What the tools screen shows: the whole pool, the presets and the custom definitions. */
@@ -266,6 +268,8 @@ export interface ToolPoolView {
   custom: CustomToolSpec[];
   /** Per preset: which `secret`-type setting has a value stored in this machine's vault. */
   secretKeys: Record<string, string[]>;
+  /** MCP servers and the tools each one offers. */
+  mcp?: McpServerView[];
 }
 
 import type { KnowledgeCollectionView, KnowledgeDocumentView, KnowledgeHit, UserProfileView } from './knowledge.ts';
@@ -433,6 +437,9 @@ export type ClientMessage =
   /** Adds or replaces a tool preset (a configured instance of a pool tool). */
   | { type: 'tool-preset-save'; preset: ToolPreset; secrets?: Record<string, string>; renameFrom?: string }
   | { type: 'tool-preset-delete'; name: string }
+  | { type: 'mcp-save'; server: McpServerSpec; renameFrom?: string }
+  | { type: 'mcp-delete'; name: string }
+  | { type: 'mcp-refresh'; name: string }
   /** The vault of API keys: names only, never values. */
   | { type: 'secrets-list' }
   /** Stores or (with an empty value) removes secrets by name. */

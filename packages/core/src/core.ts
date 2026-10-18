@@ -49,6 +49,7 @@ import {
 import { type PcLink, RoutingExecutor } from './tools/executor.ts';
 import { createToolRegistry } from './tools/index.ts';
 import { ToolPool } from './tools/pool.ts';
+import { McpHub } from './mcp/hub.ts';
 import { ToolStore } from './tools/tool-store.ts';
 import { UsageLogger } from './usage/logger.ts';
 import { resumeWorkflow, type ResumeOutcome, runWorkflow as runWorkflowNodes, runWorkflowNode, triggerItems, WorkflowState, type WorkflowRunnerDeps } from './workflows/runner.ts';
@@ -369,7 +370,12 @@ export async function createCore(
   });
   const toolStore = new ToolStore(config.toolsDir);
   const secrets = new SecretStore(config.secretsPath);
-  const toolPool = new ToolPool(tools, toolStore, secrets);
+  const mcp = new McpHub({
+    configPath: path.join(config.toolsDir, 'mcp.json'),
+    cachePath: path.join(config.dataDir, 'mcp-tools.json'),
+    secret: (name) => secrets.get(name) ?? process.env[name],
+  });
+  const toolPool = new ToolPool(tools, toolStore, secrets, mcp);
   const workflows = new WorkflowStore(config.workflowsDir);
   const triggerPool = new TriggerPool(path.join(config.triggersDir, 'pool'));
   const workflowState = new WorkflowState(config.workflowStatePath);
@@ -1086,6 +1092,7 @@ export async function createCore(
       })),
     async close() {
       scheduler.stop();
+      await mcp.close();
       closed = true;
       clearInterval(wakeTimer);
       clearTimeout(firstWake);

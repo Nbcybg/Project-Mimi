@@ -80,3 +80,40 @@ export interface ToolResult {
   ok: boolean;
   output: string;
 }
+
+/** How Mimi reaches an MCP server: a local command (stdio) or a URL (Streamable HTTP). */
+export type McpTransport = 'stdio' | 'http';
+
+/** An MCP server the user added, stored in `tools/mcp.json`. Values may use {{secret.NAME}}. */
+export interface McpServerSpec {
+  /** Lower case letters, digits and "-"; tools appear as `mcp_<name>_<tool>`. */
+  name: string;
+  title?: string;
+  enabled: boolean;
+  transport: McpTransport;
+  command?: string;
+  args?: string[];
+  cwd?: string;
+  env?: Record<string, string>;
+  url?: string;
+  headers?: Record<string, string>;
+  /** Risk of tools that do not say they only read; defaults to "write". */
+  risk?: RiskLevel;
+  /** Results may carry third-party text (web pages, mail); defaults to true. */
+  untrusted?: boolean;
+}
+
+/** One tool an MCP server offers, under the name agents use. */
+export interface McpToolView {
+  name: string;
+  tool: string;
+  description: string;
+  risk: RiskLevel;
+}
+
+export interface McpServerView extends McpServerSpec {
+  tools: McpToolView[];
+  /** When the tool list was last read from the server. */
+  checkedAt?: string;
+  error?: string;
+}

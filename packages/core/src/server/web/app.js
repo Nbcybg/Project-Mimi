@@ -2275,6 +2275,7 @@
         state.toolPresets = message.presets || [];
         state.toolCustom = message.custom || [];
         state.toolSecretKeys = message.secretKeys || {};
+        state.toolMcp = message.mcp || [];
         if (window.MimiHooks && window.MimiHooks.tools) window.MimiHooks.tools.onMessage(message);
         if (state.view === 'hub' && ui.hubTab === 'tools' && (!ui.toolDirty || message.saved)) {
           renderHub();

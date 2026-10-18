@@ -196,6 +196,7 @@ export async function startServer(
     presets: core.tools.presetViews(),
     custom: core.tools.customSpecs(),
     secretKeys: core.tools.secretKeys(),
+    mcp: core.tools.mcp?.views() ?? [],
     saved,
   });
 
@@ -696,6 +697,41 @@ export async function startServer(
         }
         const saved = core.tools.savePreset(message.preset, message.renameFrom);
         broadcast(toolsMessage(saved.name));
+        broadcast(agentsMessage());
+        break;
+      }
+      case 'mcp-save': {
+        const hub = core.tools.mcp;
+        if (!hub) throw new Error('MCP is not available.');
+        const saved = hub.save(message.server, message.renameFrom);
+        broadcast(toolsMessage());
+        // Reads the tool list right away so agents can pick them.
+        if (saved.enabled) {
+          void hub.refresh(saved.name).then(
+            () => {
+              broadcast(toolsMessage());
+              broadcast(agentsMessage());
+            },
+            (error: Error) => reply({ type: 'error', message: error.message }),
+          );
+        } else broadcast(agentsMessage());
+        break;
+      }
+      case 'mcp-refresh': {
+        const hub = core.tools.mcp;
+        if (!hub) throw new Error('MCP is not available.');
+        void hub.refresh(String(message.name)).then(
+          () => {
+            broadcast(toolsMessage());
+            broadcast(agentsMessage());
+          },
+          (error: Error) => reply({ type: 'error', message: error.message }),
+        );
+        break;
+      }
+      case 'mcp-delete': {
+        core.tools.mcp?.remove(String(message.name));
+        broadcast(toolsMessage());
         broadcast(agentsMessage());
         break;
       }

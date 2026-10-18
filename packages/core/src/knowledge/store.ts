@@ -100,6 +100,7 @@ interface CollectionRow {
   title: string;
   description: string;
   embedding_model: string | null;
+  agents: string;
   created_at: string;
 }
 
@@ -145,29 +146,49 @@ export class KnowledgeStore {
       title: row.title || row.name,
       description: row.description,
       embeddingModel: row.embedding_model,
+      agents: (() => {
+        try {
+          const list = JSON.parse(row.agents || '[]') as unknown;
+          return Array.isArray(list) ? list.map(String) : [];
+        } catch {
+          return [];
+        }
+      })(),
       ...counts,
       createdAt: row.created_at,
     };
   }
 
   /** Creates or edits a collection. Changing the embedding model leaves old vectors unused until re-embedded. */
-  saveCollection(input: { name: string; title?: string; description?: string; embeddingModel?: string | null }): KnowledgeCollectionView {
+  saveCollection(input: { name: string; title?: string; description?: string; embeddingModel?: string | null; agents?: string[] }): KnowledgeCollectionView {
     const name = String(input.name ?? '').trim().toLowerCase();
     if (!COLLECTION_NAME.test(name)) throw new Error('Knowledge base name: lowercase letters, digits, "-" or "_", e.g. "household".');
     const model = String(input.embeddingModel ?? '').trim();
     if (model && !model.includes('/')) throw new Error('The embedding model is written "provider/model", e.g. "google/gemini-embedding-001".');
     this.db
       .prepare(
-        `INSERT INTO kb_collections (name, title, description, embedding_model, created_at) VALUES (@name, @title, @description, @model, @now)
-         ON CONFLICT (name) DO UPDATE SET title = @title, description = @description, embedding_model = @model`,
+        `INSERT INTO kb_collections (name, title, description, embedding_model, agents, created_at) VALUES (@name, @title, @description, @model, @agents, @now)
+         ON CONFLICT (name) DO UPDATE SET title = @title, description = @description, embedding_model = @model, agents = @agents`,
       )
-      .run({ name, title: String(input.title ?? '').trim(), description: String(input.description ?? '').trim(), model: model || null, now: new Date().toISOString() });
+      .run({
+        name,
+        title: String(input.title ?? '').trim(),
+        description: String(input.description ?? '').trim(),
+        model: model || null,
+        agents: JSON.stringify([...new Set((input.agents ?? []).map(String).filter(Boolean))]),
+        now: new Date().toISOString(),
+      });
     return this.collection(name)!;
   }
 
   deleteCollection(name: string): boolean {
     this.db.prepare('DELETE FROM kb_chunks WHERE collection = ?').run(name);
     return this.db.prepare('DELETE FROM kb_collections WHERE name = ?').run(name).changes > 0;
+  }
+
+  /** Whether an agent may use a base: open to all (empty list) or listed. */
+  allows(collection: KnowledgeCollectionView, agent: string | undefined): boolean {
+    return agent === undefined || collection.agents.length === 0 || collection.agents.includes(agent);
   }
 
   documents(collection: string): KnowledgeDocumentView[] {
@@ -260,12 +281,17 @@ export class KnowledgeStore {
    * Keyword search always; vector search too for collections with vectors. Both lists
    * are fused by reciprocal rank, so a chunk found by both rises to the top.
    */
-  async search(query: string, options: { collection?: string; limit?: number; signal?: AbortSignal } = {}): Promise<KnowledgeHit[]> {
+  async search(query: string, options: { collection?: string; limit?: number; signal?: AbortSignal; agent?: string } = {}): Promise<KnowledgeHit[]> {
     const text = query.trim();
     if (!text) return [];
     const limit = Math.min(20, Math.max(1, options.limit ?? 5));
-    const names = options.collection ? [options.collection] : this.collections().map((entry) => entry.name);
-    if (options.collection && !this.collection(options.collection)) throw new Error(`No knowledge base "${options.collection}".`);
+    if (options.collection) {
+      const chosen = this.collection(options.collection);
+      if (!chosen) throw new Error(`No knowledge base "${options.collection}".`);
+      if (!this.allows(chosen, options.agent)) throw new Error(`The knowledge base "${options.collection}" is not open to ${options.agent}.`);
+    }
+    // An agent searches only the bases open to it.
+    const names = options.collection ? [options.collection] : this.collections().filter((entry) => this.allows(entry, options.agent)).map((entry) => entry.name);
     if (names.length === 0) return [];
     const where = `c.collection IN (${names.map(() => '?').join(',')})`;
 

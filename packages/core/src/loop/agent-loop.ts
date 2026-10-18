@@ -215,7 +215,9 @@ export async function* runAgent(deps: AgentLoopDeps, input: RunInput): AsyncGene
   const traceId = input.traceId ?? randomUUID();
 
   // Config errors (unknown tool or model, missing API key) surface before anything is stored.
-  const modelRef = deps.models.resolve('chat', agent.models);
+  const resolved = deps.models.resolve('chat', agent.models);
+  // An effort set on the agent wins over the preset's.
+  const modelRef = agent.effort ? { ...resolved, params: { ...resolved.params, reasoning: agent.effort } } : resolved;
   const modelInfo = deps.models.info(modelRef);
   const tools = [
     ...deps.tools.select(agent.tools),

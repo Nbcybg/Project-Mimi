@@ -215,6 +215,10 @@ export interface AgentView {
   /** Name shown in chats; empty means the id is shown. */
   displayName?: string;
   description: string;
+  /** Card the other agents see. */
+  intro?: string;
+  /** Reasoning effort of its chat model. */
+  effort?: ReasoningEffort;
   systemPrompt: string;
   models: ModelChoice;
   tools: string[];
@@ -444,7 +448,7 @@ export type ClientMessage =
   | { type: 'profile-save'; profile: UserProfileView }
   /** Knowledge bases: list, create / edit, delete. */
   | { type: 'knowledge-list' }
-  | { type: 'knowledge-save'; collection: { name: string; title?: string; description?: string; embeddingModel?: string | null } }
+  | { type: 'knowledge-save'; collection: { name: string; title?: string; description?: string; embeddingModel?: string | null; agents?: string[] } }
   | { type: 'knowledge-delete'; name: string }
   | { type: 'knowledge-documents'; collection: string }
   /** Adds one source: typed text, a file in the allowed folders, a URL, or an uploaded attachment. */

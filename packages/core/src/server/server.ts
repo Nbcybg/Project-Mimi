@@ -22,6 +22,7 @@ import { NODE_TYPES } from '@mimi/shared';
 import { WebSocket, WebSocketServer } from 'ws';
 import { deleteAgent, saveAgent } from '../agents/loader.ts';
 import { importN8n } from '../workflows/n8n-import.ts';
+import { REASONING_EFFORTS, type ReasoningEffort } from '@mimi/shared';
 import { renderIconPng } from '../app/icon.ts';
 import { AuthLimiter } from './auth-limiter.ts';
 import { createBackup, listBackups } from '../backup/backup.ts';
@@ -164,12 +165,14 @@ export async function startServer(
   const agentsMessage = (saved?: string): ServerMessage => ({
     type: 'agents',
     agents: core.agents.names().map((name) => {
-      const { displayName, description, systemPrompt, models, tools, skills, canMessage, budgets } =
+      const { displayName, description, intro, effort, systemPrompt, models, tools, skills, canMessage, budgets } =
         core.agents.get(name);
       return {
         name,
         displayName,
         description,
+        intro,
+        ...(effort ? { effort } : {}),
         systemPrompt,
         models,
         tools,
@@ -225,6 +228,8 @@ export async function startServer(
       name,
       displayName: String(view.displayName ?? '').trim(),
       description: String(view.description ?? '').trim(),
+      intro: String(view.intro ?? '').trim(),
+      ...((REASONING_EFFORTS as readonly string[]).includes(String(view.effort)) ? { effort: view.effort as ReasoningEffort } : {}),
       systemPrompt: String(view.systemPrompt ?? ''),
       models,
       tools,

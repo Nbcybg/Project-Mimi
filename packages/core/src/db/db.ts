@@ -16,6 +16,7 @@ const MIGRATIONS = [
   '008-workflow-approvals.sql',
   '009-knowledge.sql',
   '010-notifications.sql',
+  '011-knowledge-agents.sql',
 ];
 
 function migrate(db: Db): void {

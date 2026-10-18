@@ -155,7 +155,10 @@ export class ChatEngine {
     );
     const userText = [quoted, input.text.trim(), ...files.map(renderAttachment)].filter(Boolean).join('\n\n');
 
-    const roster = members.map((member) => ({ name: member.name, description: member.description }));
+    const roster = members.map((member) => ({
+      name: member.name,
+      description: [member.description, member.intro?.replace(/\s+/g, ' ')].filter(Boolean).join(' — '),
+    }));
     let pendingUserText: string | undefined = userText;
     let lastFinish: RunFinish | undefined;
     let turns = 0;

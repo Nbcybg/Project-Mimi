@@ -46,7 +46,7 @@
     for (const entry of collections()) {
       const item = button(`item${entry.name === selected ? ' on' : ''}`, '', () => select(entry.name));
       const text = el('div');
-      text.append(el('b', '', entry.title), el('small', 'muted', ` · ${entry.documents} เอกสาร · ${entry.embeddingModel ? 'ค้นแบบความหมาย + คำ' : 'ค้นด้วยคำ'}`));
+      text.append(el('b', '', entry.title), el('small', 'muted', ` · ${entry.documents} เอกสาร · ${entry.embeddingModel ? 'ค้นแบบความหมาย + คำ' : 'ค้นด้วยคำ'}${entry.agents && entry.agents.length ? ` · เฉพาะ ${entry.agents.join(', ')}` : ''}`));
       item.append(text);
       list.append(item);
     }
@@ -88,10 +88,22 @@
       modelHint.textContent = 'ยังไม่ได้เชื่อม Google: ค้นด้วยคำได้เลย ถ้าจะค้นตามความหมาย ให้เชื่อม Google (API key) ที่หน้าตั้งค่าก่อน';
     }
     panel.append(modelHint);
+    const allowed = new Set(entry.agents || []);
+    const agentBox = el('div', 'hstack pfagents');
+    for (const agent of M().state.agents || []) {
+      const label = el('label', 'wcheck');
+      const check = el('input');
+      check.type = 'checkbox';
+      check.checked = allowed.has(agent.name);
+      check.onchange = () => (check.checked ? allowed.add(agent.name) : allowed.delete(agent.name));
+      label.append(check, el('span', '', M().nameOf(agent.name)));
+      agentBox.append(label);
+    }
+    panel.append(M().labelled('agent ที่ค้นคลังนี้ได้ (ไม่ติ๊กเลย = ทุกตัว)', agentBox));
     const foot = el('div', 'hstack');
     foot.append(
       button('btn pri', isNew ? 'สร้างคลัง' : 'บันทึก', () => {
-        M().send({ type: 'knowledge-save', collection: { name: name.value.trim(), title: title.value, description: description.value, embeddingModel: model.value.trim() || null } });
+        M().send({ type: 'knowledge-save', collection: { name: name.value.trim(), title: title.value, description: description.value, embeddingModel: model.value.trim() || null, agents: [...allowed] } });
         if (isNew) selected = name.value.trim().toLowerCase();
       }),
     );

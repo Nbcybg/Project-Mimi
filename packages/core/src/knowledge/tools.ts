@@ -18,13 +18,13 @@ export function createKnowledgeTools(store: KnowledgeStore): ToolDefinition[] {
     }),
     summarize: (input) => `Search knowledge${input.collection ? ` (${input.collection})` : ''}: ${input.query}`,
     async execute(input, context) {
-      const known = store.collections();
+      const known = store.collections().filter((entry) => store.allows(entry, context.agent));
       if (known.length === 0) return 'There are no knowledge bases yet; the user adds them in the app (Hub → คลังความรู้).';
       const collection = input.collection?.trim() || undefined;
       if (collection && !known.some((entry) => entry.name === collection)) {
         return `No knowledge base "${collection}". Available: ${known.map((entry) => `${entry.name} (${entry.title})`).join(', ')}.`;
       }
-      const hits = await store.search(input.query, { collection, limit: input.limit ?? 5, signal: context.signal });
+      const hits = await store.search(input.query, { collection, limit: input.limit ?? 5, signal: context.signal, agent: context.agent });
       return renderHits(hits);
     },
   });

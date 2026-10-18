@@ -7,6 +7,8 @@ import { createStateTools } from '../chat/state-tools.ts';
 import type { MessagesRepo } from '../db/messages-repo.ts';
 import type { KnowledgeStore } from '../knowledge/store.ts';
 import { createKnowledgeTools } from '../knowledge/tools.ts';
+import { createProfileTools } from '../profile/tools.ts';
+import type { UserProfileStore } from '../profile/user-profile.ts';
 import type { GoogleAuth } from '../google/auth.ts';
 import { createSheetTools } from '../google/sheets.ts';
 import { createGoogleTools } from '../google/tools.ts';
@@ -38,6 +40,8 @@ export interface ToolServices {
   timezone: string;
   /** Knowledge bases; without one the knowledge_search tool is not offered. */
   knowledge?: KnowledgeStore;
+  /** The user's profile; without it the profile_update tool is not offered. */
+  profile?: UserProfileStore;
 }
 
 /** Every tool an agent file may list. The mesh tools (send_to, reply) are added per run. */
@@ -57,5 +61,6 @@ export function createToolRegistry(services: ToolServices): ToolRegistry {
     ...createWebTools({ key: services.key ?? ((name) => process.env[name]) }),
     createSkillTool(services.skills),
     ...(services.knowledge ? createKnowledgeTools(services.knowledge) : []),
+    ...(services.profile ? createProfileTools(services.profile, () => services.agents.names()) : []),
   );
 }

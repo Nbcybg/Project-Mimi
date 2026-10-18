@@ -5,6 +5,8 @@ export interface KnowledgeCollectionView {
   description: string;
   /** `provider/model` of an embedding model; null means keyword search only. */
   embeddingModel: string | null;
+  /** Agents allowed to search it; empty = every agent. */
+  agents: string[];
   documents: number;
   chunks: number;
   /** Chunks that have a vector from the current embedding model. */

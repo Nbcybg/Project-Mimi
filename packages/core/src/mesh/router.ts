@@ -159,7 +159,8 @@ export class MeshRouter implements MeshToolProvider {
     const directory = sender.canMessage
       .map((name) => {
         try {
-          return `${name} (${this.agents.get(name).description || 'no description'})`;
+          const peer = this.agents.get(name);
+          return `${name} (${peer.description || 'no description'})${peer.intro ? ` — ${peer.intro.replace(/\s+/g, ' ')}` : ''}`;
         } catch {
           return name;
         }

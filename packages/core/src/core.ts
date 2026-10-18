@@ -303,6 +303,7 @@ export async function createCore(
 
   const tools = createToolRegistry({
     knowledge,
+    profile,
     memory,
     messages,
     triggers,

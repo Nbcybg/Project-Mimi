@@ -83,7 +83,7 @@ export interface WorkflowRunnerDeps {
   /** Telegram Bot API base URL (tests point it elsewhere). */
   telegramApi?: string;
   /** The knowledge bases (the knowledge node). */
-  knowledge?: Pick<KnowledgeStore, 'search' | 'add' | 'collection'>;
+  knowledge?: Pick<KnowledgeStore, 'search' | 'add' | 'collection' | 'allows'>;
   /** Reads a PDF / image (vision model) or audio (transcript model) for the extract_file node. */
   readMedia?(request: { agent: string; data: Buffer; mime: string; name: string; instruction: string; signal?: AbortSignal }): Promise<string>;
   fetchFn?: typeof fetch;
@@ -877,6 +877,8 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
         const collection = asText(config.collection).trim();
         if (asText(config.operation || 'search') === 'add') {
           if (!collection) throw new Error('knowledge node: pick the knowledge base to add to');
+          const target = knowledge.collection(collection);
+          if (target && !knowledge.allows(target, workflow.agent)) throw new Error(`knowledge node: "${collection}" is not open to ${workflow.agent}`);
           const text = asText(config.text).trim() || asText(item.json.text).trim();
           if (!text) throw new Error('knowledge node: nothing to add (the text is empty)');
           const added = await knowledge.add(collection, { title: asText(config.title), text, source: asText(config.source) }, ctx.signal);
@@ -886,7 +888,7 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
         const query = asText(config.query).trim() || asText(item.json.text).trim();
         if (!query) throw new Error('knowledge node: the search query is empty');
         const limit = Number(config.limit) || 5;
-        const hits = await knowledge.search(query, { collection: collection || undefined, limit, signal: ctx.signal });
+        const hits = await knowledge.search(query, { collection: collection || undefined, limit, signal: ctx.signal, agent: workflow.agent });
         if (asText(config.output || 'context') === 'items') {
           for (const hit of hits) out.push({ json: { query, text: hit.text, document: hit.document, source: hit.source, collection: hit.collection, score: hit.score } });
         } else {

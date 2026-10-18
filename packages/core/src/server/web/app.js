@@ -1260,6 +1260,19 @@
     const top = el('div', 'grid2');
     top.append(labelled('ชื่อ (id)', name), labelled('ชื่อที่แสดง', displayName));
     form.append(top, labelled('คำอธิบายสั้น ๆ', description));
+    const intro = el('textarea');
+    intro.value = agent && agent.intro ? agent.intro : '';
+    intro.placeholder = 'เช่น ใจเย็น ละเอียดเรื่องตัวเลข ชอบถามกลับให้ชัดก่อนทำ · ส่งงานบัญชี รายรับรายจ่าย มาที่ตัวนี้';
+    intro.style.minHeight = '60px';
+    form.append(labelled('การ์ดแนะนำตัว (agent ตัวอื่นเห็น: นิสัย จุดเด่น วิธีทำงานด้วย)', intro));
+    const effort = el('select');
+    for (const [value, text] of REASONING_CHOICES) {
+      const option = el('option', '', value ? text : 'ตาม preset / ค่าเริ่มต้น');
+      option.value = value;
+      effort.append(option);
+    }
+    effort.value = (agent && agent.effort) || '';
+    form.append(labelled('effort ของโมเดลคุย (คิดก่อนตอบ)', effort));
     const systemPrompt = el('textarea', 'tall');
     systemPrompt.value = agent ? agent.systemPrompt : '';
     systemPrompt.placeholder = 'System prompt: บุคลิก กฎ และวิธีทำงานของ agent นี้';
@@ -1381,6 +1394,8 @@
             name: name.value.trim(),
             displayName: displayName.value.trim(),
             description: description.value.trim(),
+            intro: intro.value.trim(),
+            effort: effort.value || undefined,
             systemPrompt: systemPrompt.value,
             models: chosen,
             tools: picked(tools),

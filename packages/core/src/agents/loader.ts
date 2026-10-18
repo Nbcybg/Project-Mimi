@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { z } from 'zod';
+import { REASONING_EFFORTS, type ReasoningEffort } from '@mimi/shared';
 import type { ModelSelection } from '../providers/routing.ts';
 import { modelRefString } from '../providers/settings.ts';
 
@@ -15,6 +16,10 @@ const FrontmatterSchema = z.strictObject({
   /** The name shown in chats; the file name stays the id. */
   display_name: z.string().default(''),
   description: z.string().default(''),
+  /** What the other agents are told about this one (personality, how to work with it). */
+  intro: z.string().default(''),
+  /** Reasoning effort of its chat model; overrides the preset's. */
+  effort: z.enum(REASONING_EFFORTS).optional(),
   // Same keys as the settings file; each one overrides it for this agent only.
   model: modelRefString.optional(),
   small_model: modelRefString.optional(),
@@ -36,6 +41,10 @@ export interface AgentDefinition {
   name: string;
   displayName: string;
   description: string;
+  /** Card the other agents see: personality, strengths, how to work with it. */
+  intro?: string;
+  /** Reasoning effort for its chat model; unset = the preset's or the provider's default. */
+  effort?: ReasoningEffort;
   models: ModelSelection;
   tools: string[];
   skills: string[];
@@ -66,11 +75,13 @@ export function parseAgentFile(source: string, origin = 'agent file'): AgentDefi
   const systemPrompt = source.slice(match[0].length).trim();
   if (!systemPrompt) throw new Error(`${origin}: system prompt body is empty`);
 
-  const { name, display_name, description, tools, skills, can_message, budgets, ...models } = parsed.data;
+  const { name, display_name, description, intro, effort, tools, skills, can_message, budgets, ...models } = parsed.data;
   return {
     name,
     displayName: display_name,
     description,
+    ...(intro ? { intro } : {}),
+    ...(effort ? { effort } : {}),
     models,
     tools,
     skills,
@@ -140,6 +151,8 @@ export function serializeAgent(agent: AgentDefinition): string {
   const frontmatter: Record<string, unknown> = { name: agent.name };
   if (agent.displayName) frontmatter.display_name = agent.displayName;
   if (agent.description) frontmatter.description = agent.description;
+  if (agent.intro) frontmatter.intro = agent.intro;
+  if (agent.effort) frontmatter.effort = agent.effort;
   // One model per capability; a capability left out falls back to the global default.
   for (const key of ['model', 'small_model', 'vision_model', 'transcript_model'] as const) {
     if (agent.models[key]) frontmatter[key] = agent.models[key];

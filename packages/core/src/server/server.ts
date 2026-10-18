@@ -333,6 +333,8 @@ export async function startServer(
       allowedDirs: [...config.allowedDirs],
       google: { hasClient: core.google.hasClient, connected: core.google.isConfigured },
       microsoft: { hasClient: core.microsoft.hasClient, connected: core.microsoft.isConfigured },
+      preferences: appSettings.preferences,
+      spentTodayUsd: core.spentToday(),
       toolKeys: { serper: Boolean(process.env.SERPER_API_KEY), openweather: Boolean(process.env.OPENWEATHER_API_KEY) },
       ready: (() => {
         try {
@@ -778,6 +780,20 @@ export async function startServer(
           broadcast({ type: 'workflows', workflows: core.workflows.list(), pool: core.triggerPool.list(), nodeTypes: NODE_TYPES });
         }
         reply({ type: 'workflow-import', agent, saved: Boolean(message.save), workflows, report, errors });
+        break;
+      }
+      case 'preferences-save': {
+        const input = message.preferences ?? {};
+        const time = (value: unknown) => (typeof value === 'string' && /^\d{1,2}:\d{2}$/.test(value) ? value : undefined);
+        const budget = Number(input.dailyBudgetUsd);
+        const kinds = Array.isArray(input.pushKinds) ? input.pushKinds.filter((kind) => ['reminder', 'task-result', 'approval', 'info'].includes(kind)) : undefined;
+        appSettings.setPreferences({
+          ...(Number.isFinite(budget) && budget > 0 ? { dailyBudgetUsd: Math.round(budget * 100) / 100 } : {}),
+          ...(time(input.quietFrom) && time(input.quietTo) ? { quietFrom: time(input.quietFrom), quietTo: time(input.quietTo) } : {}),
+          ...(kinds ? { pushKinds: kinds } : {}),
+          urgentApprovals: input.urgentApprovals !== false,
+        });
+        broadcast({ type: 'settings', settings: settingsView(), saved: true });
         break;
       }
       case 'backups-list':

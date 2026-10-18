@@ -30,7 +30,7 @@ import { type PermissionBroker, PermissionGate } from './permissions/gate.ts';
 import { AuthStore } from './providers/auth-store.ts';
 import { loadCatalog, type ModelCatalog } from './providers/catalog.ts';
 import { ProviderStore } from './providers/provider-store.ts';
-import { parseModelRef, ProviderRegistry, providerOptionsFor } from './providers/registry.ts';
+import { type ModelInfo, parseModelRef, ProviderRegistry, providerOptionsFor } from './providers/registry.ts';
 import { ModelRouter, type ModelService } from './providers/routing.ts';
 import { loadSettings, type Settings } from './providers/settings.ts';
 import { Scheduler } from './scheduler/scheduler.ts';
@@ -116,6 +116,8 @@ export interface Core {
   triggerPool: TriggerPool;
   /** Past runs of every workflow, with node input/output. */
   workflowRuns: WorkflowRunStore;
+  /** Estimated model spending since midnight (configured zone). */
+  spentToday(): number;
   /** Stored notifications and the browsers they are pushed to. */
   notifications: NotificationCenter;
   /** The user's profile fields; each agent sees the ones shared with it. */
@@ -281,13 +283,49 @@ export async function createCore(
   const persona = loadPersona(config.personaPath);
   const profile = new UserProfileStore(config.userProfilePath, config.userProfileLocalPath);
 
+  /** Start of today in the configured zone, as a UTC timestamp (for "spent today"). */
+  const startOfToday = (): string => {
+    const now = new Date();
+    const parts = new Intl.DateTimeFormat('en-CA', { timeZone: config.timezone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }).formatToParts(now);
+    const get = (type: string) => Number(parts.find((part) => part.type === type)?.value ?? 0);
+    const elapsed = ((get('hour') * 60 + get('minute')) * 60 + get('second')) * 1000 + now.getMilliseconds();
+    return new Date(now.getTime() - elapsed).toISOString();
+  };
+  const spentToday = () => usage.spentSince(startOfToday());
+  let budgetNoticeDay = '';
+  /** A message when today's spending reached the limit set in Settings. */
+  const budgetCheck = (): string | null => {
+    const limit = options.app?.preferences.dailyBudgetUsd;
+    if (!limit || limit <= 0) return null;
+    const spent = spentToday();
+    if (spent < limit) return null;
+    const day = startOfToday();
+    if (budgetNoticeDay !== day) {
+      budgetNoticeDay = day;
+      notify({ kind: 'info', title: 'ถึงงบรายวันแล้ว', body: `ใช้ไป ${spent.toFixed(2)} จากงบ ${limit.toFixed(2)} — หยุดเรียก model จนถึงพรุ่งนี้ (ปรับได้ที่ ตั้งค่า)` });
+    }
+    return `Today's spending limit is reached (${spent.toFixed(2)} of ${limit.toFixed(2)}). Raise it in Settings, or wait until tomorrow.`;
+  };
+
   const knowledge = new KnowledgeStore(db, async (model, texts, signal) => {
-    const { embeddings } = await embedMany({
-      model: await registry.embeddingModel(parseModelRef(model)),
+    const overBudget = budgetCheck();
+    if (overBudget) throw new Error(overBudget);
+    const ref = parseModelRef(model);
+    const startedAt = Date.now();
+    const { embeddings, usage: used } = await embedMany({
+      model: await registry.embeddingModel(ref),
       values: texts,
       maxParallelCalls: 2,
       abortSignal: signal,
     });
+    // The catalog rarely prices embedding models: log the tokens, cost when known.
+    let info: ModelInfo;
+    try {
+      info = registry.info(ref);
+    } catch {
+      info = { ref, name: ref.model, npm: '', baseURL: undefined, contextLimit: 0, outputLimit: undefined, cost: null, imageInput: false, toolCall: false, textOutput: false, options: {} };
+    }
+    usage.logCall({ runId: null, traceId: randomUUID(), agent: 'knowledge', kind: 'embedding', model: info, inputTokens: used?.tokens ?? 0, outputTokens: 0, cachedTokens: 0, cacheWriteTokens: 0, durationMs: Date.now() - startedAt });
     return embeddings;
   });
 
@@ -327,6 +365,8 @@ export async function createCore(
   const notifications = new NotificationCenter(db, {
     vapid: () => (vapid ??= loadOrCreateVapid(config.pushKeysPath)),
     subject: config.pushContact,
+    preferences: () => options.app?.preferences ?? {},
+    timezone: config.timezone,
     log: (message) => console.error(message),
   });
   /** Every notification is kept (inbox) and pushed, then handed to whoever shows it live. */
@@ -361,6 +401,7 @@ export async function createCore(
   const jobs = new PostTurnJobs(writer, compactor, settings.memory.auto_write);
 
   const deps: AgentLoopDeps = {
+    budgetCheck: () => budgetCheck(),
     messages,
     threads,
     memory,
@@ -439,6 +480,8 @@ export async function createCore(
     permissions: settings.permission,
     knowledge,
     readMedia: async ({ agent: agentName, data, mime, name, instruction, signal }) => {
+      const overBudget = budgetCheck();
+      if (overBudget) throw new Error(overBudget);
       const agent = agents.get(agentName);
       const audio = mime.startsWith('audio/');
       const capability = audio ? 'transcript' : 'vision';
@@ -486,6 +529,8 @@ export async function createCore(
       return last?.output ?? [];
     },
     complete: async ({ agent: agentName, model, system, prompt, signal }) => {
+      const overBudget = budgetCheck();
+      if (overBudget) throw new Error(overBudget);
       const agent = agents.get(agentName);
       const ref =
         model === '@small'
@@ -938,6 +983,7 @@ export async function createCore(
     addKnowledge,
     profile,
     notifications,
+    spentToday,
     approvals,
     telegram,
     chatTriggers,

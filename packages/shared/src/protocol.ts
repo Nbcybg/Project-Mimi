@@ -180,6 +180,19 @@ export interface Notification {
   id?: number;
 }
 
+/** Spending limit and notification choices, set on the settings page. */
+export interface PreferencesView {
+  /** Stop model calls once today's estimated cost reaches this (USD); unset = no limit. */
+  dailyBudgetUsd?: number;
+  /** Quiet hours ("22:00" to "07:00"): notifications go to the inbox but no push. */
+  quietFrom?: string;
+  quietTo?: string;
+  /** Which kinds are pushed to devices; unset = reminders, task results and approvals. */
+  pushKinds?: Array<Notification['kind']>;
+  /** Approvals still push during quiet hours. */
+  urgentApprovals?: boolean;
+}
+
 /** A stored notification, as the inbox shows it. */
 export interface NotificationItem extends Notification {
   id: number;
@@ -326,6 +339,9 @@ export interface SettingsView {
   google: { hasClient: boolean; connected: boolean };
   /** Outlook mail, calendar and To Do: `hasClient` once the Azure app's client ID is saved. */
   microsoft: { hasClient: boolean; connected: boolean };
+  /** Spending limit and notification choices, plus what was spent today. */
+  preferences: PreferencesView;
+  spentTodayUsd: number;
   /** Which API keys of the web tools are set (never the keys themselves). */
   toolKeys: { serper: boolean; openweather: boolean };
   /** False until an agent exists and its chat model's provider is connected. */
@@ -440,6 +456,7 @@ export type ClientMessage =
   | { type: 'push-unsubscribe'; endpoint: string }
   | { type: 'push-devices' }
   | { type: 'push-test' }
+  | { type: 'preferences-save'; preferences: PreferencesView }
   /** Backups of the user folder: list, make one now (download with GET /api/backups/<name>). */
   | { type: 'backups-list' }
   | { type: 'backup-create'; includeSecrets: boolean }

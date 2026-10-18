@@ -41,6 +41,8 @@ export interface MeshToolProvider {
 }
 
 export interface AgentLoopDeps {
+  /** A message when today's spending limit is reached; model calls stop until tomorrow. */
+  budgetCheck?: () => string | null;
   messages: MessagesRepo;
   threads: ThreadRepo;
   memory: MemoryStore;
@@ -214,6 +216,9 @@ export async function* runAgent(deps: AgentLoopDeps, input: RunInput): AsyncGene
   const thread = input.thread ?? 'main';
   const traceId = input.traceId ?? randomUUID();
 
+  // Over the daily budget: refuse before anything is stored, like a config error.
+  const overBudget = deps.budgetCheck?.();
+  if (overBudget) throw new Error(overBudget);
   // Config errors (unknown tool or model, missing API key) surface before anything is stored.
   const resolved = deps.models.resolve('chat', agent.models);
   // An effort set on the agent wins over the preset's.

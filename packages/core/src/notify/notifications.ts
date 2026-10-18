@@ -1,4 +1,4 @@
-import type { Notification, NotificationItem, PushDeviceView } from '@mimi/shared';
+import type { Notification, NotificationItem, PreferencesView, PushDeviceView } from '@mimi/shared';
 import type { Db } from '../db/db.ts';
 import { type PushResult, type PushSubscriptionKeys, sendPush, type VapidKeys } from './web-push.ts';
 
@@ -33,6 +33,10 @@ export interface NotificationCenterDeps {
   /** VAPID contact (`mailto:` or `https:`), sent to the push services. */
   subject: string;
   send?: (subscription: PushSubscriptionKeys, payload: unknown, urgency: 'normal' | 'high') => Promise<PushResult>;
+  /** Quiet hours and which kinds are pushed (read on every notification). */
+  preferences?: () => PreferencesView;
+  timezone?: string;
+  now?: () => Date;
   log?: (message: string) => void;
 }
 
@@ -71,8 +75,31 @@ export class NotificationCenter {
     );
     this.db.prepare('DELETE FROM notifications WHERE id NOT IN (SELECT id FROM notifications ORDER BY id DESC LIMIT ?)').run(KEEP);
     const item = toItem(this.db.prepare('SELECT * FROM notifications WHERE id = ?').get(id) as NotificationRow);
-    if (PUSHED.has(item.kind)) void this.push(item);
+    if (this.shouldPush(item.kind)) void this.push(item);
     return item;
+  }
+
+  /** Whether a kind is pushed now: chosen in the settings, and not in quiet hours (urgent approvals excepted). */
+  shouldPush(kind: Notification['kind']): boolean {
+    const preferences = this.deps.preferences?.() ?? {};
+    const kinds = preferences.pushKinds ? new Set(preferences.pushKinds) : PUSHED;
+    if (!kinds.has(kind)) return false;
+    if (kind === 'approval' && preferences.urgentApprovals !== false && this.quiet(preferences)) return true;
+    return !this.quiet(preferences);
+  }
+
+  private quiet(preferences: PreferencesView): boolean {
+    const toMinutes = (value: string | undefined) => {
+      const match = /^(\d{1,2}):(\d{2})$/.exec(value ?? '');
+      return match ? Number(match[1]) * 60 + Number(match[2]) : null;
+    };
+    const from = toMinutes(preferences.quietFrom);
+    const to = toMinutes(preferences.quietTo);
+    if (from === null || to === null || from === to) return false;
+    const parts = new Intl.DateTimeFormat('en-GB', { timeZone: this.deps.timezone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(this.deps.now?.() ?? new Date());
+    const now = Number(parts.find((part) => part.type === 'hour')?.value ?? 0) * 60 + Number(parts.find((part) => part.type === 'minute')?.value ?? 0);
+    // A window like 22:00-07:00 crosses midnight.
+    return from < to ? now >= from && now < to : now >= from || now < to;
   }
 
   list(limit = 50): { items: NotificationItem[]; unread: number } {

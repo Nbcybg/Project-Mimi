@@ -4,7 +4,7 @@ import { estimateCost, type TokenUsage } from '../providers/pricing.ts';
 import type { ModelInfo, ModelRef } from '../providers/registry.ts';
 
 /** What a model call was for. Background jobs are logged next to chat calls. */
-export type UsageKind = Capability | 'memory';
+export type UsageKind = Capability | 'memory' | 'embedding';
 
 export interface RunStart {
   traceId: string;
@@ -36,6 +36,11 @@ export class UsageLogger {
 
   constructor(db: Db) {
     this.db = db;
+  }
+
+  /** Estimated cost of every call since `sinceIso` (a UTC timestamp). */
+  spentSince(sinceIso: string): number {
+    return (this.db.prepare('SELECT COALESCE(SUM(cost_usd), 0) AS total FROM usage_log WHERE created_at >= ?').get(sinceIso) as { total: number }).total;
   }
 
   startRun(run: RunStart): number {

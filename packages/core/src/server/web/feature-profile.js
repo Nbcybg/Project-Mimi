@@ -233,6 +233,64 @@
     rerender();
   }
 
+  // ---------- spending limit and notification choices (same settings page) ----------
+  const KINDS = [
+    ['reminder', '⏰ การเตือน'],
+    ['approval', '✋ ขออนุมัติ'],
+    ['task-result', '📋 ผลงานที่ตั้งเวลาไว้'],
+    ['info', '· ข้อความระบบ'],
+  ];
+
+  function renderPreferences(panel) {
+    const view = M().state.settings || {};
+    const prefs = view.preferences || {};
+    const spent = Number(view.spentTodayUsd || 0);
+    const budget = M().textInput(prefs.dailyBudgetUsd ?? '', 'เช่น 2 (เว้นว่าง = ไม่จำกัด)', 'number');
+    budget.step = '0.5';
+    budget.min = '0';
+    panel.append(
+      M().labelled('งบต่อวัน (USD) — ถึงแล้วหยุดเรียก model จนถึงพรุ่งนี้', budget),
+      el('p', 'hint', `วันนี้ใช้ไปแล้ว ~${spent.toFixed(3)}${prefs.dailyBudgetUsd ? ` จาก ${prefs.dailyBudgetUsd}` : ''} (ประมาณจากราคาใน catalog)`),
+    );
+    const quietFrom = M().textInput(prefs.quietFrom || '', '22:00', 'time');
+    const quietTo = M().textInput(prefs.quietTo || '', '07:00', 'time');
+    const quiet = el('div', 'grid2');
+    quiet.append(M().labelled('ช่วงห้ามรบกวน เริ่ม', quietFrom), M().labelled('ถึง', quietTo));
+    panel.append(quiet, el('p', 'hint', 'ในช่วงนี้แจ้งเตือนเข้ากล่อง 🔔 อย่างเดียว ไม่เด้งเข้าเครื่อง'));
+    const kinds = new Set(prefs.pushKinds || ['reminder', 'approval', 'task-result']);
+    const kindBox = el('div', 'hstack pfagents');
+    for (const [kind, label] of KINDS) {
+      const wrap = el('label', 'wcheck');
+      const check = el('input');
+      check.type = 'checkbox';
+      check.checked = kinds.has(kind);
+      check.onchange = () => (check.checked ? kinds.add(kind) : kinds.delete(kind));
+      wrap.append(check, el('span', '', label));
+      kindBox.append(wrap);
+    }
+    panel.append(M().labelled('ประเภทที่เด้งเข้าเครื่อง', kindBox));
+    const urgent = el('input');
+    urgent.type = 'checkbox';
+    urgent.checked = prefs.urgentApprovals !== false;
+    const urgentLabel = el('label', 'wcheck');
+    urgentLabel.append(urgent, el('span', '', 'ขออนุมัติยังเด้งในช่วงห้ามรบกวน'));
+    panel.append(urgentLabel);
+    const save = button('btn pri', 'บันทึก', () =>
+      M().send({
+        type: 'preferences-save',
+        preferences: {
+          dailyBudgetUsd: budget.value === '' ? undefined : Number(budget.value),
+          quietFrom: quietFrom.value || undefined,
+          quietTo: quietTo.value || undefined,
+          pushKinds: [...kinds],
+          urgentApprovals: urgent.checked,
+        },
+      }),
+    );
+    save.style.marginTop = '8px';
+    panel.append(save);
+  }
+
   // ---------- backups (same settings page) ----------
   let backups = null;
   let backupDir = '';
@@ -301,5 +359,5 @@
   }
 
   window.MimiHooks = window.MimiHooks || {};
-  window.MimiHooks.profile = { render, onMessage, renderBackups, onBackups, onError: () => { if (backingUp) { backingUp = false; rerender(); } } };
+  window.MimiHooks.profile = { render, onMessage, renderBackups, renderPreferences, onBackups, onError: () => { if (backingUp) { backingUp = false; rerender(); } } };
 })();

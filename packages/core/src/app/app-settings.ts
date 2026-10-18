@@ -1,3 +1,4 @@
+import type { PreferencesView } from '@mimi/shared';
 import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -35,6 +36,7 @@ interface StoredSettings {
   /** The model pool: named presets (model + sampling settings) that agents and skills refer to by name. */
   presets: Record<string, ModelPreset>;
   allowedDirs: string[];
+  preferences: PreferencesView;
 }
 
 /**
@@ -65,6 +67,7 @@ export class AppSettings {
       defaults: { ...stored.defaults },
       presets: { ...stored.presets },
       allowedDirs: Array.isArray(stored.allowedDirs) ? stored.allowedDirs.map(String) : [],
+      preferences: { ...stored.preferences },
     });
     if (stored.token !== settings.data.token) settings.save();
     return settings;
@@ -89,6 +92,15 @@ export class AppSettings {
 
   get providers(): Record<string, ConnectedProvider> {
     return this.data.providers;
+  }
+
+  get preferences(): PreferencesView {
+    return this.data.preferences;
+  }
+
+  setPreferences(preferences: PreferencesView): void {
+    this.data.preferences = preferences;
+    this.save();
   }
 
   get presets(): Record<string, ModelPreset> {

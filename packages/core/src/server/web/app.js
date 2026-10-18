@@ -1718,6 +1718,11 @@
     if (profileHook) profileHook.render(profile);
     stack.append(profile);
 
+    const prefs = el('div', 'panel form');
+    prefs.append(el('h3', '', 'งบประมาณ & การแจ้งเตือน'));
+    if (profileHook) profileHook.renderPreferences(prefs);
+    stack.append(prefs);
+
     const backup = el('div', 'panel form');
     backup.append(el('h3', '', 'สำรอง / กู้คืนข้อมูล'));
     if (profileHook) profileHook.renderBackups(backup);

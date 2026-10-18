@@ -1,0 +1,23 @@
+{
+  "model": "opencode-go/deepseek-v4-flash",
+  "small_model": "opencode-go/deepseek-flash",
+  "vision_model": "opencode-go/deepseek-v4-flash-vision-exp",
+  "transcript_model": "google/gemini-flash-latest",
+  "default_agent": "mimi",
+  "provider": {},
+  "permission": {},
+  "compaction": {
+    "auto": true,
+    "threshold": 0.65,
+    "keep_recent": 0.25,
+    "context_cap": 200000
+  },
+  "memory": {
+    "auto_write": true,
+    "profile_max_chars": 4000
+  },
+  "mesh": {
+    "max_hops": 8,
+    "reply_timeout_ms": 300000
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "name": "mimi",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "app": "node --env-file-if-exists=.env packages/core/src/app/launcher.ts",
+    "app:install": "node packages/core/src/app/install-shortcut.ts",
+    "build:desktop": "node scripts/build-desktop.mjs",
+    "chat": "node --env-file-if-exists=.env packages/core/src/cli/chat.ts",
+    "cost": "node --env-file-if-exists=.env packages/core/src/cli/cost.ts",
+    "memory": "node --env-file-if-exists=.env packages/core/src/cli/memory.ts",
+    "models": "node --env-file-if-exists=.env packages/core/src/cli/models.ts",
+    "test": "node --test --test-timeout=60000 \"packages/*/src/**/*.test.ts\"",
+    "typecheck": "tsc -p packages/shared/tsconfig.json && tsc -p packages/pc-agent/tsconfig.json && tsc -p packages/core/tsconfig.json",
+    "serve": "node --env-file-if-exists=.env packages/core/src/server/main.ts",
+    "pc-agent": "node --env-file-if-exists=.env packages/pc-agent/src/main.ts",
+    "google-auth": "node --env-file-if-exists=.env packages/core/src/cli/google-auth.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "typescript": "^5.9.3"
+  }
+}

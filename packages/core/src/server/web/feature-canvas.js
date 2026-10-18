@@ -1,0 +1,439 @@
+// The workflow canvas: nodes as boxes you drag, links as curves you draw by dragging
+// from an output port to another node (or to empty space to add a node there), pan
+// by dragging the background, zoom with the wheel or the buttons. No libraries: DOM
+// boxes for nodes, one SVG layer for the links. The workflow draft is edited in place;
+// the editor (feature-workflows.js) owns saving and the side panel.
+(() => {
+  'use strict';
+  const M = () => window.Mimi;
+  const el = (tag, cls, text) => M().el(tag, cls, text);
+  const SVG = 'http://www.w3.org/2000/svg';
+
+  const W = 210;
+  const HEAD = 46;
+  const ROW = 22;
+  const TRIGGER_W = 180;
+  const TRIGGER_ID = '__trigger';
+  const COLUMN = 270;
+
+  /** Pan / zoom per workflow, so a re-render keeps the view where it was. */
+  const views = new Map();
+
+  const heightOf = (outputs) => HEAD + Math.max(1, outputs.length) * ROW + 6;
+
+  /** Columns by longest path from the starts; rows ordered by their parents (one barycenter pass). */
+  function autoLayout(nodes, outputsOf, onlyMissing) {
+    const parents = new Map(nodes.map((node) => [node.id, []]));
+    for (const node of nodes) {
+      for (const targets of Object.values(node.links || {})) for (const target of targets) parents.get(target)?.push(node.id);
+    }
+    const level = new Map();
+    const visit = (id, seen = new Set()) => {
+      if (level.has(id)) return level.get(id);
+      if (seen.has(id)) return 0;
+      seen.add(id);
+      const value = Math.max(-1, ...(parents.get(id) || []).map((parent) => visit(parent, seen))) + 1;
+      level.set(id, value);
+      return value;
+    };
+    for (const node of nodes) visit(node.id);
+    const columns = [];
+    for (const node of nodes) (columns[level.get(node.id)] ??= []).push(node);
+    const rowOf = new Map();
+    columns.forEach((column, index) => {
+      if (index > 0) {
+        const score = (node) => {
+          const rows = (parents.get(node.id) || []).map((parent) => rowOf.get(parent)).filter((row) => row !== undefined);
+          return rows.length ? rows.reduce((sum, row) => sum + row, 0) / rows.length : 0;
+        };
+        column.sort((a, b) => score(a) - score(b));
+      }
+      let y = 60;
+      column.forEach((node, row) => {
+        rowOf.set(node.id, row);
+        if (!onlyMissing || !Array.isArray(node.position)) node.position = [320 + index * COLUMN, y];
+        y += heightOf(outputsOf(node)) + 46;
+      });
+    });
+  }
+
+  function curve(x1, y1, x2, y2) {
+    const dx = Math.max(40, Math.abs(x2 - x1) / 2);
+    return `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`;
+  }
+
+  /**
+   * Mounts the canvas into `host`. `ctx` gives the draft and the editor's hooks:
+   * nodes(), outputsOf(node), titleOf(id), typeLabel(type), groupOf(type), triggerLabel(),
+   * run (last run result or null), selected, onSelect(id), onChange(), addNodeAt(type, pos, from),
+   * removeNode(id), palette(anchor, onPick).
+   */
+  function mount(host, ctx) {
+    host.classList.add('wcv');
+    host.tabIndex = 0;
+    host.textContent = '';
+    const world = el('div', 'wcv-world');
+    const svg = document.createElementNS(SVG, 'svg');
+    svg.classList.add('wcv-edges');
+    world.append(svg);
+    host.append(world);
+    const toolbar = el('div', 'wcv-tools');
+    host.append(toolbar);
+
+    const nodes = ctx.nodes();
+    autoLayout(nodes, ctx.outputsOf, true);
+    const view = views.get(ctx.key) || null;
+    const state = { x: view?.x ?? 0, y: view?.y ?? 0, z: view?.z ?? 1, selected: ctx.selected || null, edge: null };
+    const boxes = new Map();
+
+    const apply = () => {
+      world.style.transform = `translate(${state.x}px, ${state.y}px) scale(${state.z})`;
+      views.set(ctx.key, { x: state.x, y: state.y, z: state.z });
+    };
+    const toWorld = (clientX, clientY) => {
+      const rect = host.getBoundingClientRect();
+      return [(clientX - rect.left - state.x) / state.z, (clientY - rect.top - state.y) / state.z];
+    };
+
+    const starts = () => {
+      const fed = new Set(nodes.flatMap((node) => Object.values(node.links || {}).flat()));
+      return nodes.filter((node) => !fed.has(node.id));
+    };
+    const triggerPosition = () => {
+      const first = starts();
+      if (first.length === 0) return [40, 60];
+      const minX = Math.min(...first.map((node) => node.position[0]));
+      const meanY = first.reduce((sum, node) => sum + node.position[1], 0) / first.length;
+      return [minX - 250, meanY];
+    };
+    const runOf = (id) => ctx.run?.nodes?.find((entry) => entry.id === id);
+
+    function drawNodes() {
+      for (const box of boxes.values()) box.remove();
+      boxes.clear();
+      // The trigger: where every start node gets its items.
+      const [tx, ty] = triggerPosition();
+      const trigger = el('div', `wcv-node wcv-trigger${state.selected === TRIGGER_ID ? ' sel' : ''}`);
+      trigger.dataset.id = TRIGGER_ID;
+      trigger.style.left = `${tx}px`;
+      trigger.style.top = `${ty}px`;
+      trigger.style.width = `${TRIGGER_W}px`;
+      trigger.append(el('b', '', '⚡ ทริกเกอร์'), el('small', '', ctx.triggerLabel()));
+      const triggerPort = el('span', 'wcv-port out');
+      triggerPort.style.top = `${HEAD / 2}px`;
+      trigger.append(triggerPort);
+      world.append(trigger);
+      boxes.set(TRIGGER_ID, trigger);
+
+      for (const node of nodes) {
+        const outputs = ctx.outputsOf(node);
+        const run = runOf(node.id);
+        const box = el('div', `wcv-node g-${ctx.groupOf(node.type)}${state.selected === node.id ? ' sel' : ''}${run ? (run.status === 'ok' ? ' ok' : ' err') : ''}`);
+        box.dataset.id = node.id;
+        box.style.left = `${node.position[0]}px`;
+        box.style.top = `${node.position[1]}px`;
+        box.style.width = `${W}px`;
+        box.style.height = `${heightOf(outputs)}px`;
+        const head = el('div', 'wcv-head');
+        head.append(el('b', '', ctx.titleOf(node.id)), el('small', '', ctx.typeLabel(node.type)));
+        box.append(head);
+        if (run) box.append(el('span', 'wcv-badge', run.status === 'ok' ? `${run.input.length} → ${run.output.length}` : 'error'));
+        const input = el('span', 'wcv-port in');
+        input.style.top = `${HEAD / 2}px`;
+        box.append(input);
+        outputs.forEach((output, index) => {
+          const y = HEAD + index * ROW + ROW / 2;
+          if (outputs.length > 1 || output.key !== 'main') {
+            const label = el('span', 'wcv-out', output.label);
+            label.style.top = `${y - 8}px`;
+            box.append(label);
+          }
+          const port = el('span', 'wcv-port out');
+          port.dataset.key = output.key;
+          port.style.top = `${y}px`;
+          box.append(port);
+        });
+        world.append(box);
+        boxes.set(node.id, box);
+      }
+    }
+
+    /** Where a link leaves (output port) and arrives (input port), in world coordinates. */
+    const outPoint = (id, key) => {
+      if (id === TRIGGER_ID) {
+        const [x, y] = triggerPosition();
+        return [x + TRIGGER_W, y + HEAD / 2];
+      }
+      const node = nodes.find((entry) => entry.id === id);
+      const outputs = ctx.outputsOf(node);
+      const index = Math.max(0, outputs.findIndex((output) => output.key === key));
+      return [node.position[0] + W, node.position[1] + HEAD + index * ROW + ROW / 2];
+    };
+    const inPoint = (id) => {
+      const node = nodes.find((entry) => entry.id === id);
+      return [node.position[0], node.position[1] + HEAD / 2];
+    };
+
+    let edgeButton = null;
+    function drawEdges() {
+      svg.textContent = '';
+      edgeButton?.remove();
+      edgeButton = null;
+      const add = (from, key, to, removable) => {
+        const [x1, y1] = outPoint(from, key);
+        const [x2, y2] = inPoint(to);
+        const d = curve(x1, y1, x2, y2);
+        const selected = state.edge && state.edge.from === from && state.edge.key === key && state.edge.to === to;
+        const path = document.createElementNS(SVG, 'path');
+        path.setAttribute('d', d);
+        path.setAttribute('class', `wcv-edge${selected ? ' sel' : ''}${from === TRIGGER_ID ? ' trig' : ''}${key === 'error' ? ' errpath' : ''}`);
+        svg.append(path);
+        if (!removable) return;
+        const hit = document.createElementNS(SVG, 'path');
+        hit.setAttribute('d', d);
+        hit.setAttribute('class', 'wcv-hit');
+        hit.dataset.from = from;
+        hit.dataset.key = key;
+        hit.dataset.to = to;
+        svg.append(hit);
+        if (selected) {
+          edgeButton = el('button', 'wcv-x', '✕');
+          edgeButton.title = 'ลบสายนี้';
+          edgeButton.style.left = `${(x1 + x2) / 2 - 11}px`;
+          edgeButton.style.top = `${(y1 + y2) / 2 - 11}px`;
+          edgeButton.onpointerdown = (event) => event.stopPropagation();
+          edgeButton.onclick = () => removeEdge(state.edge);
+          world.append(edgeButton);
+        }
+      };
+      for (const node of starts()) add(TRIGGER_ID, 'main', node.id, false);
+      for (const node of nodes) {
+        for (const [key, targets] of Object.entries(node.links || {})) {
+          const known = ctx.outputsOf(node).some((output) => output.key === key) || key === 'error';
+          if (!known) continue;
+          for (const target of targets) if (nodes.some((entry) => entry.id === target)) add(node.id, key, target, true);
+        }
+      }
+      // Bounds so the SVG layer covers every link (it does not clip, but needs a box).
+      svg.setAttribute('width', '1');
+      svg.setAttribute('height', '1');
+    }
+
+    function removeEdge(edge) {
+      const node = nodes.find((entry) => entry.id === edge.from);
+      if (!node) return;
+      node.links[edge.key] = (node.links[edge.key] || []).filter((id) => id !== edge.to);
+      state.edge = null;
+      redraw();
+      ctx.onChange();
+    }
+
+    /** True when linking from → to would make a loop. */
+    function makesLoop(from, to) {
+      const seen = new Set();
+      const walk = (id) => {
+        if (id === from) return true;
+        if (seen.has(id)) return false;
+        seen.add(id);
+        const node = nodes.find((entry) => entry.id === id);
+        return Object.values(node?.links || {}).flat().some(walk);
+      };
+      return walk(to);
+    }
+
+    function link(from, key, to) {
+      if (from === to) return;
+      if (makesLoop(from, to)) return M().toast('ต่อไม่ได้', 'สายนี้จะทำให้วนกลับ (Mimi รันจากหน้าไปหลังครั้งเดียว) — ถ้าจะวน ใช้ node Loop', true);
+      const node = nodes.find((entry) => entry.id === from);
+      const list = (node.links[key] ??= []);
+      if (!list.includes(to)) list.push(to);
+      redraw();
+      ctx.onChange();
+    }
+
+    function redraw() {
+      drawNodes();
+      drawEdges();
+    }
+
+    function select(id) {
+      state.selected = id;
+      state.edge = null;
+      for (const [boxId, box] of boxes) box.classList.toggle('sel', boxId === id);
+      drawEdges();
+      ctx.onSelect(id);
+    }
+
+    function fit() {
+      const rect = host.getBoundingClientRect();
+      if (rect.width === 0) return;
+      const [tx, ty] = triggerPosition();
+      const xs = [tx, ...nodes.flatMap((node) => [node.position[0], node.position[0] + W])];
+      const ys = [ty, ...nodes.flatMap((node) => [node.position[1], node.position[1] + heightOf(ctx.outputsOf(node))])];
+      const minX = Math.min(...xs) - 40;
+      const maxX = Math.max(...xs, tx + TRIGGER_W) + 40;
+      const minY = Math.min(...ys) - 40;
+      const maxY = Math.max(...ys, ty + HEAD) + 40;
+      state.z = Math.max(0.3, Math.min(1, rect.width / (maxX - minX), rect.height / (maxY - minY)));
+      state.x = (rect.width - (maxX - minX) * state.z) / 2 - minX * state.z;
+      state.y = (rect.height - (maxY - minY) * state.z) / 2 - minY * state.z;
+      apply();
+    }
+
+    function zoomAt(factor, clientX, clientY) {
+      const rect = host.getBoundingClientRect();
+      const px = (clientX ?? rect.left + rect.width / 2) - rect.left;
+      const py = (clientY ?? rect.top + rect.height / 2) - rect.top;
+      const z = Math.max(0.3, Math.min(2, state.z * factor));
+      state.x = px - ((px - state.x) * z) / state.z;
+      state.y = py - ((py - state.y) * z) / state.z;
+      state.z = z;
+      apply();
+    }
+
+    // ---------- pointer handling: drag node, draw link, pan ----------
+    let gesture = null;
+    let temp = null;
+    host.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0) return;
+      if (event.target.closest('.wcv-tools, .wcv-menu')) return;
+      host.focus({ preventScroll: true });
+      const port = event.target.closest('.wcv-port.out');
+      const box = event.target.closest('.wcv-node');
+      const hit = event.target.closest('.wcv-hit');
+      if (port && box) {
+        const from = box.dataset.id;
+        if (from === TRIGGER_ID) return;
+        gesture = { kind: 'link', from, key: port.dataset.key || 'main' };
+        temp = document.createElementNS(SVG, 'path');
+        temp.setAttribute('class', 'wcv-edge temp');
+        svg.append(temp);
+      } else if (hit) {
+        state.edge = { from: hit.dataset.from, key: hit.dataset.key, to: hit.dataset.to };
+        state.selected = null;
+        for (const node of boxes.values()) node.classList.remove('sel');
+        drawEdges();
+        return;
+      } else if (box) {
+        const id = box.dataset.id;
+        const node = nodes.find((entry) => entry.id === id);
+        gesture = { kind: 'node', id, node, startX: event.clientX, startY: event.clientY, origin: node ? [...node.position] : null, moved: false };
+      } else {
+        gesture = { kind: 'pan', startX: event.clientX, startY: event.clientY, originX: state.x, originY: state.y, moved: false };
+      }
+      host.setPointerCapture(event.pointerId);
+    });
+    host.addEventListener('pointermove', (event) => {
+      if (!gesture) return;
+      if (gesture.kind === 'link') {
+        const [x1, y1] = outPoint(gesture.from, gesture.key);
+        const [x2, y2] = toWorld(event.clientX, event.clientY);
+        temp.setAttribute('d', curve(x1, y1, x2, y2));
+      } else if (gesture.kind === 'node' && gesture.node) {
+        const dx = (event.clientX - gesture.startX) / state.z;
+        const dy = (event.clientY - gesture.startY) / state.z;
+        if (!gesture.moved && Math.hypot(dx, dy) < 3) return;
+        gesture.moved = true;
+        gesture.node.position = [Math.round(gesture.origin[0] + dx), Math.round(gesture.origin[1] + dy)];
+        const box = boxes.get(gesture.id);
+        box.style.left = `${gesture.node.position[0]}px`;
+        box.style.top = `${gesture.node.position[1]}px`;
+        // The trigger follows the start nodes.
+        const trigger = boxes.get(TRIGGER_ID);
+        const [tx, ty] = triggerPosition();
+        trigger.style.left = `${tx}px`;
+        trigger.style.top = `${ty}px`;
+        drawEdges();
+      } else if (gesture.kind === 'pan') {
+        const dx = event.clientX - gesture.startX;
+        const dy = event.clientY - gesture.startY;
+        if (Math.hypot(dx, dy) > 3) gesture.moved = true;
+        state.x = gesture.originX + dx;
+        state.y = gesture.originY + dy;
+        apply();
+      }
+    });
+    const finish = (event) => {
+      const current = gesture;
+      gesture = null;
+      if (!current) return;
+      if (current.kind === 'link') {
+        temp?.remove();
+        temp = null;
+        const target = document.elementFromPoint(event.clientX, event.clientY)?.closest('.wcv-node');
+        if (target && target.dataset.id !== TRIGGER_ID) {
+          link(current.from, current.key, target.dataset.id);
+        } else if (!target) {
+          // Dropped on empty canvas: pick a node type to add right there, already linked.
+          const position = toWorld(event.clientX, event.clientY);
+          const rect = host.getBoundingClientRect();
+          ctx.palette({ left: event.clientX - rect.left, top: event.clientY - rect.top, host }, (type) => {
+            ctx.addNodeAt(type, [Math.round(position[0]), Math.round(position[1] - HEAD / 2)], { id: current.from, key: current.key });
+          });
+        }
+      } else if (current.kind === 'node') {
+        if (current.moved) ctx.onChange();
+        else select(current.id);
+      } else if (current.kind === 'pan' && !current.moved) {
+        if (state.selected || state.edge) select(null);
+      }
+    };
+    host.addEventListener('pointerup', finish);
+    host.addEventListener('pointercancel', () => {
+      gesture = null;
+      temp?.remove();
+      temp = null;
+    });
+    host.addEventListener(
+      'wheel',
+      (event) => {
+        event.preventDefault();
+        zoomAt(event.deltaY < 0 ? 1.1 : 1 / 1.1, event.clientX, event.clientY);
+      },
+      { passive: false },
+    );
+    host.addEventListener('keydown', (event) => {
+      if (event.key !== 'Delete' && event.key !== 'Backspace') return;
+      if (state.edge) {
+        event.preventDefault();
+        removeEdge(state.edge);
+      } else if (state.selected && state.selected !== TRIGGER_ID) {
+        event.preventDefault();
+        ctx.removeNode(state.selected);
+      }
+    });
+
+    const tool = (text, title, onClick) => {
+      const button = el('button', 'wcv-tool', text);
+      button.type = 'button';
+      button.title = title;
+      button.onclick = onClick;
+      toolbar.append(button);
+      return button;
+    };
+    tool('+ เพิ่ม node', 'เพิ่ม node ใหม่ (หรือลากจากจุดขวาของ node ไปที่ว่าง)', (event) => {
+      const rect = host.getBoundingClientRect();
+      const buttonRect = event.currentTarget.getBoundingClientRect();
+      const center = toWorld(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      ctx.palette({ left: buttonRect.left - rect.left, top: buttonRect.bottom - rect.top + 4, host }, (type) => {
+        ctx.addNodeAt(type, [Math.round(center[0] - W / 2), Math.round(center[1] - HEAD)], null);
+      });
+    }).classList.add('pri');
+    tool('−', 'ซูมออก', () => zoomAt(1 / 1.2));
+    tool('+', 'ซูมเข้า', () => zoomAt(1.2));
+    tool('⤢', 'พอดีจอ', fit);
+    tool('จัดเรียง', 'จัดตำแหน่ง node อัตโนมัติ', () => {
+      autoLayout(nodes, ctx.outputsOf, false);
+      redraw();
+      fit();
+      ctx.onChange();
+    });
+
+    redraw();
+    apply();
+    if (!view) requestAnimationFrame(fit);
+    return { redraw, select, fit };
+  }
+
+  window.MimiCanvas = { mount, autoLayout };
+})();

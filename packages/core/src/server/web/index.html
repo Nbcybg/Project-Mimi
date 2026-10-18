@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>Mimi</title>
+<link rel="stylesheet" href="app.css">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon.png">
+<link rel="apple-touch-icon" href="/icon.png">
+<meta name="theme-color" content="#141618">
+<meta name="apple-mobile-web-app-capable" content="yes">
+</head>
+<body>
+<div class="app show-side" id="app">
+  <aside class="side">
+    <div class="brand"><div class="logo">M</div><b>Mimi</b><span class="conn" id="conn">offline</span></div>
+    <button class="search" id="open-search" type="button"><span>ค้นหาทุกแชต…</span><kbd>Ctrl K</kbd></button>
+    <div class="side-head"><span>แชต</span><button id="new-chat" type="button">+ ใหม่</button></div>
+    <div class="chats" id="chat-list"></div>
+    <nav class="nav" id="nav">
+      <button type="button" data-view="chat" class="on">แชต</button>
+      <button type="button" data-view="agents">Agent</button>
+      <button type="button" data-view="hub">Hub</button>
+      <button type="button" data-view="settings">ตั้งค่า</button>
+    </nav>
+    <div class="status"><span class="dot" id="pc-dot"></span><span id="pc">PC agent: ไม่ได้เชื่อมต่อ</span></div>
+  </aside>
+
+  <!-- chat -->
+  <main class="main" id="view-chat">
+    <div class="top">
+      <button class="back" id="back" type="button" aria-label="กลับ">‹</button>
+      <div class="stack" id="chat-avatars"></div>
+      <div class="ttl"><h1 id="chat-title">Mimi</h1><div class="sub" id="chat-sub"></div></div>
+      <div class="right">
+        <button class="btn ghost hide-narrow" id="new-session" type="button" title="เริ่ม session ใหม่เอง (ปกติระบบเริ่มให้อัตโนมัติเมื่อเงียบไปนาน)">+ session</button>
+        <button class="btn ghost" id="toggle-rail" type="button">ข้อมูล</button>
+      </div>
+    </div>
+    <div class="statusbar" id="statusbar" hidden></div>
+    <div class="stage" id="stage">
+      <img class="figure" id="figure" alt="" hidden>
+      <div class="fade"></div>
+      <div class="log" id="log"><div class="wrap" id="log-inner"></div></div>
+    </div>
+    <div class="composer"><div class="wrap">
+      <div class="banner" id="old-session" hidden><span>กำลังดู session เก่า</span><button class="btn" id="to-latest" type="button">กลับไป session ล่าสุด</button></div>
+      <div class="box" id="box">
+        <div class="menu" id="attach-menu" hidden>
+          <button type="button" data-pick="image/*">รูปภาพ <small>หลายรูปได้</small></button>
+          <button type="button" data-pick="">ไฟล์ / เอกสาร <small>PDF, CSV, …</small></button>
+          <button type="button" data-pick="audio/*">ไฟล์เสียง</button>
+        </div>
+        <div class="mention" id="mention" hidden></div>
+        <div class="staged" id="staged" hidden></div>
+        <div class="line">
+          <button class="ic" id="attach" type="button" title="แนบรูป ไฟล์ หรือเอกสาร" aria-label="แนบไฟล์"></button>
+          <textarea id="input" rows="1" placeholder="พิมพ์ข้อความ…"></textarea>
+          <button class="ic" id="mic" type="button" title="อัดเสียง" aria-label="อัดเสียง"></button>
+          <button class="ic stop" id="stop" type="button" title="หยุด" aria-label="หยุด" hidden></button>
+          <button class="ic send" id="send" type="button" title="ส่ง (Enter)" aria-label="ส่ง"></button>
+        </div>
+        <div class="hints" id="hints"></div>
+      </div>
+      <input type="file" id="file-input" multiple hidden>
+    </div></div>
+  </main>
+
+  <main class="main page" id="view-agents" hidden></main>
+  <main class="main page" id="view-hub" hidden></main>
+  <main class="main page" id="view-settings" hidden></main>
+
+  <aside class="rail" id="rail" hidden></aside>
+</div>
+
+<div id="overlay"></div>
+<div id="toasts"></div>
+<div id="gate">
+  <form id="gate-form">
+    <strong>เชื่อมต่อ Mimi</strong>
+    <p>ใส่ token ของเครื่องนี้ (หรือเปิดลิงก์ที่แอปพิมพ์ไว้ตอนเริ่มทำงาน)</p>
+    <input class="inp" id="token" type="password" autocomplete="off" placeholder="token">
+    <p id="gate-error" style="color: var(--bad)"></p>
+    <button class="btn pri" type="submit">เชื่อมต่อ</button>
+  </form>
+</div>
+<script src="app.js"></script>
+<script src="feature-tools.js"></script>
+<script src="feature-providers.js"></script>
+<script src="feature-triggers.js"></script>
+<script src="feature-canvas.js"></script>
+<script src="feature-workflows.js"></script>
+<script src="feature-secrets.js"></script>
+<script src="feature-chat.js"></script>
+<script src="feature-knowledge.js"></script>
+<script src="feature-profile.js"></script>
+<script src="feature-notify.js"></script>
+</body>
+</html>

@@ -436,6 +436,9 @@ export type ClientMessage =
   | { type: 'push-unsubscribe'; endpoint: string }
   | { type: 'push-devices' }
   | { type: 'push-test' }
+  /** Backups of the user folder: list, make one now (download with GET /api/backups/<name>). */
+  | { type: 'backups-list' }
+  | { type: 'backup-create'; includeSecrets: boolean }
   /** The user's profile (key/value facts and who may see them). */
   | { type: 'profile-get' }
   | { type: 'profile-save'; profile: UserProfileView }
@@ -540,6 +543,7 @@ export type ServerMessage =
   | { type: 'knowledge'; collections: KnowledgeCollectionView[]; saved?: string }
   | { type: 'profile'; profile: UserProfileView; saved?: boolean }
   | { type: 'notifications'; items: NotificationItem[]; unread: number }
+  | { type: 'backups'; backups: Array<{ name: string; bytes: number; createdAt: string }>; dir: string; created?: string }
   | { type: 'push-key'; publicKey: string }
   | { type: 'push-devices'; devices: PushDeviceView[]; tested?: number }
   /** What an n8n import produced (a preview, or what was saved and what failed). */

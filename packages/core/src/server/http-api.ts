@@ -1,3 +1,5 @@
+import path from 'node:path';
+import fs from 'node:fs';
 import type http from 'node:http';
 import type { AttachmentView } from '@mimi/shared';
 import { type AgentImages, isImageSlot } from '../chat/agent-images.ts';
@@ -23,6 +25,8 @@ export interface HttpApiDeps {
   /** Fires a webhook trigger; null when the key matches no active trigger. */
   /** `secret` is the caller's `x-mimi-secret` header (or `?secret=`), for workflows that ask for one. */
   webhook(key: string, payload: string, secret?: string): Promise<WebhookReply | null>;
+  /** Folder of backup files offered for download. */
+  backupsDir?: string;
 }
 
 export function toAttachmentView(attachment: Attachment): AttachmentView {
@@ -133,6 +137,18 @@ export async function handleHttpApi(
         data,
       });
       sendJson(response, 200, toAttachmentView(attachment));
+    } else if (resource === 'backups' && request.method === 'GET' && rest.length === 1 && deps.backupsDir) {
+      const name = rest[0]!;
+      if (!/^mimi-backup-[\w-]+\.tar\.gz$/.test(name)) throw new HttpError(404, 'No such backup.');
+      const file = path.join(deps.backupsDir, name);
+      if (!fs.existsSync(file)) throw new HttpError(404, 'No such backup.');
+      response.writeHead(200, {
+        'content-type': 'application/gzip',
+        'content-length': fs.statSync(file).size,
+        'content-disposition': `attachment; filename="${name}"`,
+        'cache-control': 'no-store',
+      });
+      fs.createReadStream(file).pipe(response);
     } else if (resource === 'files' && request.method === 'GET' && rest.length === 1) {
       const attachment = deps.attachments.get(rest[0]!);
       const data = attachment && deps.attachments.read(attachment.id);

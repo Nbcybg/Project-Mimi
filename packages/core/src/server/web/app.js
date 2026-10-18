@@ -1703,6 +1703,11 @@
     if (profileHook) profileHook.render(profile);
     stack.append(profile);
 
+    const backup = el('div', 'panel form');
+    backup.append(el('h3', '', 'สำรอง / กู้คืนข้อมูล'));
+    if (profileHook) profileHook.renderBackups(backup);
+    stack.append(backup);
+
     // Providers: add, edit, remove and manage the model list (feature-providers.js).
     const providers = el('div', 'panel form');
     providers.append(el('h3', '', 'ผู้ให้บริการโมเดล'));
@@ -2349,6 +2354,11 @@
           // A live notification still gets its toast below.
           if (message.type !== 'notification') return;
         }
+        if (message.type === 'backups') {
+          window.MimiHooks?.profile?.onBackups(message);
+          return;
+        }
+        if (message.type === 'error') window.MimiHooks?.profile?.onError?.();
         if (message.type === 'profile') {
           window.MimiHooks?.profile?.onMessage(message);
           return;

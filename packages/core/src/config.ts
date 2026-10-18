@@ -42,6 +42,8 @@ export interface CoreConfig {
   userProfilePath: string;
   /** Values of profile fields marked "this machine only". */
   userProfileLocalPath: string;
+  /** Where backups go (outside the user folder, so a backup never contains older backups). */
+  backupsDir: string;
   /** This server's Web Push (VAPID) key pair; machine-local. */
   pushKeysPath: string;
   /** VAPID contact sent to push services (`mailto:` or `https:`). */
@@ -114,6 +116,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
     userProfilePath: path.join(userDir, 'profile.json'),
     userProfileLocalPath: path.join(dataDir, 'profile-local.json'),
     pushKeysPath: path.join(dataDir, 'push-vapid.json'),
+    backupsDir: path.resolve(rootDir, env.MIMI_BACKUP_DIR ?? 'backups'),
     pushContact: env.MIMI_PUSH_CONTACT ?? 'mailto:mimi@localhost',
     workflowsDir: path.join(userDir, 'workflows'),
     workflowStatePath: path.join(dataDir, 'workflow-state.json'),

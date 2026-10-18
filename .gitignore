@@ -16,3 +16,5 @@ _old/
 push-vapid.json
 secrets.json
 auth.json
+profile-local.json
+backups/

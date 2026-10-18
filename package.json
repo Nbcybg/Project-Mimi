@@ -12,6 +12,8 @@
   "scripts": {
     "app": "node --env-file-if-exists=.env packages/core/src/app/launcher.ts",
     "app:install": "node packages/core/src/app/install-shortcut.ts",
+    "backup": "node --env-file-if-exists=.env packages/core/src/cli/backup.ts",
+    "restore": "node --env-file-if-exists=.env packages/core/src/cli/backup.ts restore",
     "build:desktop": "node scripts/build-desktop.mjs",
     "chat": "node --env-file-if-exists=.env packages/core/src/cli/chat.ts",
     "cost": "node --env-file-if-exists=.env packages/core/src/cli/cost.ts",

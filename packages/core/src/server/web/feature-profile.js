@@ -233,6 +233,73 @@
     rerender();
   }
 
+  // ---------- backups (same settings page) ----------
+  let backups = null;
+  let backupDir = '';
+  let backingUp = false;
+
+  function renderBackups(panel) {
+    if (backups === null) {
+      backups = [];
+      M().send({ type: 'backups-list' });
+    }
+    panel.append(el('p', 'hint', 'สำรองทั้งโฟลเดอร์ user (agent, workflow, แชต, ความจำ, โปรไฟล์, ฐานข้อมูล) เป็นไฟล์ .tar.gz · ระบบสำรองให้อัตโนมัติวันละครั้ง เก็บ 7 ไฟล์ล่าสุด · กู้คืน: ปิดแอปแล้วรัน npm run restore -- <ไฟล์>'));
+    const secrets = el('input');
+    secrets.type = 'checkbox';
+    secrets.checked = true;
+    const secretLabel = el('label', 'wcheck');
+    secretLabel.append(secrets, el('span', '', 'รวมคีย์ / token (ถ้ารวม ต้องเก็บไฟล์ให้ดี)'));
+    const row = el('div', 'hstack');
+    row.append(
+      button('btn pri', backingUp ? 'กำลังสำรอง…' : 'สำรองตอนนี้', () => {
+        if (backingUp) return;
+        backingUp = true;
+        M().send({ type: 'backup-create', includeSecrets: secrets.checked });
+        rerender();
+      }),
+      secretLabel,
+    );
+    panel.append(row);
+    const list = el('div', 'nlist');
+    for (const backup of backups.slice(0, 10)) {
+      const line = el('div', 'hstack ndevice');
+      line.append(
+        el('b', '', backup.name),
+        el('span', 'faint', `${(backup.bytes / 1048576).toFixed(1)} MB · ${M().fmtDate(backup.createdAt)}`),
+        button('btn ghost', 'ดาวน์โหลด', () => download(backup.name)),
+      );
+      list.append(line);
+    }
+    if (backups.length === 0) list.append(el('p', 'hint', 'ยังไม่มีไฟล์สำรอง'));
+    panel.append(list);
+    if (backupDir) panel.append(el('p', 'hint', `เก็บไว้ที่ ${backupDir}`));
+  }
+
+  async function download(name) {
+    try {
+      const response = await M().api(`/api/backups/${encodeURIComponent(name)}`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = name;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    } catch (error) {
+      M().toast('ดาวน์โหลดไม่ได้', error.message, true);
+    }
+  }
+
+  function onBackups(message) {
+    backups = message.backups || [];
+    backupDir = message.dir || '';
+    if (message.created) {
+      backingUp = false;
+      M().toast('สำรองข้อมูลแล้ว ✓', message.created);
+    }
+    rerender();
+  }
+
   window.MimiHooks = window.MimiHooks || {};
-  window.MimiHooks.profile = { render, onMessage };
+  window.MimiHooks.profile = { render, onMessage, renderBackups, onBackups, onError: () => { if (backingUp) { backingUp = false; rerender(); } } };
 })();

@@ -24,6 +24,7 @@ import { deleteAgent, saveAgent } from '../agents/loader.ts';
 import { importN8n } from '../workflows/n8n-import.ts';
 import { renderIconPng } from '../app/icon.ts';
 import { AuthLimiter } from './auth-limiter.ts';
+import { createBackup, listBackups } from '../backup/backup.ts';
 import { AppSettings, MODEL_KEYS } from '../app/app-settings.ts';
 import { presetSecretKey } from '../app/secrets.ts';
 import { AgentImages } from '../chat/agent-images.ts';
@@ -774,6 +775,15 @@ export async function startServer(
         reply({ type: 'workflow-import', agent, saved: Boolean(message.save), workflows, report, errors });
         break;
       }
+      case 'backups-list':
+        reply({ type: 'backups', backups: listBackups(config.backupsDir), dir: config.backupsDir });
+        break;
+      case 'backup-create':
+        void createBackup({ userDir: config.userDir, db: core.db, outDir: config.backupsDir, includeSecrets: message.includeSecrets !== false }).then(
+          (made) => reply({ type: 'backups', backups: listBackups(config.backupsDir), dir: config.backupsDir, created: made.name }),
+          (error: Error) => reply({ type: 'error', message: `Backup failed: ${error.message}` }),
+        );
+        break;
       case 'notifications-list':
         reply({ type: 'notifications', ...core.notifications.list() });
         break;
@@ -963,6 +973,7 @@ export async function startServer(
     },
     agentExists: (name: string) => core.agents.names().includes(name),
     imagesChanged: () => broadcast(agentsMessage()),
+    backupsDir: config.backupsDir,
     webhook: async (key: string, payload: string, secret?: string): Promise<WebhookReply | null> => {
       const trigger = core.triggers.byWebhookKey(key);
       if (trigger && trigger.status === 'active') {
@@ -989,6 +1000,23 @@ export async function startServer(
       return { status: 200, body: { ok: true, result: result.result.slice(0, 500) } };
     },
   };
+  // One automatic backup a day (the newest 7 are kept), checked at start and hourly.
+  const autoBackup = async () => {
+    const newest = listBackups(config.backupsDir).find((backup) => backup.name.includes('-auto'));
+    if (newest && Date.now() - Date.parse(newest.createdAt) < 23 * 3600_000) return;
+    try {
+      const made = await createBackup({ userDir: config.userDir, db: core.db, outDir: config.backupsDir, includeSecrets: true });
+      const auto = made.name.replace('.tar.gz', '-auto.tar.gz');
+      fs.renameSync(path.join(config.backupsDir, made.name), path.join(config.backupsDir, auto));
+      const autos = listBackups(config.backupsDir).filter((backup) => backup.name.includes('-auto'));
+      for (const old of autos.slice(7)) fs.rmSync(path.join(config.backupsDir, old.name), { force: true });
+    } catch (error) {
+      console.error(`automatic backup failed: ${(error as Error).message}`);
+    }
+  };
+  const backupTimer = setInterval(() => void autoBackup(), 3600_000);
+  backupTimer.unref();
+  setTimeout(() => void autoBackup(), 60_000).unref();
   let appIcon: Buffer | undefined;
   const server = http.createServer(async (request, response) => {
     const url = new URL(request.url ?? '/', 'http://localhost');
@@ -1118,6 +1146,7 @@ export async function startServer(
     port: (server.address() as AddressInfo).port,
     async close() {
       clearInterval(heartbeat);
+      clearInterval(backupTimer);
       active?.abort();
       for (const socket of wss.clients) socket.terminate();
       await new Promise<void>((resolve) => wss.close(() => resolve()));

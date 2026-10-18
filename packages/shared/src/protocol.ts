@@ -548,7 +548,7 @@ export type ServerMessage =
   /** Messages of a session were hidden or added outside a turn; clients showing it reload it. */
   | { type: 'chat-changed'; chatId: number; sessionId: number }
   /** Answer to `rewind`: the text of the message that was taken back, to edit and resend. */
-  | { type: 'rewound'; chatId: number; sessionId: number; text: string }
+  | { type: 'rewound'; chatId: number; sessionId: number; text: string; restored?: string[]; skipped?: string[] }
   | { type: 'search-results'; query: string; hits: SearchHit[] }
   | { type: 'skills'; skills: SkillView[]; saved?: string }
   /** The tool pool, its presets and the custom tool definitions. */

@@ -275,6 +275,25 @@
     const urgentLabel = el('label', 'wcheck');
     urgentLabel.append(urgent, el('span', '', 'ขออนุมัติยังเด้งในช่วงห้ามรบกวน'));
     panel.append(urgentLabel);
+    // Read-aloud is a per-device choice (this browser only).
+    const speakBox = el('input');
+    speakBox.type = 'checkbox';
+    try {
+      speakBox.checked = localStorage.getItem(M().SPEAK_KEY) === '1';
+    } catch {
+      speakBox.disabled = true;
+    }
+    speakBox.onchange = () => {
+      try {
+        localStorage.setItem(M().SPEAK_KEY, speakBox.checked ? '1' : '0');
+      } catch {
+        // storage blocked: nothing to remember
+      }
+      if (speakBox.checked) M().speak('เปิดอ่านออกเสียงคำตอบแล้ว');
+    };
+    const speakLabel = el('label', 'wcheck');
+    speakLabel.append(speakBox, el('span', '', 'อ่านคำตอบออกเสียงอัตโนมัติ (เฉพาะเครื่องนี้)'));
+    panel.append(speakLabel);
     const save = button('btn pri', 'บันทึก', () =>
       M().send({
         type: 'preferences-save',

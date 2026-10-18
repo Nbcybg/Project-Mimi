@@ -195,6 +195,41 @@
     if (last < text.length) node.append(text.slice(last));
   }
   /** Renders message text as DOM nodes (never as HTML): code blocks, inline code, bold, *actions*, links, @mentions. */
+  // ---------- read aloud (the browser's own voices; Edge has natural Thai ones) ----------
+  const SPEAK_KEY = 'mimi.autoSpeak';
+  const autoSpeak = () => {
+    try {
+      return localStorage.getItem(SPEAK_KEY) === '1';
+    } catch {
+      return false;
+    }
+  };
+  /** Markdown and links out, so the voice reads words, not symbols. */
+  const speakable = (text) =>
+    String(text || '')
+      .replace(/```[\s\S]*?```/g, ' (โค้ด) ')
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+      .replace(/https?:\/\/\S+/g, ' (ลิงก์) ')
+      .replace(/[*_#>`|~]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  function speak(text) {
+    if (!('speechSynthesis' in window)) return toast('อ่านออกเสียงไม่ได้', 'เบราว์เซอร์นี้ไม่มีเสียงอ่าน', true);
+    const words = speakable(text);
+    if (!words) return;
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(words.slice(0, 4000));
+    utterance.lang = /[\u0E00-\u0E7F]/.test(words) ? 'th-TH' : 'en-US';
+    const voices = window.speechSynthesis.getVoices().filter((voice) => voice.lang.replace('_', '-').toLowerCase().startsWith(utterance.lang.slice(0, 2).toLowerCase()));
+    const voice = voices.find((entry) => /natural|online|neural/i.test(entry.name)) || voices[0];
+    if (voice) utterance.voice = voice;
+    window.speechSynthesis.speak(utterance);
+  }
+  function speakButton(text) {
+    const control = button('speak', '🔊', () => speak(text), 'อ่านออกเสียง');
+    return control;
+  }
+
   function renderText(node, text) {
     node.replaceChildren();
     text.split(/```(?:[\w-]*\n)?([\s\S]*?)```/g).forEach((part, index) => {
@@ -483,6 +518,7 @@
       bubble.dataset.role = 'assistant';
       bubble.dataset.agent = message.agent;
       renderText(bubble, message.text);
+      bubble.append(speakButton(message.text));
       target.body.append(bubble);
     }
     if (message.approval) target.body.append(approvalNode(message.approval));
@@ -703,6 +739,7 @@
         const usage = event.usage;
         const hit = usage.inputTokens ? Math.round((usage.cachedTokens / usage.inputTokens) * 100) : 0;
         add(el('div', 'note use', `${event.rounds} รอบ · in ${usage.inputTokens} (cache ${hit}%) · out ${usage.outputTokens} · $${usage.costUsd.toFixed(5)}`));
+        if (event.reason === 'stop' && event.text && autoSpeak()) speak(event.text);
         live = null;
         state.typing = null;
         renderHeader();
@@ -2150,6 +2187,8 @@
         if (showing(message.chatId, message.sessionId)) send({ type: 'chat-open', chatId: message.chatId, sessionId: state.latest ? undefined : message.sessionId });
         break;
       case 'rewound':
+        if (message.restored && message.restored.length) toast(`ย้อนไฟล์กลับ ${message.restored.length} ไฟล์`, message.restored.join('\n'));
+        if (message.skipped && message.skipped.length) toast('บางไฟล์ย้อนไม่ได้', message.skipped.join('\n'), true);
         input.value = message.text;
         autosize();
         input.focus();
@@ -2345,6 +2384,8 @@
     messageStore,
     compose,
     modelSelect,
+    speak,
+    SPEAK_KEY,
     openChat,
     setView,
   };

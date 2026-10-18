@@ -415,7 +415,9 @@ export function createChatApi(context: ChatApiContext) {
           throw new Error('That part of the conversation was already summarized. Start a new session instead.');
         }
         messages.hideFrom(session.thread, target.id);
-        reply({ type: 'rewound', chatId: session.chatId, sessionId: session.id, text: stripAttachments(target.text) });
+        // Files the agents wrote since that message go back to how they were.
+        const files = core.fileSnapshots.restoreSince(session.thread, target.createdAt);
+        reply({ type: 'rewound', chatId: session.chatId, sessionId: session.id, text: stripAttachments(target.text), restored: files.restored, skipped: files.skipped });
         broadcast({ type: 'chat-changed', chatId: session.chatId, sessionId: session.id });
         broadcast(chatsMessage());
         return true;

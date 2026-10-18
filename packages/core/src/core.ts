@@ -8,6 +8,7 @@ import { SecretStore } from './app/secrets.ts';
 import { AttachmentStore, PROMPTS } from './chat/attachments.ts';
 import { ChatStore } from './chat/chat-store.ts';
 import { ChatEngine } from './chat/engine.ts';
+import { FileSnapshots, SnapshotExecutor } from './chat/file-snapshots.ts';
 import { HistoryFiles } from './chat/history-files.ts';
 import { SessionFiles } from './chat/session-files.ts';
 import { MemoStore, StatusStore } from './chat/state-store.ts';
@@ -56,7 +57,7 @@ import { UserProfileStore } from './profile/user-profile.ts';
 import { NotificationCenter } from './notify/notifications.ts';
 import { loadOrCreateVapid, type VapidKeys } from './notify/web-push.ts';
 import { Approvals } from './workflows/approvals.ts';
-import { allowedPath, htmlToText, kindOfFile, MAX_MEDIA_BYTES, MAX_READ_BYTES, readLimited } from './workflows/file-nodes.ts';
+import { allowedPath, documentText, htmlToText, kindOfFile } from './workflows/file-nodes.ts';
 import { WorkflowRunStore } from './workflows/run-history.ts';
 import { DEFAULT_TOKEN_SECRET, TelegramHub, type TelegramListener } from './workflows/telegram.ts';
 import { matchText } from './workflows/text-match.ts';
@@ -116,6 +117,8 @@ export interface Core {
   triggerPool: TriggerPool;
   /** Past runs of every workflow, with node input/output. */
   workflowRuns: WorkflowRunStore;
+  /** Files as they were before agents wrote them (restored on rewind). */
+  fileSnapshots: FileSnapshots;
   /** Estimated model spending since midnight (configured zone). */
   spentToday(): number;
   /** Stored notifications and the browsers they are pushed to. */
@@ -342,6 +345,11 @@ export async function createCore(
   const tools = createToolRegistry({
     knowledge,
     profile,
+    // Agents read PDFs / images / Excel / text in the allowed folders (e.g. saved mail attachments).
+    readDocument: async (requested, agentName, allowedDirs) => {
+      const file = allowedPath(requested, allowedDirs);
+      return documentText(file, (data, mime, name) => workflowRunner.readMedia!({ agent: agentName, data, mime, name, instruction: '' }));
+    },
     memory,
     messages,
     triggers,
@@ -400,6 +408,7 @@ export async function createCore(
   });
   const jobs = new PostTurnJobs(writer, compactor, settings.memory.auto_write);
 
+  const fileSnapshots = new FileSnapshots(db);
   const deps: AgentLoopDeps = {
     budgetCheck: () => budgetCheck(),
     messages,
@@ -408,7 +417,7 @@ export async function createCore(
     usage,
     models,
     tools: toolPool,
-    executor: new RoutingExecutor({ pc: options.pc, localPcTools: config.localPcTools }),
+    executor: new SnapshotExecutor(new RoutingExecutor({ pc: options.pc, localPcTools: config.localPcTools }), fileSnapshots, { pc: options.pc, localPcTools: config.localPcTools }),
     gate: new PermissionGate(broker, {
       timeoutMs: config.permissionTimeoutMs,
       overrides: settings.permission,
@@ -648,15 +657,7 @@ export async function createCore(
     let title = input.title?.trim() ?? '';
     if (input.path?.trim()) {
       const file = allowedPath(input.path, config.allowedDirs);
-      const { kind, mime } = kindOfFile(file);
-      if (kind === 'xlsx') throw new Error('Excel is not supported yet; save the sheet as CSV.');
-      const data = await readLimited(file, kind === 'pdf' || kind === 'image' || kind === 'audio' ? MAX_MEDIA_BYTES : MAX_READ_BYTES);
-      text =
-        kind === 'pdf' || kind === 'image' || kind === 'audio'
-          ? await media(data, mime, path.basename(file))
-          : kind === 'html'
-            ? htmlToText(data.toString('utf8'))
-            : data.toString('utf8');
+      text = await documentText(file, media);
       source = file;
       title ||= path.basename(file);
     } else if (input.url?.trim()) {
@@ -984,6 +985,7 @@ export async function createCore(
     profile,
     notifications,
     spentToday,
+    fileSnapshots,
     approvals,
     telegram,
     chatTriggers,

@@ -17,6 +17,7 @@ const MIGRATIONS = [
   '009-knowledge.sql',
   '010-notifications.sql',
   '011-knowledge-agents.sql',
+  '012-file-snapshots.sql',
 ];
 
 function migrate(db: Db): void {

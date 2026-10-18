@@ -132,7 +132,7 @@ const MIME: Record<string, string> = {
   flac: 'audio/flac',
 };
 
-export type FileKind = 'csv' | 'json' | 'text' | 'html' | 'pdf' | 'image' | 'audio' | 'xlsx';
+export type FileKind = 'csv' | 'json' | 'text' | 'html' | 'pdf' | 'image' | 'audio' | 'xlsx' | 'xls';
 
 /** What a file is, from its extension. */
 export function kindOfFile(name: string): { kind: FileKind; mime: string } {
@@ -140,7 +140,8 @@ export function kindOfFile(name: string): { kind: FileKind; mime: string } {
   if (ext === 'csv' || ext === 'tsv') return { kind: 'csv', mime: 'text/csv' };
   if (ext === 'json' || ext === 'jsonl') return { kind: 'json', mime: 'application/json' };
   if (ext === 'html' || ext === 'htm') return { kind: 'html', mime: 'text/html' };
-  if (ext === 'xlsx' || ext === 'xls') return { kind: 'xlsx', mime: 'application/vnd.ms-excel' };
+  if (ext === 'xlsx') return { kind: 'xlsx', mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
+  if (ext === 'xls') return { kind: 'xls', mime: 'application/vnd.ms-excel' };
   const mime = MIME[ext];
   if (mime === 'application/pdf') return { kind: 'pdf', mime };
   if (mime?.startsWith('image/')) return { kind: 'image', mime };
@@ -180,4 +181,22 @@ export function parseJsonFile(text: string, normalize: (value: unknown) => FlowI
       throw new Error('the file is not valid JSON or JSON Lines');
     }
   }
+}
+
+/** Plain text of any supported document; PDFs, images and audio go through `readMedia` (a model). */
+export async function documentText(
+  file: string,
+  readMedia: ((data: Buffer, mime: string, name: string) => Promise<string>) | undefined,
+): Promise<string> {
+  const { kind, mime } = kindOfFile(file);
+  const name = path.basename(file);
+  if (kind === 'xls') throw new Error(`"${name}" is an old .xls file; save it as .xlsx (or CSV) first`);
+  if (kind === 'pdf' || kind === 'image' || kind === 'audio') {
+    if (!readMedia) throw new Error('reading PDFs, images and audio needs a vision / transcript model');
+    return readMedia(await readLimited(file, MAX_MEDIA_BYTES), mime, name);
+  }
+  const data = await readLimited(file, MAX_READ_BYTES);
+  if (kind === 'xlsx') return (await import('./xlsx.ts')).xlsxText(data);
+  if (kind === 'html') return htmlToText(data.toString('utf8'));
+  return data.toString('utf8');
 }

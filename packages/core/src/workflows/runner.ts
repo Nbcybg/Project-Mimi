@@ -20,6 +20,7 @@ import type { ApprovalDecision } from './approvals.ts';
 import { DEFAULT_TOKEN_SECRET, sendTelegram } from './telegram.ts';
 import { runCodeIsolated } from './code-sandbox.ts';
 import { assertPublicUrl, type Lookup } from './net-guard.ts';
+import { readXlsx, sheetItems } from './xlsx.ts';
 import fsp from 'node:fs/promises';
 import { addTo, type DateUnit, diffIn, formatDate, parseDate, startOf } from './datetime.ts';
 import {
@@ -849,7 +850,15 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
         const kind = wanted === 'auto' ? detected.kind : wanted;
         const name = asText(config.name).trim() || 'text';
         const base = { ...item.json, file: path.basename(file) };
-        if (kind === 'xlsx') throw new Error('extract_file node: Excel is not supported yet; save the sheet as CSV');
+        if (kind === 'xls') throw new Error('extract_file node: old .xls files are not supported; save it as .xlsx or CSV');
+        if (kind === 'xlsx') {
+          const sheets = readXlsx(await readLimited(file, MAX_READ_BYTES));
+          const wanted = asText(config.sheet).trim();
+          const sheet = wanted ? sheets.find((entry) => entry.name === wanted) : sheets[0];
+          if (!sheet) throw new Error(`extract_file node: no sheet "${wanted}" (sheets: ${sheets.map((entry) => entry.name).join(', ')})`);
+          for (const row of sheetItems(sheet, asText(config.header || 'header') !== 'data')) out.push({ json: row as Record<string, JsonValue> });
+          continue;
+        }
         if (kind === 'csv') {
           const text = (await readLimited(file, MAX_READ_BYTES)).toString('utf8');
           out.push(...parseCsv(text, asText(config.header || 'header') !== 'data'));

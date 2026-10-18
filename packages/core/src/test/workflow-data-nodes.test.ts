@@ -142,7 +142,8 @@ test('extract_file node: CSV / JSON become items, HTML text, PDF and images go t
   assert.equal(pdf.outputs.main![0]!.json.receipt, 'ร้าน A ยอด 120');
   assert.deepEqual(asked, [{ mime: 'application/pdf', name: 'receipt.pdf', instruction: 'อ่านยอดรวม', size: 13 }]);
   const excel = await run(node('extract_file', { path: 'book.xlsx' }), [{ json: {} }], d);
-  assert.match(excel.error!, /Excel is not supported/);
+  // A broken .xlsx (not a zip) fails with a clear message; real ones are covered in documents-and-rewind.test.ts.
+  assert.match(excel.error!, /not a zip/);
 });
 
 test('core: extract_file reads a PDF with the agent vision model', async () => {

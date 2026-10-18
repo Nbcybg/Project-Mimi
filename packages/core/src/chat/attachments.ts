@@ -7,6 +7,7 @@ import type { AgentDefinition } from '../agents/loader.ts';
 import type { Db } from '../db/db.ts';
 import type { ModelService } from '../providers/routing.ts';
 import type { UsageLogger } from '../usage/logger.ts';
+import { xlsxText } from '../workflows/xlsx.ts';
 
 export type AttachmentKind = 'image' | 'audio' | 'file';
 
@@ -226,6 +227,10 @@ async function readAttachment(
       : text;
   }
   const isPdf = attachment.mime === 'application/pdf' || /\.pdf$/i.test(attachment.name);
+  if (attachment.kind === 'file' && /\.xlsx$/i.test(attachment.name)) {
+    const text = xlsxText(data);
+    return text.length > TEXT_FILE_LIMIT ? `${text.slice(0, TEXT_FILE_LIMIT)}\n[sheet cut here: ${text.length - TEXT_FILE_LIMIT} more characters]` : text;
+  }
   if (attachment.kind === 'file' && !isPdf) {
     return `(binary file, ${attachment.mime}, ${attachment.size} bytes; its content is not readable as text)`;
   }

@@ -514,10 +514,11 @@ export const NODE_TYPES: NodeTypeView[] = [
   {
     type: 'extract_file',
     label: 'ดึงข้อมูลจากไฟล์',
-    description: 'CSV / JSON → items · ข้อความ / HTML → text · PDF / รูป → ให้ vision model อ่าน · เสียง → ถอดเสียง · (Excel ยังไม่รองรับ: บันทึกเป็น CSV ก่อน)',
+    description: 'CSV / JSON / Excel (.xlsx) → items · ข้อความ / HTML → text · PDF / รูป → ให้ vision model อ่าน (OCR) · เสียง → ถอดเสียง',
     fields: [
       { key: 'path', label: 'path ของไฟล์', type: 'expression', required: true, placeholder: '{{ $json.path }}' },
-      { key: 'type', label: 'ชนิดไฟล์', type: 'string', options: ['auto', 'csv', 'json', 'text', 'html', 'pdf', 'image', 'audio'] },
+      { key: 'type', label: 'ชนิดไฟล์', type: 'string', options: ['auto', 'csv', 'xlsx', 'json', 'text', 'html', 'pdf', 'image', 'audio'] },
+      { key: 'sheet', label: 'ชื่อชีต (Excel; ว่าง = ชีตแรก)', type: 'string', placeholder: 'Sheet1' },
       { key: 'header', label: 'แถวแรกของ CSV', type: 'string', options: ['header', 'data'] },
       { key: 'instruction', label: 'บอก model ว่าให้อ่านอะไร (PDF / รูป)', type: 'text', placeholder: 'เช่น อ่านใบเสร็จ: ร้าน วันที่ รายการ ยอดรวม' },
       { key: 'name', label: 'ชื่อ field ของข้อความ', type: 'string', placeholder: 'text' },

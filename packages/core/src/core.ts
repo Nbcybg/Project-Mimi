@@ -52,7 +52,7 @@ import { ToolPool } from './tools/pool.ts';
 import { McpHub } from './mcp/hub.ts';
 import { ToolStore } from './tools/tool-store.ts';
 import { UsageLogger } from './usage/logger.ts';
-import { resumeWorkflow, type ResumeOutcome, runWorkflow as runWorkflowNodes, runWorkflowNode, triggerItems, WorkflowState, type WorkflowRunnerDeps } from './workflows/runner.ts';
+import { resumeWorkflow, type ResumeOutcome, type RunOptions, runWorkflow as runWorkflowNodes, runWorkflowNode, triggerItems, WorkflowState, type WorkflowRunnerDeps } from './workflows/runner.ts';
 import { KnowledgeStore } from './knowledge/store.ts';
 import { UserProfileStore } from './profile/user-profile.ts';
 import { NotificationCenter } from './notify/notifications.ts';
@@ -150,7 +150,9 @@ export interface Core {
   /** Stores a user message in a chat without an agent turn (a chat trigger took it). */
   postUserMessage(chatId: number, text: string): { sessionId: number; id: number; createdAt: string };
   /** Runs a workflow by hand with optional input; returns every node's input and output. */
-  runWorkflow(agent: string, name: string, input?: JsonValue): Promise<WorkflowRunResult>;
+  runWorkflow(agent: string, name: string, input?: JsonValue, options?: { pins?: boolean }): Promise<WorkflowRunResult>;
+  /** Runs again from one node with the input it got in a stored run; earlier nodes keep that run's outputs. */
+  runWorkflowFrom(agent: string, name: string, nodeId: string, runId: number): Promise<WorkflowRunResult>;
   /** Runs one node alone with sample items (the editor's per-node test). */
   testWorkflowNode(workflow: WorkflowView, node: WorkflowNode, input: FlowItem[]): Promise<WorkflowNodeTestResult>;
   /** Keeps the workflow's schedule in step with its trigger settings. */
@@ -371,7 +373,7 @@ export async function createCore(
   const toolStore = new ToolStore(config.toolsDir);
   const secrets = new SecretStore(config.secretsPath);
   const mcp = new McpHub({
-    configPath: path.join(config.toolsDir, 'mcp.json'),
+    configPath: path.join(config.toolsDir, 'mcp', 'servers.json'),
     cachePath: path.join(config.dataDir, 'mcp-tools.json'),
     secret: (name) => secrets.get(name) ?? process.env[name],
   });
@@ -597,9 +599,9 @@ export async function createCore(
    * Runs a workflow; when it fails and names an error workflow, that one runs once with
    * the failure info. The handler's own failure never masks the original one.
    */
-  async function runWorkflowWithHandler(workflow: StoredWorkflow, items: FlowItem[], mode: string): Promise<WorkflowRunResult> {
+  async function runWorkflowWithHandler(workflow: StoredWorkflow, items: FlowItem[], mode: string, options: RunOptions = {}): Promise<WorkflowRunResult> {
     const startedAt = new Date();
-    const outcome = await runWorkflowNodes(workflow, items, workflowRunner, undefined, mode);
+    const outcome = await runWorkflowNodes(workflow, items, workflowRunner, undefined, mode, 0, options);
     // Every top-level run lands in the history, whatever started it.
     outcome.runId = workflowRuns.record(`${workflow.agent}/${workflow.name}`, mode, startedAt, outcome);
     if (!outcome.ok) await runErrorWorkflow(workflow, outcome);
@@ -1053,11 +1055,28 @@ export async function createCore(
     telegram,
     chatTriggers,
     postUserMessage,
-    async runWorkflow(agent: string, name: string, input?: JsonValue): Promise<WorkflowRunResult> {
+    async runWorkflow(agent: string, name: string, input?: JsonValue, options?: { pins?: boolean }): Promise<WorkflowRunResult> {
       const workflow = workflows.get(agent, name);
       if (!workflow) throw new Error(`No workflow "${name}" for agent "${agent}".`);
       const items = await triggerItems(workflow, triggerPool, workflowRunner, { input });
-      return runWorkflowWithHandler(workflow, items, triggerPool.get(workflow.trigger.pool)?.kind ?? 'manual');
+      return runWorkflowWithHandler(workflow, items, triggerPool.get(workflow.trigger.pool)?.kind ?? 'manual', options?.pins ? { usePins: true } : {});
+    },
+    async runWorkflowFrom(agent: string, name: string, nodeId: string, runId: number): Promise<WorkflowRunResult> {
+      const workflow = workflows.get(agent, name);
+      if (!workflow) throw new Error(`No workflow "${name}" for agent "${agent}".`);
+      const run = workflowRuns.get(runId);
+      if (!run || run.workflow !== `${agent}/${name}`) throw new Error(`No stored run #${runId} of this workflow.`);
+      const view = run.nodes.find((entry) => entry.id === nodeId);
+      if (!view || view.input.length === 0) throw new Error('That node got no input in this run; run the whole workflow first.');
+      // Nodes before it keep what they gave in that run, so $node["…"] still works.
+      const outputs: Record<string, { json: Record<string, JsonValue>; items: Array<Record<string, JsonValue>> }> = {};
+      for (const entry of run.nodes) {
+        if (entry.output.length === 0) continue;
+        const record = { json: entry.output[0]!.json, items: entry.output.map((item) => item.json) };
+        outputs[entry.title] = record;
+        outputs[entry.id] = record;
+      }
+      return runWorkflowWithHandler(workflow, view.input, 'จากกลางทาง', { usePins: true, startAt: { nodeId, input: view.input, outputs } });
     },
     testWorkflowNode: (workflow, node, input) => runWorkflowNode(workflow, node, input, workflowRunner),
     syncWorkflowSchedule,

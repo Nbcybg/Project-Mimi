@@ -449,7 +449,18 @@ export type ClientMessage =
   | { type: 'workflow-save'; workflow: WorkflowView; renameFrom?: string }
   | { type: 'workflow-delete'; agent: string; name: string }
   /** Runs a workflow by hand with optional input JSON; the answer comes back as `workflow-result`. */
-  | { type: 'workflow-run'; agent: string; name: string; input?: Record<string, JsonValue> }
+  | { type: 'workflow-run'; agent: string; name: string; input?: Record<string, JsonValue>; pins?: boolean }
+  /** Runs again from one node with what it got in an earlier run (the nodes before it are not run). */
+  | { type: 'workflow-run-from'; agent: string; name: string; nodeId: string; runId: number }
+  /** What an expression gives for sample data (the editor's preview line). */
+  | {
+      type: 'workflow-expr-preview';
+      reqId: number;
+      text: string;
+      json: Record<string, JsonValue>;
+      nodes?: Record<string, { json: Record<string, JsonValue>; items: Array<Record<string, JsonValue>> }>;
+      vars?: Record<string, JsonValue>;
+    }
   /** Runs one node alone with sample items, to see what it produces (draft config is fine). */
   | { type: 'workflow-test-node'; workflow: WorkflowView; node: WorkflowNode; input: FlowItem[] }
   /** Converts an n8n export (JSON text); `save` writes the result as disabled workflows of `agent`. */
@@ -560,6 +571,7 @@ export type ServerMessage =
   | { type: 'skills'; skills: SkillView[]; saved?: string }
   /** The tool pool, its presets and the custom tool definitions. */
   | ({ type: 'tools' } & ToolPoolView & { saved?: string })
+  | { type: 'workflow-expr-preview'; reqId: number; ok: boolean; value?: string; error?: string }
   /** Secret names stored in this machine's vault (values are never sent). */
   | { type: 'secrets'; names: string[] }
   | { type: 'workflows'; workflows: WorkflowView[]; pool: TriggerPoolView[]; nodeTypes: NodeTypeView[]; saved?: string }

@@ -84,7 +84,7 @@ export interface ToolResult {
 /** How Mimi reaches an MCP server: a local command (stdio) or a URL (Streamable HTTP). */
 export type McpTransport = 'stdio' | 'http';
 
-/** An MCP server the user added, stored in `tools/mcp.json`. Values may use {{secret.NAME}}. */
+/** An MCP server the user added, stored in `tools/mcp/servers.json`. Values may use {{secret.NAME}}. */
 export interface McpServerSpec {
   /** Lower case letters, digits and "-"; tools appear as `mcp_<name>_<tool>`. */
   name: string;

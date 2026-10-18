@@ -33,7 +33,7 @@ interface CachedServer {
 const BASE_ENV = ['PATH', 'Path', 'PATHEXT', 'SystemRoot', 'SYSTEMROOT', 'ComSpec', 'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP', 'LANG', 'ProgramFiles', 'ProgramData'];
 
 export interface McpHubOptions {
-  /** `tools/mcp.json`: the servers (synced with the user folder). */
+  /** `tools/mcp/servers.json`: the servers (synced with the user folder). */
   configPath: string;
   /** Machine-local cache of each server's tool list. */
   cachePath: string;

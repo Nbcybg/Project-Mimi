@@ -66,7 +66,8 @@
    * Mounts the canvas into `host`. `ctx` gives the draft and the editor's hooks:
    * nodes(), outputsOf(node), titleOf(id), typeLabel(type), groupOf(type), triggerLabel(),
    * run (last run result or null), selected, onSelect(id), onChange(), addNodeAt(type, pos, from),
-   * removeNode(id), palette(anchor, onPick).
+   * removeNode(id), palette(anchor, onPick), notes() (the sticky notes array, edited in
+   * place), undo(), redo().
    */
   function mount(host, ctx) {
     host.classList.add('wcv');
@@ -85,6 +86,8 @@
     const view = views.get(ctx.key) || null;
     const state = { x: view?.x ?? 0, y: view?.y ?? 0, z: view?.z ?? 1, selected: ctx.selected || null, edge: null };
     const boxes = new Map();
+    const noteBoxes = [];
+    const NOTE_COLORS = ['yellow', 'blue', 'green', 'pink'];
 
     const apply = () => {
       world.style.transform = `translate(${state.x}px, ${state.y}px) scale(${state.z})`;
@@ -108,6 +111,56 @@
     };
     const runOf = (id) => ctx.run?.nodes?.find((entry) => entry.id === id);
 
+    /** Sticky notes: under the nodes, dragged by their strip, text edited in place. */
+    function drawNotes() {
+      for (const box of noteBoxes.splice(0)) box.remove();
+      for (const note of ctx.notes?.() ?? []) {
+        const box = el('div', `wcv-note c-${NOTE_COLORS.includes(note.color) ? note.color : 'yellow'}`);
+        box.dataset.note = note.id;
+        box.style.left = `${note.position[0]}px`;
+        box.style.top = `${note.position[1]}px`;
+        box.style.width = `${note.width || 220}px`;
+        box.style.height = `${note.height || 130}px`;
+        const strip = el('div', 'wcv-note-head');
+        const color = el('button', 'wcv-note-btn', '●');
+        color.type = 'button';
+        color.title = 'เปลี่ยนสี';
+        color.onclick = () => {
+          note.color = NOTE_COLORS[(NOTE_COLORS.indexOf(note.color) + 1) % NOTE_COLORS.length];
+          drawNotes();
+          ctx.onChange();
+        };
+        const remove = el('button', 'wcv-note-btn', '✕');
+        remove.type = 'button';
+        remove.title = 'ลบโน้ต';
+        remove.onclick = () => {
+          const list = ctx.notes();
+          list.splice(list.indexOf(note), 1);
+          drawNotes();
+          ctx.onChange();
+        };
+        strip.append(color, remove);
+        const text = el('textarea');
+        text.value = note.text;
+        text.placeholder = 'โน้ต…';
+        text.oninput = () => {
+          note.text = text.value;
+        };
+        text.onchange = () => ctx.onChange();
+        box.onpointerup = () => {
+          // The corner handle resizes the box; keep the size.
+          if (box.offsetWidth !== (note.width || 220) || box.offsetHeight !== (note.height || 130)) {
+            note.width = box.offsetWidth;
+            note.height = box.offsetHeight;
+            ctx.onChange();
+          }
+        };
+        box.append(strip, text);
+        world.insertBefore(box, svg.nextSibling);
+        noteBoxes.push(box);
+      }
+    }
+
     function drawNodes() {
       for (const box of boxes.values()) box.remove();
       boxes.clear();
@@ -128,14 +181,14 @@
       for (const node of nodes) {
         const outputs = ctx.outputsOf(node);
         const run = runOf(node.id);
-        const box = el('div', `wcv-node g-${ctx.groupOf(node.type)}${state.selected === node.id ? ' sel' : ''}${run ? (run.status === 'ok' ? ' ok' : run.status === 'waiting' ? ' wait' : ' err') : ''}`);
+        const box = el('div', `wcv-node g-${ctx.groupOf(node.type)}${state.selected === node.id ? ' sel' : ''}${node.disabled ? ' off' : ''}${run ? (run.status === 'ok' ? ' ok' : run.status === 'waiting' ? ' wait' : ' err') : ''}`);
         box.dataset.id = node.id;
         box.style.left = `${node.position[0]}px`;
         box.style.top = `${node.position[1]}px`;
         box.style.width = `${W}px`;
         box.style.height = `${heightOf(outputs)}px`;
         const head = el('div', 'wcv-head');
-        head.append(el('b', '', ctx.titleOf(node.id)), el('small', '', ctx.typeLabel(node.type)));
+        head.append(el('b', '', `${Array.isArray(node.pinned) ? '📌 ' : ''}${ctx.titleOf(node.id)}`), el('small', '', `${ctx.typeLabel(node.type)}${node.disabled ? ' · ปิดอยู่' : ''}`));
         box.append(head);
         if (run) box.append(el('span', 'wcv-badge', run.status === 'ok' ? `${run.input.length} → ${run.output.length}` : run.status === 'waiting' ? '⏸ รอ' : 'error'));
         const input = el('span', 'wcv-port in');
@@ -252,6 +305,7 @@
     }
 
     function redraw() {
+      drawNotes();
       drawNodes();
       drawEdges();
     }
@@ -294,10 +348,33 @@
     // ---------- pointer handling: drag node, draw link, pan ----------
     let gesture = null;
     let temp = null;
+    /** Touch points down right now; two of them pinch-zoom. */
+    const pointers = new Map();
+    const pinchOf = () => {
+      const [a, b] = [...pointers.values()];
+      return { dist: Math.hypot(a.x - b.x, a.y - b.y) || 1, x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    };
     host.addEventListener('pointerdown', (event) => {
       if (event.button !== 0) return;
-      if (event.target.closest('.wcv-tools, .wcv-menu')) return;
+      if (event.target.closest('.wcv-tools, .wcv-menu, textarea, .wcv-note-btn')) return;
+      pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      if (pointers.size === 2) {
+        temp?.remove();
+        temp = null;
+        gesture = { kind: 'pinch', ...pinchOf() };
+        return;
+      }
       host.focus({ preventScroll: true });
+      const noteBox = event.target.closest('.wcv-note');
+      if (noteBox) {
+        // The strip drags the note; elsewhere (the resize corner) the browser handles it.
+        if (!event.target.closest('.wcv-note-head')) return;
+        const note = (ctx.notes?.() ?? []).find((entry) => entry.id === noteBox.dataset.note);
+        if (!note) return;
+        gesture = { kind: 'note', note, box: noteBox, startX: event.clientX, startY: event.clientY, origin: [...note.position], moved: false };
+        host.setPointerCapture(event.pointerId);
+        return;
+      }
       const port = event.target.closest('.wcv-port.out');
       const box = event.target.closest('.wcv-node');
       const hit = event.target.closest('.wcv-hit');
@@ -324,7 +401,27 @@
       host.setPointerCapture(event.pointerId);
     });
     host.addEventListener('pointermove', (event) => {
+      if (pointers.has(event.pointerId)) pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
       if (!gesture) return;
+      if (gesture.kind === 'pinch') {
+        if (pointers.size < 2) return;
+        const now = pinchOf();
+        zoomAt(now.dist / gesture.dist, now.x, now.y);
+        state.x += now.x - gesture.x;
+        state.y += now.y - gesture.y;
+        apply();
+        Object.assign(gesture, now);
+        return;
+      }
+      if (gesture.kind === 'note') {
+        const dx = (event.clientX - gesture.startX) / state.z;
+        const dy = (event.clientY - gesture.startY) / state.z;
+        gesture.moved = gesture.moved || Math.hypot(dx, dy) >= 3;
+        gesture.note.position = [Math.round(gesture.origin[0] + dx), Math.round(gesture.origin[1] + dy)];
+        gesture.box.style.left = `${gesture.note.position[0]}px`;
+        gesture.box.style.top = `${gesture.note.position[1]}px`;
+        return;
+      }
       if (gesture.kind === 'link') {
         const [x1, y1] = outPoint(gesture.from, gesture.key);
         const [x2, y2] = toWorld(event.clientX, event.clientY);
@@ -354,9 +451,15 @@
       }
     });
     const finish = (event) => {
+      pointers.delete(event.pointerId);
       const current = gesture;
       gesture = null;
       if (!current) return;
+      if (current.kind === 'pinch') return;
+      if (current.kind === 'note') {
+        if (current.moved) ctx.onChange();
+        return;
+      }
       if (current.kind === 'link') {
         temp?.remove();
         temp = null;
@@ -379,7 +482,8 @@
       }
     };
     host.addEventListener('pointerup', finish);
-    host.addEventListener('pointercancel', () => {
+    host.addEventListener('pointercancel', (event) => {
+      pointers.delete(event.pointerId);
       gesture = null;
       temp?.remove();
       temp = null;
@@ -393,6 +497,8 @@
       { passive: false },
     );
     host.addEventListener('keydown', (event) => {
+      if (event.target !== host) return; // typing in a note
+      // Ctrl shortcuts (undo, copy…) are the editor's: they work wherever its focus is.
       if (event.key !== 'Delete' && event.key !== 'Backspace') return;
       if (state.edge) {
         event.preventDefault();
@@ -419,6 +525,23 @@
         ctx.addNodeAt(type, [Math.round(center[0] - W / 2), Math.round(center[1] - HEAD)], null);
       });
     }).classList.add('pri');
+    if (ctx.undo) {
+      tool('↶', 'ย้อน (Ctrl+Z)', () => ctx.undo());
+      tool('↷', 'ทำซ้ำ (Ctrl+Y)', () => ctx.redo());
+    }
+    if (ctx.notes) {
+      tool('📝', 'เพิ่มโน้ต', () => {
+        const rect = host.getBoundingClientRect();
+        const [x, y] = toWorld(rect.left + rect.width / 2, rect.top + rect.height / 2);
+        const list = ctx.notes();
+        let n = 1;
+        while (list.some((note) => note.id === `note${n}`)) n++;
+        list.push({ id: `note${n}`, text: '', position: [Math.round(x - 110), Math.round(y - 65)], color: 'yellow' });
+        drawNotes();
+        ctx.onChange();
+        noteBoxes.at(-1)?.querySelector('textarea')?.focus();
+      });
+    }
     tool('−', 'ซูมออก', () => zoomAt(1 / 1.2));
     tool('+', 'ซูมเข้า', () => zoomAt(1.2));
     tool('⤢', 'พอดีจอ', fit);
@@ -432,7 +555,13 @@
     redraw();
     apply();
     if (!view) requestAnimationFrame(fit);
-    return { redraw, select, fit };
+    /** Where a pasted node goes: the middle of what is on screen. */
+    const center = () => {
+      const rect = host.getBoundingClientRect();
+      const [x, y] = toWorld(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      return [Math.round(x - W / 2), Math.round(y - HEAD)];
+    };
+    return { redraw, select, fit, center };
   }
 
   window.MimiCanvas = { mount, autoLayout };

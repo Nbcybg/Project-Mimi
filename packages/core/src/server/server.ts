@@ -22,6 +22,7 @@ import { NODE_TYPES } from '@mimi/shared';
 import { WebSocket, WebSocketServer } from 'ws';
 import { deleteAgent, saveAgent } from '../agents/loader.ts';
 import { importN8n } from '../workflows/n8n-import.ts';
+import { contextFor, resolveString } from '../workflows/expressions.ts';
 import { REASONING_EFFORTS, type ReasoningEffort } from '@mimi/shared';
 import { renderIconPng } from '../app/icon.ts';
 import { AuthLimiter } from './auth-limiter.ts';
@@ -780,7 +781,7 @@ export async function startServer(
       }
       case 'workflow-run':
         void core
-          .runWorkflow(String(message.agent), String(message.name), message.input as Record<string, JsonValue> | undefined)
+          .runWorkflow(String(message.agent), String(message.name), message.input as Record<string, JsonValue> | undefined, { pins: message.pins === true })
           .then(
             (result) => {
               reply({ type: 'workflow-result', result });
@@ -790,6 +791,32 @@ export async function startServer(
             (error: Error) => reply({ type: 'error', message: error.message }),
           );
         break;
+      case 'workflow-run-from':
+        void core.runWorkflowFrom(String(message.agent), String(message.name), String(message.nodeId), Number(message.runId)).then(
+          (result) => {
+            reply({ type: 'workflow-result', result });
+            const id = `${message.agent}/${message.name}`;
+            broadcast({ type: 'workflow-runs', workflow: id, runs: core.workflowRuns.list(id) });
+          },
+          (error: Error) => reply({ type: 'error', message: error.message }),
+        );
+        break;
+      case 'workflow-expr-preview': {
+        const json = message.json && typeof message.json === 'object' ? message.json : {};
+        try {
+          const value = resolveString(String(message.text ?? '').slice(0, 5000), contextFor({ json }, 0, [{ json }], {
+            $vars: message.vars ?? {},
+            $node: message.nodes ?? {},
+            $execution: { id: 'preview', mode: 'manual' },
+            $trigger: { json, items: [json] },
+          }));
+          const text = typeof value === 'string' ? value : JSON.stringify(value);
+          reply({ type: 'workflow-expr-preview', reqId: Number(message.reqId), ok: true, value: (text ?? '').slice(0, 500) });
+        } catch (error) {
+          reply({ type: 'workflow-expr-preview', reqId: Number(message.reqId), ok: false, error: (error as Error).message.slice(0, 300) });
+        }
+        break;
+      }
       case 'workflow-import-n8n': {
         const agent = String(message.agent);
         if (!core.agents.names().includes(agent)) throw new Error(`Agent "${agent}" does not exist.`);

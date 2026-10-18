@@ -1721,8 +1721,12 @@
     const panel = el('div', 'panel');
     panel.append(
       el('h3', '', 'MCP และ CLI'),
-      el('p', 'hint', 'ยังไม่ได้สร้างในรุ่นนี้'),
-      el('p', '', 'แผน: เชื่อม MCP server (เครื่องมือของมันจะเข้ามาอยู่ในกองเครื่องมือเหมือนตัวอื่น) และห่อคำสั่ง CLI บนเครื่อง PC ให้เป็นเครื่องมือผ่าน PC agent ตอนนี้ agent รันคำสั่งได้ผ่านเครื่องมือ run_shell ซึ่งขออนุญาตก่อนทุกครั้ง'),
+      el('p', '', 'MCP server: เพิ่มที่แท็บ "เครื่องมือ" → "+ MCP server" (คำสั่งในเครื่อง หรือ URL) เครื่องมือของ server จะเข้ากองชื่อ mcp_<server>_<tool> · ใส่ mcp_<server> ใน agent = ได้ทุกตัว · ดูจากเทอร์มินัล: npm run mcp / npm run mcp -- test <ชื่อ>'),
+      el('p', '', 'คำสั่ง CLI: สร้างเครื่องมือใหม่ชนิด "shell" ในแท็บ "เครื่องมือ" เช่น git status หรือ ping -n 1 {{input.host}} — ขออนุญาตก่อนรันทุกครั้ง · หรือให้ agent ใช้ run_shell บนเครื่อง PC'),
+      button('btn', 'ไปที่แท็บเครื่องมือ', () => {
+        ui.hubTab = 'tools';
+        renderHub();
+      }),
     );
     return panel;
   }
@@ -2303,6 +2307,9 @@
         if (window.MimiHooks && window.MimiHooks.workflows) window.MimiHooks.workflows.onResult?.(result);
         break;
       }
+      case 'workflow-expr-preview':
+        if (window.MimiHooks && window.MimiHooks.workflows) window.MimiHooks.workflows.onExprPreview?.(message);
+        break;
       case 'workflow-node-result':
         if (window.MimiHooks && window.MimiHooks.workflows) window.MimiHooks.workflows.onNodeResult?.(message.result);
         break;

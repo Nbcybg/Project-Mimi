@@ -78,7 +78,7 @@ export class WorkflowRunStore {
   }
 
   /** Newest first. */
-  list(workflow: string, limit = 30): WorkflowRunSummary[] {
+  list(workflow: string, limit = 100): WorkflowRunSummary[] {
     const rows = this.db
       .prepare(
         `SELECT id, workflow, mode, ok, result, started_at, duration_ms, node_count

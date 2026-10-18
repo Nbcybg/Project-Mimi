@@ -67,6 +67,20 @@ export interface WorkflowNode {
   retryWaitMs?: number;
   /** Where the node sits on the editor canvas, `[x, y]`. */
   position?: [number, number];
+  /** Switched off: the node does not run and passes its input straight on. */
+  disabled?: boolean;
+  /** Fixed output used instead of running the node, in runs started from the editor only. */
+  pinned?: Array<Record<string, JsonValue>>;
+}
+
+/** A sticky note on the editor canvas; it never runs. */
+export interface WorkflowNote {
+  id: string;
+  text: string;
+  position: [number, number];
+  width?: number;
+  height?: number;
+  color?: string;
 }
 
 /** A trigger is chosen from the trigger pool and configured per workflow. */
@@ -90,6 +104,8 @@ export interface WorkflowView {
   /** Workflow of the same agent that runs when this one fails, with `workflow`/`error` items. */
   errorWorkflow?: string;
   nodes: WorkflowNode[];
+  /** Sticky notes on the canvas. */
+  notes?: WorkflowNote[];
 }
 
 export interface WorkflowRunNodeView {
@@ -102,6 +118,8 @@ export interface WorkflowRunNodeView {
   input: FlowItem[];
   output: FlowItem[];
   error?: string;
+  /** Why the node did not really run: switched off, or its pinned output was used. */
+  note?: 'disabled' | 'pinned';
 }
 
 /** The HTTP answer a webhook-triggered run sends back (set by a `respond` node). */

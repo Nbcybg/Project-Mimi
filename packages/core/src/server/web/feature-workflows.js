@@ -43,6 +43,106 @@
   let runs = [];
   /** { nodeId, result } while a single-node test dialog is open. */
   let nodeTest = null;
+  /** How many stored runs the history list shows. */
+  let historyShown = 12;
+
+  // ---------- undo / redo: whole-draft snapshots, taken after each change ----------
+  let past = [];
+  let future = [];
+  let snapshot = null;
+  function resetHistory() {
+    past = [];
+    future = [];
+    snapshot = draft ? JSON.stringify(draft) : null;
+  }
+  function checkpoint() {
+    if (!draft) return;
+    const now = JSON.stringify(draft);
+    if (now === snapshot) return;
+    if (snapshot) past.push(snapshot);
+    if (past.length > 80) past.shift();
+    future = [];
+    snapshot = now;
+  }
+  function restoreSnapshot() {
+    const name = draft.name;
+    draft = JSON.parse(snapshot);
+    if (!isNew) draft.name = name;
+    if (selectedNode && !draft.nodes.some((node) => node.id === selectedNode)) selectedNode = null;
+    showEditor();
+  }
+  function undo() {
+    sync();
+    checkpoint();
+    if (past.length === 0) return M().toast('ย้อนไม่ได้แล้ว', null);
+    future.push(snapshot);
+    snapshot = past.pop();
+    restoreSnapshot();
+  }
+  function redo() {
+    if (future.length === 0) return M().toast('ไม่มีอะไรให้ทำซ้ำ', null);
+    past.push(snapshot);
+    snapshot = future.pop();
+    restoreSnapshot();
+  }
+
+  /** Ctrl+Z / Ctrl+Y / Ctrl+C / Ctrl+V / Ctrl+D in the canvas editor; text fields keep their own. */
+  function editorShortcuts(event) {
+    if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+    if (event.target.closest('input, textarea, select, [contenteditable="true"]')) return;
+    const key = event.key.toLowerCase();
+    if (key === 'z' && !event.shiftKey) undo();
+    else if (key === 'y' || (key === 'z' && event.shiftKey)) redo();
+    else if (key === 'c' && selectedNode) copyNode(selectedNode);
+    else if (key === 'v') pasteNode(canvasApi?.center?.() ?? null);
+    else if (key === 'd' && selectedNode) duplicateNode(selectedNode);
+    else return;
+    event.preventDefault();
+  }
+
+  // After a re-render the focus is on the page body, so listen on the document.
+  document.addEventListener('keydown', (event) => {
+    if (draft && document.querySelector('#wfEditor.wfcanvas')) editorShortcuts(event);
+  });
+
+  // ---------- copy / paste nodes (kept in localStorage, so it works across workflows) ----------
+  const CLIP_KEY = 'mimi.workflowClipboard';
+  let clipboard = null;
+  function copyNode(id) {
+    sync();
+    const node = draft.nodes.find((entry) => entry.id === id);
+    if (!node) return;
+    clipboard = JSON.parse(JSON.stringify(node));
+    try {
+      localStorage.setItem(CLIP_KEY, JSON.stringify(clipboard));
+    } catch {
+      // storage blocked: this window only
+    }
+    M().toast('คัดลอก node แล้ว', 'กด Ctrl+V เพื่อวาง');
+  }
+  function pasteNode(position) {
+    let copy = clipboard;
+    try {
+      copy = JSON.parse(localStorage.getItem(CLIP_KEY) || 'null') || copy;
+    } catch {
+      // keep the in-memory copy
+    }
+    if (!copy || !specOf(copy.type)) return;
+    sync();
+    const node = { ...JSON.parse(JSON.stringify(copy)), id: nextId(), links: { main: [] } };
+    node.title = `${copy.title || specOf(copy.type).label} (สำเนา)`;
+    if (position) node.position = position;
+    else if (Array.isArray(copy.position)) node.position = [copy.position[0] + 40, copy.position[1] + 40];
+    else delete node.position;
+    draft.nodes.push(node);
+    selectedNode = node.id;
+    sideTab = 'node';
+    showEditor();
+  }
+  function duplicateNode(id) {
+    copyNode(id);
+    pasteNode(null);
+  }
 
   const nodeTypes = () => M().state.nodeTypes || [];
   const pool = () => M().state.workflowPool || [];
@@ -129,6 +229,8 @@
     runs = [];
     selectedNode = null;
     sideTab = 'node';
+    historyShown = 12;
+    resetHistory();
     showEditor();
     if (workflow) M().send({ type: 'workflow-runs', agent: workflow.agent, name: workflow.name });
     M().send({ type: 'secrets-list' });
@@ -502,6 +604,131 @@
     input.dispatchEvent(new Event('input'));
   }
 
+  /** Sample data for a node's expressions: what it got in the last run, else its parents' output, else the trigger sample. */
+  function sampleFor(node) {
+    const ran = (id) => runResult?.nodes?.find((entry) => entry.id === id);
+    let json = ran(node.id)?.input?.[0]?.json;
+    if (!json) json = ancestorsOf(node.id).map((other) => ran(other.id)).find((entry) => entry && entry.output.length > 0)?.output?.[0]?.json;
+    if (!json) json = (draft.trigger.pool === 'manual' && draft.trigger.config.input) || poolOf(draft.trigger.pool)?.sample || {};
+    const nodes = {};
+    for (const view of runResult?.nodes || []) {
+      if (view.output.length === 0) continue;
+      const record = { json: view.output[0].json, items: view.output.map((item) => item.json) };
+      nodes[view.title] = record;
+      nodes[view.id] = record;
+    }
+    return { json: json && typeof json === 'object' ? json : {}, nodes };
+  }
+
+  let previewSeq = 0;
+  const previewWaiters = new Map();
+  function onExprPreview(message) {
+    const waiter = previewWaiters.get(message.reqId);
+    previewWaiters.delete(message.reqId);
+    waiter?.(message);
+  }
+
+  /**
+   * Live help while typing an expression: a preview line ("= value" for the sample
+   * data) and suggestions after "$json." / "$node[…]" inside {{ }}.
+   */
+  function exprAssist(input, node) {
+    const line = el('div', 'wprev');
+    line.hidden = true;
+    input.after(line);
+    let timer = null;
+    const update = () => {
+      clearTimeout(timer);
+      if (!input.value.includes('{{')) {
+        line.hidden = true;
+        return;
+      }
+      timer = setTimeout(() => {
+        const reqId = ++previewSeq;
+        previewWaiters.set(reqId, (reply) => {
+          line.hidden = false;
+          line.className = reply.ok ? 'wprev' : 'wprev bad';
+          line.textContent = reply.ok ? `= ${reply.value === '' ? '(ว่าง)' : reply.value}` : `⚠ ${reply.error}`;
+        });
+        const sample = sampleFor(node);
+        M().send({ type: 'workflow-expr-preview', reqId, text: input.value, json: sample.json, nodes: sample.nodes, vars: draft.vars || {} });
+      }, 350);
+    };
+    let box = null;
+    let items = [];
+    let active = 0;
+    const close = () => {
+      box?.remove();
+      box = null;
+    };
+    const tokenAt = () => {
+      const before = input.value.slice(0, input.selectionStart ?? input.value.length);
+      const open = before.lastIndexOf('{{');
+      if (open < 0 || before.lastIndexOf('}}') > open) return null;
+      const match = /\$[\w$.[\]"]*$/.exec(before);
+      return match ? { start: before.length - match[0].length, text: match[0] } : null;
+    };
+    const pick = (item) => {
+      const token = tokenAt();
+      if (!token || !item) return close();
+      const end = input.selectionStart ?? input.value.length;
+      const after = input.value.slice(end);
+      const closing = /^\s*\}\}/.test(after) ? '' : ' }}';
+      input.value = input.value.slice(0, token.start) + item.path + closing + after;
+      const caret = token.start + item.path.length + closing.length;
+      input.selectionStart = input.selectionEnd = caret;
+      close();
+      input.dispatchEvent(new Event('input'));
+    };
+    const draw = () => {
+      box.textContent = '';
+      items.forEach((item, index) => {
+        const row = el('div', `wsugrow${index === active ? ' on' : ''}`);
+        row.append(el('code', '', item.path), el('span', 'faint', preview(item.value)));
+        row.onpointerdown = (event) => {
+          event.preventDefault();
+          pick(item);
+        };
+        box.append(row);
+      });
+    };
+    const suggest = () => {
+      const token = tokenAt();
+      if (!token) return close();
+      items = pickerGroups(node)
+        .flatMap((group) => group.items)
+        .filter((item) => item.path.startsWith(token.text) && item.path !== token.text)
+        .slice(0, 8);
+      if (items.length === 0) return close();
+      active = 0;
+      if (!box) {
+        box = el('div', 'wsuggest');
+        line.before(box);
+      }
+      draw();
+    };
+    input.addEventListener('input', () => {
+      update();
+      suggest();
+    });
+    input.addEventListener('focus', update);
+    input.addEventListener('blur', () => setTimeout(close, 150));
+    input.addEventListener('keydown', (event) => {
+      if (!box) return;
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault();
+        active = (active + (event.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length;
+        draw();
+      } else if (event.key === 'Enter' || event.key === 'Tab') {
+        event.preventDefault();
+        pick(items[active]);
+      } else if (event.key === 'Escape') {
+        close();
+      }
+    });
+    if (input.value.includes('{{')) update();
+  }
+
   /** The "{ } เลือกข้อมูล" button under a field and its searchable list. */
   function addPicker(label, input, node) {
     const toggle = button('wpick', '{ } เลือกข้อมูล', () => {
@@ -585,8 +812,13 @@
     };
     head.append(el('span', 'wn', String(index + 1)), title, type);
     const actions = el('span', 'hstack');
+    const ran = runResult?.nodes?.find((entry) => entry.id === node.id);
+    const runId = runResult?.id ?? runResult?.runId;
     actions.append(
       button('btn ghost', 'ทดสอบ', () => openNodeTest(node), 'รัน node นี้อย่างเดียวด้วย input ตัวอย่าง'),
+      ...(!isNew && runId && ran && ran.input.length > 0
+        ? [button('btn ghost', '▶ จากตรงนี้', () => runFrom(node, runId), 'บันทึก แล้วรันใหม่ตั้งแต่ node นี้ ด้วย input เดิมของ run ที่เปิดอยู่ (node ก่อนหน้าไม่รันซ้ำ)')]
+        : []),
       ...(mode === 'list' ? [button('btn ghost', '↑', () => move(node.id, -1)), button('btn ghost', '↓', () => move(node.id, 1))] : []),
       button('btn danger', 'ลบ', () => removeNode(node.id)),
     );
@@ -597,7 +829,10 @@
     for (const field of spec ? spec.fields : []) {
       const input = fieldInput(field, node.config[field.key], node);
       const label = M().labelled(`${field.label}${field.required ? ' *' : ''}`, input);
-      if (pickable(field, input)) addPicker(label, input, node);
+      if (pickable(field, input)) {
+        exprAssist(input, node);
+        addPicker(label, input, node);
+      }
       if (field.description) label.append(el('p', 'hint', field.description));
       card.append(label);
     }
@@ -646,8 +881,85 @@
       M().labelled('รอระหว่างลอง (ms)', retryWait),
     );
     card.append(errorGrid);
+
+    // Switch off (passes items on) and pinned output (stands in for the node in editor runs).
+    const extra = el('div', 'hstack wextra');
+    const off = el('input');
+    off.type = 'checkbox';
+    off.checked = node.disabled === true;
+    off.dataset.nodefield = 'disabled';
+    off.dataset.kind = 'boolean';
+    off.onchange = () => {
+      sync();
+      if (!node.disabled) delete node.disabled;
+      canvasApi?.redraw();
+      checkpoint();
+    };
+    const offLabel = el('label', 'hstack');
+    offLabel.title = 'node นี้จะไม่รัน แต่ส่ง input ต่อไปตามเดิม';
+    offLabel.append(off, el('span', '', 'ปิด node นี้'));
+    extra.append(offLabel);
+    if (Array.isArray(node.pinned)) {
+      extra.append(
+        el('span', 'pill warn', `📌 pin ${node.pinned.length} item`),
+        button('btn ghost', 'แก้ pin', () => editPin(node)),
+        button('btn ghost', 'เลิก pin', () => {
+          sync();
+          delete node.pinned;
+          showEditor();
+        }),
+      );
+    } else {
+      extra.append(
+        button('btn ghost', '📌 pin output', () => {
+          sync();
+          if (ran && ran.output.length > 0) {
+            node.pinned = ran.output.map((item) => item.json);
+            showEditor();
+          } else editPin(node);
+        }, 'ใช้ output นี้แทนการรันจริง เวลารันจาก editor (ประหยัดเวลา/ค่า API) — trigger จริงไม่ใช้ pin'),
+      );
+    }
+    card.append(extra);
     card.append(linkGridFor(node));
     return card;
+  }
+
+  /** Edit a node's pinned items as JSON. */
+  function editPin(node) {
+    sync();
+    const dialog = el('div', 'dialog form');
+    dialog.append(el('h3', '', `pin output: ${node.title || node.id}`), el('p', 'hint', 'array ของ object — ใช้แทนการรัน node นี้ เวลารันจาก editor เท่านั้น'));
+    const area = el('textarea', 'tall');
+    area.value = JSON.stringify(node.pinned || [{}], null, 2);
+    dialog.append(area);
+    const foot = el('div', 'foot');
+    foot.append(
+      button('btn ghost', 'ยกเลิก', () => showEditor()),
+      button('btn pri', 'บันทึก pin', () => {
+        let parsed;
+        try {
+          parsed = JSON.parse(area.value || '[]');
+        } catch {
+          return M().toast('JSON ไม่ถูกต้อง', null, true);
+        }
+        const list = (Array.isArray(parsed) ? parsed : [parsed]).map((entry) => (entry && typeof entry === 'object' && !Array.isArray(entry) ? entry : { value: entry }));
+        node.pinned = list;
+        showEditor();
+      }),
+    );
+    dialog.append(foot);
+    M().overlay(dialog);
+  }
+
+  /** Saves, then runs again from this node with what it got in the run on screen. */
+  function runFrom(node, runId) {
+    sync();
+    if (!draft.title) draft.title = draft.name;
+    M().send({ type: 'workflow-save', workflow: draft, renameFrom: draft.name });
+    M().send({ type: 'workflow-run-from', agent: draft.agent, name: draft.name, nodeId: node.id, runId });
+    running = true;
+    M().toast('กำลังรันจาก node นี้…', null);
   }
 
   const titleOf = (id) => {
@@ -761,6 +1073,7 @@
       const head = el('div', 'whead');
       const label = node.status === 'ok' ? 'ok' : node.status === 'waiting' ? '⏸ รอ' : 'error';
       head.append(el('span', `pill ${node.status === 'ok' ? 'ok' : node.status === 'waiting' ? 'warn' : 'todo'}`, label), el('b', '', node.title), el('span', 'faint', node.type));
+      if (node.note) head.append(el('span', 'pill', node.note === 'pinned' ? '📌 ใช้ pin' : 'ปิดอยู่ (ส่งผ่าน)'));
       row.append(head);
       if (node.error) row.append(el('p', 'hint badtxt', node.error));
       row.append(jsonBlock(`input (${node.input.length})`, node.input.map((item) => item.json)), jsonBlock(`output (${node.output.length})`, node.output.map((item) => item.json)));
@@ -785,7 +1098,7 @@
     }
     const list = el('div', 'wrunlist');
     const current = runResult?.id ?? runResult?.runId;
-    for (const run of runs.slice(0, 12)) {
+    for (const run of runs.slice(0, historyShown)) {
       const row = button(`wrunrow${run.id === current ? ' on' : ''}`, '', () => M().send({ type: 'workflow-run-get', id: run.id }));
       row.append(
         el('span', `pill ${run.ok ? 'ok' : 'todo'}`, run.ok ? 'ok' : 'error'),
@@ -797,6 +1110,12 @@
       list.append(row);
     }
     box.append(list);
+    if (runs.length > historyShown) {
+      box.append(button('btn ghost', `ดูเพิ่ม (${runs.length - historyShown})`, () => {
+        historyShown += 30;
+        document.querySelector('#wfEditor .whistory')?.replaceWith(historyPanel());
+      }));
+    }
     return box;
   }
 
@@ -1041,6 +1360,11 @@
     foot.append(el('span', 'msg'), ...editorButtons());
     dialog.append(foot);
     M().overlay(dialog);
+    dialog.addEventListener('change', () => {
+      sync();
+      checkpoint();
+    });
+    checkpoint();
   }
 
   const SIDE_TABS = [
@@ -1066,6 +1390,10 @@
     body.append(host, side);
     dialog.append(head, body);
     M().overlay(dialog).classList.add('scrim-full');
+    dialog.addEventListener('change', () => {
+      sync();
+      checkpoint();
+    });
 
     const renderSide = () => {
       const tabs = el('div', 'tabs');
@@ -1084,7 +1412,8 @@
           content.append(
             el('p', 'hint', 'คลิก node เพื่อแก้ไขที่นี่'),
             el('p', 'hint', 'ต่อสาย: ลากจากจุดด้านขวาของ node ไปวางบน node อื่น · ลากไปที่ว่าง = เพิ่ม node ใหม่ต่อจากตรงนั้น'),
-            el('p', 'hint', 'ลบสาย: คลิกที่สายแล้วกด ✕ หรือปุ่ม Delete · เลื่อนจอ: ลากพื้นที่ว่าง · ซูม: ล้อเมาส์'),
+            el('p', 'hint', 'ลบสาย: คลิกที่สายแล้วกด ✕ หรือปุ่ม Delete · เลื่อนจอ: ลากพื้นที่ว่าง · ซูม: ล้อเมาส์ หรือหนีบสองนิ้ว'),
+            el('p', 'hint', 'Ctrl+Z ย้อน · Ctrl+Y ทำซ้ำ · Ctrl+C / Ctrl+V คัดลอก-วาง node · Ctrl+D ทำสำเนา · 📝 เพิ่มโน้ต'),
           );
         }
       } else if (sideTab === 'trigger') {
@@ -1123,7 +1452,11 @@
         const grid = document.querySelector(`#wfEditor .wcard[data-id="${selectedNode}"] .wlinks`);
         const node = draft.nodes.find((entry) => entry.id === selectedNode);
         if (grid && node) grid.replaceWith(linkGridFor(node));
+        checkpoint();
       },
+      notes: () => (draft.notes ??= []),
+      undo,
+      redo,
       addNodeAt: (type, position, from) => {
         const node = createNode(type, position, from);
         selectedNode = node.id;
@@ -1136,6 +1469,7 @@
       palette: paletteMenu,
     });
     renderSide();
+    checkpoint();
   }
 
   /** Manual run: show the trigger's sample as editable input JSON. */
@@ -1158,7 +1492,7 @@
         } catch {
           return M().toast('JSON ไม่ถูกต้อง', null, true);
         }
-        M().send({ type: 'workflow-run', agent: workflow.agent, name: workflow.name, input });
+        M().send({ type: 'workflow-run', agent: workflow.agent, name: workflow.name, input, pins: true });
         M().closeOverlay();
         if (!draft || draft.name !== workflow.name) openEditor(workflow.agent, workflow);
         else showEditor();
@@ -1384,6 +1718,6 @@
     showImport();
   }
 
-  window.MimiHooks.agentWorkflows = { render, onMessage, onResult, onNodeResult, onRuns, onRunRecord, onImport };
+  window.MimiHooks.agentWorkflows = { render, onMessage, onResult, onNodeResult, onRuns, onRunRecord, onImport, onExprPreview };
   window.MimiHooks.workflows = window.MimiHooks.agentWorkflows;
 })();

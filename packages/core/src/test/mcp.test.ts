@@ -174,7 +174,8 @@ test('tool pool: MCP tools are listed, picked one by one or as a whole server, a
   const { SecretStore } = await import('../app/secrets.ts');
   const dir = tempDir();
   const cachePath = path.join(dir, 'cache.json');
-  const hub = new McpHub({ configPath: path.join(dir, 'mcp.json'), cachePath, secret: () => undefined });
+  // The same layout as the app: the MCP file sits under the tools folder without breaking it.
+  const hub = new McpHub({ configPath: path.join(dir, 'tools', 'mcp', 'servers.json'), cachePath, secret: () => undefined });
   try {
     hub.save({ name: 'notes', enabled: true, transport: 'stdio', command: 'unused' });
     fs.writeFileSync(cachePath, JSON.stringify({ notes: { tools: [{ name: 'find', annotations: { readOnlyHint: true } }, { name: 'add' }], checkedAt: new Date().toISOString() } }));

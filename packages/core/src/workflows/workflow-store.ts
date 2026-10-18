@@ -49,6 +49,17 @@ const nodeSchema = z.strictObject({
   retries: z.number().int().nonnegative().optional(),
   retryWaitMs: z.number().int().nonnegative().optional(),
   position: z.tuple([z.number(), z.number()]).optional(),
+  disabled: z.boolean().optional(),
+  pinned: z.array(z.record(z.string(), z.unknown())).max(500, 'pin at most 500 items').optional(),
+});
+
+const noteSchema = z.strictObject({
+  id: z.string().regex(NODE_ID),
+  text: z.string().max(5000),
+  position: z.tuple([z.number(), z.number()]),
+  width: z.number().positive().optional(),
+  height: z.number().positive().optional(),
+  color: z.string().max(20).optional(),
 });
 
 const workflowSchema = z.strictObject({
@@ -62,6 +73,7 @@ const workflowSchema = z.strictObject({
   vars: z.record(z.string(), z.unknown()).default({}),
   errorWorkflow: z.string().optional(),
   nodes: z.array(nodeSchema).min(1, 'a workflow needs at least one node'),
+  notes: z.array(noteSchema).max(100).optional(),
 });
 
 export interface StoredWorkflow extends WorkflowView {

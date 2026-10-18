@@ -950,6 +950,22 @@ export interface RunState {
   startIds: string[];
   failed: boolean;
   response?: WorkflowResponse;
+  /** Pinned node outputs stand in for running those nodes (runs from the editor). */
+  usePins?: boolean;
+}
+
+/** Extra ways to start a run from the editor. */
+export interface RunOptions {
+  usePins?: boolean;
+  /** Start at this node with these items; only it and what follows it run. */
+  startAt?: { nodeId: string; input: FlowItem[]; outputs?: Record<string, NodeOutput> };
+}
+
+/** Where a node that does not run sends its items: "main" when linked, else its first linked output. */
+function passOutput(node: WorkflowNode): string {
+  const links = node.links ?? {};
+  if ((links.main ?? []).length > 0) return 'main';
+  return Object.keys(links).find((key) => key !== 'error' && (links[key] ?? []).length > 0) ?? 'main';
 }
 
 /** What a paused node waits for. */
@@ -1062,6 +1078,17 @@ async function drive(workflow: WorkflowView, state: RunState, deps: WorkflowRunn
       continue;
     }
     const view: WorkflowRunNodeView = { id, title: node.title?.trim() || node.id, type: node.type, status: 'ok', input, output: [] };
+    // Switched off, or pinned in an editor run: the node is not run.
+    if (node.disabled || (state.usePins && Array.isArray(node.pinned))) {
+      const items = node.disabled ? input : node.pinned!.map((json) => ({ json: { ...json } }));
+      const passed = { [passOutput(node)]: items };
+      view.note = node.disabled ? 'disabled' : 'pinned';
+      view.output = items;
+      state.views.push(view);
+      recordOutput(state, node, view);
+      settle(state, node, passed);
+      continue;
+    }
     // A failing node retries first; what happens after that is its onError policy.
     let outputs: Record<string, FlowItem[]> = {};
     let error: string | undefined;
@@ -1116,17 +1143,32 @@ export async function runWorkflow(
   signal?: AbortSignal,
   mode = 'manual',
   depth = 0,
+  options: RunOptions = {},
 ): Promise<WorkflowRunResult> {
-  const nodes = workflow.nodes;
+  let nodes = workflow.nodes;
+  const startAt = options.startAt;
+  if (startAt) {
+    // Only the node and everything after it take part.
+    const keep = new Set<string>();
+    const walk = (id: string) => {
+      if (keep.has(id)) return;
+      keep.add(id);
+      for (const targets of Object.values(nodes.find((node) => node.id === id)?.links ?? {})) for (const target of targets) walk(target);
+    };
+    if (!nodes.some((node) => node.id === startAt.nodeId)) return { name: workflow.name, ok: false, result: `no node "${startAt.nodeId}"`, nodes: [] };
+    walk(startAt.nodeId);
+    nodes = nodes.filter((node) => keep.has(node.id));
+  }
   const linkedIn = new Set(Object.values(nodes.flatMap((node) => Object.values(node.links ?? {}))).flat());
-  const starts = nodes.filter((node) => !linkedIn.has(node.id));
+  const starts = startAt ? nodes.filter((node) => node.id === startAt.nodeId) : nodes.filter((node) => !linkedIn.has(node.id));
   if (starts.length === 0) return { name: workflow.name, ok: false, result: 'the workflow has no start node', nodes: [] };
+  const kept = new Set(nodes.map((node) => node.id));
   const state: RunState = {
     thread: `workflow:${workflow.agent}/${workflow.name}:${randomUUID().slice(0, 8)}`,
     execution: { id: randomUUID(), mode },
     depth,
     trigger: { json: initialItems[0]?.json ?? {}, items: initialItems.map((item) => item.json) },
-    outputs: {},
+    outputs: { ...(startAt?.outputs ?? {}) },
     collected: {},
     remaining: Object.fromEntries(nodes.map((node) => [node.id, 0])),
     incoming: {},
@@ -1134,14 +1176,15 @@ export async function runWorkflow(
     views: [],
     startIds: starts.map((node) => node.id),
     failed: false,
+    ...(options.usePins ? { usePins: true } : {}),
   };
   for (const node of nodes) {
     for (const targets of Object.values(node.links ?? {})) {
-      for (const target of new Set(targets)) state.remaining[target] = (state.remaining[target] ?? 0) + 1;
+      for (const target of new Set(targets)) if (kept.has(target)) state.remaining[target] = (state.remaining[target] ?? 0) + 1;
     }
   }
   for (const start of starts) {
-    state.collected[start.id] = initialItems.map((item) => ({ json: { ...item.json } }));
+    state.collected[start.id] = (startAt ? startAt.input : initialItems).map((item) => ({ json: { ...item.json } }));
     state.queue.push(start.id);
   }
   return drive(workflow, state, deps, signal);

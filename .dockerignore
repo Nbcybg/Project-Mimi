@@ -1,0 +1,11 @@
+node_modules
+**/node_modules
+user
+backups
+dist
+_old
+design
+.git
+.env
+*.lnk
+**/*.test.ts

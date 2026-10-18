@@ -1,0 +1,18 @@
+# docker compose up -d   (put MIMI_TOKEN and your API keys in .env next to this file)
+services:
+  mimi:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      MIMI_HOST: 0.0.0.0
+      MIMI_PORT: 8787
+      # run_shell / read_file go to the PC agent instead of running on the server.
+      MIMI_LOCAL_PC_TOOLS: '0'
+    ports:
+      # Only this machine; reach it through Tailscale / Cloudflare Tunnel / a reverse proxy.
+      - '127.0.0.1:8787:8787'
+    volumes:
+      - ./user:/app/user
+      - ./backups:/app/backups
+      - ./mimi.json:/app/mimi.json

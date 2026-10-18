@@ -40,6 +40,8 @@ export interface CoreConfig {
   secretsPath: string;
   /** The user's own profile fields (`user/profile.json`). */
   userProfilePath: string;
+  /** Values of profile fields marked "this machine only". */
+  userProfileLocalPath: string;
   /** This server's Web Push (VAPID) key pair; machine-local. */
   pushKeysPath: string;
   /** VAPID contact sent to push services (`mailto:` or `https:`). */
@@ -110,6 +112,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
     providersDir: path.join(userDir, 'providers'),
     secretsPath: path.join(dataDir, 'secrets.json'),
     userProfilePath: path.join(userDir, 'profile.json'),
+    userProfileLocalPath: path.join(dataDir, 'profile-local.json'),
     pushKeysPath: path.join(dataDir, 'push-vapid.json'),
     pushContact: env.MIMI_PUSH_CONTACT ?? 'mailto:mimi@localhost',
     workflowsDir: path.join(userDir, 'workflows'),

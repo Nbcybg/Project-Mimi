@@ -52,6 +52,8 @@ export interface UserProfileField {
   value: string;
   /** "*" = every agent; otherwise only the agents named (an empty list hides it from all). */
   visibleTo: '*' | string[];
+  /** The value stays on this machine (user/data), not in user/profile.json that may be synced. */
+  localOnly?: boolean;
 }
 
 export interface UserProfileView {

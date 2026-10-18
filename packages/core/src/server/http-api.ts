@@ -21,7 +21,8 @@ export interface HttpApiDeps {
   /** Called after an agent's picture changed. */
   imagesChanged(): void;
   /** Fires a webhook trigger; null when the key matches no active trigger. */
-  webhook(key: string, payload: string): Promise<WebhookReply | null>;
+  /** `secret` is the caller's `x-mimi-secret` header (or `?secret=`), for workflows that ask for one. */
+  webhook(key: string, payload: string, secret?: string): Promise<WebhookReply | null>;
 }
 
 export function toAttachmentView(attachment: Attachment): AttachmentView {
@@ -104,7 +105,9 @@ export async function handleHttpApi(
     if ((resource === 'webhook' || resource === 'workflow') && rest.length === 1) {
       if (!['POST', 'PUT', 'GET'].includes(request.method ?? '')) throw new HttpError(405, 'Method not allowed.');
       const payload = request.method === 'GET' ? '' : (await readBody(request, MAX_WEBHOOK_BYTES)).toString('utf8');
-      const reply = await deps.webhook(rest[0]!, payload);
+      const header = request.headers['x-mimi-secret'];
+      const secret = (Array.isArray(header) ? header[0] : header) ?? url.searchParams.get('secret') ?? undefined;
+      const reply = await deps.webhook(rest[0]!, payload, secret);
       if (reply === null) throw new HttpError(404, 'No such webhook.');
       // content-length, transfer-encoding and connection belong to the server, not the workflow.
       const headers: Record<string, string> = { 'cache-control': 'no-store' };

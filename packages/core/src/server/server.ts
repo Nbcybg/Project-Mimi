@@ -23,6 +23,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { deleteAgent, saveAgent } from '../agents/loader.ts';
 import { importN8n } from '../workflows/n8n-import.ts';
 import { renderIconPng } from '../app/icon.ts';
+import { AuthLimiter } from './auth-limiter.ts';
 import { AppSettings, MODEL_KEYS } from '../app/app-settings.ts';
 import { presetSecretKey } from '../app/secrets.ts';
 import { AgentImages } from '../chat/agent-images.ts';
@@ -946,14 +947,23 @@ export async function startServer(
     }
   };
 
+  // Wrong tokens from one address are counted; too many and it is refused for a while.
+  const limiter = new AuthLimiter();
+  const addressOf = (request: http.IncomingMessage) => request.socket.remoteAddress ?? 'unknown';
   const httpApi = {
     attachments: core.attachments,
     images,
-    authorized: (request: http.IncomingMessage) =>
-      sameToken(/^Bearer (.+)$/.exec(request.headers.authorization ?? '')?.[1], config.token),
+    authorized: (request: http.IncomingMessage) => {
+      const address = addressOf(request);
+      if (limiter.blocked(address)) return false;
+      const ok = sameToken(/^Bearer (.+)$/.exec(request.headers.authorization ?? '')?.[1], config.token);
+      if (ok) limiter.succeed(address);
+      else limiter.fail(address);
+      return ok;
+    },
     agentExists: (name: string) => core.agents.names().includes(name),
     imagesChanged: () => broadcast(agentsMessage()),
-    webhook: async (key: string, payload: string): Promise<WebhookReply | null> => {
+    webhook: async (key: string, payload: string, secret?: string): Promise<WebhookReply | null> => {
       const trigger = core.triggers.byWebhookKey(key);
       if (trigger && trigger.status === 'active') {
         const result = await core.fire(trigger.id, payload.slice(0, 8000));
@@ -963,6 +973,9 @@ export async function startServer(
       const workflow = core.workflows.byWebhookKey(key);
       if (!workflow || !workflow.enabled) return null;
       if (core.triggerPool.get(workflow.trigger.pool)?.kind !== 'webhook') return null;
+      // An optional shared secret on top of the unguessable URL.
+      const expected = String(workflow.trigger.config.secret ?? '').trim();
+      if (expected && !sameToken(secret, expected)) return { status: 401, body: { ok: false, error: 'wrong or missing x-mimi-secret' } };
       let body: JsonValue = payload.slice(0, 8000) as JsonValue;
       try {
         body = JSON.parse(payload) as JsonValue;
@@ -1013,7 +1026,8 @@ export async function startServer(
   });
 
   const alive = new WeakSet<WebSocket>();
-  wss.on('connection', (socket) => {
+  wss.on('connection', (socket, request) => {
+    const address = addressOf(request);
     let role: 'client' | 'pc' | null = null;
     alive.add(socket);
     socket.on('pong', () => alive.add(socket));
@@ -1024,10 +1038,16 @@ export async function startServer(
       if (!message) return;
 
       if (role === null) {
+        if (limiter.blocked(address)) {
+          socket.close(4029, 'too many wrong tokens; try again later');
+          return;
+        }
         if (message.type !== 'hello' || !sameToken(message.token, config.token)) {
+          limiter.fail(address);
           socket.close(4003, 'invalid token');
           return;
         }
+        limiter.succeed(address);
         clearTimeout(helloTimer);
         if (message.role === 'pc') {
           role = 'pc';

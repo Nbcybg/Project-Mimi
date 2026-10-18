@@ -273,6 +273,7 @@ export const NODE_TYPES: NodeTypeView[] = [
       { key: 'headers', label: 'headers (JSON)', type: 'json', placeholder: '{"authorization": "Bearer {{ $vars.key }}"}' },
       { key: 'query', label: 'query (JSON)', type: 'json', placeholder: '{"limit": 5}' },
       { key: 'body', label: 'body (JSON)', type: 'json', placeholder: '{"subject": "{{ $json.Subject }}"}' },
+      { key: 'allowLocal', label: 'อนุญาตเรียกเครือข่ายภายใน (localhost, 192.168.x.x, เครื่องในบ้าน)', type: 'boolean' },
     ],
     outputs: [{ key: 'main', label: 'main' }],
   },
@@ -283,6 +284,7 @@ export const NODE_TYPES: NodeTypeView[] = [
     fields: [
       { key: 'tool', label: 'เครื่องมือ / preset', type: 'string', required: true },
       { key: 'input', label: 'input (JSON + expression)', type: 'json', placeholder: '{"range": "A1", "values": [["{{ $json.Subject }}"]]}' },
+      { key: 'allow', label: 'อนุญาตให้ทำงานนี้ (เครื่องมือที่ส่ง / แก้ / ลบข้อมูล ต้องติ๊ก เพราะ workflow รันเองโดยไม่มีใครกดยืนยัน)', type: 'boolean' },
     ],
     outputs: [{ key: 'main', label: 'main' }],
   },
@@ -576,7 +578,7 @@ export const BUILTIN_TRIGGERS: TriggerPoolView[] = [
     description: 'บริการอื่น POST เข้ามา; body กลายเป็น items',
     kind: 'webhook',
     builtin: true,
-    fields: [],
+    fields: [{ key: 'secret', label: 'รหัสลับ (ไม่บังคับ) — ผู้เรียกต้องส่ง header x-mimi-secret ให้ตรง', type: 'string', placeholder: 'ตั้งเองยาว ๆ' }],
     sample: { event: 'order.created', orderId: 42 },
   },
   {
@@ -604,6 +606,7 @@ export const BUILTIN_TRIGGERS: TriggerPoolView[] = [
       { key: 'method', label: 'method', type: 'string', placeholder: 'GET' },
       { key: 'headers', label: 'headers (JSON)', type: 'json' },
       { key: 'everyMinutes', label: 'เช็คทุก (นาที)', type: 'number', placeholder: '15' },
+      { key: 'allowLocal', label: 'อนุญาตเรียกเครือข่ายภายใน', type: 'boolean' },
     ],
     sample: { value: 42 },
   },

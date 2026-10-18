@@ -13,6 +13,7 @@ const fieldSchema = z.strictObject({
   value: z.string().max(MAX_VALUE, `a value may be at most ${MAX_VALUE} characters`).default(''),
   /** "*" = every agent; otherwise the names of the agents that may see it. */
   visibleTo: z.union([z.literal('*'), z.array(z.string().regex(/^[a-z][a-z0-9_-]*$/))]).default('*'),
+  localOnly: z.boolean().optional(),
 });
 
 const profileSchema = z.strictObject({
@@ -26,9 +27,22 @@ const profileSchema = z.strictObject({
  */
 export class UserProfileStore {
   private readonly file: string;
+  /** Values of "this machine only" fields, kept outside the user folder's synced files. */
+  private readonly localFile: string | undefined;
 
-  constructor(file: string) {
+  constructor(file: string, localFile?: string) {
     this.file = file;
+    this.localFile = localFile;
+  }
+
+  private localValues(): Record<string, string> {
+    if (!this.localFile || !fs.existsSync(this.localFile)) return {};
+    try {
+      const raw = JSON.parse(fs.readFileSync(this.localFile, 'utf8')) as Record<string, unknown>;
+      return Object.fromEntries(Object.entries(raw).map(([key, value]) => [key, String(value ?? '')]));
+    } catch {
+      return {};
+    }
   }
 
   get(): UserProfileView {
@@ -41,7 +55,9 @@ export class UserProfileStore {
     }
     const parsed = profileSchema.safeParse(raw);
     if (!parsed.success) throw new Error(`${this.file}: invalid profile:\n${z.prettifyError(parsed.error)}`);
-    return parsed.data as UserProfileView;
+    const local = this.localValues();
+    const fields = (parsed.data.fields as UserProfileField[]).map((field) => (field.localOnly ? { ...field, value: local[field.key] ?? '' } : field));
+    return { fields };
   }
 
   /** Replaces the whole profile; rows without a key or value are dropped, keys must be unique. */
@@ -55,6 +71,7 @@ export class UserProfileStore {
         label: String(field.label ?? '').trim(),
         value: String(field.value ?? '').trim(),
         visibleTo: Array.isArray(field.visibleTo) ? [...new Set(field.visibleTo.map(String))] : '*',
+        ...(field.localOnly ? { localOnly: true } : {}),
       })),
     });
     if (!parsed.success) throw new Error(`Profile: ${z.prettifyError(parsed.error)}`);
@@ -69,8 +86,20 @@ export class UserProfileStore {
       }
     }
     const result: UserProfileView = { fields };
+    if (fields.some((field) => field.localOnly) && !this.localFile) throw new Error('Profile: this setup has no machine-local store.');
+    // "This machine only" values go to the local file; the shared file keeps the field without its value.
+    const local: Record<string, string> = {};
+    const shared = fields.map((field) => {
+      if (!field.localOnly) return field;
+      local[field.key] = field.value;
+      return { ...field, value: '' };
+    });
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
-    fs.writeFileSync(this.file, `${JSON.stringify(result, null, 2)}\n`, 'utf8');
+    fs.writeFileSync(this.file, `${JSON.stringify({ fields: shared }, null, 2)}\n`, 'utf8');
+    if (this.localFile) {
+      fs.mkdirSync(path.dirname(this.localFile), { recursive: true });
+      fs.writeFileSync(this.localFile, `${JSON.stringify(local, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+    }
     return result;
   }
 
@@ -116,6 +145,9 @@ export class UserProfileStore {
         touched = true;
       }
     }
-    if (touched) fs.writeFileSync(this.file, `${JSON.stringify(profile, null, 2)}\n`, 'utf8');
+    if (touched) {
+      const shared = profile.fields.map((field) => (field.localOnly ? { ...field, value: '' } : field));
+      fs.writeFileSync(this.file, `${JSON.stringify({ fields: shared }, null, 2)}\n`, 'utf8');
+    }
   }
 }

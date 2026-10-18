@@ -68,6 +68,17 @@
       rerender();
     };
     box.append(mode);
+    const local = el('label', 'wcheck');
+    const localBox = el('input');
+    localBox.type = 'checkbox';
+    localBox.checked = row.localOnly === true;
+    localBox.onchange = () => {
+      row.localOnly = localBox.checked;
+      dirty = true;
+    };
+    local.append(localBox, el('span', '', 'เก็บในเครื่องนี้เท่านั้น'));
+    local.title = 'ค่านี้จะไม่ถูกเขียนลง user/profile.json (ที่อาจ sync / สำรองไปที่อื่น) เหมาะกับเลขบัญชี เลขบัตร';
+    box.append(local);
     if (row.visibleTo !== '*') {
       const list = el('div', 'hstack pfagents');
       for (const name of agents()) {

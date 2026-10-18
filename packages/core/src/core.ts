@@ -279,7 +279,7 @@ export async function createCore(
   const skillsOf = (agent: { skills: string[] }) =>
     currentSkills().filter((skill) => agent.skills.includes(skill.name));
   const persona = loadPersona(config.personaPath);
-  const profile = new UserProfileStore(config.userProfilePath);
+  const profile = new UserProfileStore(config.userProfilePath, config.userProfileLocalPath);
 
   const knowledge = new KnowledgeStore(db, async (model, texts, signal) => {
     const { embeddings } = await embedMany({
@@ -435,6 +435,7 @@ export async function createCore(
       return decision;
     },
     secret: (name) => secrets.get(name),
+    permissions: settings.permission,
     knowledge,
     readMedia: async ({ agent: agentName, data, mime, name, instruction, signal }) => {
       const agent = agents.get(agentName);

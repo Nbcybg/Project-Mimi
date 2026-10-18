@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import vm from 'node:vm';
 import type {
   FlowItem,
   JsonValue,
@@ -19,6 +18,8 @@ import type { KnowledgeStore } from '../knowledge/store.ts';
 import { renderHits } from '../knowledge/store.ts';
 import type { ApprovalDecision } from './approvals.ts';
 import { DEFAULT_TOKEN_SECRET, sendTelegram } from './telegram.ts';
+import { runCodeIsolated } from './code-sandbox.ts';
+import { assertPublicUrl, type Lookup } from './net-guard.ts';
 import fsp from 'node:fs/promises';
 import { addTo, type DateUnit, diffIn, formatDate, parseDate, startOf } from './datetime.ts';
 import {
@@ -75,6 +76,10 @@ export interface WorkflowRunnerDeps {
   requestApproval?(request: { workflow: string; agent: string; text: string; timeoutMs: number; signal?: AbortSignal }): Promise<ApprovalDecision>;
   /** A secret from the app's vault (Telegram bot token). */
   secret?(name: string): string | undefined;
+  /** Per-tool overrides from the settings file (`permission` block): allow / ask / deny. */
+  permissions?: Record<string, 'allow' | 'ask' | 'deny'>;
+  /** DNS for the local-network guard of HTTP calls; tests that bring their own fetch skip the guard. */
+  lookup?: Lookup;
   /** Telegram Bot API base URL (tests point it elsewhere). */
   telegramApi?: string;
   /** The knowledge bases (the knowledge node). */
@@ -319,6 +324,7 @@ async function runHttp(config: Record<string, JsonValue>, item: FlowItem, index:
   };
   const url = asText(resolved.url);
   if (!url) throw new Error('HTTP node: no URL');
+  await guardUrl(url, config.allowLocal === true, ctx.deps);
   let target = url;
   const query = resolved.query;
   if (query && typeof query === 'object' && !Array.isArray(query)) {
@@ -525,33 +531,8 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
     case 'code': {
       const code = String(node.config.code ?? '');
       if (!code.trim()) throw new Error('code node: no code');
-      const logs: string[] = [];
-      const log = (...parts: unknown[]) => logs.push(parts.map((part) => (typeof part === 'string' ? part : JSON.stringify(part))).join(' '));
-      const sandbox = {
-        items: items.map((item) => item.json),
-        $json: firstOrEmpty(items).json,
-        $items: items.map((item) => item.json),
-        // n8n's helpers, so code written there runs here.
-        $input: {
-          all: () => items.map((item) => ({ json: item.json })),
-          first: () => ({ json: firstOrEmpty(items).json }),
-          last: () => ({ json: (items.at(-1) ?? { json: {} }).json }),
-          item: { json: firstOrEmpty(items).json },
-        },
-        console: { log, info: log, warn: log, error: log },
-        JSON,
-        Math,
-        Date,
-        Number,
-        String,
-        Boolean,
-        Array,
-        Object,
-        RegExp,
-        URL,
-        URLSearchParams,
-      };
-      const result: unknown = await vm.runInNewContext(`(async () => {\n${code}\n})()`, sandbox, { timeout: 15_000, filename: 'workflow:code' });
+      // A separate locked-down process: no files, no programs, no keys (see code-sandbox.ts).
+      const { result } = await runCodeIsolated(code, items.map((item) => item.json), { signal: ctx.signal });
       if (result === undefined) return { main: items };
       return { main: unwrapItems(result) };
     }
@@ -562,6 +543,13 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
         const toolName = asText(config.tool);
         const tool = deps.tool(toolName);
         if (!tool) throw new Error(`tool node: unknown tool "${toolName}"`);
+        // Unattended runs cannot ask: anything beyond reading needs the node's own consent
+        // (or an "allow" for the tool in the settings file). A "deny" there always wins.
+        const policy = deps.permissions?.[toolName];
+        if (policy === 'deny') throw new Error(`tool node: "${toolName}" is denied in the settings file`);
+        if (tool.risk !== 'read' && policy !== 'allow' && node.config.allow !== true) {
+          throw new Error(`tool node: "${toolName}" can change things (${tool.risk}); tick "อนุญาตให้ทำงานนี้" on the node to let the workflow run it`);
+        }
         const parsed = tool.inputSchema.safeParse(config.input ?? {});
         if (!parsed.success) throw new Error(`tool node "${toolName}": invalid input`);
         const context: ToolContext = {
@@ -1052,6 +1040,13 @@ export async function runWorkflow(
   };
 }
 
+/** The local-network guard; a custom fetch (tests) brings its own network and skips it. */
+async function guardUrl(url: string, allowLocal: boolean, deps: WorkflowRunnerDeps): Promise<void> {
+  if (allowLocal) return;
+  if (deps.fetchFn && !deps.lookup) return;
+  await assertPublicUrl(url, deps.lookup);
+}
+
 /** The items a trigger starts a run with; `payload` carries a webhook body or manual input. */export async function triggerItems(
   workflow: WorkflowView,
   pool: TriggerPool,
@@ -1092,6 +1087,7 @@ export async function runWorkflow(
       const resolved = resolveValue(config, empty) as { url?: JsonValue; method?: JsonValue; headers?: JsonValue };
       const url = asText(resolved.url);
       if (!url) throw new Error('poll trigger: no URL');
+      await guardUrl(url, config.allowLocal === true, deps);
       const headers: Record<string, string> = {};
       if (resolved.headers && typeof resolved.headers === 'object' && !Array.isArray(resolved.headers)) {
         for (const [key, value] of Object.entries(resolved.headers)) headers[key] = asText(value);

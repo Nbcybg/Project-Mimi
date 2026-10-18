@@ -573,7 +573,7 @@ function convertNode(node: N8nNode, attached: N8nNode[], options: N8nImportOptio
       const google = type === 'gmail';
       const operation = str(p.operation || 'send');
       const tool = (name: string, input: Record<string, JsonValue>): Converted =>
-        options.hasTool(name) ? { type: 'tool', config: { tool: name, input }, output: main } : placeholder(node.name, type, `tool "${name}" is not in the tool pool`, report);
+        options.hasTool(name) ? { type: 'tool', config: { tool: name, input, allow: false }, output: main } : placeholder(node.name, type, `tool "${name}" is not in the tool pool`, report);
       if (operation === 'send') {
         return tool(google ? 'gmail_send' : 'outlook_send', { to: conv(p.sendTo ?? p.toRecipients ?? ''), subject: conv(p.subject ?? ''), body: conv(p.message ?? p.bodyContent ?? '') });
       }

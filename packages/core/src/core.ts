@@ -22,6 +22,7 @@ import { gmailListUnread, gmailMarkRead } from './google/tools.ts';
 import { type AgentLoopDeps, runAgent, type RunInput } from './loop/agent-loop.ts';
 import { buildPromptVars } from './loop/prompt-vars.ts';
 import { WardrobeStore } from './wardrobe/wardrobe-store.ts';
+import { BackgroundStore } from './backgrounds/background-store.ts';
 import { Compactor } from './memory/compactor.ts';
 import { MemoryFiles } from './memory/files.ts';
 import { describeCompaction, PostTurnJobs } from './memory/post-turn.ts';
@@ -112,6 +113,8 @@ export interface Core {
   memos: MemoStore;
   /** The outfit pool; `{{id}}` in a prompt expands to the outfit. */
   wardrobe: WardrobeStore;
+  /** Backdrops for the chat stage and which one each agent uses. */
+  backgrounds: BackgroundStore;
   attachments: AttachmentStore;
   /** The skill hub as it is on disk right now. */
   skills(): Skill[];
@@ -256,6 +259,7 @@ export async function createCore(
   const status = new StatusStore(db);
   const memos = new MemoStore(db);
   const wardrobe = new WardrobeStore(config.wardrobeDir, () => agents.names());
+  const backgrounds = new BackgroundStore(config.backgroundsDir);
   const attachments = new AttachmentStore(db, config.filesDir);
 
   // The database stays the source of truth; the mirrors under `user/sessions`,
@@ -1145,6 +1149,7 @@ export async function createCore(
     status,
     memos,
     wardrobe,
+    backgrounds,
     attachments,
     skills: currentSkills,
     tools: toolPool,

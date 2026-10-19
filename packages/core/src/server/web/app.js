@@ -892,6 +892,14 @@
       }
       section.append(grid);
       nodes.push(section);
+      const hooks = window.MimiHooks && window.MimiHooks.backgrounds;
+      if (hooks) {
+        const backdrop = el('div');
+        backdrop.append(el('h3', '', 'ฉากหลัง'));
+        const settings = (state.backgrounds && state.backgrounds.settings) || { agents: {} };
+        backdrop.append(hooks.choiceSelect(settings.agents[chat.agents[0]] || '', true, (choice) => send({ type: 'background-select', agent: chat.agents[0], choice })));
+        nodes.push(backdrop);
+      }
     } else {
       const section = el('div');
       const head = el('h3', '', 'สมาชิก');
@@ -1502,6 +1510,7 @@
     ['triggers', 'Trigger'],
     ['knowledge', 'คลังความรู้'],
     ['wardrobe', 'ตู้เสื้อผ้า'],
+    ['backgrounds', 'ฉากหลัง'],
     ['links', 'MCP / CLI'],
   ];
   function renderHub() {
@@ -1517,7 +1526,8 @@
     }
     const knowledge = () => (window.MimiHooks && window.MimiHooks.knowledge ? window.MimiHooks.knowledge.render() : el('div'));
     const wardrobe = () => (window.MimiHooks && window.MimiHooks.wardrobe ? window.MimiHooks.wardrobe.render() : el('div'));
-    const body = { models: hubModels, skills: hubSkills, tools: hubTools, triggers: hubTriggers, knowledge, wardrobe, links: hubLinks }[ui.hubTab]();
+    const backgrounds = () => (window.MimiHooks && window.MimiHooks.backgrounds ? window.MimiHooks.backgrounds.render() : el('div'));
+    const body = { models: hubModels, skills: hubSkills, tools: hubTools, triggers: hubTriggers, knowledge, wardrobe, backgrounds, links: hubLinks }[ui.hubTab]();
     page.replaceChildren(pageHead('Hub', 'ของกลางที่ agent และ skill หยิบไปใช้: ตั้งค่าที่เดียว ใช้ได้ทุกตัว'), tabs, body);
   }
   const shown = (value) => (value === undefined || value === null ? '—' : String(value));
@@ -2433,6 +2443,7 @@
     avatar,
     blobUrl,
     renderHub,
+    renderRail,
     renderAgents,
     renderSettings,
     fmtDate,
@@ -2474,6 +2485,10 @@
           window.MimiHooks.knowledge.onMessage(message);
         }
         if (message.type.startsWith('knowledge')) return;
+        if (message.type === 'backgrounds') {
+          window.MimiHooks?.backgrounds?.onMessage(message);
+          return;
+        }
         if (message.type === 'wardrobe') {
           window.MimiHooks?.wardrobe?.onMessage(message);
           window.MimiHooks?.stage?.refresh();

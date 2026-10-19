@@ -62,6 +62,22 @@ export interface UserProfileView {
   fields: UserProfileField[];
 }
 
+/** A backdrop for the chat stage. */
+export interface BackgroundView {
+  id: string;
+  name: string;
+  /** Words in an agent's location that make "auto" choose this backdrop. */
+  keywords: string[];
+  /** Changes whenever the picture does; null when there is none. */
+  image: string | null;
+}
+
+/** Choices are a backdrop id, "none" (no backdrop) or "auto" (by location); "" = follow the app-wide choice. */
+export interface BackgroundSettingsView {
+  default: string;
+  agents: Record<string, string>;
+}
+
 /** An outfit in the wardrobe pool; agents and prompts refer to it by `id` (e.g. wa01). */
 export interface WardrobeOutfitView {
   id: string;

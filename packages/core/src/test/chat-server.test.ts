@@ -277,3 +277,34 @@ test('wardrobe and emoji pictures over the socket and HTTP', async () => {
   assert.equal((await app.api('/api/sprite/outfit/work/1f60a')).status, 404);
   await app.stop();
 });
+
+test('backgrounds over the socket and HTTP', async () => {
+  const app = await boot();
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const upload = (url: string, type = 'image/png') => app.api(url, { method: 'POST', body: png, headers: { 'content-type': type } });
+
+  const saved = await app.ask({ type: 'background-save', background: { id: 'cafe', name: 'คาเฟ่', keywords: ['คาเฟ่'] } }, 'backgrounds');
+  assert.deepEqual(saved.items.map((item) => [item.id, item.keywords, item.image]), [['cafe', ['คาเฟ่'], null]]);
+  assert.equal((await upload('/api/background-image/ghost')).status, 404);
+  assert.equal((await upload('/api/background-image/cafe', 'text/html')).status, 400);
+  assert.equal((await app.api('/api/background-image/cafe')).status, 404);
+  const pictured = app.ask(null, 'backgrounds', (reply) => Boolean(reply.items[0]?.image));
+  assert.equal((await upload('/api/background-image/cafe')).status, 200);
+  await pictured;
+  const fetched = await app.api('/api/background-image/cafe');
+  assert.deepEqual([fetched.headers.get('content-type'), Buffer.from(await fetched.arrayBuffer()).equals(png)], ['image/png', true]);
+
+  const chosen = await app.ask({ type: 'background-select', agent: 'mimi', choice: 'cafe' }, 'backgrounds', (reply) => reply.settings.agents.mimi === 'cafe');
+  assert.deepEqual(chosen.settings, { default: '', agents: { mimi: 'cafe' } });
+  const error = await app.ask({ type: 'background-select', choice: 'ghost' }, 'error');
+  assert.match(error.message, /No background/);
+
+  // The choice follows an agent rename and goes when the backdrop does.
+  const agents = await app.ask({ type: 'agents-list' }, 'agents');
+  const mimi = agents.agents.find((agent) => agent.name === 'mimi')!;
+  await app.ask({ type: 'agent-save', renameFrom: 'mimi', agent: { ...mimi, name: 'mimi2', models: {} } }, 'agents');
+  assert.deepEqual((await app.ask({ type: 'backgrounds-list' }, 'backgrounds')).settings.agents, { mimi2: 'cafe' });
+  const gone = await app.ask({ type: 'background-delete', id: 'cafe' }, 'backgrounds');
+  assert.deepEqual([gone.items, gone.settings.agents], [[], {}]);
+  await app.stop();
+});

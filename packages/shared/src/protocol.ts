@@ -279,7 +279,7 @@ export interface ToolPoolView {
   mcp?: McpServerView[];
 }
 
-import type { KnowledgeCollectionView, KnowledgeDocumentView, KnowledgeHit, UserProfileView, WardrobeOutfitView } from './knowledge.ts';
+import type { KnowledgeCollectionView, KnowledgeDocumentView, KnowledgeHit, UserProfileView, WardrobeOutfitView, BackgroundView, BackgroundSettingsView } from './knowledge.ts';
 
 /** The importer's account of an n8n conversion. */
 export interface N8nImportReportView {
@@ -490,6 +490,11 @@ export type ClientMessage =
   | { type: 'profile-save'; profile: UserProfileView }
   /** Knowledge bases: list, create / edit, delete. */
   | { type: 'knowledge-list' }
+  | { type: 'backgrounds-list' }
+  | { type: 'background-save'; background: { id: string; name?: string; keywords?: string[] }; renameFrom?: string }
+  | { type: 'background-delete'; id: string }
+  /** Chooses the backdrop: for one agent, or (no agent) for the whole app. */
+  | { type: 'background-select'; agent?: string; choice: string }
   | { type: 'wardrobe-list' }
   /** Saves an outfit; `renameFrom` moves an existing one to a new id. */
   | { type: 'wardrobe-save'; outfit: { id: string; name?: string; description?: string }; renameFrom?: string }
@@ -593,6 +598,7 @@ export type ServerMessage =
   | { type: 'workflow-runs'; workflow: string; runs: WorkflowRunSummary[] }
   | { type: 'knowledge'; collections: KnowledgeCollectionView[]; saved?: string }
   | { type: 'wardrobe'; outfits: WardrobeOutfitView[]; saved?: string }
+  | { type: 'backgrounds'; items: BackgroundView[]; settings: BackgroundSettingsView; saved?: string }
   | { type: 'profile'; profile: UserProfileView; saved?: boolean }
   | { type: 'notifications'; items: NotificationItem[]; unread: number }
   | { type: 'backups'; backups: Array<{ name: string; bytes: number; createdAt: string }>; dir: string; created?: string }

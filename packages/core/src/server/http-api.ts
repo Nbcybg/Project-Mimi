@@ -5,6 +5,7 @@ import type { AttachmentView } from '@mimi/shared';
 import { type AgentImages, isImageSlot } from '../chat/agent-images.ts';
 import { type Attachment, type AttachmentStore, MAX_ATTACHMENT_BYTES } from '../chat/attachments.ts';
 import type { WardrobeStore } from '../wardrobe/wardrobe-store.ts';
+import type { BackgroundStore } from '../backgrounds/background-store.ts';
 
 /** What the webhook endpoint answers: a `respond` node may shape all of it. */
 export interface WebhookReply {
@@ -19,6 +20,9 @@ export interface HttpApiDeps {
   attachments: AttachmentStore;
   images: AgentImages;
   wardrobe: WardrobeStore;
+  backgrounds: BackgroundStore;
+  /** Called after a backdrop's picture changed. */
+  backgroundsChanged(): void;
   /** Called after an outfit's picture changed. */
   wardrobeChanged(): void;
   /** True when the request carries the shared token. */
@@ -193,6 +197,24 @@ export async function handleHttpApi(
         }
         if (scope === 'outfit') deps.wardrobeChanged();
         else deps.imagesChanged();
+        sendJson(response, 200, { ok: true });
+      } else {
+        throw new HttpError(405, 'Method not allowed.');
+      }
+    } else if (resource === 'background-image' && rest.length === 1) {
+      const id = rest[0]!;
+      if (request.method === 'GET') {
+        const image = deps.backgrounds.readImage(id);
+        if (!image) throw new HttpError(404, 'No picture.');
+        sendBytes(response, image.data, image.mime);
+      } else if (request.method === 'POST' || request.method === 'DELETE') {
+        if (!deps.backgrounds.has(id)) throw new HttpError(404, `No background "${id}".`);
+        if (request.method === 'DELETE') deps.backgrounds.removeImage(id);
+        else {
+          const mime = String(request.headers['content-type'] ?? '').split(';')[0]!.trim();
+          deps.backgrounds.saveImage(id, mime, await readBody(request, 12 * 1024 * 1024));
+        }
+        deps.backgroundsChanged();
         sendJson(response, 200, { ok: true });
       } else {
         throw new HttpError(405, 'Method not allowed.');

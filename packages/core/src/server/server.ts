@@ -75,6 +75,7 @@ const WEB_FILES: Record<string, [string, string]> = {
   '/feature-knowledge.js': ['feature-knowledge.js', 'text/javascript; charset=utf-8'],
   '/feature-wardrobe.js': ['feature-wardrobe.js', 'text/javascript; charset=utf-8'],
   '/feature-stage.js': ['feature-stage.js', 'text/javascript; charset=utf-8'],
+  '/feature-backgrounds.js': ['feature-backgrounds.js', 'text/javascript; charset=utf-8'],
   '/feature-canvas.js': ['feature-canvas.js', 'text/javascript; charset=utf-8'],
   '/feature-profile.js': ['feature-profile.js', 'text/javascript; charset=utf-8'],
   '/feature-notify.js': ['feature-notify.js', 'text/javascript; charset=utf-8'],
@@ -167,6 +168,13 @@ export async function startServer(
       if (value) core.registry.info(modelRef(value));
     }
   };
+
+  const backgroundsMessage = (saved?: string): ServerMessage => ({
+    type: 'backgrounds',
+    items: core.backgrounds.list(),
+    settings: core.backgrounds.settings(),
+    ...(saved ? { saved } : {}),
+  });
 
   const agentsMessage = (saved?: string): ServerMessage => ({
     type: 'agents',
@@ -267,6 +275,7 @@ export async function startServer(
       // Chats, status and notes follow the agent to its new name.
       core.chats.renameAgent(renameFrom, name);
       core.profile.renameAgent(renameFrom, name);
+      core.backgrounds.renameAgent(renameFrom, name);
       core.status.rename(renameFrom, name);
       core.memos.rename(renameFrom, name);
     }
@@ -911,6 +920,25 @@ export async function startServer(
       case 'profile-save':
         broadcast({ type: 'profile', profile: core.profile.save(message.profile, core.agents.names()), saved: true });
         break;
+      case 'backgrounds-list':
+        reply(backgroundsMessage());
+        break;
+      case 'background-save': {
+        const background = message.background;
+        const from = message.renameFrom ? String(message.renameFrom) : '';
+        if (from && from !== background.id) core.backgrounds.rename(from, String(background.id));
+        const saved = core.backgrounds.save(background);
+        broadcast(backgroundsMessage(saved.id));
+        break;
+      }
+      case 'background-delete':
+        core.backgrounds.remove(String(message.id));
+        broadcast(backgroundsMessage());
+        break;
+      case 'background-select':
+        core.backgrounds.select(message.agent === undefined ? undefined : String(message.agent), String(message.choice ?? ''));
+        broadcast(backgroundsMessage());
+        break;
       case 'wardrobe-list':
         reply({ type: 'wardrobe', outfits: core.wardrobe.list() });
         break;
@@ -1037,6 +1065,7 @@ export async function startServer(
           core.status.forget(gone);
           core.memos.forget(gone);
           core.profile.forgetAgent(gone);
+          core.backgrounds.forgetAgent(gone);
           images.forget(gone);
           // An agent's workflows go with it, and so do their schedules.
           for (const name of core.workflows.forgetAgent(gone)) {
@@ -1072,6 +1101,8 @@ export async function startServer(
     attachments: core.attachments,
     images,
     wardrobe: core.wardrobe,
+    backgrounds: core.backgrounds,
+    backgroundsChanged: () => broadcast(backgroundsMessage()),
     wardrobeChanged: () => broadcast({ type: 'wardrobe', outfits: core.wardrobe.list() }),
     authorized: (request: http.IncomingMessage) => {
       const address = addressOf(request);

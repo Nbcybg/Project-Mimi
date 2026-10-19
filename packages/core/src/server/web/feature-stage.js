@@ -78,6 +78,7 @@
       M().state.wardrobeLoaded = true;
       M().send({ type: 'wardrobe-list' });
     }
+    window.MimiHooks.backgrounds?.apply();
     const agent = directAgent();
     const target = agent && pick(agent);
     stage.classList.toggle('has-figure', Boolean(target));

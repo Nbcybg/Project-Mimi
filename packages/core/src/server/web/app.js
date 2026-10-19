@@ -295,6 +295,8 @@
   const logInner = $('log-inner');
   /** The assistant block being streamed into right now. */
   let live = null;
+  /** A chat that changed while its turn was still streaming: reloaded once the turn ends. */
+  let refreshAfterTurn = null;
   const cards = new Map();
 
   const pinned = () => logBox.scrollHeight - logBox.scrollTop - logBox.clientHeight < 140;
@@ -463,6 +465,31 @@
       }
       nodes.push(box);
     }
+    for (const file of files.filter((entry) => entry.kind === 'video')) {
+      const box = el('div', 'voice vid');
+      const play = el('button', 'play');
+      play.append(el('i', '', '▶'), el('span', '', `วิดีโอ · ${file.name} · ${fmtSize(file.size)}`));
+      // Loaded on demand: a video can be 25 MB.
+      play.onclick = async () => {
+        try {
+          const video = el('video');
+          video.controls = true;
+          video.playsInline = true;
+          video.src = await blobUrl(`/api/files/${file.id}`);
+          play.replaceWith(video);
+          video.play().catch(() => {});
+        } catch {
+          toast('เปิดวิดีโอไม่ได้', file.name, true);
+        }
+      };
+      box.append(play);
+      if (file.text) {
+        const seen = el('div', 'tr');
+        seen.append(el('b', '', 'AI เห็นว่า'), file.text);
+        box.append(seen);
+      }
+      nodes.push(box);
+    }
     for (const file of files.filter((entry) => entry.kind === 'file')) {
       const chip = button('filechip', null, () => download(file), file.text ? file.text.slice(0, 500) : file.name);
       const info = el('div');
@@ -523,6 +550,13 @@
     }
     if (message.approval) target.body.append(approvalNode(message.approval));
     for (const tool of message.tools || []) target.body.append(toolRow(tool.name, tool.summary, false).node);
+    // Files the agent sent (send_file, generate_image, ...) sit under the step that sent them.
+    const files = message.attachments || [];
+    if (files.length > 0) {
+      const box = el('div', 'agentfiles');
+      box.append(...attachmentNodes(files));
+      target.body.append(box);
+    }
     return target;
   }
 
@@ -718,6 +752,20 @@
         if (live && live.tools.has(event.result.callId)) live.tools.get(event.result.callId).finish(event.result.ok, event.result.output);
         think(true);
         break;
+      case 'attachment': {
+        if (sub) {
+          subLine(sub, `📎 ${event.attachment.name}`);
+          break;
+        }
+        if (!live) break;
+        live.bubble = null;
+        const box = el('div', 'agentfiles');
+        box.append(...attachmentNodes([event.attachment]));
+        const stick = pinned();
+        live.body.append(box);
+        if (stick) scrollDown();
+        break;
+      }
       case 'permission-request':
         state.pendingPerms.set(event.request.id, event.request);
         think(false);
@@ -1225,6 +1273,7 @@
     ['xhigh', 'xhigh'],
     ['max', 'max — คิดเต็มที่ (ช้าสุด)'],
   ];
+  const MEDIA_KEYS = ['image_model', 'speech_model', 'video_model'];
   /** A model picker: presets from the model pool first, then the models of the connected providers. */
   function modelSelect(current, emptyLabel, withPresets = true) {
     const select = el('select');
@@ -1250,6 +1299,9 @@
     ['vision_model', 'ดูรูป / อ่าน PDF'],
     ['transcript_model', 'ถอดเสียง'],
     ['small_model', 'สรุป / ความจำ'],
+    ['image_model', 'สร้างรูป (generate_image)'],
+    ['speech_model', 'อ่านออกเสียงเป็นไฟล์ (text_to_speech)'],
+    ['video_model', 'สร้างวิดีโอ (generate_video)'],
   ];
   /** Progress text next to the save buttons of the page that is open. */
   function flash(message) {
@@ -1369,7 +1421,8 @@
     const models = el('div', 'grid2');
     const defaults = state.settings ? state.settings.defaults : {};
     for (const [key, label] of CAPABILITIES) {
-      const fallback = defaults[key] || (key === 'model' ? '' : 'โมเดลคุยของ agent นี้');
+      // Making media has no fallback: a chat model cannot draw, speak or film.
+      const fallback = defaults[key] || (key === 'model' ? '' : MEDIA_KEYS.includes(key) ? 'ไม่มี' : 'โมเดลคุยของ agent นี้');
       const select = modelSelect(agent ? agent.models[key] : '', `ค่าเริ่มต้น${fallback ? `: ${fallback}` : ''}`);
       select.dataset.capability = key;
       models.append(labelled(label, select));
@@ -1789,7 +1842,7 @@
     general.append(el('h3', '', 'โมเดลเริ่มต้น'), el('p', 'hint', view.models.length ? 'ใช้กับ agent ที่ไม่ได้เลือกโมเดลของตัวเองในงานนั้น' : 'เชื่อมต่อผู้ให้บริการก่อน แล้วรายชื่อโมเดลจะขึ้นให้เลือก'));
     const defaults = el('div', 'grid2');
     for (const [key, label] of CAPABILITIES) {
-      const select = modelSelect(view.defaults[key] || '', key === 'model' ? null : 'ใช้โมเดลคุย');
+      const select = modelSelect(view.defaults[key] || '', key === 'model' ? null : MEDIA_KEYS.includes(key) ? 'ไม่ใช้' : 'ใช้โมเดลคุย');
       select.dataset.default = key;
       defaults.append(labelled(label, select));
     }
@@ -2183,12 +2236,22 @@
         if (message.chatId === null) {
           state.typing = null;
           live = null;
+          if (refreshAfterTurn && showing(refreshAfterTurn.chatId, refreshAfterTurn.sessionId)) {
+            send({ type: 'chat-open', chatId: refreshAfterTurn.chatId, sessionId: state.latest ? undefined : refreshAfterTurn.sessionId });
+          }
+          refreshAfterTurn = null;
         }
         renderChatList();
         renderHeader();
         break;
       case 'chat-changed':
-        if (showing(message.chatId, message.sessionId)) send({ type: 'chat-open', chatId: message.chatId, sessionId: state.latest ? undefined : message.sessionId });
+        if (!showing(message.chatId, message.sessionId)) break;
+        // Reloading now would wipe the reply that is still streaming in; reload when the turn ends.
+        if (state.busyChat === message.chatId) {
+          refreshAfterTurn = { chatId: message.chatId, sessionId: message.sessionId };
+          break;
+        }
+        send({ type: 'chat-open', chatId: message.chatId, sessionId: state.latest ? undefined : message.sessionId });
         break;
       case 'rewound':
         if (message.restored && message.restored.length) toast(`ย้อนไฟล์กลับ ${message.restored.length} ไฟล์`, message.restored.join('\n'));

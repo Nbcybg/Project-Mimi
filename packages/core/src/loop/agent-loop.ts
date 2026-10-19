@@ -63,7 +63,15 @@ export interface AgentLoopDeps {
   /** Tools that exist only for this run (the agent's skills). */
   extraTools?: (agent: AgentDefinition, input: RunInput) => ToolDefinition<any>[];
   now?: () => Date;
+  /** The user's files: tied to the message that carries them, and shown as they are to a model that can see. */
+  media?: {
+    link(attachmentIds: string[], messageId: number): void;
+    imageParts(messageIds: number[], limit: number): Map<number, Array<{ type: 'file'; data: Buffer; mediaType: string; filename: string }>>;
+  };
 }
+
+/** How many of a session's newest images a vision-capable chat model gets as pictures. */
+const MAX_PROMPT_IMAGES = 6;
 
 export interface RunInput {
   agent: AgentDefinition;
@@ -79,6 +87,8 @@ export interface RunInput {
   instructions?: string;
   /** Extra lines for the volatile block stored with the message (what the last session was about). */
   context?: string;
+  /** Files sent with `userText` (already read into it as text). */
+  attachments?: string[];
   signal?: AbortSignal;
   /** Shared by every run that belongs to the same user turn or scheduled task. */
   traceId?: string;
@@ -277,9 +287,17 @@ export async function* runAgent(deps: AgentLoopDeps, input: RunInput): AsyncGene
       [deps.contextExtras?.(agent), input.context].filter(Boolean).join('\n'),
     ),
   );
-  const messages = buildHistory(deps.messages.after(thread, state.summarizedThrough), agent.name, {
-    group: input.group,
-  });
+  if (input.attachments?.length) deps.media?.link(input.attachments, userMessageId);
+  const tail = deps.messages.after(thread, state.summarizedThrough);
+  // A model that can see gets the pictures themselves, not only their description.
+  const media =
+    modelInfo.imageInput && deps.media
+      ? deps.media.imageParts(
+          tail.filter((message) => message.role === 'user').map((message) => message.id),
+          MAX_PROMPT_IMAGES,
+        )
+      : undefined;
+  const messages = buildHistory(tail, agent.name, { group: input.group, media });
   const providerOptions = providerOptionsFor(modelInfo);
 
   const runId = deps.usage.startRun({ traceId, agent: agent.name, model: modelRef });
@@ -348,7 +366,9 @@ export async function* runAgent(deps: AgentLoopDeps, input: RunInput): AsyncGene
       const rejected = new Map<string, string>();
       for (const message of await result.responseMessages) {
         messages.push(message);
-        persist(message.role, message.content);
+        const storedId = persist(message.role, message.content);
+        // Files a tool of this round sends are shown under the message that called it.
+        if (message.role === 'assistant') toolContext.messageId = storedId;
         if (message.role !== 'tool') continue;
         for (const part of message.content) {
           if (part.type !== 'tool-result') continue;

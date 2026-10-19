@@ -1,5 +1,5 @@
 import type { Capability } from '@mimi/shared';
-import type { LanguageModel } from 'ai';
+import type { ImageModel, LanguageModel, SpeechModel } from 'ai';
 import {
   type ModelInfo,
   type ModelRef,
@@ -15,7 +15,13 @@ export interface ModelSelection {
   small_model?: string;
   vision_model?: string;
   transcript_model?: string;
+  image_model?: string;
+  speech_model?: string;
+  video_model?: string;
 }
+
+/** Models that make media instead of text. */
+export type MediaKind = 'image' | 'speech' | 'video';
 
 /** What the rest of the core needs from the provider layer. */
 export interface ModelService {
@@ -23,7 +29,12 @@ export interface ModelService {
   resolve(capability: Capability, agent?: ModelSelection): ModelRef;
   info(ref: ModelRef): ModelInfo;
   languageModel(ref: ModelRef): Promise<LanguageModel>;
+  /** A model that makes pictures, spoken audio or video; absent where no provider can. */
+  mediaModel?(kind: MediaKind, ref: ModelRef): Promise<ImageModel | SpeechModel | VideoModel>;
 }
+
+/** The SDK's (experimental) video model type, as `experimental_generateVideo` takes it. */
+export type VideoModel = Parameters<typeof import('ai').experimental_generateVideo>[0]['model'];
 
 /** A named entry of the model pool: a model plus how to sample from it. */
 export interface ModelPreset extends SamplingParams {
@@ -60,7 +71,9 @@ export class ModelRouter implements ModelService {
 
   /**
    * chat -> `model`; summarize -> `small_model`; vision -> `vision_model`;
-   * transcript -> `transcript_model`. Anything unset falls back to the chat model.
+   * transcript -> `transcript_model`. Anything unset falls back to the chat model, except
+   * image / speech / video (`image_model`, `speech_model`, `video_model`): a chat model
+   * cannot make those, so an unset one is an error that says where to set it.
    */
   resolve(capability: Capability, agent: ModelSelection = {}): ModelRef {
     const defaults = this.defaults();
@@ -76,6 +89,17 @@ export class ModelRouter implements ModelService {
         return parse(pick('vision_model'));
       case 'transcript':
         return parse(pick('transcript_model'));
+      case 'image':
+      case 'speech':
+      case 'video': {
+        const key = `${capability}_model` as const;
+        const name = agent[key] ?? defaults[key];
+        if (!name) {
+          const what = { image: 'pictures', speech: 'spoken audio', video: 'videos' }[capability];
+          throw new Error(`No model makes ${what} yet: pick one under "${key}" in the agent's models or the app's default models.`);
+        }
+        return parse(name);
+      }
     }
   }
 
@@ -85,5 +109,9 @@ export class ModelRouter implements ModelService {
 
   languageModel(ref: ModelRef): Promise<LanguageModel> {
     return this.registry.languageModel(ref);
+  }
+
+  mediaModel(kind: MediaKind, ref: ModelRef): Promise<ImageModel | SpeechModel | VideoModel> {
+    return this.registry.mediaModel<ImageModel | SpeechModel | VideoModel>(kind, ref);
   }
 }

@@ -145,10 +145,15 @@ kbd { font: 11px var(--mono); padding: 1px 6px; border: 1px solid var(--line); b
 .album.one img { height: auto; max-height: 320px; }
 .voice { display: flex; flex-direction: column; gap: 6px; background: #2a2622; border: 1px solid #3a3129; border-radius: 14px 14px 4px 14px; padding: 8px 12px; width: min(340px, 100%); }
 .voice audio { width: 100%; height: 34px; }
+.voice.vid { width: min(420px, 100%); }
+.voice video { width: 100%; max-height: 360px; border-radius: 10px; background: #000; display: block; }
+.voice.vid .play span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .voice .play { display: flex; gap: 10px; align-items: center; font-size: 13px; color: var(--ink-2); }
 .voice .play i { width: 32px; height: 32px; border-radius: 50%; background: var(--accent); color: var(--accent-ink); display: grid; place-items: center; font-style: normal; font-size: 12px; flex: none; }
 .tr { font-size: 12.5px; color: var(--ink-2); border-top: 1px solid #3a3129; padding-top: 6px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .tr b { font-weight: 500; color: var(--muted); font-size: 11px; display: block; }
+.agentfiles { width: 100%; display: flex; flex-direction: column; gap: 6px; align-items: flex-start; margin: 4px 0; max-width: 100%; }
+.agentfiles .voice { width: 340px; max-width: 100%; border-radius: 14px 14px 14px 4px; background: var(--raised); border-color: var(--line); }
 .filechip { position: relative; display: flex; gap: 9px; align-items: center; padding: 7px 11px; border: 1px solid var(--line); border-radius: 9px; background: var(--raised); text-align: left; max-width: 100%; }
 .ficon { width: 30px; height: 36px; border-radius: 5px; display: grid; place-items: center; font: 700 9.5px var(--mono); color: #fff; flex: none; background: #56606e; }
 .ficon.pdf { background: #c8473e; } .ficon.xls, .ficon.csv { background: #2f8a55; } .ficon.doc, .ficon.txt, .ficon.md { background: #3b6fc4; } .ficon.zip { background: #7a6a3a; } .ficon.aud { background: #8a5fc4; }

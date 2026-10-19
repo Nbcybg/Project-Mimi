@@ -9,7 +9,7 @@ import type { ModelService } from '../providers/routing.ts';
 import type { UsageLogger } from '../usage/logger.ts';
 import { xlsxText } from '../workflows/xlsx.ts';
 
-export type AttachmentKind = 'image' | 'audio' | 'file';
+export type AttachmentKind = 'image' | 'audio' | 'video' | 'file';
 
 export interface Attachment {
   id: string;
@@ -52,6 +52,7 @@ const TEXT_EXTENSIONS = /\.(txt|md|markdown|csv|tsv|json|jsonl|ya?ml|xml|html?|c
 function kindOf(mime: string): AttachmentKind {
   if (mime.startsWith('image/')) return 'image';
   if (mime.startsWith('audio/')) return 'audio';
+  if (mime.startsWith('video/')) return 'video';
   return 'file';
 }
 
@@ -140,7 +141,40 @@ export class AttachmentStore {
     }
     return byMessage;
   }
+
+  /**
+   * The images of the given messages as they are, for a chat model that can see them.
+   * Only the newest `limit` images, so a long session does not resend every photo;
+   * older ones stay in the prompt as their description.
+   */
+  imageParts(messageIds: number[], limit: number): Map<number, MediaPart[]> {
+    const parts = new Map<number, MediaPart[]>();
+    const images = [...this.forMessages(messageIds).values()]
+      .flat()
+      .filter((attachment) => attachment.kind === 'image' && MODEL_IMAGE.test(attachment.mime))
+      .sort((a, b) => a.messageId! - b.messageId! || a.createdAt.localeCompare(b.createdAt))
+      .slice(-limit);
+    for (const image of images) {
+      const data = this.read(image.id);
+      if (!data) continue;
+      const list = parts.get(image.messageId!) ?? [];
+      list.push({ type: 'file', data, mediaType: image.mime, filename: image.name });
+      parts.set(image.messageId!, list);
+    }
+    return parts;
+  }
 }
+
+/** A file handed to a model as it is (not as its description). */
+export interface MediaPart {
+  type: 'file';
+  data: Buffer;
+  mediaType: string;
+  filename: string;
+}
+
+/** Image formats every vision-capable chat model takes. */
+const MODEL_IMAGE = /^image\/(png|jpeg|webp|gif)$/;
 
 /** How an attachment appears inside the user's message, for the models. */
 export function renderAttachment(attachment: Attachment): string {
@@ -170,13 +204,18 @@ export function renderReply(
   return `<reply_to id="${original.id}" name="${who}">\n${cut}\n</reply_to>`;
 }
 
-export const PROMPTS: Record<'image' | 'audio' | 'pdf', string> = {
+export const PROMPTS: Record<'image' | 'audio' | 'video' | 'pdf', string> = {
   image:
     'Describe this image for an assistant that cannot see it. Say what it shows, and copy any visible text exactly (keep its language). Be complete but compact. Output only the description.',
   audio:
     'Transcribe this recording word for word in the language spoken. Output only the transcript. If nothing intelligible is said, output "(no speech)".',
+  video:
+    'Describe this video for an assistant that cannot watch it: what happens, in order, with rough timestamps; copy any visible text exactly (keep its language); and transcribe what is said word for word in the language spoken. Be complete but compact. Output only the description.',
   pdf: 'Extract the content of this document as plain text, keeping its structure (headings, lists, tables as rows). Output only the content.',
 };
+
+/** Attachments being read right now, by id. */
+const reading = new Map<string, Promise<string>>();
 
 export interface IngestDeps {
   store: AttachmentStore;
@@ -199,13 +238,19 @@ export async function ingestAttachments(
     const attachment = deps.store.get(id);
     if (!attachment) throw new Error(`Unknown attachment "${id}". Upload it again.`);
     if (!attachment.text) {
-      let text: string;
-      try {
-        text = await readAttachment(deps, attachment, input);
-      } catch (error) {
-        text = `(this ${attachment.kind} could not be read: ${(error as Error).message})`;
+      // A chat trigger and the agent may read the same file at once: one model call serves both.
+      let pending = reading.get(id);
+      if (!pending) {
+        pending = readAttachment(deps, attachment, input)
+          .catch((error: Error) => `(this ${attachment.kind} could not be read: ${error.message})`)
+          .then((text) => {
+            deps.store.setText(id, text);
+            return text;
+          })
+          .finally(() => reading.delete(id));
+        reading.set(id, pending);
       }
-      deps.store.setText(id, text);
+      await pending;
     }
     done.push(deps.store.get(id)!);
   }
@@ -246,7 +291,7 @@ async function readAttachment(
       {
         role: 'user',
         content: [
-          { type: 'text', text: PROMPTS[isPdf ? 'pdf' : (attachment.kind as 'image' | 'audio')] },
+          { type: 'text', text: PROMPTS[isPdf ? 'pdf' : (attachment.kind as 'image' | 'audio' | 'video')] },
           { type: 'file', mediaType: isPdf ? 'application/pdf' : attachment.mime, data, filename: attachment.name },
         ],
       },

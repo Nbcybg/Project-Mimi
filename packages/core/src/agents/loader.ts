@@ -25,6 +25,9 @@ const FrontmatterSchema = z.strictObject({
   small_model: modelRefString.optional(),
   vision_model: modelRefString.optional(),
   transcript_model: modelRefString.optional(),
+  image_model: modelRefString.optional(),
+  speech_model: modelRefString.optional(),
+  video_model: modelRefString.optional(),
   tools: z.array(z.string()).default([]),
   /** Skills from the skill hub this agent may use. */
   skills: z.array(z.string()).default([]),
@@ -154,7 +157,7 @@ export function serializeAgent(agent: AgentDefinition): string {
   if (agent.intro) frontmatter.intro = agent.intro;
   if (agent.effort) frontmatter.effort = agent.effort;
   // One model per capability; a capability left out falls back to the global default.
-  for (const key of ['model', 'small_model', 'vision_model', 'transcript_model'] as const) {
+  for (const key of ['model', 'small_model', 'vision_model', 'transcript_model', 'image_model', 'speech_model', 'video_model'] as const) {
     if (agent.models[key]) frontmatter[key] = agent.models[key];
   }
   frontmatter.tools = agent.tools;

@@ -8,7 +8,7 @@ import { type CoreConfig, loadConfig } from '../config.ts';
 import { type Core, createCore } from '../core.ts';
 import { ModelCatalog } from '../providers/catalog.ts';
 import { parseSettings, type Settings } from '../providers/settings.ts';
-import { FakeBroker, fakeModels, replyingModel, scriptedModel, textStep } from './helpers.ts';
+import { FakeBroker, type FakeModelsOptions, fakeModels, replyingModel, scriptedModel, textStep } from './helpers.ts';
 
 type StreamResult = Awaited<ReturnType<MockLanguageModelV4['doStream']>>;
 type Chunk = StreamResult['stream'] extends ReadableStream<infer T> ? T : never;
@@ -83,6 +83,9 @@ export interface TestCoreOptions {
   settings?: Record<string, unknown>;
   approve?: boolean | 'never';
   env?: NodeJS.ProcessEnv;
+  /** The chat models can see images. */
+  imageInput?: boolean;
+  media?: FakeModelsOptions['media'];
 }
 
 export interface TestCore {
@@ -116,6 +119,8 @@ export function testCoreParts(options: TestCoreOptions = {}) {
       chat: scriptedModel([textStep('ok')]),
       small,
       byModel: options.models,
+      imageInput: options.imageInput,
+      media: options.media,
     }),
   };
   return { root, config: { ...config, dbPath: ':memory:' }, settings, small, coreOptions };

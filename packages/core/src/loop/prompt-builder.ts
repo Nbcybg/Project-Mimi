@@ -180,26 +180,32 @@ export function sanitizeHistory(messages: ModelMessage[]): ModelMessage[] {
 export function buildHistory(
   history: StoredMessage[],
   agentName: string,
-  options: { group?: boolean } = {},
+  options: {
+    group?: boolean;
+    /** Files to show the model as they are, by user message id (images for a model that can see). */
+    media?: Map<number, Array<{ type: 'file'; data: Buffer; mediaType: string; filename: string }>>;
+  } = {},
 ): ModelMessage[] {
   const messages: ModelMessage[] = [];
+  type UserPart = { type: 'text'; text: string } | { type: 'file'; data: Buffer; mediaType: string; filename: string };
   /** Adds user-side text; in a group, neighbouring user-side messages become one message. */
-  const say = (texts: string[]) => {
-    const parts = texts.filter(Boolean).map((text) => ({ type: 'text' as const, text }));
+  const say = (texts: string[], files: UserPart[] = []) => {
+    const parts: UserPart[] = [...texts.filter(Boolean).map((text) => ({ type: 'text' as const, text })), ...files];
     if (parts.length === 0) return;
     const last = messages.at(-1);
     if (options.group && last?.role === 'user') {
       const before = typeof last.content === 'string' ? [{ type: 'text' as const, text: last.content }] : last.content;
       messages[messages.length - 1] = { role: 'user', content: [...before, ...parts] };
     } else {
-      messages.push({ role: 'user', content: parts.length === 1 && !options.group ? parts[0]!.text : parts });
+      const single = parts.length === 1 && parts[0]!.type === 'text' && !options.group;
+      messages.push({ role: 'user', content: single ? (parts[0] as { text: string }).text : parts });
     }
   };
 
   for (const stored of history) {
     if (stored.role === 'user') {
       const own = !options.group || stored.agent === agentName;
-      if (stored.text) say([stored.text, own ? (stored.context ?? '') : '']);
+      if (stored.text) say([stored.text, own ? (stored.context ?? '') : ''], options.media?.get(stored.id));
       else if (own) say([stored.context ?? '']);
     } else if (stored.agent === agentName) {
       messages.push({ role: stored.role, content: stored.content } as ModelMessage);

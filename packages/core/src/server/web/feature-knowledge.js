@@ -166,7 +166,7 @@
       } else if (mode.value === 'file') {
         const input = el('input');
         input.type = 'file';
-        input.accept = '.txt,.md,.csv,.json,.html,.htm,.pdf,.png,.jpg,.jpeg,.webp,.mp3,.m4a,.wav,.ogg';
+        input.accept = '.txt,.md,.csv,.json,.html,.htm,.pdf,.png,.jpg,.jpeg,.webp,.mp3,.m4a,.wav,.ogg,.mp4,.webm,.mov';
         body.append(M().labelled('ไฟล์ (ข้อความ / PDF / รูป / เสียง, ไม่เกิน 25 MB)', input), el('p', 'hint', 'PDF รูป และเสียง ให้ model ของ agent หลักอ่านก่อน (มีค่าใช้จ่ายตาม model)'));
         read = async () => {
           const file = input.files && input.files[0];

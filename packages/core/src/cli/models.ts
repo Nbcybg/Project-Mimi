@@ -23,8 +23,9 @@ const catalog = await loadCatalog({
 if (catalog.isEmpty) console.log('The models.dev catalog is not available (offline and no cached copy).\n');
 
 console.log(`Settings (${config.settingsPath})`);
-for (const key of ['model', 'small_model', 'vision_model', 'transcript_model'] as const) {
-  console.log(`  ${key.padEnd(17)} ${settings[key] ?? `(falls back to model)`}`);
+for (const key of ['model', 'small_model', 'vision_model', 'transcript_model', 'image_model', 'speech_model', 'video_model'] as const) {
+  const unset = key === 'image_model' || key === 'speech_model' || key === 'video_model' ? '(not set)' : '(falls back to model)';
+  console.log(`  ${key.padEnd(17)} ${settings[key] ?? unset}`);
 }
 console.log();
 // Providers connected in the app count here too.

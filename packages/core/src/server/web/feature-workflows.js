@@ -1139,6 +1139,13 @@
       }
       if (entry.kind === 'chat') {
         box.append(el('p', 'hint', `พิมพ์ในแชตตรงกับ ${M().nameOf(draft.agent)} แล้วข้อความที่ตรงเงื่อนไขจะเข้า workflow นี้ · {{ $json.rest }} = ข้อความหลังคำขึ้นต้น · "workflow_only" = agent ไม่ตอบข้อความนั้น`));
+        box.append(el('p', 'hint', 'ไฟล์ที่แนบมาอยู่ใน {{ $json.files }} — แต่ละไฟล์มี id, kind (image / audio / video / file), name, mime, size และ text (คำบรรยายรูป/วิดีโอ, คำถอดเสียง หรือข้อความในไฟล์ ถ้าเลือกให้อ่านก่อน) · อ่านไฟล์ใหม่ด้วยคำสั่งของคุณเอง: node "ดึงข้อมูลจากไฟล์" ช่อง "ไฟล์จากแชต" = {{ $json.files[0].id }} · "ไฟล์แนบ" = image แปลว่ารันเฉพาะข้อความที่มีรูป'));
+      }
+      if (entry.kind === 'tool') {
+        const toolName = `workflow_${String(draft.name || '<ชื่อ>').replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+        const callers = [draft.agent, ...String(draft.trigger.config.agents || '').split(/[\s,]+/).filter(Boolean)];
+        box.append(el('p', 'hint', `agent ที่เรียกได้: ${[...new Set(callers)].map((name) => M().nameOf(name)).join(', ')} · จะเห็นเครื่องมือชื่อ ${toolName} พร้อมคำอธิบายจากช่อง "ใช้เมื่อไหร่" — เขียนให้ชัดว่าทำอะไร และควรใช้ตอนไหน agent จะเลือกถูกขึ้น`));
+        box.append(el('p', 'hint', 'ค่าที่ agent ส่งมา: {{ $json.<ชื่อช่อง> }} และ {{ $json.agent }} = agent ที่เรียก · ผลที่ agent ได้กลับ = body ของ node "ตอบกลับ" ถ้ามี ไม่งั้นเป็น output ของ node สุดท้ายที่รัน · "ask" = ถามคุณก่อนรันทุกครั้ง'));
       }
       if (entry.kind === 'telegram') {
         const secret = String(draft.trigger.config.tokenSecret || '').trim() || 'TELEGRAM_BOT_TOKEN';

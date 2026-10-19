@@ -81,6 +81,9 @@ interface ProviderSdk {
   languageModel(modelId: string): LanguageModel;
   embeddingModel?(modelId: string): EmbeddingModel;
   textEmbeddingModel?(modelId: string): EmbeddingModel;
+  imageModel?(modelId: string): unknown;
+  speechModel?(modelId: string): unknown;
+  videoModel?(modelId: string): unknown;
 }
 type ProviderFactory = (options: Record<string, unknown>) => ProviderSdk;
 
@@ -348,6 +351,21 @@ export class ProviderRegistry {
     const make = sdk.embeddingModel ?? sdk.textEmbeddingModel;
     if (!make) throw new Error(`Provider "${ref.provider}" has no embedding models; use e.g. google/gemini-embedding-001.`);
     return make.call(sdk, ref.model);
+  }
+
+  /**
+   * A model that makes pictures, speech or video. The catalog lists few of them, so the id
+   * is not checked here; the provider answers if it is wrong.
+   */
+  async mediaModel<T>(kind: 'image' | 'speech' | 'video', ref: ModelRef): Promise<T> {
+    const provider = this.describe(ref.provider);
+    const sdk = await this.sdkFor(ref.provider, this.toInfo(provider, ref.model, provider.models[ref.model]));
+    const make = { image: sdk.imageModel, speech: sdk.speechModel, video: sdk.videoModel }[kind];
+    if (!make) {
+      const what = { image: 'pictures', speech: 'speech', video: 'videos' }[kind];
+      throw new Error(`Provider "${ref.provider}" cannot make ${what}; pick a model of a provider that can (e.g. google).`);
+    }
+    return make.call(sdk, ref.model) as T;
   }
 
   /** One client per provider and API dialect: a gateway may serve models in several. */

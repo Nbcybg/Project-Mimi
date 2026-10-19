@@ -21,6 +21,7 @@ import type { TriggerStore } from '../scheduler/triggers.ts';
 import { createSkillTool, type Skill } from '../skills/skills.ts';
 import { createDocumentTools } from './document-tools.ts';
 import { createMailAttachmentTools } from './mail-attachments.ts';
+import { createMediaTools, type MediaToolDeps } from './media-tools.ts';
 import { createMemoryTools } from './memory-tools.ts';
 import { ToolRegistry } from './registry.ts';
 import { createWebTools } from './web-tools.ts';
@@ -46,6 +47,8 @@ export interface ToolServices {
   profile?: UserProfileStore;
   /** Reads a document in the allowed folders as text (read_document). */
   readDocument?: (path: string, agent: string, allowedDirs: string[]) => Promise<string>;
+  /** Sending and making files (send_file, generate_image, text_to_speech, generate_video). */
+  media?: MediaToolDeps;
 }
 
 /** Every tool an agent file may list. The mesh tools (send_to, reply) are added per run. */
@@ -64,6 +67,7 @@ export function createToolRegistry(services: ToolServices): ToolRegistry {
     ...createDriveTools(services.microsoft),
     ...createMailAttachmentTools(services.google, services.microsoft),
     ...(services.readDocument ? createDocumentTools(services.readDocument) : []),
+    ...(services.media ? createMediaTools(services.media) : []),
     ...createWebTools({ key: services.key ?? ((name) => process.env[name]) }),
     createSkillTool(services.skills),
     ...(services.knowledge ? createKnowledgeTools(services.knowledge) : []),

@@ -225,10 +225,17 @@ export const NODE_TYPES: NodeTypeView[] = [
   {
     type: 'chat',
     label: 'ส่งเข้าแชต',
-    description: 'ส่งข้อความเข้าแชตของ agent (ค่าเริ่มต้น = agent เจ้าของ workflow)',
+    description: 'ส่งข้อความ และ/หรือ ไฟล์ (รูป เสียง วิดีโอ เอกสาร) เข้าแชตของ agent (ค่าเริ่มต้น = agent เจ้าของ workflow)',
     fields: [
       { key: 'agent', label: 'agent ปลายทาง (เว้นว่าง = เจ้าของ workflow)', type: 'string' },
-      { key: 'text', label: 'ข้อความ', type: 'text', required: true, placeholder: '📬 {{ $json.Subject }} — {{ $json.text }}' },
+      { key: 'text', label: 'ข้อความ', type: 'text', placeholder: '📬 {{ $json.Subject }} — {{ $json.text }}' },
+      {
+        key: 'files',
+        label: 'ไฟล์แนบ (id ไฟล์ในแชต หรือ path; หลายไฟล์คั่นด้วย , หรือขึ้นบรรทัด)',
+        type: 'expression',
+        placeholder: '{{ $json.files[0].id }}',
+        description: 'ใส่ผลของ tool generate_image / text_to_speech / send_file ทั้งก้อนได้เลย ระบบหา "attachment id" ในข้อความเอง',
+      },
     ],
     outputs: [{ key: 'main', label: 'main' }],
   },
@@ -535,13 +542,14 @@ export const NODE_TYPES: NodeTypeView[] = [
   {
     type: 'extract_file',
     label: 'ดึงข้อมูลจากไฟล์',
-    description: 'CSV / JSON / Excel (.xlsx) → items · ข้อความ / HTML → text · PDF / รูป → ให้ vision model อ่าน (OCR) · เสียง → ถอดเสียง',
+    description: 'CSV / JSON / Excel (.xlsx) → items · ข้อความ / HTML → text · PDF / รูป / วิดีโอ → ให้ vision model อ่าน · เสียง → ถอดเสียง · ใช้ได้ทั้งไฟล์ในโฟลเดอร์และไฟล์ที่ส่งมาในแชต',
     fields: [
-      { key: 'path', label: 'path ของไฟล์', type: 'expression', required: true, placeholder: '{{ $json.path }}' },
-      { key: 'type', label: 'ชนิดไฟล์', type: 'string', options: ['auto', 'csv', 'xlsx', 'json', 'text', 'html', 'pdf', 'image', 'audio'] },
+      { key: 'path', label: 'path ของไฟล์', type: 'expression', placeholder: '{{ $json.path }}' },
+      { key: 'attachment', label: 'หรือ ไฟล์จากแชต (id)', type: 'expression', placeholder: '{{ $json.files[0].id }}' },
+      { key: 'type', label: 'ชนิดไฟล์', type: 'string', options: ['auto', 'csv', 'xlsx', 'json', 'text', 'html', 'pdf', 'image', 'audio', 'video'] },
       { key: 'sheet', label: 'ชื่อชีต (Excel; ว่าง = ชีตแรก)', type: 'string', placeholder: 'Sheet1' },
       { key: 'header', label: 'แถวแรกของ CSV', type: 'string', options: ['header', 'data'] },
-      { key: 'instruction', label: 'บอก model ว่าให้อ่านอะไร (PDF / รูป)', type: 'text', placeholder: 'เช่น อ่านใบเสร็จ: ร้าน วันที่ รายการ ยอดรวม' },
+      { key: 'instruction', label: 'บอก model ว่าให้อ่านอะไร (PDF / รูป / วิดีโอ)', type: 'text', placeholder: 'เช่น อ่านใบเสร็จ: ร้าน วันที่ รายการ ยอดรวม' },
       { key: 'name', label: 'ชื่อ field ของข้อความ', type: 'string', placeholder: 'text' },
     ],
     outputs: [{ key: 'main', label: 'main' }],
@@ -568,7 +576,7 @@ export interface TriggerPoolView {
   name: string;
   label: string;
   description: string;
-  kind: 'manual' | 'schedule' | 'webhook' | 'mail' | 'poll' | 'chat' | 'telegram';
+  kind: 'manual' | 'schedule' | 'webhook' | 'mail' | 'poll' | 'chat' | 'telegram' | 'tool';
   builtin: boolean;
   fields: NodeTypeField[];
   /** Example of the JSON this trigger produces; shown in the editor. */
@@ -642,8 +650,16 @@ export const BUILTIN_TRIGGERS: TriggerPoolView[] = [
       { key: 'match', label: 'เงื่อนไข', type: 'string', options: ['starts_with', 'contains', 'regex', 'any'] },
       { key: 'pattern', label: 'คำ / pattern', type: 'string', placeholder: '/จด' },
       { key: 'reply', label: 'agent ยังตอบไหม', type: 'string', options: ['workflow_only', 'agent_also'] },
+      { key: 'files', label: 'ไฟล์แนบ', type: 'string', options: ['any', 'none', 'some', 'image', 'audio', 'video', 'file'] },
+      { key: 'read_files', label: 'อ่านไฟล์ให้ก่อน (บรรยายรูป/วิดีโอ, ถอดเสียง, ดึงข้อความ)', type: 'string', options: ['yes', 'no'] },
     ],
-    sample: { text: '/จด ซื้อนม 2 ขวด', rest: 'ซื้อนม 2 ขวด', chatId: 1, agent: 'mimi' },
+    sample: {
+      text: '/จด ซื้อนม 2 ขวด',
+      rest: 'ซื้อนม 2 ขวด',
+      chatId: 1,
+      agent: 'mimi',
+      files: [{ id: '00000000-0000-0000-0000-000000000000', kind: 'image', name: 'receipt.jpg', mime: 'image/jpeg', size: 182044, text: 'ใบเสร็จร้าน ... ยอดรวม 125 บาท' }],
+    },
   },
   {
     name: 'telegram',
@@ -658,5 +674,31 @@ export const BUILTIN_TRIGGERS: TriggerPoolView[] = [
       { key: 'pattern', label: 'คำ / pattern', type: 'string', placeholder: '/start' },
     ],
     sample: { text: 'สวัสดี', rest: 'สวัสดี', chatId: 123456789, messageId: 10, from: { id: 123456789, username: 'me', firstName: 'Me' }, date: '2026-10-18T09:00:00.000Z' },
+  },
+  {
+    name: 'agent_tool',
+    label: 'agent เรียกใช้ (เป็นเครื่องมือ)',
+    description:
+      'agent เจ้าของ workflow (และ agent ที่ระบุ) เห็น workflow นี้เป็นเครื่องมือชื่อ workflow_<ชื่อ> แล้วเลือกเรียกเองเมื่อเหมาะ โดยดูจาก "ใช้เมื่อไหร่" · ค่าที่ agent ส่งมาอยู่ใน {{ $json.<ชื่อ> }} · ผลที่ agent ได้กลับ = body ของ node "ตอบกลับ" ถ้ามี ไม่งั้นเป็น output ของ node สุดท้าย',
+    kind: 'tool',
+    builtin: true,
+    fields: [
+      {
+        key: 'when',
+        label: 'ใช้เมื่อไหร่ / ทำอะไร (agent อ่านช่องนี้เพื่อตัดสินใจ)',
+        type: 'text',
+        required: true,
+        placeholder: 'บันทึกรายจ่ายลงชีตบัญชี ใช้เมื่อผู้ใช้บอกว่าจ่ายเงินซื้ออะไร',
+      },
+      {
+        key: 'inputs',
+        label: 'ค่าที่ agent ต้องส่งมา (บรรทัดละช่อง: ชื่อ: คำอธิบาย · ชื่อ? = ไม่บังคับ · ชื่อ (number) = ตัวเลข)',
+        type: 'text',
+        placeholder: 'item: ซื้ออะไร\namount (number): กี่บาท\nnote?: หมายเหตุ',
+      },
+      { key: 'agents', label: 'agent อื่นที่เรียกได้ (คั่นด้วย , ; เจ้าของเรียกได้เสมอ)', type: 'string', placeholder: 'tim, karen' },
+      { key: 'ask', label: 'ถามคุณก่อนรันไหม', type: 'string', options: ['ask', 'no'] },
+    ],
+    sample: { item: 'กาแฟ', amount: 65, note: '', agent: 'mimi' },
   },
 ];

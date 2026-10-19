@@ -1,4 +1,4 @@
-export const CAPABILITIES = ['chat', 'vision', 'transcript', 'summarize'] as const;
+export const CAPABILITIES = ['chat', 'vision', 'transcript', 'summarize', 'image', 'speech', 'video'] as const;
 export type Capability = (typeof CAPABILITIES)[number];
 
 export type MessageRole = 'user' | 'assistant' | 'tool';

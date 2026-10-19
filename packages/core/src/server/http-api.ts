@@ -62,7 +62,7 @@ function readBody(request: http.IncomingMessage, limit: number): Promise<Buffer>
 }
 
 /** Types a browser may show in place. Anything else is only ever offered as a download. */
-const INLINE = /^(image\/(png|jpeg|webp|gif)|audio\/[\w.+-]+|video\/webm|application\/pdf)$/;
+const INLINE = /^(image\/(png|jpeg|webp|gif)|audio\/[\w.+-]+|video\/(webm|mp4|ogg|quicktime)|application\/pdf)$/;
 
 /** A webhook call is a small event, not a file upload. */
 const MAX_WEBHOOK_BYTES = 256 * 1024;

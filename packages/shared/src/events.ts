@@ -1,4 +1,5 @@
 import type { PermissionDecision, PermissionRequest } from './permissions.ts';
+import type { AttachmentView } from './protocol.ts';
 import type { RiskLevel, ToolCall, ToolResult } from './tools.ts';
 
 export type RunFinishReason =
@@ -34,6 +35,8 @@ export type AgentEvent =
   | { type: 'permission-request'; request: PermissionRequest }
   | { type: 'permission-decision'; requestId: string; decision: PermissionDecision }
   | { type: 'tool-result'; result: ToolResult }
+  /** A file the agent sent to the user (made or picked by a tool), shown under its message. */
+  | { type: 'attachment'; attachment: AttachmentView }
   | { type: 'usage'; round: number; usage: UsageSnapshot }
   /** Something a sub-agent did while working on agent-to-agent message `messageId`. */
   | { type: 'agent-activity'; agent: string; messageId: number; event: AgentEvent }

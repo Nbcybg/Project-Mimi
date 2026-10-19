@@ -60,7 +60,11 @@ export interface WorkflowRunnerDeps {
   /** A tool or preset from the pool, by name. */
   tool(name: string): ToolDefinition | undefined;
   /** Posts a message into an agent's chat with the user. */
-  speak(agentName: string | null, text: string): void;
+  /**
+   * Posts into an agent's chat. `files` are chat attachment ids (any text holding them, e.g.
+   * a tool's "attachment id: …" answer) or paths in the allowed folders. Throws when one is not found.
+   */
+  speak(agentName: string | null, text: string, files?: string[]): void;
   mail: {
     list(source: 'google' | 'microsoft', query: string, max: number): Promise<WorkflowMailItem[]>;
     markRead(source: 'google' | 'microsoft', ids: string[]): Promise<void>;
@@ -89,6 +93,8 @@ export interface WorkflowRunnerDeps {
   knowledge?: Pick<KnowledgeStore, 'search' | 'add' | 'collection' | 'allows'>;
   /** Reads a PDF / image (vision model) or audio (transcript model) for the extract_file node. */
   readMedia?(request: { agent: string; data: Buffer; mime: string; name: string; instruction: string; signal?: AbortSignal }): Promise<string>;
+  /** A file sent in a chat, by attachment id. */
+  attachmentFile?(id: string): { data: Buffer; mime: string; name: string } | undefined;
   fetchFn?: typeof fetch;
 }
 
@@ -384,10 +390,13 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
     case 'chat': {
       const out: FlowItem[] = [];
       for (const [index, item] of items.entries()) {
-        const config = resolveValue(node.config, contextAt(ctx, item, index, items)) as { agent?: JsonValue; text?: JsonValue };
+        const config = resolveValue(node.config, contextAt(ctx, item, index, items)) as { agent?: JsonValue; text?: JsonValue; files?: JsonValue };
         const agent = asText(config.agent) || workflow.agent;
-        const text = asText(config.text).trim() || asText(item.json.text);
-        if (text) deps.speak(agent, text);
+        const files = (Array.isArray(config.files) ? config.files.map(asText) : asText(config.files).split(/[\n,]+/))
+          .map((entry) => entry.trim())
+          .filter(Boolean);
+        const text = asText(config.text).trim() || (files.length > 0 ? '' : asText(item.json.text));
+        if (text || files.length > 0) deps.speak(agent, text, files);
         out.push(item);
       }
       return { main: out };
@@ -854,15 +863,42 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
       const out: FlowItem[] = [];
       for (const [index, item] of items.entries()) {
         const config = resolveValue(node.config, contextAt(ctx, item, index, items)) as Record<string, JsonValue>;
-        const file = allowedPath(asText(config.path), deps.allowedDirs);
-        const detected = kindOfFile(file);
+        // A file in the allowed folders, or one sent in the chat (by attachment id).
+        const attachmentId = asText(config.attachment).trim();
+        let fileName: string;
+        let load: (limit: number) => Promise<Buffer>;
+        let fileMime = '';
+        if (attachmentId) {
+          const sent = deps.attachmentFile?.(attachmentId);
+          if (!sent) throw new Error(`extract_file node: no chat file "${attachmentId}"`);
+          fileName = sent.name;
+          fileMime = sent.mime;
+          load = async (limit) => {
+            if (sent.data.length > limit) throw new Error(`"${sent.name}" is ${(sent.data.length / 1048576).toFixed(1)} MB; the limit is ${limit / 1048576} MB`);
+            return sent.data;
+          };
+        } else {
+          if (!asText(config.path).trim()) throw new Error('extract_file node: set a path or a chat file id');
+          const file = allowedPath(asText(config.path), deps.allowedDirs);
+          fileName = file;
+          load = (limit) => readLimited(file, limit);
+        }
+        const detected = kindOfFile(fileName);
+        // A chat file's own type wins when its name has no telling extension.
+        if (fileMime && detected.kind === 'text' && /^(image|audio|video)\//.test(fileMime)) {
+          detected.kind = fileMime.split('/')[0] as 'image' | 'audio' | 'video';
+          detected.mime = fileMime;
+        } else if (fileMime === 'application/pdf') {
+          detected.kind = 'pdf';
+          detected.mime = fileMime;
+        }
         const wanted = asText(config.type || 'auto');
         const kind = wanted === 'auto' ? detected.kind : wanted;
         const name = asText(config.name).trim() || 'text';
-        const base = { ...item.json, file: path.basename(file) };
+        const base = { ...item.json, file: path.basename(fileName) };
         if (kind === 'xls') throw new Error('extract_file node: old .xls files are not supported; save it as .xlsx or CSV');
         if (kind === 'xlsx') {
-          const sheets = readXlsx(await readLimited(file, MAX_READ_BYTES));
+          const sheets = readXlsx(await load(MAX_READ_BYTES));
           const wanted = asText(config.sheet).trim();
           const sheet = wanted ? sheets.find((entry) => entry.name === wanted) : sheets[0];
           if (!sheet) throw new Error(`extract_file node: no sheet "${wanted}" (sheets: ${sheets.map((entry) => entry.name).join(', ')})`);
@@ -870,18 +906,18 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
           continue;
         }
         if (kind === 'csv') {
-          const text = (await readLimited(file, MAX_READ_BYTES)).toString('utf8');
+          const text = (await load(MAX_READ_BYTES)).toString('utf8');
           out.push(...parseCsv(text, asText(config.header || 'header') !== 'data'));
         } else if (kind === 'json') {
-          out.push(...parseJsonFile((await readLimited(file, MAX_READ_BYTES)).toString('utf8'), normalizeItems));
+          out.push(...parseJsonFile((await load(MAX_READ_BYTES)).toString('utf8'), normalizeItems));
         } else if (kind === 'text' || kind === 'html') {
-          const text = (await readLimited(file, MAX_READ_BYTES)).toString('utf8');
+          const text = (await load(MAX_READ_BYTES)).toString('utf8');
           out.push({ json: { ...base, [name]: kind === 'html' ? htmlToText(text) : text } });
         } else {
-          if (!deps.readMedia) throw new Error('extract_file node: reading PDFs, images and audio is not available here');
-          const data = await readLimited(file, MAX_MEDIA_BYTES);
+          if (!deps.readMedia) throw new Error('extract_file node: reading PDFs, images, audio and video is not available here');
+          const data = await load(MAX_MEDIA_BYTES);
           const mime = detected.kind === kind ? detected.mime : kind === 'pdf' ? 'application/pdf' : detected.mime;
-          const text = await deps.readMedia({ agent: workflow.agent, data, mime, name: path.basename(file), instruction: asText(config.instruction).trim(), signal: ctx.signal });
+          const text = await deps.readMedia({ agent: workflow.agent, data, mime, name: path.basename(fileName), instruction: asText(config.instruction).trim(), signal: ctx.signal });
           out.push({ json: { ...base, [name]: text } });
         }
       }
@@ -1261,7 +1297,8 @@ async function guardUrl(url: string, allowLocal: boolean, deps: WorkflowRunnerDe
     case 'webhook':
     case 'chat':
     case 'telegram':
-      // Real messages arrive as payloads; a manual run uses the sample.
+    case 'tool':
+      // Real messages (or an agent's call) arrive as payloads; a manual run uses the sample.
       return normalizeItems(entry.sample ?? {});
     case 'mail': {
       const source = asText(config.source) === 'microsoft' ? 'microsoft' : 'google';

@@ -19,6 +19,8 @@ export interface ToolContext {
   allowedDirs: string[];
   signal?: AbortSignal;
   mesh?: MeshContext;
+  /** The stored assistant message that made this call; files the tool sends are shown under it. */
+  messageId?: number;
   /** Streams an event to the user while the tool is still running (sub-agent activity). */
   emit?(event: AgentEvent): void;
   /** Ends the current run after this tool call and passes the user-facing turn to another agent. */

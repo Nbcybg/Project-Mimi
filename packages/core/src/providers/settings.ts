@@ -69,6 +69,12 @@ export const SettingsSchema = z.strictObject({
   vision_model: modelRefString.optional(),
   /** Speech-to-text model. */
   transcript_model: modelRefString.optional(),
+  /** Makes pictures (generate_image); no fallback. */
+  image_model: modelRefString.optional(),
+  /** Text-to-speech (text_to_speech); no fallback. */
+  speech_model: modelRefString.optional(),
+  /** Makes videos (generate_video); no fallback. */
+  video_model: modelRefString.optional(),
   /** The agent that answers the user unless a client picks another, and that speaks reminders. */
   default_agent: z.string().default('mimi'),
   /** Custom providers and per-provider/per-model overrides of the models.dev catalog. */

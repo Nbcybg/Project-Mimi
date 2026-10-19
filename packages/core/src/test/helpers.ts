@@ -10,7 +10,7 @@ import type { AgentLoopDeps } from '../loop/agent-loop.ts';
 import { MemoryStore } from '../memory/store.ts';
 import { type PermissionBroker, PermissionGate } from '../permissions/gate.ts';
 import type { ModelCost, ModelInfo, ModelRef } from '../providers/registry.ts';
-import type { ModelService } from '../providers/routing.ts';
+import type { MediaKind, ModelService } from '../providers/routing.ts';
 import { LocalExecutor } from '../tools/executor.ts';
 import { createMemoryTools } from '../tools/memory-tools.ts';
 import { defineTool, ToolRegistry } from '../tools/registry.ts';
@@ -117,6 +117,10 @@ export interface FakeModelsOptions {
   contextLimit?: number;
   smallContextLimit?: number;
   npm?: string;
+  /** The chat models can see images (the catalog's image input). */
+  imageInput?: boolean;
+  /** Models that make pictures / speech / video (generate_image, text_to_speech, generate_video). */
+  media?: Partial<Record<MediaKind, unknown>>;
   /** Chat models for agents that set `model: test/<name>` in their file. */
   byModel?: Record<string, MockLanguageModelV4>;
 }
@@ -141,10 +145,19 @@ export function fakeModels(options: FakeModelsOptions): ModelService {
         ref.model === 'small' ? (options.smallContextLimit ?? 100_000) : (options.contextLimit ?? 100_000),
       outputLimit: undefined,
       cost: TEST_COST,
-      imageInput: false,
+      imageInput: ref.model !== 'small' && (options.imageInput ?? false),
       toolCall: true,
       options: {},
     }),
+    ...(options.media
+      ? {
+          mediaModel: async (kind: MediaKind) => {
+            const model = options.media?.[kind];
+            if (!model) throw new Error(`No ${kind} model in this test.`);
+            return model as never;
+          },
+        }
+      : {}),
     languageModel: async (ref: ModelRef) =>
       ref.model === 'small'
         ? (options.small ?? options.chat)

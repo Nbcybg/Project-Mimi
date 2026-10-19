@@ -67,7 +67,7 @@ export interface HistoryMessage {
 /** A file the user sent. The bytes are fetched from `/api/files/<id>`. */
 export interface AttachmentView {
   id: string;
-  kind: 'image' | 'audio' | 'file';
+  kind: 'image' | 'audio' | 'video' | 'file';
   name: string;
   mime: string;
   size: number;
@@ -213,13 +213,18 @@ export interface PushDeviceView {
 /**
  * One model per capability, as `provider/model`. An agent may use a different model for
  * each: `model` talks, `vision_model` looks at images, `transcript_model` turns speech
- * into text, `small_model` does cheap background work (summaries, memory).
+ * into text, `small_model` does cheap background work (summaries, memory). `image_model`,
+ * `speech_model` and `video_model` make pictures, spoken audio and videos (no fallback:
+ * a chat model cannot make them).
  */
 export interface ModelChoice {
   model?: string;
   small_model?: string;
   vision_model?: string;
   transcript_model?: string;
+  image_model?: string;
+  speech_model?: string;
+  video_model?: string;
 }
 
 /** An agent as the agent editor shows and saves it. */

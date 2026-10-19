@@ -70,6 +70,9 @@ class Renderer {
       case 'tool-result':
         this.line(`  [${event.result.ok ? 'ok' : 'failed'}] ${preview(event.result.output)}`);
         break;
+      case 'attachment':
+        this.line(`  [file] ${event.attachment.name} (${event.attachment.kind}, ${Math.ceil(event.attachment.size / 1024)} KB)`);
+        break;
       case 'permission-decision':
         if (!event.decision.allow) this.line(`  [permission ${event.decision.reason}]`);
         break;

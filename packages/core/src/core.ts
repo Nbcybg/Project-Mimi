@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
 import path from 'node:path';
 import { embedMany, generateText } from 'ai';
 import type { AgentEvent, HistoryMessage, Notification, WorkflowRunResult } from '@mimi/shared';
 import { AgentCatalog } from './agents/loader.ts';
 import type { AppSettings } from './app/app-settings.ts';
 import { SecretStore } from './app/secrets.ts';
-import { AttachmentStore, PROMPTS } from './chat/attachments.ts';
+import { type AttachmentKind, AttachmentStore, ingestAttachments, MAX_ATTACHMENT_BYTES, PROMPTS } from './chat/attachments.ts';
 import { ChatStore } from './chat/chat-store.ts';
 import { ChatEngine } from './chat/engine.ts';
 import { FileSnapshots, SnapshotExecutor } from './chat/file-snapshots.ts';
@@ -60,6 +61,7 @@ import { loadOrCreateVapid, type VapidKeys } from './notify/web-push.ts';
 import { Approvals } from './workflows/approvals.ts';
 import { ParkedRuns } from './workflows/parked-runs.ts';
 import { allowedPath, documentText, htmlToText, kindOfFile } from './workflows/file-nodes.ts';
+import { createWorkflowTool, workflowToolCallers } from './workflows/workflow-tools.ts';
 import { WorkflowRunStore } from './workflows/run-history.ts';
 import { DEFAULT_TOKEN_SECRET, TelegramHub, type TelegramListener } from './workflows/telegram.ts';
 import { matchText } from './workflows/text-match.ts';
@@ -146,9 +148,10 @@ export interface Core {
    * Workflows whose chat trigger matches a message the user sent in a direct chat.
    * `consumed` means the agent should not answer it; `run` starts the workflows.
    */
-  chatTriggers(chatId: number, text: string): { consumed: boolean; run(): void };
+  /** Workflows a chat message (and its files) starts; `consumed` = the agent stays quiet. */
+  chatTriggers(chatId: number, text: string, attachmentIds?: string[]): { consumed: boolean; run(): void };
   /** Stores a user message in a chat without an agent turn (a chat trigger took it). */
-  postUserMessage(chatId: number, text: string): { sessionId: number; id: number; createdAt: string };
+  postUserMessage(chatId: number, text: string, attachmentIds?: string[]): { sessionId: number; id: number; createdAt: string };
   /** Runs a workflow by hand with optional input; returns every node's input and output. */
   runWorkflow(agent: string, name: string, input?: JsonValue, options?: { pins?: boolean }): Promise<WorkflowRunResult>;
   /** Runs again from one node with the input it got in a stored run; earlier nodes keep that run's outputs. */
@@ -180,6 +183,26 @@ export interface Core {
 const USER_THREAD = 'main';
 
 /** Wires the core services together. Each front end (CLI, WebSocket server) brings its own broker. */
+/**
+ * Whether a message's files suit a chat trigger: `any`, `none` (text only), `some`
+ * (at least one file) or one kind (at least one image / audio / video / other file).
+ */
+export function filesMatch(rule: string, kinds: AttachmentKind[]): boolean {
+  switch (rule) {
+    case 'none':
+      return kinds.length === 0;
+    case 'some':
+      return kinds.length > 0;
+    case 'image':
+    case 'audio':
+    case 'video':
+    case 'file':
+      return kinds.includes(rule);
+    default:
+      return true;
+  }
+}
+
 export async function createCore(
   config: CoreConfig,
   broker: PermissionBroker,
@@ -210,6 +233,9 @@ export async function createCore(
         small_model: settings.small_model,
         vision_model: settings.vision_model,
         transcript_model: settings.transcript_model,
+        image_model: settings.image_model,
+        speech_model: settings.speech_model,
+        video_model: settings.video_model,
         ...options.app?.defaults,
       }),
       registry,
@@ -353,6 +379,13 @@ export async function createCore(
   const tools = createToolRegistry({
     knowledge,
     profile,
+    media: {
+      attachments,
+      models,
+      usage,
+      modelsOf: (agent) => agents.get(agent).models,
+      budgetCheck: () => budgetCheck(),
+    },
     // Agents read PDFs / images / Excel / text in the allowed folders (e.g. saved mail attachments).
     readDocument: async (requested, agentName, allowedDirs) => {
       const file = allowedPath(requested, allowedDirs);
@@ -452,9 +485,14 @@ export async function createCore(
       return [persona, profileBlock(agent.name), index].filter(Boolean).join('\n\n');
     },
     contextExtras: (agent) => status.render(agent.name),
+    media: attachments,
     extraTools: (agent) => {
       const own = skillsOf(agent);
-      return own.length > 0 ? [createUseSkillTool(own, runSkill)] : [];
+      // Workflows with an "agent tool" trigger this agent may call (its own, or ones that list it).
+      const flows = workflowsOfKind('tool')
+        .filter((workflow) => workflowToolCallers(workflow).includes(agent.name))
+        .map((workflow) => createWorkflowTool(workflow, (items) => runWorkflowWithHandler(workflow, items, 'tool')));
+      return [...(own.length > 0 ? [createUseSkillTool(own, runSkill)] : []), ...flows];
     },
   };
   mesh.attach((input) => runAgent(deps, input));
@@ -489,10 +527,13 @@ export async function createCore(
   const workflowRunner: WorkflowRunnerDeps = {
     runAgent: runWorkflowAgent,
     tool: (name) => toolPool.get(name),
-    speak: (agentName, text) => {
+    speak: (agentName, text, files = []) => {
       const speaker = agentName ?? defaultAgentName() ?? 'system';
-      const chatId = speakAs(speaker, text, randomUUID());
-      if (chatId !== undefined) listeners.chatChanged?.(chatId);
+      // Resolved first: a missing file fails the node before anything is posted.
+      const ids = chatFiles(files, speaker);
+      const posted = postAs(speaker, text, randomUUID());
+      if (ids.length > 0) attachments.link(ids, posted.messageId);
+      if (posted.chatId !== undefined) listeners.chatChanged?.(posted.chatId);
     },
     requestApproval: async (request) => {
       const decision = approvals.request(request);
@@ -512,6 +553,11 @@ export async function createCore(
     },
     permissions: settings.permission,
     knowledge,
+    attachmentFile: (id) => {
+      const file = attachments.get(id);
+      const data = file && attachments.read(id);
+      return file && data ? { data, mime: file.mime, name: file.name } : undefined;
+    },
     readMedia: async ({ agent: agentName, data, mime, name, instruction, signal }) => {
       const overBudget = budgetCheck();
       if (overBudget) throw new Error(overBudget);
@@ -522,7 +568,7 @@ export async function createCore(
       const info = models.info(ref);
       const prompt = instruction
         ? `${instruction}\n\nOutput only the result.`
-        : PROMPTS[audio ? 'audio' : mime === 'application/pdf' ? 'pdf' : 'image'];
+        : PROMPTS[audio ? 'audio' : mime.startsWith('video/') ? 'video' : mime === 'application/pdf' ? 'pdf' : 'image'];
       const startedAt = Date.now();
       const result = await generateText({
         model: await models.languageModel(ref),
@@ -648,25 +694,39 @@ export async function createCore(
     report: (message) => notify({ kind: 'info', title: 'Telegram', body: message }),
   });
 
-  function chatTriggers(chatId: number, text: string): { consumed: boolean; run(): void } {
+  function chatTriggers(chatId: number, text: string, attachmentIds: string[] = []): { consumed: boolean; run(): void } {
     const chat = chats.getChat(chatId);
     if (!chat || chat.kind !== 'direct' || !chat.agents[0]) return { consumed: false, run: () => {} };
     const agent = chat.agents[0];
-    const matched: Array<{ workflow: StoredWorkflow; rest: string }> = [];
+    const sent = attachmentIds.map((id) => attachments.get(id)).filter((file) => file !== undefined);
+    const matched: Array<{ workflow: StoredWorkflow; rest: string; read: boolean }> = [];
     let consumed = false;
     for (const workflow of workflowsOfKind('chat', agent)) {
       const config = workflow.trigger.config as Record<string, unknown>;
+      if (!filesMatch(String(config.files ?? 'any'), sent.map((file) => file.kind))) continue;
       const result = matchText(String(config.match ?? 'starts_with'), String(config.pattern ?? ''), text);
       if (!result.ok) continue;
-      matched.push({ workflow, rest: result.rest });
+      matched.push({ workflow, rest: result.rest, read: String(config.read_files ?? 'yes') !== 'no' });
       if (String(config.reply ?? 'workflow_only') !== 'agent_also') consumed = true;
     }
     return {
       consumed,
       run: () => {
-        for (const { workflow, rest } of matched) {
-          void runWorkflowWithHandler(workflow, [{ json: { text: text.trim(), rest, chatId, agent } }], 'chat').catch(() => {});
-        }
+        if (matched.length === 0) return;
+        void (async () => {
+          // Files are read once (description / transcript / text), only when a workflow asks.
+          let files = sent;
+          if (sent.length > 0 && matched.some((entry) => entry.read)) {
+            files = await ingestAttachments(
+              { store: attachments, models, usage },
+              { ids: sent.map((file) => file.id), agent: agents.get(agent), traceId: randomUUID() },
+            ).catch(() => sent);
+          }
+          for (const { workflow, rest, read } of matched) {
+            const list = files.map(({ id, kind, name, mime, size, text: content }) => ({ id, kind, name, mime, size, text: read ? content : '' }));
+            void runWorkflowWithHandler(workflow, [{ json: { text: text.trim(), rest, chatId, agent, files: list } }], 'chat').catch(() => {});
+          }
+        })();
       },
     };
   }
@@ -704,7 +764,7 @@ export async function createCore(
       if (!file || !data) throw new Error('The uploaded file is gone; upload it again.');
       const { kind } = kindOfFile(file.name);
       text =
-        file.kind === 'image' || file.kind === 'audio' || kind === 'pdf'
+        file.kind === 'image' || file.kind === 'audio' || file.kind === 'video' || kind === 'pdf'
           ? await media(data, kind === 'pdf' ? 'application/pdf' : file.mime, file.name)
           : kind === 'html'
             ? htmlToText(data.toString('utf8'))
@@ -716,11 +776,12 @@ export async function createCore(
     return knowledge.add(collection, { title, text, source });
   }
 
-  function postUserMessage(chatId: number, text: string): { sessionId: number; id: number; createdAt: string } {
+  function postUserMessage(chatId: number, text: string, attachmentIds: string[] = []): { sessionId: number; id: number; createdAt: string } {
     const chat = chats.getChat(chatId);
     if (!chat) throw new Error(`Chat #${chatId} does not exist.`);
     const { session } = chats.currentSession(chat.id, idleMs);
     const id = messages.append({ thread: session.thread, traceId: randomUUID(), agent: chat.agents[0] ?? '', role: 'user', content: text, text });
+    if (attachmentIds.length > 0) attachments.link(attachmentIds, id);
     chats.touch(session.id);
     return { sessionId: session.id, id, createdAt: messages.get(id)?.createdAt ?? new Date().toISOString() };
   }
@@ -872,6 +933,32 @@ export async function createCore(
     } finally {
       mesh.endTrace(traceId);
     }
+  }
+
+  /**
+   * Attachment ids for files a workflow posts: ids found in the text (a file that already
+   * belongs to a message is copied, so it stays there too) or paths in the allowed folders.
+   */
+  function chatFiles(entries: string[], speaker: string): string[] {
+    const ids: string[] = [];
+    for (const entry of entries) {
+      const found = entry.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi);
+      if (found) {
+        for (const id of found) {
+          const file = attachments.get(id.toLowerCase());
+          if (!file) throw new Error(`chat node: no chat file "${id}"`);
+          ids.push(file.messageId === null ? file.id : attachments.clone(file.id)!);
+        }
+        continue;
+      }
+      const file = allowedPath(entry, config.allowedDirs);
+      if (!fs.existsSync(file) || !fs.statSync(file).isFile()) throw new Error(`chat node: "${entry}" is not a file`);
+      if (fs.statSync(file).size > MAX_ATTACHMENT_BYTES) throw new Error(`chat node: "${entry}" is larger than 25 MB`);
+      const saved = attachments.save({ name: path.basename(file), mime: kindOfFile(file).mime, data: fs.readFileSync(file) });
+      attachments.setText(saved.id, `(sent by ${speaker}'s workflow)`);
+      ids.push(saved.id);
+    }
+    return ids;
   }
 
   /** Posts a message into an agent's one-to-one chat with the user; returns the chat id. */

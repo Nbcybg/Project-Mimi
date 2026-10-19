@@ -16,7 +16,7 @@ export const SETTABLE_KEYS = [
 ] as const;
 
 /** The model keys of the settings file and of agent files: one per capability. */
-export const MODEL_KEYS = ['model', 'small_model', 'vision_model', 'transcript_model'] as const;
+export const MODEL_KEYS = ['model', 'small_model', 'vision_model', 'transcript_model', 'image_model', 'speech_model', 'video_model'] as const;
 export type ModelKey = (typeof MODEL_KEYS)[number];
 export type ModelDefaults = Partial<Record<ModelKey, string>>;
 

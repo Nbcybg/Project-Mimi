@@ -129,10 +129,14 @@ const MIME: Record<string, string> = {
   ogg: 'audio/ogg',
   oga: 'audio/ogg',
   webm: 'audio/webm',
+  mp4: 'video/mp4',
+  mov: 'video/quicktime',
+  mkv: 'video/x-matroska',
+  avi: 'video/x-msvideo',
   flac: 'audio/flac',
 };
 
-export type FileKind = 'csv' | 'json' | 'text' | 'html' | 'pdf' | 'image' | 'audio' | 'xlsx' | 'xls';
+export type FileKind = 'csv' | 'json' | 'text' | 'html' | 'pdf' | 'image' | 'audio' | 'video' | 'xlsx' | 'xls';
 
 /** What a file is, from its extension. */
 export function kindOfFile(name: string): { kind: FileKind; mime: string } {
@@ -146,6 +150,7 @@ export function kindOfFile(name: string): { kind: FileKind; mime: string } {
   if (mime === 'application/pdf') return { kind: 'pdf', mime };
   if (mime?.startsWith('image/')) return { kind: 'image', mime };
   if (mime?.startsWith('audio/')) return { kind: 'audio', mime };
+  if (mime?.startsWith('video/')) return { kind: 'video', mime };
   return { kind: 'text', mime: 'text/plain' };
 }
 
@@ -191,8 +196,8 @@ export async function documentText(
   const { kind, mime } = kindOfFile(file);
   const name = path.basename(file);
   if (kind === 'xls') throw new Error(`"${name}" is an old .xls file; save it as .xlsx (or CSV) first`);
-  if (kind === 'pdf' || kind === 'image' || kind === 'audio') {
-    if (!readMedia) throw new Error('reading PDFs, images and audio needs a vision / transcript model');
+  if (kind === 'pdf' || kind === 'image' || kind === 'audio' || kind === 'video') {
+    if (!readMedia) throw new Error('reading PDFs, images, audio and video needs a vision / transcript model');
     return readMedia(await readLimited(file, MAX_MEDIA_BYTES), mime, name);
   }
   const data = await readLimited(file, MAX_READ_BYTES);

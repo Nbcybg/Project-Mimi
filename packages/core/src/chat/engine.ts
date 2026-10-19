@@ -172,6 +172,7 @@ export class ChatEngine {
         const runInput: RunInput = {
           agent,
           userText: pendingUserText,
+          attachments: pendingUserText !== undefined ? files.map((file) => file.id) : undefined,
           thread,
           traceId,
           budget: deps.budgetFor(traceId),

@@ -111,7 +111,8 @@ export function createChatApi(context: ChatApiContext) {
   };
 
   const messageViews = (rows: StoredMessage[]): ChatMessageView[] => {
-    const files = core.attachments.forMessages(rows.filter((row) => row.role === 'user').map((row) => row.id));
+    // The user's files, and the files agents sent (under the message whose tool sent them).
+    const files = core.attachments.forMessages(rows.filter((row) => row.role !== 'tool').map((row) => row.id));
     const quoted = new Map<number, { id: number; role: MessageRole; agent: string; text: string }>();
     for (const row of rows) {
       if (row.replyTo === undefined || quoted.has(row.replyTo)) continue;
@@ -170,8 +171,16 @@ export function createChatApi(context: ChatApiContext) {
     chatId: number,
     turn: { text: string; attachments: string[]; replyTo?: number; forward?: { from: string; chat: string } },
     signal: AbortSignal,
+    /** Runs once the user's message is stored (or the turn ends without storing it). */
+    afterStored?: () => void,
   ) => {
     let sessionId = 0;
+    let stored = false;
+    const markStored = () => {
+      if (stored) return;
+      stored = true;
+      afterStored?.();
+    };
     try {
       for await (const item of core.engine.runTurn({ chatId, ...turn, signal })) {
         if (item.type === 'session') {
@@ -194,6 +203,7 @@ export function createChatApi(context: ChatApiContext) {
               forwardedFrom: item.forwardedFrom ?? null,
             },
           });
+          markStored();
         } else {
           broadcast({ type: 'chat-event', chatId, sessionId, agent: item.agent, event: item.event });
           context.resolved(item.event);
@@ -202,6 +212,7 @@ export function createChatApi(context: ChatApiContext) {
     } catch (error) {
       broadcast({ type: 'error', message: (error as Error).message, chatId });
     }
+    markStored();
     // The session may have been given its title during the turn.
     const session = chats.getSession(sessionId);
     if (session) broadcast({ type: 'chat-session', chatId, session: sessionView(session), started: false });
@@ -376,23 +387,24 @@ export function createChatApi(context: ChatApiContext) {
         const replyTo = message.replyTo === undefined ? undefined : Number(message.replyTo);
         const forward = message.forward ? { from: String(message.forward.from), chat: String(message.forward.chat) } : undefined;
         // A workflow with a chat trigger may take the message; then the agent stays quiet.
-        const triggered = attachments.length === 0 && !forward ? core.chatTriggers(chatId, text) : null;
+        const triggered = !forward ? core.chatTriggers(chatId, text, attachments) : null;
         if (triggered?.consumed) {
-          const posted = core.postUserMessage(chatId, text);
+          const posted = core.postUserMessage(chatId, text, attachments);
+          const sent = attachments.map((id) => core.attachments.get(id)).filter((file) => file !== undefined);
           const session = chats.getSession(posted.sessionId);
           if (session) broadcast({ type: 'chat-session', chatId, session: sessionView(session), started: false });
           broadcast({
             type: 'chat-message',
             chatId,
             sessionId: posted.sessionId,
-            message: { id: posted.id, role: 'user', agent: '', text, createdAt: posted.createdAt, attachments: [], tools: [], replyTo: null, forwardedFrom: null },
+            message: { id: posted.id, role: 'user', agent: '', text, createdAt: posted.createdAt, attachments: sent.map(toAttachmentView), tools: [], replyTo: null, forwardedFrom: null },
           });
           broadcast(chatsMessage());
           triggered.run();
           return true;
         }
-        triggered?.run();
-        context.enqueue(chatId, (signal) => runTurn(chatId, { text, attachments, replyTo, forward }, signal));
+        // Workflows that let the agent answer too start after the message is stored, so their replies come after it.
+        context.enqueue(chatId, (signal) => runTurn(chatId, { text, attachments, replyTo, forward }, signal, triggered?.run));
         return true;
       }
       case 'session-new': {

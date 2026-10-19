@@ -19,6 +19,7 @@ const MIGRATIONS = [
   '011-knowledge-agents.sql',
   '012-file-snapshots.sql',
   '013-parked-runs.sql',
+  '014-video-attachments.sql',
 ];
 
 function migrate(db: Db): void {

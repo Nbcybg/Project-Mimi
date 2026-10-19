@@ -152,6 +152,9 @@ export async function startServer(
     small_model: appSettings.defaults.small_model ?? core.settings.small_model,
     vision_model: appSettings.defaults.vision_model ?? core.settings.vision_model,
     transcript_model: appSettings.defaults.transcript_model ?? core.settings.transcript_model,
+    image_model: appSettings.defaults.image_model ?? core.settings.image_model,
+    speech_model: appSettings.defaults.speech_model ?? core.settings.speech_model,
+    video_model: appSettings.defaults.video_model ?? core.settings.video_model,
   });
   /** Rejects a model choice that names a model no connected provider offers. */
   /** A model string is `provider/model` or the name of a preset from the model pool. */

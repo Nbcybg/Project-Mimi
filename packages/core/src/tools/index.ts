@@ -26,6 +26,7 @@ import { createMailAttachmentTools } from './mail-attachments.ts';
 import { createMediaTools, type MediaToolDeps } from './media-tools.ts';
 import { createMemoryTools } from './memory-tools.ts';
 import { ToolRegistry } from './registry.ts';
+import { createWakeTools } from './wake-tools.ts';
 import { createWebTools } from './web-tools.ts';
 
 export interface ToolServices {
@@ -73,6 +74,7 @@ export function createToolRegistry(services: ToolServices): ToolRegistry {
     ...(services.readDocument ? createDocumentTools(services.readDocument) : []),
     ...(services.media ? createMediaTools(services.media) : []),
     ...(services.gallery && services.media ? createGalleryTools(services.gallery, services.status, services.media.attachments) : []),
+    ...createWakeTools(),
     ...createWebTools({ key: services.key ?? ((name) => process.env[name]) }),
     createSkillTool(services.skills),
     ...(services.knowledge ? createKnowledgeTools(services.knowledge) : []),

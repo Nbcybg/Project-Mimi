@@ -1,11 +1,15 @@
 import type { ToolDefinition } from '@mimi/shared';
 import { readFileTool } from './tools/read-file.ts';
+import { fileTools } from './tools/files.ts';
 import { runShellTool } from './tools/run-shell.ts';
+import { systemTools } from './tools/system.ts';
 import { writeFileTool } from './tools/write-file.ts';
 
 export { PcAgent, type PcAgentOptions } from './client.ts';
 export { PathNotAllowedError, resolveAllowedPath } from './tools/path-guard.ts';
+export { fileTools, moveToTrash, wildcardToRegExp } from './tools/files.ts';
+export { parseProcessList, powerInvocation, systemTools } from './tools/system.ts';
 export { readFileTool, runShellTool, writeFileTool };
 
 /** Tools that act on the user's machine. The core holds their schemas; the PC agent runs them. */
-export const pcTools: ToolDefinition<any>[] = [readFileTool, writeFileTool, runShellTool];
+export const pcTools: ToolDefinition<any>[] = [readFileTool, writeFileTool, runShellTool, ...fileTools, ...systemTools];

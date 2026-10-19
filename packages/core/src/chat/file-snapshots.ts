@@ -77,7 +77,7 @@ export class FileSnapshots {
 }
 
 /**
- * Wraps the executor: before write_file runs on this machine, the file's current state
+ * Wraps the executor: before write_file or edit_file runs on this machine, the file's current state
  * is remembered. Writes routed to a connected PC agent are passed through untouched.
  */
 export class SnapshotExecutor implements ToolExecutor {
@@ -95,7 +95,7 @@ export class SnapshotExecutor implements ToolExecutor {
 
   async execute(tool: ToolDefinition, input: unknown, context: ToolContext): Promise<string> {
     const local = tool.target !== 'pc' || (!this.pc?.online && this.localPcTools);
-    if (tool.name === 'write_file' && local) {
+    if ((tool.name === 'write_file' || tool.name === 'edit_file') && local) {
       const requested = (input as { path?: unknown }).path;
       if (typeof requested === 'string') {
         try {

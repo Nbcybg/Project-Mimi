@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type {
   AgentEvent,
   AgentView,
@@ -30,6 +31,7 @@ import { createBackup, listBackups } from '../backup/backup.ts';
 import { AppSettings, MODEL_KEYS } from '../app/app-settings.ts';
 import { presetSecretKey } from '../app/secrets.ts';
 import { AgentImages } from '../chat/agent-images.ts';
+import { AgentAssets } from '../chat/agent-assets.ts';
 import type { CoreConfig } from '../config.ts';
 import { type Core, type CoreOptions, createCore } from '../core.ts';
 import { startGoogleOAuth } from '../google/oauth-flow.ts';
@@ -59,6 +61,14 @@ export interface MimiServer {
 const HELLO_TIMEOUT_MS = 10_000;
 const HEARTBEAT_MS = 30_000;
 const WEB_DIR = path.join(import.meta.dirname, 'web');
+/** The app's release number, from the root package.json (shown in Settings and by /health). */
+export const APP_VERSION: string = (() => {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(import.meta.dirname, '../../../../package.json'), 'utf8')).version ?? '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+})();
 /** The built-in web client: path -> [file, content type]. */
 const WEB_FILES: Record<string, [string, string]> = {
   '/': ['index.html', 'text/html; charset=utf-8'],
@@ -80,7 +90,28 @@ const WEB_FILES: Record<string, [string, string]> = {
   '/feature-canvas.js': ['feature-canvas.js', 'text/javascript; charset=utf-8'],
   '/feature-profile.js': ['feature-profile.js', 'text/javascript; charset=utf-8'],
   '/feature-notify.js': ['feature-notify.js', 'text/javascript; charset=utf-8'],
+  '/feature-vrm.js': ['feature-vrm.js', 'text/javascript; charset=utf-8'],
 };
+
+/** The 3D libraries (three.js, three-vrm) served from node_modules, so the client works offline. */
+function vendorFile(request: string): string | undefined {
+  if (request === '/vendor/three.module.js') return fileURLToPath(import.meta.resolve('three'));
+  // three.module.js re-exports from './three.core.js' next to it in the build folder.
+  if (request === '/vendor/three.core.js') {
+    return path.join(path.dirname(fileURLToPath(import.meta.resolve('three'))), 'three.core.js');
+  }
+  if (request === '/vendor/three-vrm.module.js') return fileURLToPath(import.meta.resolve('@pixiv/three-vrm'));
+  if (request.startsWith('/vendor/addons/')) {
+    const rest = request.slice('/vendor/addons/'.length);
+    if (!/^[a-zA-Z0-9/_.-]+$/.test(rest) || rest.includes('..')) return undefined;
+    try {
+      return fileURLToPath(import.meta.resolve(`three/examples/jsm/${rest}`));
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
 
 function sameToken(given: unknown, expected: string): boolean {
   if (typeof given !== 'string') return false;
@@ -132,6 +163,7 @@ export async function startServer(
     Object.fromEntries(Object.entries(appSettings.providers).map(([id, entry]) => [id, { def: entry.def, models: entry.models }])),
   );
   const images = new AgentImages(config.agentsDir);
+  const assets = new AgentAssets(config.agentsDir);
   core.status.onChange = (agent, status) => broadcast({ type: 'status', agent, status });
 
   const hasKey = (provider: string) => {
@@ -180,7 +212,7 @@ export async function startServer(
   const agentsMessage = (saved?: string): ServerMessage => ({
     type: 'agents',
     agents: core.agents.names().map((name) => {
-      const { displayName, description, intro, effort, systemPrompt, models, tools, skills, canMessage, budgets } =
+      const { displayName, description, intro, effort, systemPrompt, models, tools, skills, canMessage, budgets, character, idleMotion } =
         core.agents.get(name);
       return {
         name,
@@ -198,6 +230,10 @@ export async function startServer(
         avatar: images.version(name, 'avatar'),
         portrait: images.version(name, 'portrait'),
         sprites: images.sprites(name)?.list() ?? {},
+        character: character ?? 'sprite',
+        idleMotion: idleMotion ?? null,
+        model: assets.modelVersion(name),
+        motions: assets.motions(name),
       };
     }),
     tools: core.tools.views(),
@@ -242,6 +278,18 @@ export async function startServer(
     if (renameFrom !== name && known.includes(name)) throw new Error(`An agent named "${name}" already exists.`);
     if (core.wardrobe.has(name)) throw new Error(`"${name}" is already the id of an outfit; {{${name}}} cannot mean both.`);
 
+    const character = view.character === 'vrm' ? 'vrm' : 'sprite';
+    const idleMotion = view.idleMotion?.trim() || undefined;
+    if (idleMotion !== undefined) {
+      if (character !== 'vrm') throw new Error('An idle motion needs the character to be "vrm".');
+      if (!/^[a-z0-9][a-z0-9_-]*$/.test(idleMotion)) throw new Error('Invalid idle motion name.');
+      // During a rename the motions still live in the old folder; they move after the agent file is written.
+      const motionOwner = renameFrom && renameFrom !== name ? renameFrom : name;
+      if (!assets.motions(motionOwner).some((motion) => motion.name === idleMotion)) {
+        throw new Error(`Idle motion "${idleMotion}" has not been uploaded.`);
+      }
+    }
+
     saveAgent(config.agentsDir, {
       name,
       displayName: String(view.displayName ?? '').trim(),
@@ -253,6 +301,8 @@ export async function startServer(
       tools,
       skills,
       canMessage,
+      character,
+      idleMotion,
       budgets: {
         maxRounds: Number(view.budgets?.maxRounds) || 12,
         maxTokens: Number(view.budgets?.maxTokens) || 200_000,
@@ -270,8 +320,9 @@ export async function startServer(
           });
         }
       }
-      // The pictures live in the agent's folder, so they move before it is removed.
+      // The pictures and the 3D model live in the agent's folder, so they move before it is removed.
       images.rename(renameFrom, name);
+      assets.rename(renameFrom, name);
       deleteAgent(config.agentsDir, renameFrom);
       // Chats, status and notes follow the agent to its new name.
       core.chats.renameAgent(renameFrom, name);
@@ -1087,6 +1138,7 @@ export async function startServer(
           core.profile.forgetAgent(gone);
           core.backgrounds.forgetAgent(gone);
           images.forget(gone);
+          assets.forget(gone);
           // An agent's workflows go with it, and so do their schedules.
           for (const name of core.workflows.forgetAgent(gone)) {
             core.clearWorkflowSchedule(`${gone}/${name}`);
@@ -1120,6 +1172,7 @@ export async function startServer(
   const httpApi = {
     attachments: core.attachments,
     images,
+    assets,
     wardrobe: core.wardrobe,
     backgrounds: core.backgrounds,
     gallery: core.gallery,
@@ -1188,6 +1241,14 @@ export async function startServer(
     if (request.method === 'GET' && page) {
       response.writeHead(200, { 'content-type': page[1], 'cache-control': 'no-store' });
       response.end(fs.readFileSync(path.join(WEB_DIR, page[0])));
+    } else if (request.method === 'GET' && url.pathname.startsWith('/vendor/')) {
+      const file = vendorFile(url.pathname);
+      if (file) {
+        response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'max-age=86400' });
+        response.end(fs.readFileSync(file));
+      } else {
+        response.writeHead(404).end();
+      }
     } else if (await handleHttpApi(httpApi, request, response)) {
       // answered by the file API
     } else if (request.method === 'GET' && url.pathname === '/icon.png') {
@@ -1195,7 +1256,7 @@ export async function startServer(
       response.end(appIcon ??= renderIconPng());
     } else if (request.method === 'GET' && url.pathname === '/health') {
       response.writeHead(200, { 'content-type': 'application/json' });
-      response.end(JSON.stringify({ ok: true, pcOnline: pc.online, clients: clients.size }));
+      response.end(JSON.stringify({ ok: true, version: APP_VERSION, pcOnline: pc.online, clients: clients.size }));
     } else {
       response.writeHead(404).end();
     }

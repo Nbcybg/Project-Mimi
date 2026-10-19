@@ -584,3 +584,22 @@ kbd { font: 11px var(--mono); padding: 1px 6px; border: 1px solid var(--line); b
 .gadetail .gapreview { background: #1b1d22; border-radius: 8px; overflow: hidden; align-self: start; }
 .gadetail .gapreview img { width: 100%; display: block; }
 @media (max-width: 720px) { .gadetail { grid-template-columns: 1fr; } }
+
+/* ตัวละคร (VRM) */
+.char-modes { display: flex; gap: 8px; margin: 0 0 10px; }
+.char-mode { display: flex; gap: 7px; align-items: center; font-size: 13px; padding: 7px 14px; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; color: var(--ink-2); margin: 0; }
+.char-mode:has(input:checked) { border-color: rgba(224,138,91,.5); color: var(--accent-text); background: var(--accent-soft); }
+.char-mode input { accent-color: var(--accent); }
+.char-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 6px 0; font-size: 12.5px; }
+.char-row > span:first-child { color: var(--muted); min-width: 96px; }
+.char-row .chip { cursor: pointer; background: transparent; }
+.char-row .inp { flex: 1; min-width: 180px; }
+.char-model-label { color: var(--muted); }
+.char-view { height: 300px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: radial-gradient(ellipse at 50% 20%, #2b2f38, #17191d); margin: 4px 0 10px; }
+.char-view canvas { cursor: grab; } .char-view canvas:active { cursor: grabbing; }
+.char-motion { cursor: pointer; }
+.char-blend { margin: 6px 0; }
+.char-blend summary { cursor: pointer; font-size: 12.5px; color: var(--muted); }
+.char-blend-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 4px 14px; margin-top: 8px; }
+.char-slider { display: grid; grid-template-columns: 1fr; gap: 2px; font-size: 11px; color: var(--muted); margin: 0; }
+.char-slider input[type="range"] { accent-color: var(--accent); width: 100%; }

@@ -1425,6 +1425,13 @@
       form.append(el('p', 'hint', 'บันทึก agent ก่อน แล้วจึงใส่รูปโปรไฟล์และรูปเต็มตัวได้'));
     }
 
+    form.append(el('h4', '', 'ตัวละคร (รูป / โมเดล 3D)'));
+    const charBox = el('div');
+    const charHook = window.MimiHooks && window.MimiHooks.character;
+    if (agent && charHook) charHook.render(charBox, agent);
+    else charBox.append(el('p', 'hint', agent ? 'โหลดระบบตัวละคร 3D ไม่สำเร็จ — รีเฟรชหน้าใหม่' : 'บันทึก agent ก่อน แล้วจึงเลือกตัวละครได้'));
+    form.append(charBox);
+
     form.append(el('h4', '', 'โมเดล (เลือกแยกตามงาน)'));
     const models = el('div', 'grid2');
     const defaults = state.settings ? state.settings.defaults : {};
@@ -1485,6 +1492,8 @@
         const chosen = {};
         for (const select of models.querySelectorAll('select')) if (select.value) chosen[select.dataset.capability] = select.value;
         flash('กำลังบันทึก…');
+        const charHook = window.MimiHooks && window.MimiHooks.character;
+        const character = (charHook && charHook.form && charHook.form()) || {};
         send({
           type: 'agent-save',
           renameFrom: agent ? agent.name : undefined,
@@ -1500,6 +1509,7 @@
             skills: picked(skills),
             canMessage: picked(peers),
             budgets: { maxRounds: Number(rounds.value) || 12, maxTokens: Number(tokens.value) || 200000 },
+            ...character,
           },
         });
       }),
@@ -1801,7 +1811,7 @@
     const page = $('view-settings');
     const view = state.settings;
     if (!view) return page.replaceChildren(pageHead('ตั้งค่า', 'กำลังโหลด…'));
-    const nodes = [pageHead('ตั้งค่า', 'ผู้ให้บริการโมเดล โมเดลเริ่มต้น โฟลเดอร์ที่อนุญาต บัญชี Google และความจำ')];
+    const nodes = [pageHead('ตั้งค่า', `ผู้ให้บริการโมเดล โมเดลเริ่มต้น โฟลเดอร์ที่อนุญาต บัญชี Google และความจำ${state.version ? ` · Mimi v${state.version}` : ''}`)];
     if (!view.ready) {
       nodes.push(
         el(
@@ -2550,4 +2560,11 @@
   renderHeader();
   renderChatList();
   connect();
+  fetch('/health')
+    .then((response) => response.json())
+    .then((health) => {
+      state.version = health.version;
+      if (state.view === 'settings') renderSettings();
+    })
+    .catch(() => {});
 })();

@@ -89,6 +89,15 @@
     <button class="btn pri" type="submit">เชื่อมต่อ</button>
   </form>
 </div>
+<script type="importmap">
+{
+  "imports": {
+    "three": "/vendor/three.module.js",
+    "three/addons/": "/vendor/addons/",
+    "@pixiv/three-vrm": "/vendor/three-vrm.module.js"
+  }
+}
+</script>
 <script src="app.js"></script>
 <script src="feature-tools.js"></script>
 <script src="feature-providers.js"></script>
@@ -104,5 +113,6 @@
 <script src="feature-gallery.js"></script>
 <script src="feature-profile.js"></script>
 <script src="feature-notify.js"></script>
+<script type="module" src="feature-vrm.js"></script>
 </body>
 </html>

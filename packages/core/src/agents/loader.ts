@@ -36,6 +36,10 @@ const FrontmatterSchema = z.strictObject({
   /** Skills from the skill hub this agent may use. */
   skills: z.array(z.string()).default([]),
   can_message: z.array(agentName).default([]),
+  /** How the agent is shown: a static picture (`sprite`) or a 3D VRM model (`vrm`). */
+  character: z.enum(['sprite', 'vrm']).default('sprite'),
+  /** The motion that loops by default while the VRM stands idle. */
+  idle_motion: z.string().optional(),
   budgets: z
     .strictObject({
       max_rounds: z.number().int().positive().default(12),
@@ -57,6 +61,10 @@ export interface AgentDefinition {
   skills: string[];
   /** Agents this one is allowed to message. */
   canMessage: string[];
+  /** How the agent is shown: a static picture (`sprite`, the default) or a 3D VRM model (`vrm`). */
+  character?: 'sprite' | 'vrm';
+  /** The motion that loops by default while the VRM stands idle. */
+  idleMotion?: string;
   budgets: { maxRounds: number; maxTokens: number };
   systemPrompt: string;
 }
@@ -82,7 +90,7 @@ export function parseAgentFile(source: string, origin = 'agent file'): AgentDefi
   const systemPrompt = source.slice(match[0].length).trim();
   if (!systemPrompt) throw new Error(`${origin}: system prompt body is empty`);
 
-  const { name, display_name, description, intro, effort, tools, skills, can_message, budgets, ...models } = parsed.data;
+  const { name, display_name, description, intro, effort, tools, skills, can_message, budgets, character, idle_motion, ...models } = parsed.data;
   return {
     name,
     displayName: display_name,
@@ -93,6 +101,8 @@ export function parseAgentFile(source: string, origin = 'agent file'): AgentDefi
     tools,
     skills,
     canMessage: can_message,
+    ...(character !== 'sprite' ? { character } : {}),
+    ...(idle_motion !== undefined ? { idleMotion: idle_motion } : {}),
     budgets: { maxRounds: budgets.max_rounds, maxTokens: budgets.max_tokens },
     systemPrompt,
   };
@@ -167,6 +177,8 @@ export function serializeAgent(agent: AgentDefinition): string {
   frontmatter.tools = agent.tools;
   if (agent.skills.length > 0) frontmatter.skills = agent.skills;
   frontmatter.can_message = agent.canMessage;
+  if (agent.character && agent.character !== 'sprite') frontmatter.character = agent.character;
+  if (agent.idleMotion) frontmatter.idle_motion = agent.idleMotion;
   frontmatter.budgets = { max_rounds: agent.budgets.maxRounds, max_tokens: agent.budgets.maxTokens };
   return `---\n${stringifyYaml(frontmatter).trimEnd()}\n---\n${agent.systemPrompt.trim()}\n`;
 }

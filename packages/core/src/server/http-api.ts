@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import type http from 'node:http';
 import type { AttachmentView } from '@mimi/shared';
 import { type AgentImages, isImageSlot } from '../chat/agent-images.ts';
+import { AgentAssets } from '../chat/agent-assets.ts';
 import { type Attachment, type AttachmentStore, MAX_ATTACHMENT_BYTES } from '../chat/attachments.ts';
 import type { WardrobeStore } from '../wardrobe/wardrobe-store.ts';
 import type { BackgroundStore } from '../backgrounds/background-store.ts';
@@ -20,6 +21,8 @@ export interface WebhookReply {
 export interface HttpApiDeps {
   attachments: AttachmentStore;
   images: AgentImages;
+  /** VRM models and motion clips of agents. */
+  assets: AgentAssets;
   wardrobe: WardrobeStore;
   backgrounds: BackgroundStore;
   gallery: GalleryStore;
@@ -179,6 +182,41 @@ export async function handleHttpApi(
           const mime = String(request.headers['content-type'] ?? '').split(';')[0]!.trim();
           deps.images.save(agent, slot, mime, await readBody(request, 8 * 1024 * 1024));
         }
+        deps.imagesChanged();
+        sendJson(response, 200, { ok: true });
+      } else {
+        throw new HttpError(405, 'Method not allowed.');
+      }
+    } else if (resource === 'agent-model' && rest.length === 1) {
+      const [agent] = rest as [string];
+      if (request.method === 'GET') {
+        const model = deps.assets.readModel(agent);
+        if (!model) throw new HttpError(404, 'No VRM model.');
+        sendBytes(response, model, 'model/vrm', `${agent}.vrm`);
+      } else if (request.method === 'POST' || request.method === 'DELETE') {
+        if (!deps.agentExists(agent)) throw new HttpError(404, `No agent "${agent}".`);
+        if (request.method === 'DELETE') deps.assets.removeModel(agent);
+        else deps.assets.saveModel(agent, await readBody(request, 128 * 1024 * 1024));
+        deps.imagesChanged();
+        sendJson(response, 200, { ok: true });
+      } else {
+        throw new HttpError(405, 'Method not allowed.');
+      }
+    } else if (resource === 'agent-motions' && rest.length === 1) {
+      const [agent] = rest as [string];
+      if (request.method !== 'GET') throw new HttpError(405, 'Method not allowed.');
+      if (!deps.agentExists(agent)) throw new HttpError(404, `No agent "${agent}".`);
+      sendJson(response, 200, { motions: deps.assets.motions(agent) });
+    } else if (resource === 'agent-motion' && rest.length === 2) {
+      const [agent, name] = rest as [string, string];
+      if (request.method === 'GET') {
+        const motion = deps.assets.readMotion(agent, name);
+        if (!motion) throw new HttpError(404, 'No such motion.');
+        sendBytes(response, motion, 'application/octet-stream', `${name}.fbx`);
+      } else if (request.method === 'POST' || request.method === 'DELETE') {
+        if (!deps.agentExists(agent)) throw new HttpError(404, `No agent "${agent}".`);
+        if (request.method === 'DELETE') deps.assets.removeMotion(agent, name);
+        else deps.assets.saveMotion(agent, AgentAssets.cleanMotionName(name), await readBody(request, 64 * 1024 * 1024));
         deps.imagesChanged();
         sendJson(response, 200, { ok: true });
       } else {

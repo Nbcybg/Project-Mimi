@@ -19,3 +19,6 @@ auth.json
 profile-local.json
 backups/
 .claude/launch.json
+
+# local Claude Code project files
+.claude/

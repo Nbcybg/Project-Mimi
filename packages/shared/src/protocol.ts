@@ -251,6 +251,20 @@ export interface AgentView {
   portrait?: string | null;
   /** Expression pictures by emoji key (see SPRITE_KEY), each with a version. */
   sprites?: Record<string, string>;
+  /** How the agent is shown: a static picture (sprite) or a 3D VRM model. */
+  character?: 'sprite' | 'vrm';
+  /** The motion that loops by default while the VRM stands idle (a Mixamo clip name). */
+  idleMotion?: string | null;
+  /** Read-only: version stamp of the VRM model, null when there is none. */
+  model?: string | null;
+  /** Read-only: the uploaded motion clips (Mixamo FBX files). */
+  motions?: MotionView[];
+}
+
+/** A motion clip of an agent's VRM, as the editor lists it. */
+export interface MotionView {
+  name: string;
+  version: string;
 }
 
 export interface ToolView {

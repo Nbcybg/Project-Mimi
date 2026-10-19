@@ -51,7 +51,7 @@ import {
   type Skill,
   type SkillRunner,
 } from './skills/skills.ts';
-import { type PcLink, RoutingExecutor } from './tools/executor.ts';
+import { makePcRunner, type PcLink, RoutingExecutor } from './tools/executor.ts';
 import { createToolRegistry } from './tools/index.ts';
 import { ToolPool } from './tools/pool.ts';
 import { McpHub } from './mcp/hub.ts';
@@ -419,12 +419,14 @@ export async function createCore(
   });
   const toolStore = new ToolStore(config.toolsDir);
   const secrets = new SecretStore(config.secretsPath);
+  const pcRunner = makePcRunner(options.pc, config.localPcTools);
   const mcp = new McpHub({
+    pc: pcRunner,
     configPath: path.join(config.toolsDir, 'mcp', 'servers.json'),
     cachePath: path.join(config.dataDir, 'mcp-tools.json'),
     secret: (name) => secrets.get(name) ?? process.env[name],
   });
-  const toolPool = new ToolPool(tools, toolStore, secrets, mcp);
+  const toolPool = new ToolPool(tools, toolStore, secrets, mcp, pcRunner);
   const workflows = new WorkflowStore(config.workflowsDir);
   const triggerPool = new TriggerPool(path.join(config.triggersDir, 'pool'));
   const workflowState = new WorkflowState(config.workflowStatePath);

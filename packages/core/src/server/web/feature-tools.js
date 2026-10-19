@@ -100,7 +100,7 @@
       row.style.margin = '4px 0';
       const state = !server.enabled ? 'ปิดอยู่' : server.error ? 'ต่อไม่ได้' : server.checkedAt ? `${server.tools.length} เครื่องมือ` : 'ยังไม่ได้ต่อ';
       row.append(
-        button('chip', `${server.title || server.name} · ${server.transport}`, () => go({ mode: 'mcp', name: server.name })),
+        button('chip', `${server.title || server.name} · ${server.transport}${server.runsOn === 'pc' ? ' · PC' : ''}`, () => go({ mode: 'mcp', name: server.name })),
         el('span', server.error ? 'badtxt' : 'muted', state),
       );
       box.append(row);
@@ -131,7 +131,8 @@
     const risk = select(['write', 'read', 'network', 'shell', 'delete'], spec.risk || 'write');
     const mid = el('div', 'grid2');
     mid.append(M().labelled('ต่อแบบ', transport), M().labelled('ระดับของเครื่องมือที่ไม่ได้บอกว่าอ่านอย่างเดียว', risk));
-    form.append(top, mid);
+    const runsOn = select(['core', 'pc'], spec.runsOn || 'core');
+    form.append(top, mid, M().labelled('รันที่ (core = เครื่องที่รัน Mimi · pc = คอมของคุณผ่าน PC agent, ใช้ได้เมื่อ core อยู่บนเครื่องอื่น)', runsOn));
 
     const command = M().textInput(spec.command || '', 'เช่น npx');
     const args = textarea((spec.args || []).join('\n'), '-y\n@modelcontextprotocol/server-filesystem\nC:\\Users\\me\\Documents');
@@ -204,7 +205,7 @@
     foot.append(
       button('btn pri', 'บันทึก', () => {
         if (!name.value.trim()) return M().toast('กรอกไม่ครบ', 'ต้องมีชื่อ', true);
-        const server = { name: name.value.trim(), enabled: enabled.checked, transport: transport.value, risk: risk.value, untrusted: untrusted.checked };
+        const server = { name: name.value.trim(), enabled: enabled.checked, transport: transport.value, risk: risk.value, untrusted: untrusted.checked, ...(runsOn.value === 'pc' ? { runsOn: 'pc' } : {}) };
         if (title.value.trim()) server.title = title.value.trim();
         if (transport.value === 'stdio') {
           server.command = command.value.trim();
@@ -375,9 +376,11 @@
       const command = M().textInput(config.command || '', 'เช่น ping -n 1 {{input.host}}');
       const cwd = M().textInput(config.cwd || '', 'เว้นว่าง = โฟลเดอร์แรกที่อนุญาต');
       const timeout = M().textInput(config.timeoutMs || '', '60000', 'number');
-      configBox.append(M().labelled('คำสั่ง', command), M().labelled('โฟลเดอร์ทำงาน', cwd), M().labelled('timeout (ms)', timeout));
+      const runsOn = select(['core', 'pc'], config.runsOn || 'core');
+      configBox.append(M().labelled('คำสั่ง', command), M().labelled('โฟลเดอร์ทำงาน', cwd), M().labelled('timeout (ms)', timeout), M().labelled('รันที่ (core = เครื่องที่รัน Mimi · pc = คอมของคุณผ่าน PC agent)', runsOn));
       readConfig = () => ({
         command: command.value,
+        ...(runsOn.value === 'pc' ? { runsOn: 'pc' } : {}),
         ...(cwd.value.trim() ? { cwd: cwd.value.trim() } : {}),
         ...(timeout.value ? { timeoutMs: Number(timeout.value) } : {}),
       });

@@ -2,6 +2,7 @@ import type { CustomToolSpec, ToolPreset, ToolView } from '@mimi/shared';
 import { presetSecretKey, type SecretStore } from '../app/secrets.ts';
 import type { McpHub } from '../mcp/hub.ts';
 import { buildCustomTool } from './custom-tools.ts';
+import type { PcRunner } from './executor.ts';
 import { type ToolDefinition, ToolRegistry, type ToolSource } from './registry.ts';
 import { ToolStore } from './tool-store.ts';
 
@@ -26,8 +27,11 @@ export class ToolPool implements ToolSource {
   private readonly secrets: SecretStore;
   /** Tools of the user's MCP servers (`mcp_<server>_<tool>`). */
   readonly mcp?: McpHub;
+  /** Where tools that are set to run on the user's PC go. */
+  private readonly pc?: PcRunner;
 
-  constructor(registry: ToolRegistry, store: ToolStore, secrets: SecretStore, mcp?: McpHub) {
+  constructor(registry: ToolRegistry, store: ToolStore, secrets: SecretStore, mcp?: McpHub, pc?: PcRunner) {
+    this.pc = pc;
     this.registry = registry;
     this.store = store;
     this.secrets = secrets;
@@ -191,7 +195,7 @@ export class ToolPool implements ToolSource {
   }
 
   private customTool(spec: CustomToolSpec): ToolDefinition {
-    return buildCustomTool(spec, (name) => this.secrets.get(name) ?? process.env[name]);
+    return buildCustomTool(spec, (name) => this.secrets.get(name) ?? process.env[name], this.pc);
   }
 
   private materializeCustom(preset: ToolPreset): ToolDefinition | undefined {

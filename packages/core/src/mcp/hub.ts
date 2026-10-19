@@ -3,8 +3,9 @@ import path from 'node:path';
 import { type McpServerSpec, type McpServerView, type McpToolView, RISK_LEVELS, type RiskLevel } from '@mimi/shared';
 import { z } from 'zod';
 import { renderTemplate, truncateOutput } from '../tools/custom-tools.ts';
-import type { ToolDefinition } from '../tools/registry.ts';
-import { callResultText, HttpLink, McpClient, type McpLink, type McpTool, StdioLink } from './client.ts';
+import { PC_OFFLINE, type PcRunner } from '../tools/executor.ts';
+import type { ToolContext, ToolDefinition } from '../tools/registry.ts';
+import { callResultText, HttpLink, McpClient, type McpCallResult, type McpLink, type McpTool, StdioLink } from './client.ts';
 
 export const MCP_SERVER_NAME = /^[a-z0-9][a-z0-9-]{0,23}$/;
 
@@ -21,6 +22,7 @@ const serverSchema = z.strictObject({
   headers: z.record(z.string(), z.string()).optional(),
   risk: z.enum(RISK_LEVELS).optional(),
   untrusted: z.boolean().optional(),
+  runsOn: z.enum(['core', 'pc']).optional(),
 });
 
 interface CachedServer {
@@ -39,8 +41,47 @@ export interface McpHubOptions {
   cachePath: string;
   /** Values for {{secret.NAME}} in env and headers. */
   secret(name: string): string | undefined;
+  /** Where servers marked `runsOn: "pc"` run; without it they run here. */
+  pc?: PcRunner;
   /** Tests swap the transport. */
   link?(spec: McpServerSpec, render: (text: string) => string): McpLink;
+}
+
+/** What the hub needs from a connection: a real MCP client, or a stand-in that works through the PC agent. */
+export interface McpSession {
+  listTools(): Promise<McpTool[]>;
+  callTool(name: string, args: unknown, signal?: AbortSignal, context?: ToolContext): Promise<McpCallResult>;
+  close(): Promise<void>;
+  onClose?: (error: Error) => void;
+}
+
+/** An MCP server that runs on the user's PC: every call is a message to the PC agent, which keeps the server alive. */
+class PcMcpSession implements McpSession {
+  private readonly runner: PcRunner;
+  private readonly spec: Record<string, unknown>;
+
+  constructor(runner: PcRunner, spec: Record<string, unknown>) {
+    this.runner = runner;
+    this.spec = spec;
+  }
+
+  private run(input: Record<string, unknown>, context?: ToolContext): Promise<string> {
+    const fallback: ToolContext = { traceId: 'mcp', thread: 'mcp', agent: 'mcp', allowedDirs: [] };
+    return this.runner.execute('mcp_session', { ...input, spec: this.spec }, context ?? fallback);
+  }
+
+  async listTools(): Promise<McpTool[]> {
+    return JSON.parse(await this.run({ action: 'list' })) as McpTool[];
+  }
+
+  async callTool(name: string, args: unknown, signal?: AbortSignal, context?: ToolContext): Promise<McpCallResult> {
+    const base: ToolContext = context ?? { traceId: 'mcp', thread: 'mcp', agent: 'mcp', allowedDirs: [] };
+    return JSON.parse(await this.run({ action: 'call', tool: name, arguments: args ?? {} }, { ...base, signal: signal ?? base.signal })) as McpCallResult;
+  }
+
+  async close(): Promise<void> {
+    await this.run({ action: 'close' }).catch(() => {});
+  }
 }
 
 /** Tool names of MCP servers: `mcp_<server>_<tool>`, in the characters models accept. */
@@ -71,7 +112,7 @@ function inputSchemaOf(schema: Record<string, unknown> | undefined): z.ZodType<R
  */
 export class McpHub {
   private readonly options: McpHubOptions;
-  private readonly live = new Map<string, Promise<McpClient>>();
+  private readonly live = new Map<string, Promise<McpSession>>();
 
   constructor(options: McpHubOptions) {
     this.options = options;
@@ -223,18 +264,29 @@ export class McpHub {
       summarize: (input) => `${server.name} › ${tool.name} ${truncateOutput(JSON.stringify(input ?? {}), 120)}`,
       execute: async (input, context) => {
         const client = await this.client(server.name);
-        return truncateOutput(callResultText(await client.callTool(tool.name, input, context.signal)));
+        return truncateOutput(callResultText(await client.callTool(tool.name, input, context.signal, context)));
       },
     };
   }
 
-  private client(name: string): Promise<McpClient> {
+  private client(name: string): Promise<McpSession> {
     const existing = this.live.get(name);
     if (existing) return existing;
     const spec = this.server(name);
     if (!spec) return Promise.reject(new Error(`Unknown MCP server "${name}".`));
     if (!spec.enabled) return Promise.reject(new Error(`MCP server "${name}" is turned off.`));
     const render = (text: string) => renderTemplate(text, { input: {}, settings: {}, secret: this.options.secret });
+    if (spec.runsOn === 'pc' && this.options.pc) {
+      const mode = this.options.pc.mode();
+      if (mode === 'offline') return Promise.reject(new Error(PC_OFFLINE));
+      if (mode === 'remote') {
+        // The PC agent runs it; secrets are filled in here and travel over the agent's own socket.
+        const session = new PcMcpSession(this.options.pc, this.remoteSpec(spec, render));
+        const ready = Promise.resolve<McpSession>(session);
+        this.live.set(name, ready);
+        return ready;
+      }
+    }
     const connecting = McpClient.connect((this.options.link ?? this.makeLink)(spec, render)).then((client) => {
       client.onClose = () => {
         if (this.live.get(name) === connecting) this.live.delete(name);
@@ -246,6 +298,17 @@ export class McpHub {
     });
     this.live.set(name, connecting);
     return connecting;
+  }
+
+  private remoteSpec(spec: McpServerSpec, render: (text: string) => string): Record<string, unknown> {
+    if (spec.transport === 'http') {
+      const headers: Record<string, string> = {};
+      for (const [key, value] of Object.entries(spec.headers ?? {})) headers[key] = render(value);
+      return { transport: 'http', url: render(spec.url ?? ''), headers };
+    }
+    const env: Record<string, string> = {};
+    for (const [key, value] of Object.entries(spec.env ?? {})) env[key] = render(value);
+    return { transport: 'stdio', command: render(spec.command ?? ''), args: (spec.args ?? []).map(render), ...(spec.cwd ? { cwd: render(spec.cwd) } : {}), env };
   }
 
   private readonly makeLink = (spec: McpServerSpec, render: (text: string) => string): McpLink => {

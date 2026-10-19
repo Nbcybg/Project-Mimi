@@ -3,7 +3,8 @@ import path from 'node:path';
 import vm from 'node:vm';
 import type { CustomToolSpec, ToolSettingField, ToolSettingValues } from '@mimi/shared';
 import { z } from 'zod';
-import { defineTool, type ToolDefinition } from './registry.ts';
+import type { PcRunner } from './executor.ts';
+import { defineTool, type ToolContext, type ToolDefinition } from './registry.ts';
 
 export const MAX_TOOL_OUTPUT = 20_000;
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -173,16 +174,25 @@ async function runCode(spec: CustomToolSpec, input: unknown, settings: ToolSetti
   return truncateOutput(joined || '(the code returned nothing)');
 }
 
-function runShell(
+async function runShell(
   spec: CustomToolSpec,
   input: unknown,
   settings: ToolSettingValues,
-  context: { allowedDirs: string[] },
+  context: ToolContext,
   secret: (name: string) => string | undefined,
+  pc?: PcRunner,
 ): Promise<string> {
   const scope = scopeFor(input, settings, secret);
   const command = renderTemplate(String(spec.config.command ?? ''), scope);
   const requested = typeof spec.config.cwd === 'string' && spec.config.cwd.trim() ? renderTemplate(spec.config.cwd, scope) : undefined;
+  if (spec.config.runsOn === 'pc' && pc) {
+    const mode = pc.mode();
+    // On the user's PC: the PC agent's own shell tool runs it (its folder check and time limit apply there).
+    if (mode === 'remote' || mode === 'offline') {
+      const timeout = Number(spec.config.timeoutMs) || DEFAULT_TIMEOUT_MS;
+      return truncateOutput(await pc.execute('run_shell', { command, ...(requested ? { cwd: requested } : {}), timeout_ms: Math.min(timeout, 600_000) }, context));
+    }
+  }
   const cwd = path.resolve(requested ?? context.allowedDirs[0] ?? process.cwd());
   const allowed = context.allowedDirs.map((dir) => path.resolve(dir));
   if (allowed.length > 0 && !allowed.some((dir) => cwd === dir || cwd.startsWith(dir + path.sep))) {
@@ -213,6 +223,7 @@ function runShell(
 export function buildCustomTool(
   spec: CustomToolSpec,
   secret: (name: string) => string | undefined = (name) => process.env[name],
+  pc?: PcRunner,
 ): ToolDefinition<Record<string, unknown>> {
   const risk = riskOf(spec);
   const tool = defineTool({
@@ -239,7 +250,7 @@ export function buildCustomTool(
         return runHttp(spec.config as unknown as HttpConfig, input, values, context.signal, secret);
       }
       if (spec.kind === 'code') return runCode(spec, input, values);
-      return runShell(spec, input, values, { allowedDirs: context.allowedDirs }, secret);
+      return runShell(spec, input, values, context, secret, pc);
     },
   });
   return tool;

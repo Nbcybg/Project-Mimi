@@ -101,6 +101,8 @@ export interface McpServerSpec {
   risk?: RiskLevel;
   /** Results may carry third-party text (web pages, mail); defaults to true. */
   untrusted?: boolean;
+  /** Where the server runs: on the machine of the core (default) or on the user's PC through the PC agent. */
+  runsOn?: 'core' | 'pc';
 }
 
 /** One tool an MCP server offers, under the name agents use. */

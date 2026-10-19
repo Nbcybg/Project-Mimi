@@ -99,6 +99,26 @@ ALLOWED_DIRS=C:\Users\<ชื่อ>\Documents
 แล้วรัน `npm run pc-agent` และบน core ตั้ง `MIMI_LOCAL_PC_TOOLS=0` (Docker ตั้งไว้ให้แล้ว)
 เพื่อให้คำสั่งบนเครื่องไปทำที่ PC แทนที่จะทำบน server
 
+### MCP server และคำสั่ง CLI ที่ต้องรันบน PC
+
+เมื่อ core อยู่บนเครื่องอื่น ปกติ MCP server (แบบ stdio) และเครื่องมือชนิด shell จะรันบน server
+ถ้าต้องการให้รันบน PC ของเรา (เช่น โปรแกรมที่ลงไว้เฉพาะในเครื่อง หรือ MCP server ในวง LAN บ้าน):
+
+- Hub → เครื่องมือ → MCP: เลือก "รันที่" = `pc`
+- Hub → เครื่องมือ → เครื่องมือแบบ shell: เลือก "รันที่" = `pc`
+
+ตอนเรียกใช้ core ส่งคำสั่ง (และค่า `{{secret.NAME}}` ที่เติมแล้ว) ไปทางช่อง WebSocket ของ PC agent
+จึงควรใช้ `wss://` หรือ Tailscale เท่านั้น · โฟลเดอร์ทำงานต้องอยู่ใน `ALLOWED_DIRS` ของ PC ·
+ถ้า PC agent ไม่ได้เชื่อมอยู่ จะขึ้นว่า PC offline (รายการเครื่องมือเดิมยังเห็นอยู่)
+
+### Browser, ไฟล์ และการควบคุมเครื่อง
+
+เครื่องมือ `browser_*`, `list_dir`/`move_path`/`delete_path`, `power` ฯลฯ ทำงานที่ PC agent เช่นกัน ·
+เบราว์เซอร์ของ agent ใช้โปรไฟล์แยกที่ `~/.mimi/browser-profile` (ปรับได้ด้วย `MIMI_BROWSER_PROFILE`,
+เลือกโปรแกรมด้วย `MIMI_BROWSER_PATH`, ซ่อนหน้าต่างด้วย `MIMI_BROWSER_HEADLESS=1`,
+อนุญาต localhost/LAN ด้วย `MIMI_BROWSER_ALLOW_LOCAL=1`) · ภาพหน้าจอเก็บใน `browser-screenshots/` ของโฟลเดอร์แรกที่อนุญาต ·
+`wake_pc` (ปลุกเครื่องด้วย Wake-on-LAN) ส่งจาก core จึงต้องมี core ที่เปิดอยู่ตลอดในวง LAN เดียวกับเครื่องที่จะปลุก
+
 ## เช็กลิสต์หลังย้าย
 
 - [ ] เปิดหน้าเว็บจากมือถือได้ (HTTPS)

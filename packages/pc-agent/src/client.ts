@@ -1,6 +1,6 @@
 import os from 'node:os';
 import type { PcMessage, PcRequest, ToolDefinition } from '@mimi/shared';
-import { pcTools } from './index.ts';
+import { pcInternalTools, pcTools } from './index.ts';
 
 export interface PcAgentOptions {
   /** WebSocket URL of the core, e.g. wss://my-core.example/ws */
@@ -32,7 +32,8 @@ export class PcAgent {
 
   constructor(options: PcAgentOptions) {
     this.options = options;
-    this.tools = new Map((options.tools ?? pcTools).map((tool) => [tool.name, tool]));
+    // Plus the tools only the core's own services use (MCP servers on this machine).
+    this.tools = new Map([...(options.tools ?? pcTools), ...pcInternalTools].map((tool) => [tool.name, tool]));
   }
 
   private log(line: string): void {

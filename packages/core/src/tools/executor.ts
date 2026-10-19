@@ -27,6 +27,22 @@ export const PC_OFFLINE =
   'PC offline: the PC agent is not connected, so files and commands on the user\'s computer are unavailable right now.';
 
 /**
+ * Where work meant for the user's machine goes: down the PC agent's socket when one is
+ * connected, in this process when the core runs on that machine itself, or nowhere.
+ */
+export interface PcRunner {
+  mode(): 'remote' | 'local' | 'offline';
+  execute(tool: string, input: unknown, context: ToolContext): Promise<string>;
+}
+
+export function makePcRunner(pc: PcLink | undefined, localPcTools: boolean): PcRunner {
+  return {
+    mode: () => (pc?.online ? 'remote' : localPcTools ? 'local' : 'offline'),
+    execute: (tool, input, context) => (pc?.online ? pc.execute(tool, input, context) : Promise.reject(new Error(PC_OFFLINE))),
+  };
+}
+
+/**
  * Sends `pc` tools to the PC agent and runs everything else in the core. Without a
  * connected PC agent, `pc` tools fail with "PC offline" unless the core was started
  * on the user's own machine with local execution enabled.

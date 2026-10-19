@@ -8,7 +8,7 @@
   const el = (tag, cls, text) => M().el(tag, cls, text);
   const button = (cls, text, onClick, title) => M().button(cls, text, onClick, title);
 
-  const ICONS = { reminder: '⏰', approval: '✋', 'task-result': '📋', info: '·' };
+  const ICONS = { reminder: '⏰', approval: '✋', 'task-result': '📋', message: '💬', info: '·' };
   let items = [];
   let unread = 0;
   let devices = [];

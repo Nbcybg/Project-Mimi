@@ -47,6 +47,32 @@ const WRITER_TOOLS = {
   }),
 };
 
+/**
+ * Small models bend the tool shapes: arguments as a JSON string, "content" or "text"
+ * where "line" belongs, no description for a new file. Accept those instead of dropping
+ * the fact; a missing description becomes the file's own name.
+ */
+function looseInput(raw: unknown, kind: 'save' | 'append'): Record<string, unknown> {
+  let input = raw;
+  if (typeof input === 'string') {
+    try {
+      input = JSON.parse(input);
+    } catch {
+      return {};
+    }
+  }
+  if (!input || typeof input !== 'object') return {};
+  const fields = { ...(input as Record<string, unknown>) };
+  const text = (key: string) => (typeof fields[key] === 'string' && (fields[key] as string).trim() ? (fields[key] as string) : undefined);
+  if (kind === 'append') fields.line = text('line') ?? text('content') ?? text('text') ?? text('fact') ?? text('entry');
+  else fields.content = text('content') ?? text('text') ?? text('line');
+  const path = text('path');
+  if (path && !text('description') && !(LAYER1_PATHS as readonly string[]).includes(path.trim())) {
+    fields.description = path.trim().split('/').pop()!.replace(/[-_]+/g, ' ');
+  }
+  return fields;
+}
+
 function instructions(profileMaxChars: number, today: string): string {
   return `You maintain the long-term memory an AI assistant keeps about its user. After each exchange you decide whether it revealed anything worth remembering for months.
 
@@ -129,14 +155,14 @@ export class MemoryWriter {
     for (const call of response.toolCalls) {
       try {
         if (call.toolName === 'save_memory') {
-          const input = SaveInput.parse(call.input);
+          const input = SaveInput.parse(looseInput(call.input, 'save'));
           const existing = memory.get(input.path.trim());
           if (existing?.layer === 2) {
             throw new MemoryError(`"${existing.path}" already exists; add to it with append_memory.`);
           }
           result.saved.push(memory.write(input).path);
         } else if (call.toolName === 'append_memory') {
-          const input = AppendInput.parse(call.input);
+          const input = AppendInput.parse(looseInput(call.input, 'append'));
           result.saved.push(memory.append(input.path, input.line, input.description).path);
         }
       } catch (error) {

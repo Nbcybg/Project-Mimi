@@ -47,6 +47,53 @@ interface WeatherPoint {
   pop?: number;
 }
 
+const KEYLESS_AGENT = 'Mimi/0.3 (personal assistant; https://github.com/Nbcybg/Project-Mimi)';
+
+/** Text of an HTML fragment: tags dropped, the common entities decoded, spaces folded. */
+function htmlText(fragment: string): string {
+  return fragment
+    .replace(/<[^>]+>/g, '')
+    .replace(/&quot;/g, '"')
+    .replace(/&#x27;|&#39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** Results of DuckDuckGo's HTML page (no key needed): title, real link, snippet. */
+export function parseDuckDuckGo(html: string): Array<{ title: string; link: string; snippet: string }> {
+  const results: Array<{ title: string; link: string; snippet: string }> = [];
+  const blocks = html.split(/<div class="result results_links/).slice(1);
+  for (const block of blocks) {
+    const anchor = /<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/.exec(block);
+    if (!anchor) continue;
+    let link = anchor[1]!.replace(/&amp;/g, '&');
+    const target = /[?&]uddg=([^&]+)/.exec(link);
+    if (target) link = decodeURIComponent(target[1]!);
+    else if (link.startsWith('//')) link = `https:${link}`;
+    if (/duckduckgo\.com\/y\.js/.test(link)) continue; // ads
+    const snippet = /class="result__snippet"[^>]*>([\s\S]*?)<\/a>/.exec(block);
+    results.push({ title: htmlText(anchor[2]!), link, snippet: snippet ? htmlText(snippet[1]!) : '' });
+  }
+  return results;
+}
+
+/** Thai place words OpenStreetMap's search understands better in English. */
+const PLACE_WORDS: Array<[RegExp, string]> = [
+  [/ร้านอาหาร|ที่กิน|ร้านข้าว/g, 'restaurant'],
+  [/ร้านกาแฟ|คาเฟ่/g, 'cafe'],
+  [/โรงพยาบาล/g, 'hospital'],
+  [/ร้านขายยา/g, 'pharmacy'],
+  [/ปั๊มน้ำมัน/g, 'fuel'],
+  [/โรงแรม/g, 'hotel'],
+  [/ธนาคาร/g, 'bank'],
+  [/ห้าง|ห้างสรรพสินค้า/g, 'mall'],
+  [/แถว|ใกล้|ย่าน/g, ' '],
+];
+
 function weatherLine(point: WeatherPoint): string {
   const parts = [
     `${Math.round(point.main?.temp ?? NaN)}°C`,
@@ -86,6 +133,42 @@ export function createWebTools(options: WebToolOptions): ToolDefinition<any>[] {
     return json<T>(response, 'Search');
   };
 
+  /** Without a Serper key: DuckDuckGo's HTML results. */
+  const keylessSearch = async (query: string, count: number): Promise<string> => {
+    const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}&kl=${region.country}-${region.language}`;
+    const response = await fetchFn(url, { headers: { 'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36' } });
+    if (!response.ok) throw new Error(`Search error ${response.status} (DuckDuckGo). Add a Serper key in the app's settings for steadier results.`);
+    const results = parseDuckDuckGo(await response.text()).slice(0, count);
+    if (results.length === 0) return 'No results.';
+    return results.map((result, index) => `${index + 1}. ${result.title}\n   ${result.link}\n   ${result.snippet}`).join('\n');
+  };
+
+  /** Without a Serper key: OpenStreetMap's place search (Nominatim). */
+  const keylessPlaces = async (query: string, count: number): Promise<string> => {
+    const ask = async (q: string) => {
+      const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=jsonv2&limit=${count}&countrycodes=${region.country}&extratags=1&accept-language=${region.language}`;
+      const response = await fetchFn(url, { headers: { 'user-agent': KEYLESS_AGENT } });
+      return json<Array<{ name?: string; display_name?: string; type?: string; lat?: string; lon?: string; extratags?: Record<string, string> }>>(response, 'Map search');
+    };
+    let places = await ask(query);
+    if (places.length === 0) {
+      let english = query;
+      for (const [pattern, word] of PLACE_WORDS) english = english.replace(pattern, ` ${word} `);
+      english = english.replace(/\s+/g, ' ').trim();
+      if (english !== query) places = await ask(english);
+    }
+    if (places.length === 0) return 'No places found. Try a category word plus the area, e.g. "restaurant Lat Phrao".';
+    return places
+      .slice(0, count)
+      .map((place, index) => {
+        const extra = place.extratags ?? {};
+        const details = [place.type, extra.cuisine && `cuisine: ${extra.cuisine}`, extra.opening_hours && `hours: ${extra.opening_hours}`, extra.phone ?? extra['contact:phone']].filter(Boolean).join(' · ');
+        const link = place.lat && place.lon ? `\n   https://www.google.com/maps?q=${place.lat},${place.lon}` : '';
+        return `${index + 1}. ${place.name || place.display_name?.split(',')[0] || '?'}${details ? ` · ${details}` : ''}\n   ${place.display_name ?? ''}${link}`;
+      })
+      .join('\n') + '\n(Source: OpenStreetMap; ratings need a Serper key.)';
+  };
+
   const webSearch = defineTool({
     name: 'web_search',
     description:
@@ -99,6 +182,7 @@ export function createWebTools(options: WebToolOptions): ToolDefinition<any>[] {
     }),
     summarize: (input) => `Search the web: ${input.query}`,
     async execute(input) {
+      if (!options.key('SERPER_API_KEY')) return keylessSearch(input.query, input.max_results ?? 5);
       const found = await serper<SerperSearch>('search', input.query, input.max_results ?? 5);
       const lines: string[] = [];
       const answer = found.answerBox?.answer ?? found.answerBox?.snippet;
@@ -127,6 +211,7 @@ export function createWebTools(options: WebToolOptions): ToolDefinition<any>[] {
     }),
     summarize: (input) => `Search places: ${input.query}`,
     async execute(input) {
+      if (!options.key('SERPER_API_KEY')) return keylessPlaces(input.query, input.max_results ?? 5);
       const found = await serper<SerperMaps>('maps', input.query, input.max_results ?? 5);
       const places = (found.places ?? []).slice(0, input.max_results ?? 5);
       if (places.length === 0) return 'No places found.';

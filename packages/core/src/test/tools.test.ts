@@ -80,8 +80,28 @@ test('web tools: search, places and weather, each behind its own key', async () 
   assert.match(web.calls.at(-1)!.url, /forecast\?q=Bangkok&units=metric&lang=th&appid=owm-key&cnt=8$/);
   assert.equal((await tools.weather!.execute({ city: 'Bangkok', days: 0 }, context)).split('\n').length, 1);
 
-  delete keys.SERPER_API_KEY;
-  await assert.rejects(tools.web_search!.execute({ query: 'x' }, context), /Web search is not set up/);
+  // Without a Serper key, search falls back to DuckDuckGo and places to OpenStreetMap.
+  const seen: string[] = [];
+  const keyless = byName(
+    createWebTools({
+      key: () => undefined,
+      fetchFn: (async (url: string) => {
+        seen.push(String(url));
+        if (String(url).includes('duckduckgo')) {
+          return new Response(
+            '<div class="result results_links results_links_deep web-result "><a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fcurry&amp;rut=x">แกง<b>อินเดีย</b> &amp; โรตี</a>' +
+              '<a class="result__snippet" href="x">เมนู &quot;ยอดฮิต&quot;</a></div>',
+          );
+        }
+        const thai = String(url).includes(encodeURIComponent('ร้านอาหาร'));
+        return Response.json(thai ? [] : [{ name: 'ร้าน A', type: 'restaurant', lat: '13.8', lon: '100.57', display_name: 'ร้าน A, ลาดพร้าว', extratags: { cuisine: 'thai' } }]);
+      }) as typeof fetch,
+    }),
+  );
+  assert.equal(await keyless.web_search!.execute({ query: 'อาหารอินเดีย' }, context), '1. แกงอินเดีย & โรตี\n   https://example.com/curry\n   เมนู "ยอดฮิต"');
+  const nearby = await keyless.map_search!.execute({ query: 'ร้านอาหาร แถวลาดพร้าว' }, context);
+  assert.match(nearby, /^1\. ร้าน A · restaurant · cuisine: thai\n {3}ร้าน A, ลาดพร้าว\n {3}https:\/\/www\.google\.com\/maps\?q=13\.8,100\.57/);
+  assert.match(seen.at(-1)!, /q=restaurant%20%E0%B8%A5/, 'Thai place words are retried in English');
 
   // What the web says is untrusted: it may not sit next to a shell in one agent.
   for (const tool of Object.values(tools)) assert.deepEqual([tool.risk, tool.untrustedInput], ['read', true], tool.name);

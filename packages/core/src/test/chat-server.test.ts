@@ -80,6 +80,11 @@ async function boot() {
     ask,
     finished,
     api,
+    /** Sends a message and waits until the server has handled it (replies come in order). */
+    async post(message: ClientMessage) {
+      send(message);
+      await ask({ type: 'chats-list' }, 'chats');
+    },
     root: parts.root,
     async stop() {
       socket.close();
@@ -348,5 +353,37 @@ test('situation gallery over HTTP and the socket', async () => {
   await app.ask({ type: 'gallery-delete', agent: 'mimi2', id: 'g1' }, 'gallery-changed');
   assert.equal(app.server.core.status.get('mimi2').situation, undefined);
   assert.equal((await app.ask({ type: 'gallery-list', agent: 'mimi2' }, 'gallery')).total, 0);
+  await app.stop();
+});
+
+test('agent messages notify the user only when that chat is not on screen', async () => {
+  const app = await boot();
+  await app.ask(null, 'welcome');
+  const chatId = (await app.ask({ type: 'chat-create', kind: 'direct', agents: ['mimi'] }, 'chat-history')).chat.id;
+  const messageNotices = () => app.inbox.filter((message) => message.type === 'notification' && message.notification.kind === 'message');
+  const send = (message: ClientMessage) => app.ask(message, 'busy', (reply) => reply.chatId === null);
+
+  // Looking at the chat: the reply shows up there, no notification.
+  await app.post({ type: 'presence', chatId, visible: true });
+  await send({ type: 'chat-send', chatId, text: 'สวัสดี' });
+  assert.equal(messageNotices().length, 0);
+
+  // Another chat open (or the window hidden): the reply raises one.
+  await app.post({ type: 'presence', chatId: chatId + 100, visible: true });
+  await send({ type: 'chat-send', chatId, text: 'อีกเรื่อง' });
+  const [notice] = messageNotices();
+  assert.ok(notice && notice.type === 'notification');
+  assert.deepEqual([notice.notification.chatId, notice.notification.body], [chatId, 'รับทราบค่ะ']);
+  assert.ok(notice.notification.id, 'kept in the inbox');
+
+  // notify_user posts in the agent's own chat and always notifies.
+  const tool = app.server.core.tools.get('notify_user');
+  assert.ok(tool);
+  const result = await tool.execute({ message: 'มีอีเมลด่วนจากลูกค้า', title: 'อีเมลใหม่' }, { traceId: 't', thread: 'x', agent: 'mimi', allowedDirs: [] });
+  assert.match(String(result), /Notified the user/);
+  const last = await app.ask(null, 'notification', (reply) => reply.notification.title === 'อีเมลใหม่');
+  assert.deepEqual([last.notification.title, last.notification.body, last.notification.chatId], ['อีเมลใหม่', 'มีอีเมลด่วนจากลูกค้า', chatId]);
+  const history = await app.ask({ type: 'chat-open', chatId }, 'chat-history');
+  assert.equal(history.messages.at(-1)?.text, 'มีอีเมลด่วนจากลูกค้า');
   await app.stop();
 });

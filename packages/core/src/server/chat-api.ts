@@ -31,6 +31,8 @@ export interface ChatApiContext {
   appSettings: AppSettings;
   images: AgentImages;
   broadcast(message: ServerMessage): void;
+  /** An agent finished a reply in a chat; notifies the user when nobody is looking at that chat. */
+  agentSpoke?(chatId: number, agent: string, text: string): void;
   /** Resolves a model string (preset name or `provider/model`); throws when it is unknown. */
   modelRef(name: string): ModelRef;
   /** Queues a turn; turns run one at a time. The job is given the signal that `abort` fires. */
@@ -207,6 +209,9 @@ export function createChatApi(context: ChatApiContext) {
         } else {
           broadcast({ type: 'chat-event', chatId, sessionId, agent: item.agent, event: item.event });
           context.resolved(item.event);
+          if (item.event.type === 'run-finish' && item.event.reason !== 'aborted' && item.event.text) {
+            context.agentSpoke?.(chatId, item.agent, item.event.text);
+          }
         }
       }
     } catch (error) {

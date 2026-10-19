@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import { PcAgent } from '@mimi/pc-agent';
 import type { AgentEvent, ClientMessage, ServerMessage, WorkflowView } from '@mimi/shared';
 import { WebSocket as WsClient } from 'ws';
-import { type MimiServer, startServer } from '../server/server.ts';
+import { APP_VERSION, type MimiServer, startServer } from '../server/server.ts';
 import { hangingModel, type TestCoreOptions, testCoreParts } from './core-helpers.ts';
 import { scriptedModel, textStep, toolStep } from './helpers.ts';
 
@@ -145,7 +145,7 @@ test('http: serves the web client and a health check; other origins cannot open 
   assert.equal(page.status, 200);
   assert.match(page.headers.get('content-type')!, /text\/html/);
   assert.match(await page.text(), /<title>Mimi<\/title>/);
-  assert.deepEqual(await (await fetch(`${booted.http}/health`)).json(), { ok: true, pcOnline: false, clients: 0 });
+  assert.deepEqual(await (await fetch(`${booted.http}/health`)).json(), { ok: true, version: APP_VERSION, pcOnline: false, clients: 0 });
   assert.equal((await fetch(`${booted.http}/etc/passwd`)).status, 404);
 
   // A page on another site trying to drive the agent through the user's browser.

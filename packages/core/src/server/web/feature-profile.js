@@ -238,6 +238,7 @@
     ['reminder', '⏰ การเตือน'],
     ['approval', '✋ ขออนุมัติ'],
     ['task-result', '📋 ผลงานที่ตั้งเวลาไว้'],
+    ['message', '💬 ข้อความจาก agent (ตอนไม่ได้เปิดแชตนั้น)'],
     ['info', '· ข้อความระบบ'],
   ];
 
@@ -257,7 +258,7 @@
     const quiet = el('div', 'grid2');
     quiet.append(M().labelled('ช่วงห้ามรบกวน เริ่ม', quietFrom), M().labelled('ถึง', quietTo));
     panel.append(quiet, el('p', 'hint', 'ในช่วงนี้แจ้งเตือนเข้ากล่อง 🔔 อย่างเดียว ไม่เด้งเข้าเครื่อง'));
-    const kinds = new Set(prefs.pushKinds || ['reminder', 'approval', 'task-result']);
+    const kinds = new Set(prefs.pushKinds || ['reminder', 'approval', 'task-result', 'message']);
     const kindBox = el('div', 'hstack pfagents');
     for (const [kind, label] of KINDS) {
       const wrap = el('label', 'wcheck');

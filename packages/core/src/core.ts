@@ -82,6 +82,8 @@ export interface CoreListeners {
   backgroundEvent?: (event: AgentEvent) => void;
   /** Something was posted into a chat outside a turn (workflow message, approval request). */
   chatChanged?: (chatId: number) => void;
+  /** An agent message landed in a chat outside a turn and nobody notified the user about it yet. */
+  agentPosted?: (chatId: number, agent: string, text: string) => void;
 }
 
 export interface CoreOptions {
@@ -141,6 +143,8 @@ export interface Core {
   spentToday(): number;
   /** Stored notifications and the browsers they are pushed to. */
   notifications: NotificationCenter;
+  /** Stores a notification in the inbox, pushes it and hands it to the live clients. */
+  notify(notification: Notification): void;
   /** The user's profile fields; each agent sees the ones shared with it. */
   profile: UserProfileStore;
   /** Knowledge bases searched by agents (knowledge_search) and workflows. */
@@ -390,6 +394,13 @@ export async function createCore(
   };
 
   const tools = createToolRegistry({
+    notifyUser: (agent, message, title) => {
+      const { chatId } = postAs(agent, message, `notify:${randomUUID()}`);
+      const name = agents.names().includes(agent) ? agents.get(agent).displayName || agent : agent;
+      notify({ kind: 'message', title: title ?? name, body: message, ...(chatId !== undefined ? { chatId } : {}) });
+      if (chatId !== undefined) listeners.chatChanged?.(chatId);
+      return { chatId };
+    },
     gallery,
     knowledge,
     profile,
@@ -570,7 +581,10 @@ export async function createCore(
       const ids = chatFiles(files, speaker);
       const posted = postAs(speaker, text, randomUUID());
       if (ids.length > 0) attachments.link(ids, posted.messageId);
-      if (posted.chatId !== undefined) listeners.chatChanged?.(posted.chatId);
+      if (posted.chatId !== undefined) {
+        listeners.chatChanged?.(posted.chatId);
+        listeners.agentPosted?.(posted.chatId, speaker, text);
+      }
     },
     requestApproval: async (request) => {
       const decision = approvals.request(request);
@@ -1047,6 +1061,8 @@ export async function createCore(
       'This task was scheduled earlier and runs unattended: nobody is reading along. Do it and finish with a short report for the user.',
     ].join('\n');
     let finish: RunFinish | undefined;
+    /** The agent already told the user itself (notify_user); a second notice would be noise. */
+    let notifiedItself = false;
     try {
       for await (const event of runAgent(deps, {
         agent,
@@ -1056,6 +1072,7 @@ export async function createCore(
         budget: mesh.budgetFor(traceId),
       })) {
         if (event.type === 'run-finish') finish = event;
+        if (event.type === 'tool-call' && event.call.name === 'notify_user') notifiedItself = true;
         listeners.backgroundEvent?.({ type: 'agent-activity', agent: agent.name, messageId: 0, event });
       }
     } finally {
@@ -1064,7 +1081,11 @@ export async function createCore(
     const done = finish as RunFinish | undefined;
     const result = done?.text.trim() || `(no report; the run ended with: ${done?.error ?? done?.reason ?? 'no result'})`;
     const chatId = speakAs(speaker, `[Scheduled task "${trigger.title}"]\n${result}`, traceId);
-    notify({ kind: 'task-result', title: trigger.title, body: result, triggerId: trigger.id, chatId });
+    if (notifiedItself) {
+      if (chatId !== undefined) listeners.chatChanged?.(chatId);
+    } else {
+      notify({ kind: 'task-result', title: trigger.title, body: result, triggerId: trigger.id, chatId });
+    }
     return result;
   }
 
@@ -1174,6 +1195,7 @@ export async function createCore(
     addKnowledge,
     profile,
     notifications,
+    notify,
     spentToday,
     fileSnapshots,
     parkedRuns,

@@ -230,3 +230,20 @@ test('writer: writes that break a rule are rejected, valid ones still apply', as
   assert.equal(memory.get('projects/garden')!.content, 'chili\n2026-10-12: added basil');
   assert.equal(memory.get('profile'), undefined);
 });
+
+test('writer: small models bending the tool shapes still get their facts filed', async () => {
+  const { memory, writer, add } = writerSetup([
+    {
+      toolCalls: [
+        // "content" instead of "line", and no description for a new file
+        { name: 'append_memory', input: { path: 'projects/abc-2026', content: '2026-10-19: weekly meeting on Fridays' } },
+        { name: 'save_memory', input: { path: 'people/somsri', content: 'Purchasing, ABC company' } },
+      ],
+    },
+  ]);
+  add('user', 'I work on ABC-2026 with Somsri from ABC; we meet every Friday.');
+  const result = await writer.processTrace('turn-1', makeAgent());
+  assert.deepEqual(result, { saved: ['projects/abc-2026', 'people/somsri'], rejected: [] });
+  assert.equal(memory.get('projects/abc-2026')!.description, 'abc 2026');
+  assert.equal(memory.get('people/somsri')!.content, 'Purchasing, ABC company');
+});

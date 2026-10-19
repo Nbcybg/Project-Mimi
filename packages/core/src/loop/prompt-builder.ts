@@ -241,6 +241,7 @@ export function groupInstructions(agent: string, members: Array<{ name: string; 
     'Messages that start with "[name]:" were written by that agent; everything else on the user side is the user.',
     '- Speak only for yourself, in your own voice. Never write another agent\'s lines and do not start your message with "[your name]:".',
     '- To ask another agent something, or to hand them the word, write @name in your message. They answer next and can ask you back the same way. Without an @name the turn returns to the user.',
+    '- They are in this chat: talk to them here with @name. Do not use send_to for them; their answer would happen out of the user\'s sight.',
     '- Mention someone only when you need their answer. Answer what you are asked; if you disagree with another agent, say so and say why.',
     '- Keep it a conversation: short turns, no summaries of what others just said.',
   ].join('\n');

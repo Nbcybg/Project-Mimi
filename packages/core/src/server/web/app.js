@@ -10,7 +10,16 @@
   const fromHash = new URLSearchParams(location.hash.slice(1)).get('token');
   if (fromHash) {
     localStorage.setItem(TOKEN_KEY, fromHash);
-    history.replaceState(null, '', location.pathname);
+    history.replaceState(null, '', location.pathname + location.search);
+  }
+  // ?ui=compact: the phone-sized window of the tray app. Chats stay in it; Agent, Hub and
+  // Settings open in a normal desktop-sized window. ?view=<name> opens on that screen.
+  const pageQuery = new URLSearchParams(location.search);
+  const compact = pageQuery.get('ui') === 'compact';
+  if (compact) document.documentElement.classList.add('compact');
+  function openDesktop(view) {
+    const opened = window.open(`/?view=${encodeURIComponent(view)}`, 'mimi-desktop', 'popup,width=1200,height=840');
+    if (opened) opened.focus();
   }
   const token = () => localStorage.getItem(TOKEN_KEY) || '';
 
@@ -55,10 +64,16 @@
     const text = (typeof value === 'string' ? value : JSON.stringify(value) || '').replace(/\s+/g, ' ').trim();
     return text.length > limit ? `${text.slice(0, limit)}…` : text;
   }
-  function toast(title, body, bad) {
-    const node = el('div', `toast${bad ? ' bad' : ''}`);
+  function toast(title, body, bad, onClick) {
+    const node = el('div', `toast${bad ? ' bad' : ''}${onClick ? ' link' : ''}`);
     node.append(el('b', '', title));
     if (body) node.append(document.createTextNode(body));
+    if (onClick) {
+      node.onclick = () => {
+        node.remove();
+        onClick();
+      };
+    }
     $('toasts').append(node);
     setTimeout(() => node.remove(), bad ? 14000 : 9000);
   }
@@ -1174,9 +1189,28 @@
   };
   $('to-latest').onclick = () => state.chat && openChat(state.chat.id);
 
+  // ---------- presence ----------
+  // The server notifies about agent messages only for chats nobody is looking at.
+  let lastPresence = '';
+  function reportPresence(force) {
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      lastPresence = '';
+      return;
+    }
+    const visible = document.visibilityState === 'visible';
+    const chatId = state.view === 'chat' && state.chat ? state.chat.id : null;
+    const key = `${chatId}:${visible}`;
+    if (!force && key === lastPresence) return;
+    lastPresence = key;
+    send({ type: 'presence', chatId, visible });
+  }
+  document.addEventListener('visibilitychange', () => reportPresence());
+  window.addEventListener('focus', () => reportPresence());
+
   // ---------- views ----------
   function setView(view) {
     state.view = view;
+    setTimeout(() => reportPresence(), 0);
     for (const name of ['chat', 'agents', 'hub', 'settings']) $(`view-${name}`).hidden = name !== view;
     for (const item of $('nav').children) item.classList.toggle('on', item.dataset.view === view);
     if (view === 'agents') renderAgents();
@@ -1186,6 +1220,7 @@
   }
   for (const item of $('nav').children) {
     item.onclick = () => {
+      if (compact && item.dataset.view !== 'chat') return openDesktop(item.dataset.view);
       setView(item.dataset.view);
       if (item.dataset.view !== 'chat' || state.chat) $('app').classList.remove('show-side');
       if (item.dataset.view === 'hub') {
@@ -2198,6 +2233,7 @@
         state.booted = false;
         state.gotAgents = state.gotChats = false;
         for (const type of ['agents-list', 'settings-get', 'chats-list', 'skills-list', 'tools-list', 'workflows-list']) send({ type });
+        reportPresence(true);
         if (state.chat) send({ type: 'chat-open', chatId: state.chat.id, sessionId: state.latest ? undefined : state.session && state.session.id });
         break;
       case 'chats':
@@ -2224,6 +2260,7 @@
         renderHeader();
         renderRail();
         renderLog(message);
+        reportPresence();
         break;
       }
       case 'chat-session': {
@@ -2294,8 +2331,21 @@
           if (state.view === 'chat' && state.chat) add(el('div', 'note', `· ${notice.body}`));
           break;
         }
-        toast(`${notice.kind === 'reminder' ? '⏰ ' : notice.kind === 'approval' ? '✋ ' : '📋 '}${notice.title}`, notice.body);
-        if (window.Notification && Notification.permission === 'granted') new Notification(notice.title, { body: notice.body });
+        const goTo = notice.chatId ? () => {
+          setView('chat');
+          openChat(notice.chatId);
+          if (notice.id) send({ type: 'notifications-read', ids: [notice.id] });
+        } : undefined;
+        const icon = notice.kind === 'reminder' ? '⏰ ' : notice.kind === 'approval' ? '✋ ' : notice.kind === 'message' ? '💬 ' : '📋 ';
+        toast(`${icon}${notice.title}`, notice.body.length > 220 ? `${notice.body.slice(0, 220)}…` : notice.body, false, goTo);
+        if (window.Notification && Notification.permission === 'granted' && (document.visibilityState !== 'visible' || notice.kind !== 'message')) {
+          const shown = new Notification(`${icon}${notice.title}`, { body: notice.body.slice(0, 300), tag: notice.id ? `mimi-${notice.id}` : undefined });
+          shown.onclick = () => {
+            window.focus();
+            goTo?.();
+            shown.close();
+          };
+        }
         send({ type: 'chats-list' });
         if (state.chat && notice.chatId === state.chat.id && state.latest && state.busyChat !== state.chat.id) {
           send({ type: 'chat-open', chatId: state.chat.id });
@@ -2559,6 +2609,10 @@
 
   renderHeader();
   renderChatList();
+  const startView = pageQuery.get('view');
+  if (!compact && ['agents', 'hub', 'settings'].includes(startView)) {
+    setView(startView);
+  }
   connect();
   fetch('/health')
     .then((response) => response.json())

@@ -55,6 +55,10 @@ export interface MimiServer {
   pc: PcHub;
   /** The port actually bound (useful when the configured port is 0). */
   port: number;
+  /** True while some client shows the app in a window that is on screen. */
+  someoneLooking(): boolean;
+  /** Set by the desktop launcher: `POST /app/<action>` (with the token) asks it to show a window. */
+  onAppAction?: (action: string) => void;
   close(): Promise<void>;
 }
 
@@ -540,6 +544,21 @@ export async function startServer(
     }
   };
   core.listeners.notification = (notification) => broadcast({ type: 'notification', notification });
+
+  /** What each connected client shows: its open chat and whether its window is on screen. */
+  const presence = new Map<WebSocket, { chatId: number | null; visible: boolean }>();
+  /** True when some client has this chat open in a window the user can see. */
+  const watching = (chatId: number) => [...presence.values()].some((seen) => seen.visible && seen.chatId === chatId);
+  /** An agent spoke in a chat the user is not looking at: tell them (inbox, toast, push). */
+  const agentSpoke = (chatId: number, agent: string, text: string) => {
+    const body = text.trim();
+    if (!body || watching(chatId)) return;
+    const name = core.agents.names().includes(agent) ? core.agents.get(agent).displayName || agent : agent;
+    const chat = core.chats.getChat(chatId);
+    const title = chat && chat.kind === 'group' ? `${name} · ${chat.title}` : name;
+    core.notify({ kind: 'message', title, body: body.length > 300 ? `${body.slice(0, 300)}…` : body, chatId });
+  };
+  core.listeners.agentPosted = agentSpoke;
   core.listeners.backgroundEvent = forward;
 
   // One turn at a time: turns from any client, in any chat, queue up in arrival order.
@@ -554,6 +573,7 @@ export async function startServer(
     appSettings,
     images,
     broadcast,
+    agentSpoke,
     modelRef,
     busy: () => queued > 0,
     resolved: (event) => {
@@ -618,6 +638,12 @@ export async function startServer(
     const reply = (response: ServerMessage) => socket.send(JSON.stringify(response));
     if (chatApi.handle(message, reply)) return;
     switch (message.type) {
+      case 'presence':
+        presence.set(socket, {
+          chatId: typeof message.chatId === 'number' && Number.isInteger(message.chatId) ? message.chatId : null,
+          visible: message.visible === true,
+        });
+        break;
       case 'send': {
         const text = typeof message.text === 'string' ? message.text.trim() : '';
         if (!text) return;
@@ -918,7 +944,7 @@ export async function startServer(
         const input = message.preferences ?? {};
         const time = (value: unknown) => (typeof value === 'string' && /^\d{1,2}:\d{2}$/.test(value) ? value : undefined);
         const budget = Number(input.dailyBudgetUsd);
-        const kinds = Array.isArray(input.pushKinds) ? input.pushKinds.filter((kind) => ['reminder', 'task-result', 'approval', 'info'].includes(kind)) : undefined;
+        const kinds = Array.isArray(input.pushKinds) ? input.pushKinds.filter((kind) => ['reminder', 'task-result', 'approval', 'info', 'message'].includes(kind)) : undefined;
         appSettings.setPreferences({
           ...(Number.isFinite(budget) && budget > 0 ? { dailyBudgetUsd: Math.round(budget * 100) / 100 } : {}),
           ...(time(input.quietFrom) && time(input.quietTo) ? { quietFrom: time(input.quietFrom), quietTo: time(input.quietTo) } : {}),
@@ -1254,6 +1280,14 @@ export async function startServer(
     } else if (request.method === 'GET' && url.pathname === '/icon.png') {
       response.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'max-age=86400' });
       response.end(appIcon ??= renderIconPng());
+    } else if (request.method === 'POST' && /^\/app\/[a-z-]+$/.test(url.pathname)) {
+      const authorized = sameToken(/^Bearer (.+)$/.exec(request.headers.authorization ?? '')?.[1], config.token);
+      if (!authorized || !mimi.onAppAction) {
+        response.writeHead(authorized ? 404 : 401).end();
+      } else {
+        mimi.onAppAction(url.pathname.slice('/app/'.length));
+        response.writeHead(204).end();
+      }
     } else if (request.method === 'GET' && url.pathname === '/health') {
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end(JSON.stringify({ ok: true, version: APP_VERSION, pcOnline: pc.online, clients: clients.size }));
@@ -1342,6 +1376,7 @@ export async function startServer(
     socket.on('close', () => {
       clearTimeout(helloTimer);
       clients.delete(socket);
+      presence.delete(socket);
       if (role === 'pc') pc.detach(socket);
     });
     socket.on('error', () => socket.terminate());
@@ -1365,10 +1400,11 @@ export async function startServer(
   });
   core.scheduler.start();
 
-  return {
+  const mimi: MimiServer = {
     core,
     pc,
     port: (server.address() as AddressInfo).port,
+    someoneLooking: () => [...presence.values()].some((seen) => seen.visible),
     async close() {
       clearInterval(heartbeat);
       clearInterval(backupTimer);
@@ -1381,4 +1417,5 @@ export async function startServer(
       await core.close();
     },
   };
+  return mimi;
 }

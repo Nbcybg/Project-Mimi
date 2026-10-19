@@ -170,7 +170,8 @@ export interface SearchHit {
 }
 
 export interface Notification {
-  kind: 'reminder' | 'task-result' | 'info' | 'approval';
+  /** `message`: an agent wrote in a chat the user was not looking at, or called notify_user. */
+  kind: 'reminder' | 'task-result' | 'info' | 'approval' | 'message';
   title: string;
   body: string;
   triggerId?: number;
@@ -489,6 +490,8 @@ export type ClientMessage =
   /** The notification inbox; `notifications-read` without ids marks everything read. */
   | { type: 'notifications-list' }
   | { type: 'notifications-read'; ids?: number[] }
+  /** Which chat this client shows, and whether its window is on screen (decides "message" notifications). */
+  | { type: 'presence'; chatId: number | null; visible: boolean }
   /** Push messages to this browser: the server key, (un)subscribe, list, test. */
   | { type: 'push-key' }
   | { type: 'push-subscribe'; subscription: { endpoint: string; keys: { p256dh: string; auth: string } }; label: string }

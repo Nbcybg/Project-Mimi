@@ -3,7 +3,7 @@ import type { Db } from '../db/db.ts';
 import { type PushResult, type PushSubscriptionKeys, sendPush, type VapidKeys } from './web-push.ts';
 
 /** Kinds worth waking a phone for; "info" notes only go to the inbox. */
-const PUSHED = new Set<Notification['kind']>(['reminder', 'task-result', 'approval']);
+const PUSHED = new Set<Notification['kind']>(['reminder', 'task-result', 'approval', 'message']);
 const KEEP = 500;
 /** A device that fails this many pushes in a row (without saying "gone") is dropped. */
 const MAX_FAILURES = 20;

@@ -603,3 +603,7 @@ kbd { font: 11px var(--mono); padding: 1px 6px; border: 1px solid var(--line); b
 .char-blend-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 4px 14px; margin-top: 8px; }
 .char-slider { display: grid; grid-template-columns: 1fr; gap: 2px; font-size: 11px; color: var(--muted); margin: 0; }
 .char-slider input[type="range"] { accent-color: var(--accent); width: 100%; }
+.toast.link { cursor: pointer; }
+.toast.link:hover { border-color: var(--accent); }
+/* tray app: phone-sized chat window */
+.compact #nav button[data-view="agents"]::after, .compact #nav button[data-view="hub"]::after, .compact #nav button[data-view="settings"]::after { content: " ↗"; font-size: 10px; opacity: .6; }

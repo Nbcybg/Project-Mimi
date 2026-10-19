@@ -212,6 +212,8 @@ export class ProviderRegistry {
         models[modelId] = mergeModel(models[modelId], def);
       }
     }
+    // Ids the provider listed (or the user typed in) are real models even without metadata.
+    for (const modelId of this.sources.listed?.()[id] ?? []) models[modelId] ??= {} as ModelDef;
     return {
       id,
       name: last('name') ?? base?.name ?? id,

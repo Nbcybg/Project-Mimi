@@ -87,6 +87,9 @@ test('seeded settings and agents load, and their tools resolve', () => {
     status: new StatusStore(db),
     memos: new MemoStore(db),
     timezone: config.timezone,
+    // Tools that need a service the core always has.
+    notifyUser: () => ({}),
+    readDocument: async () => '',
   });
   // No agents are shipped: the user creates their own in the app. Whatever exists must load.
   for (const name of listAgents(config.agentsDir)) {

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -167,10 +168,13 @@ test('the app starts with no agents; they are created, edited, renamed and delet
 
 test('nothing is shipped: the repository has no agents and no persona file', () => {
   const repoRoot = path.resolve(import.meta.dirname, '../../../..');
-  const agentsDir = path.join(repoRoot, 'user', 'agents');
-  const shipped = fs.existsSync(agentsDir)
-    ? fs.readdirSync(agentsDir, { withFileTypes: true }).map((entry) => entry.name).filter((name) => ['mimi', 'tim', 'karlen'].includes(name))
-    : [];
-  assert.deepEqual(shipped, [], 'the three agents that used to be seeded are gone');
-  assert.equal(fs.existsSync(path.join(repoRoot, 'user', 'persona.md')), false);
+  // The user's own folder may hold agents of any name; what counts is what the repository ships.
+  let tracked: string[];
+  try {
+    tracked = execFileSync('git', ['ls-files', 'user'], { cwd: repoRoot, encoding: 'utf8' }).split('\n').filter(Boolean);
+  } catch {
+    return; // not a git checkout (e.g. the packaged app)
+  }
+  assert.deepEqual(tracked, [], 'nothing under user/ is in the repository');
+  assert.equal(fs.existsSync(path.join(repoRoot, 'persona.md')), false);
 });

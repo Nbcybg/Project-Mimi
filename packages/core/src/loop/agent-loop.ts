@@ -312,6 +312,8 @@ export async function* runAgent(deps: AgentLoopDeps, input: RunInput): AsyncGene
   let text = '';
   let reason: RunFinishReason = 'stop';
   let error: string | undefined;
+  /** Some models end a turn with no text at all (everything went into reasoning); they get one more go. */
+  let nudged = false;
 
   yield { type: 'run-start', traceId, agent: agent.name, model: formatModelRef(modelRef), userMessageId };
 
@@ -401,7 +403,13 @@ export async function* runAgent(deps: AgentLoopDeps, input: RunInput): AsyncGene
       budget?.charge(contextTokens);
       yield { type: 'usage', round: rounds, usage: snapshot };
 
-      if (calls.length === 0) break;
+      if (calls.length === 0) {
+        if (text.trim() || nudged || rounds >= agent.budgets.maxRounds) break;
+        nudged = true;
+        // Not stored: it only steers this run.
+        messages.push({ role: 'user', content: '(Your last reply came out empty. Write your answer to the message above now, as plain text.)' });
+        continue;
+      }
 
       const results: ToolResult[] = [];
       for (const call of calls) {

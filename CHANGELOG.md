@@ -9,6 +9,8 @@
 - Memory writer accepts the tool-call variations of small models instead of dropping the fact.
 - A scheduled agent task that already notified the user does not raise a second notification.
 - Group chats: agents are told to talk to members in the chat, not through send_to.
+- Model ids typed into a provider's list by hand are known models even when the catalog has no entry for them.
+- A model that ends its turn with an empty answer is asked once more instead of leaving a blank reply.
 
 ## 0.2.0 — 2026-10-19
 

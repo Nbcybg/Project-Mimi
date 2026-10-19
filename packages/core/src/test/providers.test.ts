@@ -245,3 +245,12 @@ test('provider files: save, read, list, remove and one-time migration from app s
   assert.equal(store.remove('my-llm'), true);
   assert.equal(store.remove('my-llm'), false);
 });
+
+test('registry: model ids a provider listed (or the user typed in) are known even without catalog metadata', () => {
+  const catalog = new ModelCatalog({
+    gw: { name: 'Gateway', npm: '@ai-sdk/openai-compatible', api: 'https://gw.example/v1', env: [], models: { old: { name: 'Old' } } },
+  });
+  const registry = new ProviderRegistry(catalog, {}, {}, { listed: () => ({ gw: ['old', 'new-free'] }) });
+  assert.equal(registry.info({ provider: 'gw', model: 'new-free' }).name, 'new-free');
+  assert.throws(() => registry.info({ provider: 'gw', model: 'missing' }), /Unknown model "gw\/missing"/);
+});

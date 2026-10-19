@@ -206,3 +206,17 @@ test('provider failure ends the run with an error instead of throwing', async ()
   assert.match(finish.error ?? '', /upstream exploded/);
   assert.equal(runRow(harness.db).status, 'error');
 });
+
+test('an empty answer gets one more go; a second empty one ends the run', async () => {
+  const model = scriptedModel([textStep(''), textStep('ตอบแล้วค่ะ')]);
+  const harness = makeHarness(model);
+  const events = await collect(runAgent(harness.deps, { agent: makeAgent(), userText: 'hi' }));
+  const finish = eventsOf(events, 'run-finish')[0]!;
+  assert.deepEqual([finish.reason, finish.rounds, finish.text], ['stop', 2, 'ตอบแล้วค่ะ']);
+  assert.match(promptOf(model, 1), /came out empty/);
+  assert.ok(!storedRoles(harness.db).includes('system'));
+
+  const silent = scriptedModel([textStep('')]);
+  const quiet = await collect(runAgent(makeHarness(silent).deps, { agent: makeAgent(), userText: 'hi' }));
+  assert.deepEqual([eventsOf(quiet, 'run-finish')[0]!.rounds, silent.doStreamCalls.length], [2, 2]);
+});

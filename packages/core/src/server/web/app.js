@@ -892,6 +892,12 @@
       }
       section.append(grid);
       nodes.push(section);
+      if (agent && agent.status && agent.status.situation) {
+        const cg = el('div');
+        cg.append(el('h3', '', 'ภาพสถานการณ์'));
+        cg.append(button('btn ghost', 'เอาภาพออกจากแชต', () => send({ type: 'status-set', agent: chat.agents[0], key: 'situation', value: '' })));
+        nodes.push(cg);
+      }
       const hooks = window.MimiHooks && window.MimiHooks.backgrounds;
       if (hooks) {
         const backdrop = el('div');
@@ -1412,6 +1418,9 @@
       form.append(el('h4', '', 'รูปตามอีโมจิ (ของ agent เอง)'));
       form.append(el('p', 'hint', 'agent ส่งอีโมจิไหน ก็เปลี่ยนเป็นรูปนั้นในแชต (ถ้าชุดที่ใส่อยู่ไม่มีรูปสำหรับอีโมจินั้น) · รูปที่ผูกกับชุดตั้งที่ Hub → ตู้เสื้อผ้า'));
       form.append(window.MimiHooks.stage.spriteEditor('agent', agent.name, agent.sprites || {}));
+      form.append(el('h4', '', 'คลังภาพสถานการณ์ (Gallery)'));
+      form.append(el('p', 'hint', 'ภาพที่ agent เลือกวางทับแชตได้เหมือน CG ใน visual novel (ติ๊กเครื่องมือ gallery_search / gallery_show / gallery_hide / gallery_add ให้ agent) · ใส่ชื่อ แท็ก และคำอธิบายให้ตรงสถานการณ์ agent จะค้นเจอเอง'));
+      form.append(window.MimiHooks.gallery.manager(agent.name));
     } else {
       form.append(el('p', 'hint', 'บันทึก agent ก่อน แล้วจึงใส่รูปโปรไฟล์และรูปเต็มตัวได้'));
     }
@@ -2485,6 +2494,10 @@
           window.MimiHooks.knowledge.onMessage(message);
         }
         if (message.type.startsWith('knowledge')) return;
+        if (message.type === 'gallery' || message.type === 'gallery-changed') {
+          window.MimiHooks?.gallery?.onMessage(message);
+          return;
+        }
         if (message.type === 'backgrounds') {
           window.MimiHooks?.backgrounds?.onMessage(message);
           return;

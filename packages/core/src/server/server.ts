@@ -76,6 +76,7 @@ const WEB_FILES: Record<string, [string, string]> = {
   '/feature-wardrobe.js': ['feature-wardrobe.js', 'text/javascript; charset=utf-8'],
   '/feature-stage.js': ['feature-stage.js', 'text/javascript; charset=utf-8'],
   '/feature-backgrounds.js': ['feature-backgrounds.js', 'text/javascript; charset=utf-8'],
+  '/feature-gallery.js': ['feature-gallery.js', 'text/javascript; charset=utf-8'],
   '/feature-canvas.js': ['feature-canvas.js', 'text/javascript; charset=utf-8'],
   '/feature-profile.js': ['feature-profile.js', 'text/javascript; charset=utf-8'],
   '/feature-notify.js': ['feature-notify.js', 'text/javascript; charset=utf-8'],
@@ -920,6 +921,25 @@ export async function startServer(
       case 'profile-save':
         broadcast({ type: 'profile', profile: core.profile.save(message.profile, core.agents.names()), saved: true });
         break;
+      case 'gallery-list': {
+        const agent = String(message.agent);
+        if (!core.agents.names().includes(agent)) throw new Error(`No agent "${agent}".`);
+        const query = String(message.query ?? '');
+        const offset = Math.max(0, Number(message.offset) || 0);
+        const { total, items } = core.gallery.list(agent, { query, offset, limit: Number(message.limit) || 60 });
+        reply({ type: 'gallery', agent, query, offset, total, items });
+        break;
+      }
+      case 'gallery-update':
+        core.gallery.update(String(message.agent), String(message.id), { title: message.title, tags: message.tags, description: message.description });
+        broadcast({ type: 'gallery-changed', agent: String(message.agent) });
+        break;
+      case 'gallery-delete':
+        core.gallery.remove(String(message.agent), String(message.id));
+        // A picture that is on show goes with it.
+        if (core.status.get(String(message.agent)).situation === String(message.id)) core.status.set(String(message.agent), 'situation', '');
+        broadcast({ type: 'gallery-changed', agent: String(message.agent) });
+        break;
       case 'backgrounds-list':
         reply(backgroundsMessage());
         break;
@@ -1102,6 +1122,8 @@ export async function startServer(
     images,
     wardrobe: core.wardrobe,
     backgrounds: core.backgrounds,
+    gallery: core.gallery,
+    galleryChanged: (agent: string) => broadcast({ type: 'gallery-changed', agent }),
     backgroundsChanged: () => broadcast(backgroundsMessage()),
     wardrobeChanged: () => broadcast({ type: 'wardrobe', outfits: core.wardrobe.list() }),
     authorized: (request: http.IncomingMessage) => {

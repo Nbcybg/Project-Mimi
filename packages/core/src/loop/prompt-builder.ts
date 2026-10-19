@@ -65,6 +65,13 @@ export function buildInstructions(agent: AgentDefinition, workingDir: string | u
       '- Your status (location, outfit, current_task, mood) is shown in the context block of the newest message. When something in the conversation changes one of them, call status_set for that key, then answer. Otherwise leave it alone.',
     );
   }
+  if (has('gallery_show')) {
+    rules.push(
+      '',
+      '## Situation gallery',
+      '- You have a gallery of pictures that can be laid over the chat like the event pictures of a visual novel. Find one with gallery_search, show it with gallery_show, take it away with gallery_hide. Use it for a moment that deserves a picture; the picture on show is your `situation` status.',
+    );
+  }
   return `${agent.systemPrompt}\n\n${rules.join('\n')}`;
 }
 

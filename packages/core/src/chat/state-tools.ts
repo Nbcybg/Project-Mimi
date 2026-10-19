@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { defineTool, type ToolDefinition } from '../tools/registry.ts';
-import { type MemoStore, STATUS_KEYS, type StatusStore } from './state-store.ts';
+import { type MemoStore, SELF_STATUS_KEYS, type StatusStore } from './state-store.ts';
 
 /**
  * Tools an agent uses on its own state: its status and its memos. They change nothing
@@ -14,7 +14,7 @@ export function createStateTools(status: StatusStore, memos: MemoStore): ToolDef
     risk: 'read',
     target: 'core',
     inputSchema: z.object({
-      key: z.enum(STATUS_KEYS),
+      key: z.enum(SELF_STATUS_KEYS),
       value: z.string().describe('Short, in the language you speak with the user'),
     }),
     summarize: (input) => `Status ${input.key}: ${input.value}`,

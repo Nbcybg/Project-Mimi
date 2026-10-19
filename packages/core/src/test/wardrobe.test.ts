@@ -66,10 +66,10 @@ test('core: {{wa01}} in an agent prompt expands; the outfit shows in the status;
   assert.match(core.deps.promptExtras!(withStatus), /- wa01: ชุดทำงาน - เชิ้ตขาว/);
 
   core.status.set('tim', 'outfit', 'wa01');
-  const rendered = core.status.render('tim', (outfit) => core.wardrobe.promptEntries()[outfit]);
+  const rendered = core.status.render('tim', (key, value) => (key === 'outfit' ? core.wardrobe.promptEntries()[value] : undefined));
   assert.match(rendered, /outfit: wa01 = ชุดทำงาน \(เชิ้ตขาว\)/);
   core.status.set('tim', 'outfit', 'pyjamas');
-  assert.match(core.status.render('tim', (outfit) => core.wardrobe.promptEntries()[outfit]), /outfit: pyjamas$/m);
+  assert.match(core.status.render('tim', (key, value) => (key === 'outfit' ? core.wardrobe.promptEntries()[value] : undefined)), /outfit: pyjamas$/m);
 
   assert.throws(() => core.wardrobe.save({ id: 'scout' }), /id of an agent/);
   await target.cleanup();

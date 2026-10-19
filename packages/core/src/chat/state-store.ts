@@ -1,8 +1,10 @@
 import type { Db } from '../db/db.ts';
 
-/** The four things an agent keeps current about itself. */
-export const STATUS_KEYS = ['location', 'outfit', 'current_task', 'mood'] as const;
+/** What an agent keeps current about itself, plus the gallery picture on show (`situation`, set by the gallery tools). */
+export const STATUS_KEYS = ['location', 'outfit', 'current_task', 'mood', 'situation'] as const;
 export type StatusKey = (typeof STATUS_KEYS)[number];
+/** The keys the agent sets with `status_set`. */
+export const SELF_STATUS_KEYS = ['location', 'outfit', 'current_task', 'mood'] as const;
 export type AgentStatus = Partial<Record<StatusKey, string>>;
 
 const VALUE_LIMIT = 300;
@@ -58,11 +60,11 @@ export class StatusStore {
   }
 
   /** The snapshot placed at the bottom of the prompt. Empty when nothing is set. */
-  render(agent: string, describeOutfit?: (value: string) => string | undefined): string {
+  render(agent: string, describe?: (key: StatusKey, value: string) => string | undefined): string {
     const status = this.get(agent);
     const lines = STATUS_KEYS.filter((key) => status[key]).map((key) => {
-      // An outfit set by wardrobe id also shows what that outfit is.
-      const detail = key === 'outfit' ? describeOutfit?.(status[key]!) : undefined;
+      // An outfit or gallery picture set by id also shows what it is.
+      const detail = describe?.(key, status[key]!);
       return detail ? `${key}: ${status[key]} = ${detail}` : `${key}: ${status[key]}`;
     });
     return lines.length > 0 ? `Your current status:\n${lines.join('\n')}` : '';

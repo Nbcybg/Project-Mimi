@@ -79,6 +79,7 @@
       M().send({ type: 'wardrobe-list' });
     }
     window.MimiHooks.backgrounds?.apply();
+    window.MimiHooks.gallery?.apply();
     const agent = directAgent();
     const target = agent && pick(agent);
     stage.classList.toggle('has-figure', Boolean(target));

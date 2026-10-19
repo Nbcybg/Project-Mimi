@@ -6,6 +6,7 @@ import { type AgentImages, isImageSlot } from '../chat/agent-images.ts';
 import { type Attachment, type AttachmentStore, MAX_ATTACHMENT_BYTES } from '../chat/attachments.ts';
 import type { WardrobeStore } from '../wardrobe/wardrobe-store.ts';
 import type { BackgroundStore } from '../backgrounds/background-store.ts';
+import type { GalleryStore } from '../gallery/gallery-store.ts';
 
 /** What the webhook endpoint answers: a `respond` node may shape all of it. */
 export interface WebhookReply {
@@ -21,6 +22,9 @@ export interface HttpApiDeps {
   images: AgentImages;
   wardrobe: WardrobeStore;
   backgrounds: BackgroundStore;
+  gallery: GalleryStore;
+  /** Called after a gallery picture was added, changed or removed. */
+  galleryChanged(agent: string): void;
   /** Called after a backdrop's picture changed. */
   backgroundsChanged(): void;
   /** Called after an outfit's picture changed. */
@@ -197,6 +201,35 @@ export async function handleHttpApi(
         }
         if (scope === 'outfit') deps.wardrobeChanged();
         else deps.imagesChanged();
+        sendJson(response, 200, { ok: true });
+      } else {
+        throw new HttpError(405, 'Method not allowed.');
+      }
+    } else if (resource === 'gallery' && rest.length >= 1 && rest.length <= 3) {
+      // POST /api/gallery/<agent>?title=&tags=&description=  adds a picture (body = the image)
+      // GET  /api/gallery/<agent>/<id>[/thumb]               the picture or its preview
+      // POST /api/gallery/<agent>/<id>/thumb                 a JPEG preview made by the client
+      const [agent, id, part] = rest as [string, string | undefined, string | undefined];
+      if (!deps.agentExists(agent)) throw new HttpError(404, `No agent "${agent}".`);
+      const mime = String(request.headers['content-type'] ?? '').split(';')[0]!.trim();
+      if (id === undefined) {
+        if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed.');
+        const item = deps.gallery.add(agent, {
+          title: url.searchParams.get('title') ?? '',
+          tags: (url.searchParams.get('tags') ?? '').split(','),
+          description: url.searchParams.get('description') ?? '',
+          mime,
+          data: await readBody(request, 12 * 1024 * 1024),
+          source: 'user',
+        });
+        deps.galleryChanged(agent);
+        sendJson(response, 200, item);
+      } else if (request.method === 'GET' && (part === undefined || part === 'thumb')) {
+        const image = deps.gallery.readImage(agent, id, part === 'thumb');
+        if (!image) throw new HttpError(404, 'No picture.');
+        sendBytes(response, image.data, image.mime);
+      } else if (request.method === 'POST' && part === 'thumb') {
+        deps.gallery.saveThumb(agent, id, mime, await readBody(request, 512 * 1024));
         sendJson(response, 200, { ok: true });
       } else {
         throw new HttpError(405, 'Method not allowed.');

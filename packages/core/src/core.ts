@@ -22,6 +22,7 @@ import { gmailListUnread, gmailMarkRead } from './google/tools.ts';
 import { type AgentLoopDeps, runAgent, type RunInput } from './loop/agent-loop.ts';
 import { buildPromptVars } from './loop/prompt-vars.ts';
 import { WardrobeStore } from './wardrobe/wardrobe-store.ts';
+import { GalleryStore } from './gallery/gallery-store.ts';
 import { BackgroundStore } from './backgrounds/background-store.ts';
 import { Compactor } from './memory/compactor.ts';
 import { MemoryFiles } from './memory/files.ts';
@@ -115,6 +116,8 @@ export interface Core {
   wardrobe: WardrobeStore;
   /** Backdrops for the chat stage and which one each agent uses. */
   backgrounds: BackgroundStore;
+  /** The situation gallery of each agent. */
+  gallery: GalleryStore;
   attachments: AttachmentStore;
   /** The skill hub as it is on disk right now. */
   skills(): Skill[];
@@ -260,6 +263,7 @@ export async function createCore(
   const memos = new MemoStore(db);
   const wardrobe = new WardrobeStore(config.wardrobeDir, () => agents.names());
   const backgrounds = new BackgroundStore(config.backgroundsDir);
+  const gallery = new GalleryStore(config.agentsDir);
   const attachments = new AttachmentStore(db, config.filesDir);
 
   // The database stays the source of truth; the mirrors under `user/sessions`,
@@ -386,6 +390,7 @@ export async function createCore(
   };
 
   const tools = createToolRegistry({
+    gallery,
     knowledge,
     profile,
     media: {
@@ -509,7 +514,12 @@ export async function createCore(
         extra: wardrobe.promptEntries(),
       });
     },
-    contextExtras: (agent) => status.render(agent.name, (outfit) => wardrobe.promptEntries()[outfit]),
+    contextExtras: (agent) =>
+      status.render(agent.name, (key, value) => {
+        if (key === 'outfit') return wardrobe.promptEntries()[value];
+        const item = key === 'situation' ? gallery.get(agent.name, value) : undefined;
+        return item && `${item.title}${item.description ? ` (${item.description.slice(0, 120)})` : ''}`;
+      }),
     media: attachments,
     extraTools: (agent) => {
       const own = skillsOf(agent);
@@ -1150,6 +1160,7 @@ export async function createCore(
     memos,
     wardrobe,
     backgrounds,
+    gallery,
     attachments,
     skills: currentSkills,
     tools: toolPool,

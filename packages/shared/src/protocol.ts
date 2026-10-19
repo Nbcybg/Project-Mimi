@@ -125,7 +125,7 @@ export interface ChatView {
   preview: string;
 }
 
-export type StatusKeyName = 'location' | 'outfit' | 'current_task' | 'mood';
+export type StatusKeyName = 'location' | 'outfit' | 'current_task' | 'mood' | 'situation';
 /** What an agent says about itself right now. */
 export type AgentStatusView = Partial<Record<StatusKeyName, string>>;
 
@@ -279,7 +279,7 @@ export interface ToolPoolView {
   mcp?: McpServerView[];
 }
 
-import type { KnowledgeCollectionView, KnowledgeDocumentView, KnowledgeHit, UserProfileView, WardrobeOutfitView, BackgroundView, BackgroundSettingsView } from './knowledge.ts';
+import type { KnowledgeCollectionView, KnowledgeDocumentView, KnowledgeHit, UserProfileView, WardrobeOutfitView, BackgroundView, BackgroundSettingsView, GalleryItemView } from './knowledge.ts';
 
 /** The importer's account of an n8n conversion. */
 export interface N8nImportReportView {
@@ -490,6 +490,9 @@ export type ClientMessage =
   | { type: 'profile-save'; profile: UserProfileView }
   /** Knowledge bases: list, create / edit, delete. */
   | { type: 'knowledge-list' }
+  | { type: 'gallery-list'; agent: string; query?: string; offset?: number; limit?: number }
+  | { type: 'gallery-update'; agent: string; id: string; title?: string; tags?: string[]; description?: string }
+  | { type: 'gallery-delete'; agent: string; id: string }
   | { type: 'backgrounds-list' }
   | { type: 'background-save'; background: { id: string; name?: string; keywords?: string[] }; renameFrom?: string }
   | { type: 'background-delete'; id: string }
@@ -598,6 +601,9 @@ export type ServerMessage =
   | { type: 'workflow-runs'; workflow: string; runs: WorkflowRunSummary[] }
   | { type: 'knowledge'; collections: KnowledgeCollectionView[]; saved?: string }
   | { type: 'wardrobe'; outfits: WardrobeOutfitView[]; saved?: string }
+  | { type: 'gallery'; agent: string; query: string; offset: number; total: number; items: GalleryItemView[] }
+  /** A picture was added, changed or removed (the manager asks for the list again). */
+  | { type: 'gallery-changed'; agent: string }
   | { type: 'backgrounds'; items: BackgroundView[]; settings: BackgroundSettingsView; saved?: string }
   | { type: 'profile'; profile: UserProfileView; saved?: boolean }
   | { type: 'notifications'; items: NotificationItem[]; unread: number }

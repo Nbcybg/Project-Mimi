@@ -7,6 +7,8 @@ import { createStateTools } from '../chat/state-tools.ts';
 import type { MessagesRepo } from '../db/messages-repo.ts';
 import type { KnowledgeStore } from '../knowledge/store.ts';
 import { createKnowledgeTools } from '../knowledge/tools.ts';
+import type { GalleryStore } from '../gallery/gallery-store.ts';
+import { createGalleryTools } from '../gallery/gallery-tools.ts';
 import { createProfileTools } from '../profile/tools.ts';
 import type { UserProfileStore } from '../profile/user-profile.ts';
 import type { GoogleAuth } from '../google/auth.ts';
@@ -43,6 +45,8 @@ export interface ToolServices {
   timezone: string;
   /** Knowledge bases; without one the knowledge_search tool is not offered. */
   knowledge?: KnowledgeStore;
+  /** Situation galleries; without one the gallery tools are not offered. */
+  gallery?: GalleryStore;
   /** The user's profile; without it the profile_update tool is not offered. */
   profile?: UserProfileStore;
   /** Reads a document in the allowed folders as text (read_document). */
@@ -68,6 +72,7 @@ export function createToolRegistry(services: ToolServices): ToolRegistry {
     ...createMailAttachmentTools(services.google, services.microsoft),
     ...(services.readDocument ? createDocumentTools(services.readDocument) : []),
     ...(services.media ? createMediaTools(services.media) : []),
+    ...(services.gallery && services.media ? createGalleryTools(services.gallery, services.status, services.media.attachments) : []),
     ...createWebTools({ key: services.key ?? ((name) => process.env[name]) }),
     createSkillTool(services.skills),
     ...(services.knowledge ? createKnowledgeTools(services.knowledge) : []),

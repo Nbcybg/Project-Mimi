@@ -62,6 +62,23 @@ export interface UserProfileView {
   fields: UserProfileField[];
 }
 
+/** One picture of an agent's situation gallery. */
+export interface GalleryItemView {
+  /** Short id the agent quotes, e.g. g12; never reused. */
+  id: string;
+  title: string;
+  tags: string[];
+  /** When the picture fits; what the agent reads to choose it. */
+  description: string;
+  mime: string;
+  size: number;
+  createdAt: string;
+  /** Who put it in: the user (upload) or the agent (gallery_add). */
+  source: 'user' | 'agent';
+  /** True when a small preview exists (the grid uses it). */
+  thumb: boolean;
+}
+
 /** A backdrop for the chat stage. */
 export interface BackgroundView {
   id: string;

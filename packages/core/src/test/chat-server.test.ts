@@ -308,3 +308,45 @@ test('backgrounds over the socket and HTTP', async () => {
   assert.deepEqual([gone.items, gone.settings.agents], [[], {}]);
   await app.stop();
 });
+
+test('situation gallery over HTTP and the socket', async () => {
+  const app = await boot();
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0]);
+  const post = (url: string, body: Buffer, type: string) => app.api(url, { method: 'POST', body, headers: { 'content-type': type } });
+
+  assert.equal((await post('/api/gallery/ghost', png, 'image/png')).status, 404);
+  assert.equal((await post('/api/gallery/mimi', png, 'text/html')).status, 400);
+  const changed = app.ask(null, 'gallery-changed');
+  const created = await post(`/api/gallery/mimi?title=${encodeURIComponent('ฝนตก')}&tags=rain,cafe&description=quiet`, png, 'image/png');
+  assert.equal(created.status, 200);
+  const item = (await created.json()) as { id: string; title: string; tags: string[]; thumb: boolean };
+  assert.deepEqual([item.id, item.title, item.tags, item.thumb], ['g1', 'ฝนตก', ['rain', 'cafe'], false]);
+  assert.equal((await changed).agent, 'mimi');
+
+  assert.equal((await post('/api/gallery/mimi/g1/thumb', png, 'image/png')).status, 400);
+  assert.equal((await post('/api/gallery/mimi/g1/thumb', jpeg, 'image/jpeg')).status, 200);
+  const thumb = await app.api('/api/gallery/mimi/g1/thumb');
+  assert.deepEqual([thumb.headers.get('content-type'), Buffer.from(await thumb.arrayBuffer()).equals(jpeg)], ['image/jpeg', true]);
+  const full = await app.api('/api/gallery/mimi/g1');
+  assert.deepEqual([full.headers.get('content-type'), Buffer.from(await full.arrayBuffer()).equals(png)], ['image/png', true]);
+  assert.equal((await app.api('/api/gallery/mimi/g9')).status, 404);
+
+  const listed = await app.ask({ type: 'gallery-list', agent: 'mimi', query: 'rain' }, 'gallery');
+  assert.deepEqual([listed.total, listed.items.map((entry) => [entry.id, entry.thumb])], [1, [['g1', true]]]);
+  await app.ask({ type: 'gallery-update', agent: 'mimi', id: 'g1', title: 'Rainy', tags: ['rain'], description: 'x' }, 'gallery-changed');
+  assert.equal((await app.ask({ type: 'gallery-list', agent: 'mimi' }, 'gallery')).items[0]!.title, 'Rainy');
+
+  // Showing is a status; deleting the picture on show clears it; a rename carries the gallery along.
+  await app.ask({ type: 'status-set', agent: 'mimi', key: 'situation', value: 'g1' }, 'status');
+  const agents = await app.ask({ type: 'agents-list' }, 'agents');
+  const mimi = agents.agents.find((agent) => agent.name === 'mimi')!;
+  await app.ask({ type: 'agent-save', renameFrom: 'mimi', agent: { ...mimi, name: 'mimi2', models: {} } }, 'agents');
+  assert.equal((await app.ask({ type: 'gallery-list', agent: 'mimi2' }, 'gallery')).total, 1);
+  assert.equal((await app.api('/api/gallery/mimi2/g1')).status, 200);
+  await app.ask({ type: 'status-set', agent: 'mimi2', key: 'situation', value: 'g1' }, 'status');
+  await app.ask({ type: 'gallery-delete', agent: 'mimi2', id: 'g1' }, 'gallery-changed');
+  assert.equal(app.server.core.status.get('mimi2').situation, undefined);
+  assert.equal((await app.ask({ type: 'gallery-list', agent: 'mimi2' }, 'gallery')).total, 0);
+  await app.stop();
+});

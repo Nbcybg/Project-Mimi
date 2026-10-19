@@ -92,10 +92,13 @@ export class AgentImages {
       fs.mkdirSync(target, { recursive: true });
       fs.renameSync(found.file, path.join(target, `${slot}${path.extname(found.file)}`));
     }
-    const sprites = this.folder(from) && path.join(this.folder(from)!, SPRITES_DIR);
-    if (sprites && fs.existsSync(sprites)) {
-      fs.mkdirSync(target, { recursive: true });
-      fs.renameSync(sprites, path.join(target, SPRITES_DIR));
+    // The expression pictures and the situation gallery live in folders of the agent too.
+    for (const name of [SPRITES_DIR, 'gallery']) {
+      const moved = this.folder(from) && path.join(this.folder(from)!, name);
+      if (moved && fs.existsSync(moved)) {
+        fs.mkdirSync(target, { recursive: true });
+        fs.renameSync(moved, path.join(target, name));
+      }
     }
   }
 }

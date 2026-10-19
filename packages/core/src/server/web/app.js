@@ -17,6 +17,14 @@
   const pageQuery = new URLSearchParams(location.search);
   const compact = pageQuery.get('ui') === 'compact';
   if (compact) document.documentElement.classList.add('compact');
+  /** Tray window: tool calls and other details are hidden unless "แสดง prompt" is on. */
+  let showPrompt = false;
+  try {
+    showPrompt = localStorage.getItem('mimi.showPrompt') === '1';
+  } catch {
+    // private window: the default
+  }
+  if (showPrompt) document.documentElement.classList.add('show-prompt');
   function openDesktop(view) {
     const opened = window.open(`/?view=${encodeURIComponent(view)}`, 'mimi-desktop', 'popup,width=1200,height=840');
     if (opened) opened.focus();
@@ -836,6 +844,9 @@
       ...(chat ? chat.agents.slice(0, 4).map((name) => avatar(name, chat.kind === 'group' ? 'sm' : '')) : []),
     );
     $('chat-title').textContent = chat ? chatTitle(chat) : 'Mimi';
+    // The tray window shows a one-to-one chat like a character-chat app (the stage is the screen).
+    $('app').classList.toggle('solo', Boolean(compact && direct));
+    input.placeholder = compact && direct ? `ทัก${nameOf(direct.name)}…` : 'พิมพ์ข้อความ…';
     const sub = $('chat-sub');
     sub.className = `sub${state.typing ? ' typing' : ''}`;
     sub.textContent = !chat
@@ -989,6 +1000,28 @@
       hints.replaceChildren(el('span', 'rec', `● กำลังอัดเสียง ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')} — กดไมค์อีกครั้งเพื่อหยุด`));
       return;
     }
+    if (compact) {
+      // The tray window: a switch for the details, and where the work runs.
+      const toggle = el('button', `tg${showPrompt ? ' on' : ''}`);
+      toggle.type = 'button';
+      toggle.setAttribute('aria-label', 'แสดง prompt');
+      const label = el('label', 'tglabel');
+      label.append(el('span', '', 'แสดง prompt'), toggle);
+      toggle.onclick = () => {
+        showPrompt = !showPrompt;
+        document.documentElement.classList.toggle('show-prompt', showPrompt);
+        try {
+          localStorage.setItem('mimi.showPrompt', showPrompt ? '1' : '0');
+        } catch {
+          // not remembered, still switched
+        }
+        renderHints();
+        scrollDown();
+      };
+      const busyElsewhere = state.busyChat !== null && state.chat && state.busyChat !== state.chat.id;
+      hints.replaceChildren(label, el('span', 'grow'), el('span', '', busyElsewhere ? 'แชตอื่นกำลังตอบ — ข้อความนี้จะเข้าคิว' : state.pcOnline ? 'sync กับ PC แล้ว' : 'ทำงานบนเครื่องนี้'));
+      return;
+    }
     const parts = ['Enter ส่ง · Shift+Enter ขึ้นบรรทัดใหม่'];
     if (state.chat && state.chat.kind === 'group') parts.push('@ชื่อ เพื่อเรียกคนตอบ');
     if (state.busyChat !== null && state.chat && state.busyChat !== state.chat.id) parts.push('มีแชตอื่นกำลังตอบอยู่ ข้อความนี้จะเข้าคิว');
@@ -1118,10 +1151,30 @@
     );
   }
 
+  /** An empty composer offers the microphone; once there is something to send, the send button. */
+  function markEmpty() {
+    $('box').classList.toggle('empty', !input.value.trim() && state.staged.length === 0);
+  }
   input.addEventListener('input', () => {
     autosize();
     renderMention();
+    markEmpty();
   });
+  if (compact) {
+    $('toggle-rail').textContent = '⋯';
+    $('toggle-rail').title = 'ข้อมูลแชต';
+    const find = button('btn ghost icon', '⌕', () => $('open-search').click(), 'ค้นหา');
+    $('toggle-rail').before(find);
+    const camera = el('button', 'ic camera');
+    camera.type = 'button';
+    camera.title = 'ส่งรูป';
+    camera.textContent = '📷';
+    camera.onclick = () => document.querySelector('#attach-menu [data-pick="image/*"]').click();
+    $('mic').before(camera);
+    $('box').before($('hints')); // the switch row sits above the box
+    markEmpty();
+    setInterval(markEmpty, 800); // files staged or sent change it too
+  }
   input.addEventListener('keydown', (event) => {
     const mention = $('mention');
     if (!mention.hidden && (event.key === 'Tab' || event.key === 'Enter')) {
@@ -2195,6 +2248,8 @@
 
   // ---------- messages from the core ----------
   function setPc(online, name) {
+    state.pcOnline = Boolean(online);
+    if (compact) renderHints();
     $('pc-dot').classList.toggle('on', Boolean(online));
     $('pc').textContent = online ? `PC agent: ${name || 'online'}` : 'PC agent: ไม่ได้เชื่อมต่อ';
   }
@@ -2214,11 +2269,20 @@
       $('app').classList.remove('show-side');
     } else if (!state.chat) {
       const remembered = Number(localStorage.getItem(CHAT_KEY));
-      const chat = state.chats.find((entry) => entry.id === remembered) || state.chats[0];
+      // The tray window opens straight into a chat: the last one, else the main agent's.
+      const main = state.defaultAgent || state.agents[0].name;
+      const chat =
+        state.chats.find((entry) => entry.id === remembered) ||
+        (compact ? state.chats.find((entry) => entry.kind === 'direct' && entry.agents[0] === main) : undefined) ||
+        (compact ? undefined : state.chats[0]);
       if (chat) {
         const narrow = window.innerWidth <= 820;
         send({ type: 'chat-open', chatId: chat.id });
-        if (narrow) $('app').classList.add('show-side');
+        if (narrow && !compact) $('app').classList.add('show-side');
+        else $('app').classList.remove('show-side');
+      } else if (compact) {
+        send({ type: 'chat-create', kind: 'direct', agents: [main] });
+        $('app').classList.remove('show-side');
       }
     }
   }

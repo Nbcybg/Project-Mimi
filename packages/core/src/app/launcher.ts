@@ -6,6 +6,7 @@ import { loadConfig } from '../config.ts';
 import { APP_VERSION, type MimiServer, startServer } from '../server/server.ts';
 import { AppSettings } from './app-settings.ts';
 import { renderIconPng } from './icon.ts';
+import { localAppDir, moveUserDataToDocuments } from './user-home.ts';
 
 // The desktop app: starts the core on this machine and shows the client in a window of
 // its own. Everything the user needs to configure is done inside the window.
@@ -54,11 +55,23 @@ async function isMimiRunning(port: number): Promise<boolean> {
   }
 }
 
+// A copy from before the data moved to Documents goes there now, while nothing runs.
+const startConfig = loadConfig();
+if (!(await isMimiRunning(startConfig.port))) {
+  try {
+    const moved = moveUserDataToDocuments(startConfig.rootDir);
+    if (moved) process.stdout.write(`moved the user data to ${moved}\n`);
+  } catch (error) {
+    process.stdout.write(`could not move the user data to Documents: ${(error as Error).message}\n`);
+  }
+}
+
 const bootConfig = loadConfig();
 const settings = AppSettings.load(bootConfig.appSettingsPath);
 settings.applyToEnv(process.env);
 const config = loadConfig(); // again, now with the folders chosen in the app
 fs.mkdirSync(config.allowedDirs[0]!, { recursive: true });
+fs.mkdirSync(config.dataDir, { recursive: true });
 const useTray = process.platform === 'win32' && process.env.MIMI_TRAY !== '0';
 
 // Started from the desktop shortcut there is no console, so keep a log file.
@@ -76,14 +89,14 @@ process.on('uncaughtException', (error) => {
   log(`fatal: ${error.stack ?? error.message}`);
   process.exit(1);
 });
+log(`user data: ${config.userDir}`);
 
 // ---------- windows ----------
 
 type WindowKind = 'phone' | 'desktop';
+/** The chat flyout, in device-independent pixels (the tray helper scales it per screen). */
 const PHONE = { width: 410, height: 820, margin: 12 };
 const DESKTOP = { width: 1200, height: 840 };
-/** Work area of the main screen, reported by the tray helper. */
-let workArea: { x: number; y: number; width: number; height: number } | null = null;
 const windows: Partial<Record<WindowKind, ChildProcess>> = {};
 
 function pageUrl(port: number, kind: WindowKind | 'single', view?: string): string {
@@ -95,8 +108,8 @@ function pageUrl(port: number, kind: WindowKind | 'single', view?: string): stri
 }
 
 /**
- * Opens a client window. Each kind has its own browser profile, so it is a process of its
- * own (the tray can find and raise its window) and its size and place are kept apart.
+ * Opens a client window. Each kind has its own browser profile (kept in the machine-local
+ * folder, not in Documents), so it is a process of its own that the tray can find.
  * Resolves when the window's process ends (or never, with a plain browser tab).
  */
 function openWindow(port: number, kind: WindowKind | 'single', view?: string): Promise<void> {
@@ -107,26 +120,21 @@ function openWindow(port: number, kind: WindowKind | 'single', view?: string): P
     openInDefaultBrowser(url);
     return new Promise(() => {});
   }
-  const geometry: string[] = [];
-  if (kind === 'phone') {
-    const area = workArea ?? { x: 0, y: 0, width: 1920, height: 1040 };
-    const height = Math.min(PHONE.height, area.height - PHONE.margin * 2);
-    const x = area.x + area.width - PHONE.width - PHONE.margin;
-    const y = area.y + area.height - height - PHONE.margin;
-    geometry.push(`--window-size=${PHONE.width},${height}`, `--window-position=${x},${y}`);
-  } else {
-    geometry.push(`--window-size=${kind === 'desktop' ? `${DESKTOP.width},${DESKTOP.height}` : '1100,820'}`);
-  }
+  const size = kind === 'phone' ? `${PHONE.width},${PHONE.height}` : kind === 'desktop' ? `${DESKTOP.width},${DESKTOP.height}` : '1100,820';
   const profile = kind === 'desktop' ? 'app-window-desktop' : 'app-window';
   const child = spawn(
     browser,
     [
       `--app=${url}`,
-      `--user-data-dir=${path.join(config.dataDir, profile)}`,
-      ...geometry,
+      `--user-data-dir=${path.join(localAppDir(config.dataDir), profile)}`,
+      `--window-size=${size}`,
       '--no-first-run',
       '--no-default-browser-check',
       '--disable-background-mode',
+      // An app window, not a browser: no sign-in / sync prompts, no "restore pages" bubble.
+      '--disable-sync',
+      '--disable-features=msImplicitSignin,msEdgeSyncConsent,msShowRestoreBubble,Translate',
+      '--hide-crash-restore-bubble',
     ],
     { stdio: 'ignore' },
   );
@@ -147,8 +155,8 @@ function openWindow(port: number, kind: WindowKind | 'single', view?: string): P
 
 interface Tray {
   send(line: string): void;
-  /** Raises (or with `toggle`, minimises again) the window of a process; false when it has none. */
-  window(pid: number, mode: 'toggle' | 'focus'): Promise<boolean>;
+  /** Sends a command and waits for the helper's answer that starts with `word`. */
+  ask(line: string, word: string, timeoutMs?: number): Promise<string>;
   stop(): void;
 }
 
@@ -165,39 +173,44 @@ function startTray(onCommand: (command: string) => void): Promise<Tray | null> {
       env: {
         ...process.env,
         MIMI_TRAY_TIP: 'Mimi',
-        MIMI_TRAY_OPEN: 'เปิด Mimi',
-        MIMI_TRAY_DESKTOP: 'ตั้งค่า / Agent / Hub (หน้าต่างใหญ่)',
+        MIMI_TRAY_OPEN: 'เปิดแชต',
+        MIMI_TRAY_DESKTOP: 'Agent / Hub / ตั้งค่า (หน้าต่างใหญ่)',
         MIMI_TRAY_QUIT: 'ออกจาก Mimi',
       },
     },
   );
-  const waiting = new Map<number, (shown: boolean) => void>();
+  const waiting: Array<{ word: string; done: (answer: string) => void }> = [];
   return new Promise((resolve) => {
     let ready = false;
     const tray: Tray = {
       send: (line) => {
         if (child.stdin.writable) child.stdin.write(`${line}\n`);
       },
-      window: (pid, mode) =>
+      ask: (line, word, timeoutMs = 20_000) =>
         new Promise((done) => {
-          waiting.set(pid, done);
-          tray.send(`${mode} ${pid}`);
-          setTimeout(() => waiting.get(pid) === done && (waiting.delete(pid), done(false)), 3000);
+          const entry = { word, done };
+          waiting.push(entry);
+          tray.send(line);
+          setTimeout(() => {
+            const index = waiting.indexOf(entry);
+            if (index >= 0) {
+              waiting.splice(index, 1);
+              done('none');
+            }
+          }, timeoutMs);
         }),
       stop: () => child.stdin.end(),
     };
     readline.createInterface({ input: child.stdout }).on('line', (line) => {
       const [word, ...rest] = line.trim().split(' ');
       if (word === 'ready') {
-        const [x, y, width, height] = rest.map(Number);
-        if ([x, y, width, height].every((value) => Number.isFinite(value))) workArea = { x: x!, y: y!, width: width!, height: height! };
         ready = true;
         resolve(tray);
-      } else if (word === 'window') {
-        const pid = Number(rest[0]);
-        const done = waiting.get(pid);
-        waiting.delete(pid);
-        done?.(rest[1] !== '0');
+        return;
+      }
+      const index = waiting.findIndex((entry) => entry.word === word);
+      if (index >= 0) {
+        waiting.splice(index, 1)[0]!.done(rest.join(' '));
       } else if (word) {
         onCommand(word);
       }
@@ -255,18 +268,30 @@ const shutdown = async () => {
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
-/** Shows the window of this kind: raises (or toggles) the open one, or opens a new one. */
-const show = async (kind: WindowKind, toggle: boolean) => {
-  const open = windows[kind];
-  if (open?.pid && tray && (await tray.window(open.pid, toggle ? 'toggle' : 'focus'))) return;
-  if (open) open.kill();
-  void openWindow(server.port, kind, kind === 'desktop' ? 'settings' : undefined);
+/** The chat flyout: shows the one there is, or opens a window and has the tray make it one. */
+const showChat = async () => {
+  if (!tray) return;
+  if (windows.phone && (await tray.ask('showflyout', 'flyout', 3000)) === 'ok') return;
+  windows.phone?.kill();
+  void openWindow(server.port, 'phone');
+  const child = windows.phone;
+  if (!child?.pid) return;
+  const made = await tray.ask(`flyout ${child.pid} ${PHONE.width} ${PHONE.height} ${PHONE.margin}`, 'flyout');
+  if (made !== 'ok') log('the chat window did not appear in time');
+};
+
+/** The big window for Agent / Hub / Settings: raised when open, else opened. */
+const showDesktop = async () => {
+  const open = windows.desktop;
+  if (open?.pid && tray && (await tray.ask(`focus ${open.pid}`, 'focus', 3000)) === 'ok') return;
+  open?.kill();
+  void openWindow(server.port, 'desktop', 'settings');
 };
 
 if (useTray) {
   tray = await startTray((command) => {
-    if (command === 'open') void show('phone', true);
-    else if (command === 'desktop') void show('desktop', false);
+    if (command === 'open') void showChat();
+    else if (command === 'desktop') void showDesktop();
     else if (command === 'quit') void shutdown();
   });
 }
@@ -277,7 +302,7 @@ if (!tray) {
   await openWindow(server.port, 'single');
   await shutdown();
 } else {
-  server.onAppAction = (action) => void show(action === 'desktop' ? 'desktop' : 'phone', false);
+  server.onAppAction = (action) => void (action === 'desktop' ? showDesktop() : showChat());
   // Agent messages and reminders reach the user through the tray while no window is on screen.
   const previous = server.core.listeners.notification;
   server.core.listeners.notification = (notification) => {
@@ -287,5 +312,5 @@ if (!tray) {
     tray?.send(`balloon\t${flat(notification.title, 60)}\t${flat(notification.body, 220)}`);
   };
   log('tray icon ready; click it to open the chat');
-  void show('phone', false);
+  void showChat();
 }

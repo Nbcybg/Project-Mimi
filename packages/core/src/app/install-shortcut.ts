@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { loadConfig } from '../config.ts';
 import { renderIconIco } from './icon.ts';
+import { localAppDir } from './user-home.ts';
 
 // npm run app:install
 // Puts a "Mimi" shortcut on the Desktop (and one in the project folder) that starts
@@ -15,9 +16,10 @@ if (process.platform !== 'win32') {
 }
 
 const config = loadConfig();
-const dataDir = config.dataDir;
-fs.mkdirSync(dataDir, { recursive: true });
-const iconFile = path.join(dataDir, 'mimi.ico');
+// The icon is the app's, not the user's: it lives in the machine-local folder.
+const iconDir = localAppDir(config.dataDir);
+fs.mkdirSync(iconDir, { recursive: true });
+const iconFile = path.join(iconDir, 'mimi.ico');
 fs.writeFileSync(iconFile, renderIconIco());
 
 const quote = (value: string) => `'${value.replaceAll("'", "''")}'`;

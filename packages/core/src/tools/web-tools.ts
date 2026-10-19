@@ -47,7 +47,7 @@ interface WeatherPoint {
   pop?: number;
 }
 
-const KEYLESS_AGENT = 'Mimi/0.3 (personal assistant; https://github.com/Nbcybg/Project-Mimi)';
+const KEYLESS_AGENT = 'Mimi/0.4 (personal assistant; https://github.com/Nbcybg/Project-Mimi)';
 
 /** Text of an HTML fragment: tags dropped, the common entities decoded, spaces folded. */
 function htmlText(fragment: string): string {

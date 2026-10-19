@@ -14,7 +14,9 @@ FROM node:24-bookworm-slim
 ENV NODE_ENV=production \
     MIMI_HOST=0.0.0.0 \
     MIMI_PORT=8787 \
-    MIMI_LOCAL_PC_TOOLS=0
+    MIMI_LOCAL_PC_TOOLS=0 \
+    MIMI_USER=/app/user \
+    MIMI_BACKUP_DIR=/app/backups
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json mimi.json ./

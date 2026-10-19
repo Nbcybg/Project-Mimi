@@ -48,6 +48,7 @@
   let moodKey = null; // last emoji of the newest reply in this chat
   let shown = { path: '', outfit: '' }; // what the figure shows now
   let pending = '';
+  let retries = 0; // failed loads of the current picture
 
   const directAgent = () => {
     const chat = M().state.chat;
@@ -107,9 +108,12 @@
         }
         wrap.append(image);
         shown = { path: target.path, outfit: target.outfit };
+        retries = 0;
       })
       .catch(() => {
         if (pending === target.path) pending = '';
+        // A picture that failed to load (the app was still starting) is tried again.
+        if (retries++ < 3) setTimeout(refresh, 2000);
       });
   }
 

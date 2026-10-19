@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 export interface CoreConfig {
@@ -86,10 +88,32 @@ function positiveInt(value: string | undefined, fallback: number): number {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+/** The user's Documents folder (falls back to the home folder where there is none). */
+export function documentsDir(env: NodeJS.ProcessEnv = process.env): string {
+  const home = env.USERPROFILE || env.HOME || os.homedir();
+  const documents = path.join(home, 'Documents');
+  return fs.existsSync(documents) ? documents : home;
+}
+
+/**
+ * Where the user's own data lives. MIMI_USER picks any folder; MIMI_ROOT (a server, a
+ * test) keeps everything in "<root>/user". Otherwise it is "Documents/Mimi", outside the
+ * app, so updating or deleting the app never touches it. An install from before the move
+ * keeps using its old "<app>/user" until the desktop app moves it (launcher).
+ */
+export function resolveUserDir(rootDir: string, env: NodeJS.ProcessEnv = process.env): { userDir: string; legacy: boolean } {
+  if (env.MIMI_USER) return { userDir: path.resolve(rootDir, env.MIMI_USER), legacy: false };
+  const legacy = path.join(rootDir, 'user');
+  if (env.MIMI_ROOT) return { userDir: legacy, legacy: true };
+  const home = path.join(documentsDir(env), 'Mimi');
+  if (!fs.existsSync(home) && fs.existsSync(path.join(legacy, 'data'))) return { userDir: legacy, legacy: true };
+  return { userDir: home, legacy: false };
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
   const rootDir = env.MIMI_ROOT ? path.resolve(env.MIMI_ROOT) : REPO_ROOT;
   // The user workspace: what a person can carry to another machine or publish.
-  const userDir = path.resolve(rootDir, env.MIMI_USER ?? 'user');
+  const { userDir, legacy } = resolveUserDir(rootDir, env);
   // Machine-local state lives inside it, so one folder is the whole install.
   const dataDir = path.join(userDir, 'data');
   const allowedDirs = (env.ALLOWED_DIRS ?? '')
@@ -122,7 +146,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
     userProfilePath: path.join(userDir, 'profile.json'),
     userProfileLocalPath: path.join(dataDir, 'profile-local.json'),
     pushKeysPath: path.join(dataDir, 'push-vapid.json'),
-    backupsDir: path.resolve(rootDir, env.MIMI_BACKUP_DIR ?? 'backups'),
+    // Backups sit next to the data they save (the backup itself skips "backups/").
+    backupsDir: env.MIMI_BACKUP_DIR
+      ? path.resolve(rootDir, env.MIMI_BACKUP_DIR)
+      : legacy
+        ? path.join(rootDir, 'backups')
+        : path.join(userDir, 'backups'),
     pushContact: env.MIMI_PUSH_CONTACT ?? 'mailto:mimi@localhost',
     workflowsDir: path.join(userDir, 'workflows'),
     workflowStatePath: path.join(dataDir, 'workflow-state.json'),

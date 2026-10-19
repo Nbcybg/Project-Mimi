@@ -104,7 +104,7 @@ export const CUSTOM_PROVIDER_NPM = '@ai-sdk/openai-compatible';
 const DEFAULT_CONTEXT_LIMIT = 128_000;
 
 /** How this app names itself to provider gateways. */
-const CLIENT_USER_AGENT = 'mimi/0.3.0';
+const CLIENT_USER_AGENT = 'mimi/0.4.0';
 
 /**
  * opencode's gateways ask clients to identify themselves with their own user agent and a

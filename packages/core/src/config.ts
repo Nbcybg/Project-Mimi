@@ -22,6 +22,8 @@ export interface CoreConfig {
   catalogUrl: string | undefined;
   /** One file per skill: `skills/<name>.md`. */
   skillsDir: string;
+  /** One folder per outfit: `wardrobe/<id>/` (outfit.json + picture). */
+  wardrobeDir: string;
   /** One file per tool (`tools/<name>.json`) and tool presets (`tools/presets/<name>.json`). */
   toolsDir: string;
   /** Trigger definitions mirrored as `triggers/<id>.json` for syncing. */
@@ -105,6 +107,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
     catalogOffline: env.MIMI_MODELS_OFFLINE === '1' || env.MIMI_MODELS_OFFLINE === 'true',
     catalogUrl: env.MIMI_MODELS_URL || undefined,
     skillsDir: path.join(userDir, 'skills'),
+    wardrobeDir: path.join(userDir, 'wardrobe'),
     toolsDir: path.join(userDir, 'tools'),
     triggersDir: path.join(userDir, 'triggers'),
     personaPath: path.join(userDir, 'persona.md'),

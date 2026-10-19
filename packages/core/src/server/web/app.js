@@ -612,6 +612,7 @@
       scrollDown();
     }
     state.highlight = null;
+    window.MimiHooks?.stage?.reset(history.messages);
   }
   function olderButton(first) {
     const node = el('div', 'divider');
@@ -724,6 +725,7 @@
           live.body.append(live.bubble);
         }
         live.raw += event.text;
+        window.MimiHooks?.stage?.onText(live.raw);
         const stick = pinned();
         renderText(live.bubble, live.raw);
         if (stick) scrollDown();
@@ -836,31 +838,16 @@
         const value = direct.status && direct.status[key];
         if (!value) continue;
         const chip = el('span', `st${key === 'mood' ? ' mood' : ''}`);
-        chip.append(el('b', '', label), el('span', '', value));
+        // An outfit set by wardrobe id shows its name.
+        const outfit = key === 'outfit' && (state.wardrobe || []).find((item) => item.id === value);
+        chip.append(el('b', '', label), el('span', '', outfit ? `${outfit.name} (${value})` : value));
         chips.push(chip);
       }
     }
     bar.replaceChildren(...chips);
     bar.hidden = chips.length === 0;
 
-    const figure = $('figure');
-    const portrait = direct && direct.portrait;
-    $('stage').classList.toggle('has-figure', Boolean(portrait));
-    figure.hidden = !portrait;
-    if (portrait) {
-      const path = `/api/agent-image/${encodeURIComponent(direct.name)}/portrait?v=${portrait}`;
-      if (figure.dataset.path !== path) {
-        figure.dataset.path = path;
-        figure.removeAttribute('src');
-        blobUrl(path)
-          .then((url) => {
-            if (figure.dataset.path === path) figure.src = url;
-          })
-          .catch(() => {});
-      }
-    } else {
-      delete figure.dataset.path;
-    }
+    window.MimiHooks?.stage?.refresh();
 
     $('box').hidden = !chat || !state.latest;
     $('old-session').hidden = !chat || state.latest;
@@ -1366,6 +1353,7 @@
     systemPrompt.value = agent ? agent.systemPrompt : '';
     systemPrompt.placeholder = 'System prompt: บุคลิก กฎ และวิธีทำงานของ agent นี้';
     form.append(labelled('System prompt', systemPrompt));
+    form.append(el('p', 'hint', 'ตัวแปรใน prompt: {{user}} = ผู้ใช้ · {{char}} = agent ตัวนี้ · {{id ของ agent}} เช่น {{tim}} = ชื่อ agent นั้น'));
 
     if (agent) {
       form.append(el('h4', '', 'รูปของ agent'));
@@ -1413,6 +1401,9 @@
         pictures.append(picture);
       }
       form.append(pictures);
+      form.append(el('h4', '', 'รูปตามอีโมจิ (ของ agent เอง)'));
+      form.append(el('p', 'hint', 'agent ส่งอีโมจิไหน ก็เปลี่ยนเป็นรูปนั้นในแชต (ถ้าชุดที่ใส่อยู่ไม่มีรูปสำหรับอีโมจินั้น) · รูปที่ผูกกับชุดตั้งที่ Hub → ตู้เสื้อผ้า'));
+      form.append(window.MimiHooks.stage.spriteEditor('agent', agent.name, agent.sprites || {}));
     } else {
       form.append(el('p', 'hint', 'บันทึก agent ก่อน แล้วจึงใส่รูปโปรไฟล์และรูปเต็มตัวได้'));
     }
@@ -1510,6 +1501,7 @@
     ['tools', 'เครื่องมือ'],
     ['triggers', 'Trigger'],
     ['knowledge', 'คลังความรู้'],
+    ['wardrobe', 'ตู้เสื้อผ้า'],
     ['links', 'MCP / CLI'],
   ];
   function renderHub() {
@@ -1524,7 +1516,8 @@
       );
     }
     const knowledge = () => (window.MimiHooks && window.MimiHooks.knowledge ? window.MimiHooks.knowledge.render() : el('div'));
-    const body = { models: hubModels, skills: hubSkills, tools: hubTools, triggers: hubTriggers, knowledge, links: hubLinks }[ui.hubTab]();
+    const wardrobe = () => (window.MimiHooks && window.MimiHooks.wardrobe ? window.MimiHooks.wardrobe.render() : el('div'));
+    const body = { models: hubModels, skills: hubSkills, tools: hubTools, triggers: hubTriggers, knowledge, wardrobe, links: hubLinks }[ui.hubTab]();
     page.replaceChildren(pageHead('Hub', 'ของกลางที่ agent และ skill หยิบไปใช้: ตั้งค่าที่เดียว ใช้ได้ทุกตัว'), tabs, body);
   }
   const shown = (value) => (value === undefined || value === null ? '—' : String(value));
@@ -2481,6 +2474,11 @@
           window.MimiHooks.knowledge.onMessage(message);
         }
         if (message.type.startsWith('knowledge')) return;
+        if (message.type === 'wardrobe') {
+          window.MimiHooks?.wardrobe?.onMessage(message);
+          window.MimiHooks?.stage?.refresh();
+          return;
+        }
         if (['notifications', 'notification', 'push-key', 'push-devices'].includes(message.type)) {
           window.MimiHooks?.notify?.onMessage(message);
           // A live notification still gets its toast below.

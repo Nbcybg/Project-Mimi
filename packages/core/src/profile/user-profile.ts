@@ -110,6 +110,16 @@ export class UserProfileStore {
     );
   }
 
+  /** What the agent calls the user: "call me", else nickname, else full name; empty when it may see none. */
+  displayName(agent: string): string {
+    const fields = this.visibleTo(agent);
+    for (const key of ['call_me', 'nickname', 'full_name']) {
+      const value = fields.find((field) => field.key === key)?.value.trim();
+      if (value) return value;
+    }
+    return '';
+  }
+
   /** The prompt block for an agent; empty when it may see nothing. */
   render(agent: string): string {
     const fields = this.visibleTo(agent);

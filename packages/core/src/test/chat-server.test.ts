@@ -232,3 +232,48 @@ test('hubs over the socket: model pool, skills, status and agent pictures', asyn
   assert.equal((await app.api('/api/agent-image/mimi/avatar')).status, 404);
   await app.stop();
 });
+
+test('wardrobe and emoji pictures over the socket and HTTP', async () => {
+  const app = await boot();
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const upload = (url: string, type = 'image/png') => app.api(url, { method: 'POST', body: png, headers: { 'content-type': type } });
+  const refuse = async (message: ClientMessage, pattern: RegExp) => {
+    const error = await app.ask(message, 'error');
+    assert.match(error.message, pattern);
+  };
+
+  const list = await app.ask({ type: 'wardrobe-save', outfit: { id: 'wa01', name: 'ชุดทำงาน', description: 'เชิ้ตขาว' } }, 'wardrobe');
+  assert.deepEqual(list.outfits.map((outfit) => [outfit.id, outfit.name, outfit.sprites]), [['wa01', 'ชุดทำงาน', {}]]);
+  await refuse({ type: 'wardrobe-save', outfit: { id: 'mimi' } }, /id of an agent/);
+  await refuse({ type: 'agent-save', agent: { name: 'wa01', description: '', canMessage: [], systemPrompt: 'x', tools: [], models: {}, budgets: { maxRounds: 3, maxTokens: 1000 } } }, /id of an outfit/);
+
+  // An outfit's emoji picture: bad type / bad key / unknown owner are refused.
+  assert.equal((await upload('/api/sprite/outfit/wa01/1f60a', 'text/html')).status, 400);
+  assert.equal((await upload('/api/sprite/outfit/wa01/smile')).status, 400);
+  assert.equal((await upload('/api/sprite/outfit/ghost/1f60a')).status, 404);
+  assert.equal((await upload('/api/sprite/agent/ghost/1f60a')).status, 404);
+  assert.equal((await app.api('/api/sprite/outfit/wa01/1f60a')).status, 404);
+  const changed = app.ask(null, 'wardrobe', (reply) => Boolean(reply.outfits[0]?.sprites['1f60a']));
+  assert.equal((await upload('/api/sprite/outfit/wa01/1f60a')).status, 200);
+  assert.deepEqual(Object.keys((await changed).outfits[0]!.sprites), ['1f60a']);
+  const fetched = await app.api('/api/sprite/outfit/wa01/1f60a');
+  assert.deepEqual([fetched.headers.get('content-type'), Buffer.from(await fetched.arrayBuffer()).equals(png)], ['image/png', true]);
+
+  // The sprites move with the outfit when its id changes.
+  const renamed = await app.ask({ type: 'wardrobe-save', renameFrom: 'wa01', outfit: { id: 'work', name: 'ชุดทำงาน' } }, 'wardrobe');
+  assert.deepEqual(renamed.outfits.map((outfit) => [outfit.id, Object.keys(outfit.sprites)]), [['work', ['1f60a']]]);
+
+  // The agent's own set is announced with the agent and moves with a rename.
+  const pictured = app.ask(null, 'agents', (reply) => Object.keys(reply.agents.find((agent) => agent.name === 'mimi')?.sprites ?? {}).length > 0);
+  assert.equal((await upload('/api/sprite/agent/mimi/2764')).status, 200);
+  assert.deepEqual(Object.keys((await pictured).agents.find((agent) => agent.name === 'mimi')!.sprites!), ['2764']);
+  const agents = await app.ask({ type: 'agents-list' }, 'agents');
+  const mimi = agents.agents.find((agent) => agent.name === 'mimi')!;
+  const moved = await app.ask({ type: 'agent-save', renameFrom: 'mimi', agent: { ...mimi, name: 'mimi2', models: {} } }, 'agents');
+  assert.deepEqual(Object.keys(moved.agents.find((agent) => agent.name === 'mimi2')!.sprites!), ['2764']);
+  assert.equal((await app.api('/api/sprite/agent/mimi2/2764')).status, 200);
+
+  await app.ask({ type: 'wardrobe-delete', id: 'work' }, 'wardrobe');
+  assert.equal((await app.api('/api/sprite/outfit/work/1f60a')).status, 404);
+  await app.stop();
+});

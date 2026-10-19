@@ -58,9 +58,13 @@ export class StatusStore {
   }
 
   /** The snapshot placed at the bottom of the prompt. Empty when nothing is set. */
-  render(agent: string): string {
+  render(agent: string, describeOutfit?: (value: string) => string | undefined): string {
     const status = this.get(agent);
-    const lines = STATUS_KEYS.filter((key) => status[key]).map((key) => `${key}: ${status[key]}`);
+    const lines = STATUS_KEYS.filter((key) => status[key]).map((key) => {
+      // An outfit set by wardrobe id also shows what that outfit is.
+      const detail = key === 'outfit' ? describeOutfit?.(status[key]!) : undefined;
+      return detail ? `${key}: ${status[key]} = ${detail}` : `${key}: ${status[key]}`;
+    });
     return lines.length > 0 ? `Your current status:\n${lines.join('\n')}` : '';
   }
 }

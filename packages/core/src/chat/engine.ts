@@ -5,6 +5,7 @@ import type { AgentCatalog, AgentDefinition } from '../agents/loader.ts';
 import type { MessagesRepo } from '../db/messages-repo.ts';
 import type { RunInput } from '../loop/agent-loop.ts';
 import { groupInstructions } from '../loop/prompt-builder.ts';
+import { renderPromptVars } from '../loop/prompt-vars.ts';
 import type { ModelService } from '../providers/routing.ts';
 import type { UsageLogger } from '../usage/logger.ts';
 import {
@@ -157,7 +158,11 @@ export class ChatEngine {
 
     const roster = members.map((member) => ({
       name: member.name,
-      description: [member.description, member.intro?.replace(/\s+/g, ' ')].filter(Boolean).join(' — '),
+      // {{char}} in a member's card means that member, not the agent reading the roster.
+      description: renderPromptVars(
+        [member.description, member.intro?.replace(/\s+/g, ' ')].filter(Boolean).join(' — '),
+        new Map([['char', member.displayName || member.name]]),
+      ),
     }));
     let pendingUserText: string | undefined = userText;
     let lastFinish: RunFinish | undefined;

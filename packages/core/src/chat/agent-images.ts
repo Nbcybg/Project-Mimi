@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { SpriteSet } from '../wardrobe/sprite-set.ts';
 
 /** `avatar` is the small profile picture; `portrait` is the large picture shown behind a chat. */
 export const IMAGE_SLOTS = ['avatar', 'portrait'] as const;
@@ -13,6 +14,7 @@ const TYPES: Record<string, string> = {
 };
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const AGENT_NAME = /^[a-z][a-z0-9_-]*$/;
+const SPRITES_DIR = 'sprites';
 
 export function isImageSlot(value: string): value is ImageSlot {
   return (IMAGE_SLOTS as readonly string[]).includes(value);
@@ -41,6 +43,12 @@ export class AgentImages {
       if (fs.existsSync(file)) return { file, mime };
     }
     return undefined;
+  }
+
+  /** The agent's own expression pictures (used when the outfit has none for an emoji). */
+  sprites(agent: string): SpriteSet | undefined {
+    const folder = this.folder(agent);
+    return folder ? new SpriteSet(path.join(folder, SPRITES_DIR)) : undefined;
   }
 
   read(agent: string, slot: ImageSlot): { data: Buffer; mime: string } | undefined {
@@ -83,6 +91,11 @@ export class AgentImages {
       this.remove(to, slot);
       fs.mkdirSync(target, { recursive: true });
       fs.renameSync(found.file, path.join(target, `${slot}${path.extname(found.file)}`));
+    }
+    const sprites = this.folder(from) && path.join(this.folder(from)!, SPRITES_DIR);
+    if (sprites && fs.existsSync(sprites)) {
+      fs.mkdirSync(target, { recursive: true });
+      fs.renameSync(sprites, path.join(target, SPRITES_DIR));
     }
   }
 }

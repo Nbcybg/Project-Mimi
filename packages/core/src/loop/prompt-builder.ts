@@ -2,6 +2,7 @@ import type { MessageRole, StoredMessage } from '@mimi/shared';
 import type { ModelMessage, SystemModelMessage } from 'ai';
 import type { AgentDefinition } from '../agents/loader.ts';
 import type { Summary } from '../db/thread-repo.ts';
+import { renderPromptVars, type PromptVars } from './prompt-vars.ts';
 
 const TOOL_TEXT_LIMIT = 500;
 
@@ -87,10 +88,16 @@ export function buildSystem(parts: {
   extras?: string;
   memorySnapshot: string;
   summaries: Summary[];
+  /** Values for {{user}}, {{char}}, {{agent id}} in the persona and extras. */
+  vars?: PromptVars;
 }): SystemModelMessage[] {
-  const blocks = [buildInstructions(parts.agent, parts.workingDir), parts.extras, parts.memorySnapshot];
+  const identity = parts.vars
+    ? `## Who is who\n- Your name: ${parts.vars.get('char')} (agent id: ${parts.agent.name}). The person you talk to: ${parts.vars.get('user')}.`
+    : '';
+  const blocks = [buildInstructions(parts.agent, parts.workingDir), identity, parts.extras, parts.memorySnapshot];
+  const text = blocks.filter(Boolean).join('\n\n');
   const system: SystemModelMessage[] = [
-    { role: 'system', content: blocks.filter(Boolean).join('\n\n') },
+    { role: 'system', content: parts.vars ? renderPromptVars(text, parts.vars) : text },
   ];
   if (parts.summaries.length > 0) {
     system.push({

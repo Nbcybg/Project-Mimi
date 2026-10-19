@@ -5,8 +5,12 @@ import { z } from 'zod';
 import { REASONING_EFFORTS, type ReasoningEffort } from '@mimi/shared';
 import type { ModelSelection } from '../providers/routing.ts';
 import { modelRefString } from '../providers/settings.ts';
+import { RESERVED_NAMES } from '../loop/prompt-vars.ts';
 
-const agentName = z.string().regex(/^[a-z][a-z0-9_-]*$/, 'lowercase letters, digits, "-" or "_"');
+const agentName = z
+  .string()
+  .regex(/^[a-z][a-z0-9_-]*$/, 'lowercase letters, digits, "-" or "_"')
+  .refine((name) => !(RESERVED_NAMES as readonly string[]).includes(name), '"user" and "char" are reserved for prompts');
 const AGENT_NAME = /^[a-z][a-z0-9_-]*$/;
 /** Every agent is a folder of its own: the definition sits in `agent.md`. */
 export const AGENT_FILE = 'agent.md';

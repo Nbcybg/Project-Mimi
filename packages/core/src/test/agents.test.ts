@@ -104,6 +104,7 @@ test('the app starts with no agents; they are created, edited, renamed and delet
     status: {},
     avatar: null,
     portrait: null,
+    sprites: {},
   });
   const source = fs.readFileSync(agentFile('mimi'), 'utf8');
   for (const line of ['model: lab/chat-cheap', 'vision_model: lab/eyes', 'transcript_model: lab/ears', 'small_model: lab/chat-cheap']) {

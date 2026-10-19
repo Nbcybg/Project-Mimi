@@ -73,6 +73,8 @@ const WEB_FILES: Record<string, [string, string]> = {
   '/feature-secrets.js': ['feature-secrets.js', 'text/javascript; charset=utf-8'],
   '/feature-chat.js': ['feature-chat.js', 'text/javascript; charset=utf-8'],
   '/feature-knowledge.js': ['feature-knowledge.js', 'text/javascript; charset=utf-8'],
+  '/feature-wardrobe.js': ['feature-wardrobe.js', 'text/javascript; charset=utf-8'],
+  '/feature-stage.js': ['feature-stage.js', 'text/javascript; charset=utf-8'],
   '/feature-canvas.js': ['feature-canvas.js', 'text/javascript; charset=utf-8'],
   '/feature-profile.js': ['feature-profile.js', 'text/javascript; charset=utf-8'],
   '/feature-notify.js': ['feature-notify.js', 'text/javascript; charset=utf-8'],
@@ -186,6 +188,7 @@ export async function startServer(
         status: core.status.get(name),
         avatar: images.version(name, 'avatar'),
         portrait: images.version(name, 'portrait'),
+        sprites: images.sprites(name)?.list() ?? {},
       };
     }),
     tools: core.tools.views(),
@@ -228,6 +231,7 @@ export async function startServer(
       if (!known.includes(peer)) throw new Error(`Agent "${peer}" does not exist.`);
     }
     if (renameFrom !== name && known.includes(name)) throw new Error(`An agent named "${name}" already exists.`);
+    if (core.wardrobe.has(name)) throw new Error(`"${name}" is already the id of an outfit; {{${name}}} cannot mean both.`);
 
     saveAgent(config.agentsDir, {
       name,
@@ -907,6 +911,21 @@ export async function startServer(
       case 'profile-save':
         broadcast({ type: 'profile', profile: core.profile.save(message.profile, core.agents.names()), saved: true });
         break;
+      case 'wardrobe-list':
+        reply({ type: 'wardrobe', outfits: core.wardrobe.list() });
+        break;
+      case 'wardrobe-save': {
+        const outfit = message.outfit;
+        const from = message.renameFrom ? String(message.renameFrom) : '';
+        if (from && from !== outfit.id) core.wardrobe.rename(from, String(outfit.id));
+        const saved = core.wardrobe.save(outfit);
+        broadcast({ type: 'wardrobe', outfits: core.wardrobe.list(), saved: saved.id });
+        break;
+      }
+      case 'wardrobe-delete':
+        core.wardrobe.remove(String(message.id));
+        broadcast({ type: 'wardrobe', outfits: core.wardrobe.list() });
+        break;
       case 'knowledge-list':
         reply({ type: 'knowledge', collections: core.knowledge.collections() });
         break;
@@ -1052,6 +1071,8 @@ export async function startServer(
   const httpApi = {
     attachments: core.attachments,
     images,
+    wardrobe: core.wardrobe,
+    wardrobeChanged: () => broadcast({ type: 'wardrobe', outfits: core.wardrobe.list() }),
     authorized: (request: http.IncomingMessage) => {
       const address = addressOf(request);
       if (limiter.blocked(address)) return false;

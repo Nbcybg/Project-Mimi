@@ -20,6 +20,8 @@ import { ThreadRepo } from './db/thread-repo.ts';
 import { GoogleAuth } from './google/auth.ts';
 import { gmailListUnread, gmailMarkRead } from './google/tools.ts';
 import { type AgentLoopDeps, runAgent, type RunInput } from './loop/agent-loop.ts';
+import { buildPromptVars } from './loop/prompt-vars.ts';
+import { WardrobeStore } from './wardrobe/wardrobe-store.ts';
 import { Compactor } from './memory/compactor.ts';
 import { MemoryFiles } from './memory/files.ts';
 import { describeCompaction, PostTurnJobs } from './memory/post-turn.ts';
@@ -108,6 +110,8 @@ export interface Core {
   engine: ChatEngine;
   status: StatusStore;
   memos: MemoStore;
+  /** The outfit pool; `{{id}}` in a prompt expands to the outfit. */
+  wardrobe: WardrobeStore;
   attachments: AttachmentStore;
   /** The skill hub as it is on disk right now. */
   skills(): Skill[];
@@ -251,6 +255,7 @@ export async function createCore(
   const chats = new ChatStore(db);
   const status = new StatusStore(db);
   const memos = new MemoStore(db);
+  const wardrobe = new WardrobeStore(config.wardrobeDir, () => agents.names());
   const attachments = new AttachmentStore(db, config.filesDir);
 
   // The database stays the source of truth; the mirrors under `user/sessions`,
@@ -482,9 +487,25 @@ export async function createCore(
           : agent.tools.includes('load_skill')
             ? renderSkillIndex(currentSkills())
             : '';
-      return [persona, profileBlock(agent.name), index].filter(Boolean).join('\n\n');
+      return [persona, profileBlock(agent.name), index, agent.tools.includes('status_set') ? wardrobe.renderIndex() : '']
+        .filter(Boolean)
+        .join('\n\n');
     },
-    contextExtras: (agent) => status.render(agent.name),
+    promptVars: (agent) => {
+      let userName = '';
+      try {
+        userName = profile.displayName(agent.name);
+      } catch {
+        // a broken profile file only costs the name
+      }
+      return buildPromptVars({
+        userName: userName || 'the user',
+        self: agent,
+        agents: agents.list(),
+        extra: wardrobe.promptEntries(),
+      });
+    },
+    contextExtras: (agent) => status.render(agent.name, (outfit) => wardrobe.promptEntries()[outfit]),
     media: attachments,
     extraTools: (agent) => {
       const own = skillsOf(agent);
@@ -1123,6 +1144,7 @@ export async function createCore(
     engine,
     status,
     memos,
+    wardrobe,
     attachments,
     skills: currentSkills,
     tools: toolPool,

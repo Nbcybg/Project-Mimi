@@ -4,6 +4,7 @@ import type http from 'node:http';
 import type { AttachmentView } from '@mimi/shared';
 import { type AgentImages, isImageSlot } from '../chat/agent-images.ts';
 import { type Attachment, type AttachmentStore, MAX_ATTACHMENT_BYTES } from '../chat/attachments.ts';
+import type { WardrobeStore } from '../wardrobe/wardrobe-store.ts';
 
 /** What the webhook endpoint answers: a `respond` node may shape all of it. */
 export interface WebhookReply {
@@ -17,6 +18,9 @@ export interface WebhookReply {
 export interface HttpApiDeps {
   attachments: AttachmentStore;
   images: AgentImages;
+  wardrobe: WardrobeStore;
+  /** Called after an outfit's picture changed. */
+  wardrobeChanged(): void;
   /** True when the request carries the shared token. */
   authorized(request: http.IncomingMessage): boolean;
   agentExists(name: string): boolean;
@@ -168,6 +172,45 @@ export async function handleHttpApi(
           deps.images.save(agent, slot, mime, await readBody(request, 8 * 1024 * 1024));
         }
         deps.imagesChanged();
+        sendJson(response, 200, { ok: true });
+      } else {
+        throw new HttpError(405, 'Method not allowed.');
+      }
+    } else if (resource === 'sprite' && rest.length === 3) {
+      // /api/sprite/<outfit|agent>/<id>/<emoji key>
+      const [scope, id, key] = rest as [string, string, string];
+      const set = scope === 'outfit' ? deps.wardrobe.sprites(id) : scope === 'agent' && deps.agentExists(id) ? deps.images.sprites(id) : undefined;
+      if (!set) throw new HttpError(404, `No ${scope === 'outfit' ? 'outfit' : 'agent'} "${id}".`);
+      if (request.method === 'GET') {
+        const image = set.read(key);
+        if (!image) throw new HttpError(404, 'No picture.');
+        sendBytes(response, image.data, image.mime);
+      } else if (request.method === 'POST' || request.method === 'DELETE') {
+        if (request.method === 'DELETE') set.remove(key);
+        else {
+          const mime = String(request.headers['content-type'] ?? '').split(';')[0]!.trim();
+          set.save(key, mime, await readBody(request, 8 * 1024 * 1024));
+        }
+        if (scope === 'outfit') deps.wardrobeChanged();
+        else deps.imagesChanged();
+        sendJson(response, 200, { ok: true });
+      } else {
+        throw new HttpError(405, 'Method not allowed.');
+      }
+    } else if (resource === 'wardrobe-image' && rest.length === 1) {
+      const id = rest[0]!;
+      if (request.method === 'GET') {
+        const image = deps.wardrobe.readImage(id);
+        if (!image) throw new HttpError(404, 'No picture.');
+        sendBytes(response, image.data, image.mime);
+      } else if (request.method === 'POST' || request.method === 'DELETE') {
+        if (!deps.wardrobe.has(id)) throw new HttpError(404, `No outfit "${id}".`);
+        if (request.method === 'DELETE') deps.wardrobe.removeImage(id);
+        else {
+          const mime = String(request.headers['content-type'] ?? '').split(';')[0]!.trim();
+          deps.wardrobe.saveImage(id, mime, await readBody(request, 8 * 1024 * 1024));
+        }
+        deps.wardrobeChanged();
         sendJson(response, 200, { ok: true });
       } else {
         throw new HttpError(405, 'Method not allowed.');

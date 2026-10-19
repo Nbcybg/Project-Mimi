@@ -249,6 +249,8 @@ export interface AgentView {
   status?: AgentStatusView;
   avatar?: string | null;
   portrait?: string | null;
+  /** Expression pictures by emoji key (see SPRITE_KEY), each with a version. */
+  sprites?: Record<string, string>;
 }
 
 export interface ToolView {
@@ -277,7 +279,7 @@ export interface ToolPoolView {
   mcp?: McpServerView[];
 }
 
-import type { KnowledgeCollectionView, KnowledgeDocumentView, KnowledgeHit, UserProfileView } from './knowledge.ts';
+import type { KnowledgeCollectionView, KnowledgeDocumentView, KnowledgeHit, UserProfileView, WardrobeOutfitView } from './knowledge.ts';
 
 /** The importer's account of an n8n conversion. */
 export interface N8nImportReportView {
@@ -488,6 +490,10 @@ export type ClientMessage =
   | { type: 'profile-save'; profile: UserProfileView }
   /** Knowledge bases: list, create / edit, delete. */
   | { type: 'knowledge-list' }
+  | { type: 'wardrobe-list' }
+  /** Saves an outfit; `renameFrom` moves an existing one to a new id. */
+  | { type: 'wardrobe-save'; outfit: { id: string; name?: string; description?: string }; renameFrom?: string }
+  | { type: 'wardrobe-delete'; id: string }
   | { type: 'knowledge-save'; collection: { name: string; title?: string; description?: string; embeddingModel?: string | null; agents?: string[] } }
   | { type: 'knowledge-delete'; name: string }
   | { type: 'knowledge-documents'; collection: string }
@@ -586,6 +592,7 @@ export type ServerMessage =
   | { type: 'workflow-node-result'; result: WorkflowNodeTestResult }
   | { type: 'workflow-runs'; workflow: string; runs: WorkflowRunSummary[] }
   | { type: 'knowledge'; collections: KnowledgeCollectionView[]; saved?: string }
+  | { type: 'wardrobe'; outfits: WardrobeOutfitView[]; saved?: string }
   | { type: 'profile'; profile: UserProfileView; saved?: boolean }
   | { type: 'notifications'; items: NotificationItem[]; unread: number }
   | { type: 'backups'; backups: Array<{ name: string; bytes: number; createdAt: string }>; dir: string; created?: string }

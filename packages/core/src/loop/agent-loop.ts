@@ -27,6 +27,7 @@ import type { ModelService } from '../providers/routing.ts';
 import type { ToolExecutor } from '../tools/executor.ts';
 import type { ToolContext, ToolDefinition, ToolSource } from '../tools/registry.ts';
 import type { UsageLogger } from '../usage/logger.ts';
+import type { PromptVars } from './prompt-vars.ts';
 import {
   buildHistory,
   buildSystem,
@@ -58,6 +59,8 @@ export interface AgentLoopDeps {
   workingDir?: () => string | undefined;
   /** Stable text appended to every agent's instructions (persona file, skill index). */
   promptExtras?: (agent: AgentDefinition) => string;
+  /** Values for {{user}}, {{char}} and {{agent id}} in an agent's instructions. */
+  promptVars?: (agent: AgentDefinition) => PromptVars;
   /** Lines for the volatile block at the bottom of the prompt (the agent's status). */
   contextExtras?: (agent: AgentDefinition) => string;
   /** Tools that exist only for this run (the agent's skills). */
@@ -275,6 +278,7 @@ export async function* runAgent(deps: AgentLoopDeps, input: RunInput): AsyncGene
     extras: [deps.promptExtras?.(agent), input.instructions].filter(Boolean).join('\n\n'),
     memorySnapshot: state.memorySnapshot,
     summaries: deps.threads.activeSummaries(thread),
+    vars: deps.promptVars?.(agent),
   });
   // Without a message of its own (a group member answering the others), the run still
   // stores a row: it carries the volatile block, so the prompt can be rebuilt byte for byte.

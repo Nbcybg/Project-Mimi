@@ -61,3 +61,14 @@ export interface UserProfileField {
 export interface UserProfileView {
   fields: UserProfileField[];
 }
+
+/** An outfit in the wardrobe pool; agents and prompts refer to it by `id` (e.g. wa01). */
+export interface WardrobeOutfitView {
+  id: string;
+  name: string;
+  description: string;
+  /** Changes whenever the picture does; null when there is none. */
+  image: string | null;
+  /** This outfit's expression pictures by emoji key, each with a version. */
+  sprites: Record<string, string>;
+}

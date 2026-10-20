@@ -24,6 +24,8 @@ interface MessageRow {
   reply_to: number | null;
   forward_from: string | null;
   forward_chat: string | null;
+  pinned_at: string | null;
+  reactions: string | null;
   created_at: string;
 }
 
@@ -40,6 +42,8 @@ function toMessage(row: MessageRow): StoredMessage {
     replyTo: row.reply_to ?? undefined,
     forwardFrom: row.forward_from ?? undefined,
     forwardChat: row.forward_chat ?? undefined,
+    pinnedAt: row.pinned_at ?? undefined,
+    reactions: row.reactions ? (JSON.parse(row.reactions) as string[]) : undefined,
     createdAt: row.created_at,
   };
 }
@@ -92,6 +96,35 @@ export class MessagesRepo {
         forwardFrom: meta.forwardFrom ?? null,
         forwardChat: meta.forwardChat ?? null,
       });
+  }
+
+  /** Pins a message or removes the pin. */
+  setPinned(id: number, pinned: boolean): void {
+    this.db
+      .prepare(`UPDATE messages SET pinned_at = CASE WHEN @pinned THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now') ELSE NULL END WHERE id = @id`)
+      .run({ id, pinned: pinned ? 1 : 0 });
+  }
+
+  /** Adds `emoji` to the reactions of a message, or removes it when it is there. Returns the new list. */
+  toggleReaction(id: number, emoji: string): string[] {
+    const row = this.db.prepare(`SELECT reactions FROM messages WHERE id = ?`).get(id) as { reactions: string | null } | undefined;
+    const current: string[] = row?.reactions ? (JSON.parse(row.reactions) as string[]) : [];
+    const next = current.includes(emoji) ? current.filter((entry) => entry !== emoji) : [...current, emoji];
+    this.db.prepare(`UPDATE messages SET reactions = ? WHERE id = ?`).run(next.length > 0 ? JSON.stringify(next) : null, id);
+    return next;
+  }
+
+  /** The pinned messages of these threads, newest pin first. */
+  pinned(threads: string[]): StoredMessage[] {
+    if (threads.length === 0) return [];
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM messages
+          WHERE thread IN (${threads.map(() => '?').join(', ')}) AND pinned_at IS NOT NULL AND hidden_at IS NULL
+          ORDER BY pinned_at DESC, id DESC`,
+      )
+      .all(...threads) as MessageRow[];
+    return rows.map(toMessage);
   }
 
   /** Messages of a thread with id > `afterId`, oldest first. */

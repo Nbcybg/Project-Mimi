@@ -21,5 +21,9 @@ export interface StoredMessage {
   /** When forwarded: who wrote the original, and where. */
   forwardFrom?: string;
   forwardChat?: string;
+  /** When the user pinned this message. */
+  pinnedAt?: string;
+  /** Emoji the user reacted with. */
+  reactions?: string[];
   createdAt: string;
 }

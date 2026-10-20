@@ -91,6 +91,20 @@ export interface ChatMessageView {
   forwardedFrom?: { from: string; chat: string } | null;
   /** Set when a workflow asks the user to approve something with this message. */
   approval?: ApprovalView | null;
+  /** Set while the user has this message pinned. */
+  pinned?: boolean;
+  /** Emoji the user reacted with, in the order they were added. */
+  reactions?: string[];
+}
+
+/** A pinned message, as the pin bar lists it. */
+export interface PinView {
+  id: number;
+  sessionId: number;
+  role: MessageRole;
+  agent: string;
+  text: string;
+  createdAt: string;
 }
 
 export interface ApprovalView {
@@ -445,6 +459,10 @@ export type ClientMessage =
   | { type: 'chat-send'; chatId: number; text: string; attachments?: string[]; replyTo?: number; forward?: { from: string; chat: string } }
   /** Starts a new session by hand; the next message goes there. */
   | { type: 'session-new'; chatId: number }
+  /** Pins a message (or removes the pin). */
+  | { type: 'message-pin'; messageId: number; pinned: boolean }
+  /** Adds the emoji as a reaction to a message, or takes it away when it is already there. */
+  | { type: 'message-react'; messageId: number; emoji: string }
   /** Takes the conversation back to just before a message of the user; that message and everything after it is hidden. */
   | { type: 'rewind'; sessionId: number; messageId: number }
   /** Searches every session of every chat. */
@@ -592,7 +610,11 @@ export type ServerMessage =
       hasMore: boolean;
       /** Set when this answers a request for older messages. */
       beforeId?: number;
+      /** Every pinned message of the chat, newest pin first. */
+      pins?: PinView[];
     }
+  /** A message was pinned or unpinned, or its reactions changed. */
+  | { type: 'message-marks'; chatId: number; sessionId: number; messageId: number; pinned: boolean; reactions: string[]; pins: PinView[] }
   /** A turn landed in this session; `started` when the session was opened for it. */
   | { type: 'chat-session'; chatId: number; session: SessionView; started: boolean }
   | { type: 'chat-message'; chatId: number; sessionId: number; message: ChatMessageView }

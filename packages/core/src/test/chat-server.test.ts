@@ -407,3 +407,33 @@ test('an outfit can carry its own VRM model', async () => {
   await removed;
   await app.stop();
 });
+
+test('pin and react: marks come back in the history and are broadcast; pins list the whole chat', async () => {
+  const app = await boot();
+  await app.ask(null, 'welcome');
+  const opened = await app.ask({ type: 'chat-create', kind: 'direct', agents: ['mimi'] }, 'chat-history');
+  const chatId = opened.chat.id;
+  await app.finished({ type: 'chat-send', chatId, text: 'ข้อความของฉัน' });
+  await app.ask(null, 'busy', (reply) => reply.chatId === null);
+  const history = await app.ask({ type: 'chat-open', chatId }, 'chat-history');
+  const [mine, answer] = history.messages;
+  assert.deepEqual([mine!.pinned, mine!.reactions, history.pins], [false, [], []]);
+
+  const pinned = await app.ask({ type: 'message-pin', messageId: answer!.id, pinned: true }, 'message-marks');
+  assert.deepEqual([pinned.messageId, pinned.pinned, pinned.pins.map((pin) => [pin.id, pin.role, pin.text])], [answer!.id, true, [[answer!.id, 'assistant', 'รับทราบค่ะ']]]);
+  const loved = await app.ask({ type: 'message-react', messageId: answer!.id, emoji: '❤️' }, 'message-marks', (reply) => reply.reactions.length > 0);
+  assert.deepEqual([loved.pinned, loved.reactions], [true, ['❤️']]);
+  await app.ask({ type: 'message-react', messageId: answer!.id, emoji: '👍' }, 'message-marks', (reply) => reply.reactions.length === 2);
+
+  // The log remembers them, and a second ❤️ takes the first back.
+  const again = await app.ask({ type: 'chat-open', chatId }, 'chat-history');
+  assert.deepEqual([again.messages[1]!.pinned, again.messages[1]!.reactions, again.pins!.length], [true, ['❤️', '👍'], 1]);
+  const taken = await app.ask({ type: 'message-react', messageId: answer!.id, emoji: '❤️' }, 'message-marks', (reply) => reply.reactions.length === 1);
+  assert.deepEqual(taken.reactions, ['👍']);
+  const unpinned = await app.ask({ type: 'message-pin', messageId: answer!.id, pinned: false }, 'message-marks', (reply) => !reply.pinned);
+  assert.deepEqual(unpinned.pins, []);
+
+  assert.match((await app.ask({ type: 'message-react', messageId: answer!.id, emoji: '' }, 'error')).message, /one emoji/);
+  assert.match((await app.ask({ type: 'message-pin', messageId: 99999, pinned: true }, 'error')).message, /message of a chat/);
+  await app.stop();
+});

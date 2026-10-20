@@ -4,6 +4,7 @@ import type {
   ChatView,
   ClientMessage,
   MessageRole,
+  PinView,
   PresetView,
   SearchHit,
   ServerMessage,
@@ -138,9 +139,22 @@ export function createChatApi(context: ChatApiContext) {
       const forwardedFrom = row.forwardFrom ? { from: row.forwardFrom, chat: row.forwardChat ?? '' } : null;
       if (!text && tools.length === 0 && attachments.length === 0) continue;
       const approval = approvals.get(row.id) ?? null;
-      views.push({ id: row.id, role: row.role, agent: row.agent, text, createdAt: row.createdAt, attachments, tools, replyTo, forwardedFrom, approval });
+      views.push({ id: row.id, role: row.role, agent: row.agent, text, createdAt: row.createdAt, attachments, tools, replyTo, forwardedFrom, approval, pinned: row.pinnedAt !== undefined, reactions: row.reactions ?? [] });
     }
     return views;
+  };
+
+  const pinsOf = (chat: Chat): PinView[] => {
+    const sessions = chats.sessions(chat.id, 200);
+    const byThread = new Map(sessions.map((session) => [session.thread, session.id]));
+    return messages.pinned([...byThread.keys()]).map((row) => ({
+      id: row.id,
+      sessionId: byThread.get(row.thread) ?? 0,
+      role: row.role,
+      agent: row.agent,
+      text: (row.role === 'user' ? stripAttachments(row.text) : row.text).replace(/\s+/g, ' ').slice(0, 160),
+      createdAt: row.createdAt,
+    }));
   };
 
   const historyMessage = (chatId: number, sessionId?: number, beforeId?: number): ServerMessage => {
@@ -159,6 +173,7 @@ export function createChatApi(context: ChatApiContext) {
       messages: messageViews(hasMore ? rows.slice(1) : rows),
       hasMore,
       beforeId,
+      pins: pinsOf(chat),
     };
   };
 
@@ -437,6 +452,30 @@ export function createChatApi(context: ChatApiContext) {
         reply({ type: 'rewound', chatId: session.chatId, sessionId: session.id, text: stripAttachments(target.text), restored: files.restored, skipped: files.skipped });
         broadcast({ type: 'chat-changed', chatId: session.chatId, sessionId: session.id });
         broadcast(chatsMessage());
+        return true;
+      }
+      case 'message-pin':
+      case 'message-react': {
+        const target = messages.get(Number(message.messageId));
+        const session = target && chats.allSessions().find((entry) => entry.thread === target.thread);
+        const chat = session && chats.getChat(session.chatId);
+        if (!target || !session || !chat || target.role === 'tool') throw new Error('Pick a message of a chat.');
+        if (message.type === 'message-pin') messages.setPinned(target.id, Boolean(message.pinned));
+        else {
+          const emoji = String(message.emoji ?? '').trim();
+          if (!emoji || emoji.length > 16) throw new Error('A reaction is one emoji.');
+          messages.toggleReaction(target.id, emoji);
+        }
+        const after = messages.get(target.id);
+        broadcast({
+          type: 'message-marks',
+          chatId: chat.id,
+          sessionId: session.id,
+          messageId: target.id,
+          pinned: after?.pinnedAt !== undefined,
+          reactions: after?.reactions ?? [],
+          pins: pinsOf(chat),
+        });
         return true;
       }
       case 'search':

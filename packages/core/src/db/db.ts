@@ -21,6 +21,7 @@ const MIGRATIONS = [
   '013-parked-runs.sql',
   '014-video-attachments.sql',
   '015-message-marks.sql',
+  '016-speech.sql',
 ];
 
 function migrate(db: Db): void {

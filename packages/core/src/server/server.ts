@@ -198,13 +198,38 @@ export async function startServer(
     speech_model: appSettings.defaults.speech_model ?? core.settings.speech_model,
     video_model: appSettings.defaults.video_model ?? core.settings.video_model,
   });
-  /** Rejects a model choice that names a model no connected provider offers. */
+  /** What a model must be, take or make to be usable for a key (the catalog's type and modalities). */
+  const MODEL_NEEDS: Record<
+    (typeof MODEL_KEYS)[number],
+    { types?: string[]; inputs?: string[]; outputs: string[] }
+  > = {
+    model: { types: ['chat'], outputs: ['text'] },
+    small_model: { types: ['chat'], outputs: ['text'] },
+    vision_model: { types: ['chat'], inputs: ['image', 'pdf', 'video'], outputs: ['text'] },
+    transcript_model: { types: ['chat', 'transcription'], inputs: ['audio'], outputs: ['text'] },
+    image_model: { types: ['image'], outputs: ['image'] },
+    speech_model: { types: ['speech'], outputs: ['audio'] },
+    video_model: { types: ['video'], outputs: ['video'] },
+  };
   /** A model string is `provider/model` or the name of a preset from the model pool. */
   const modelRef = (name: string) => resolveModelName(name, appSettings.presets);
+  /** Rejects a model choice that is unknown, or that the catalog says cannot do the job. */
   const checkModels = (choice: ModelChoice) => {
     for (const key of MODEL_KEYS) {
       const value = choice[key];
-      if (value) core.registry.info(modelRef(value));
+      if (!value) continue;
+      const info = core.registry.info(modelRef(value));
+      const needs = MODEL_NEEDS[key];
+      // Without metadata the abilities are unknown, not empty: do not guess against the user.
+      if (info.type && needs.types && !needs.types.includes(info.type)) {
+        throw new Error(`Model "${value}" is not usable for "${key}" (type: ${info.type}).`);
+      }
+      if (info.inputs && needs.inputs && !needs.inputs.some((kind) => info.inputs!.includes(kind))) {
+        throw new Error(`Model "${value}" does not take ${needs.inputs.join(' / ')} input: pick another model for "${key}".`);
+      }
+      if (info.outputs && !needs.outputs.every((kind) => info.outputs!.includes(kind))) {
+        throw new Error(`Model "${value}" does not produce ${needs.outputs.join(' / ')}: pick another model for "${key}".`);
+      }
     }
   };
 
@@ -396,12 +421,20 @@ export async function startServer(
       }),
       catalog,
       models: available.flatMap((provider) =>
-        provider.models
-          .filter((model) => model.textOutput)
-          .map((model) => ({
+        provider.models.map((model) => {
+          const badges = model.inputs
+            ? model.inputs.filter((kind) => kind !== 'text').map((kind) => ` [${kind}]`).join('')
+            : model.imageInput
+              ? ' [image]'
+              : '';
+          return {
             ref: formatModelRef(model.ref),
-            label: `${provider.name} · ${model.name}${model.imageInput ? ' [image]' : ''}${model.cost ? ` ($${model.cost.input}/$${model.cost.output})` : ''}`,
-          })),
+            label: `${provider.name} · ${model.name}${badges}${model.cost ? ` ($${model.cost.input}/$${model.cost.output})` : ''}`,
+            ...(model.type ? { type: model.type } : {}),
+            ...(model.inputs ? { input: model.inputs } : {}),
+            ...(model.outputs ? { output: model.outputs } : {}),
+          };
+        }),
       ),
       defaults: effectiveDefaults(),
       presets: chatApi.presetViews(),

@@ -18,6 +18,8 @@
 - The stop button takes the place of mic / send while a reply is coming (and Esc stops it when the box is empty). A finished reply is reloaded from the log so its bubbles can be pinned, reacted to and replied to right away.
 - Providers: the model list is only fetched, never typed. The form lost the model box; editing a provider shows what was fetched, and a new URL or key fetches again.
 - Placeholder "ทัก<name>…" in every direct chat.
+- The portable macOS app: `npm run build:mac` writes `dist/mac/Mimi.app` (Node runtime and production dependencies inside) and `dist/Mimi-<version>-mac-<arch>.zip`. On an Intel Mac this is an x64 build.
+- Model pickers follow the input: the agent editor and Settings group models by what they read (text, image/PDF/video, audio), background work (summary/memory) and what they make (image, speech, video), and each list offers only models whose models.dev type and modalities fit (an embedding model is not offered as a chat or vision model). A model without metadata stays offered, and saving a model the catalog says cannot do the job is refused.
 
 ## 0.4.0 — 2026-10-20
 

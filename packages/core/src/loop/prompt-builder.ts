@@ -58,6 +58,11 @@ export function buildInstructions(agent: AgentDefinition, workingDir: string | u
   if (has('search_history')) {
     rules.push('- Use search_history to recover exact wording or details from summarized messages.');
   }
+  rules.push(
+    '',
+    '## Voice',
+    '- A reply that should be spoken with a particular feeling may begin with one direction line: [emotion: …][tone: …][voice: …][speed: 0.5-2]. Use only these tags, only on the first line; the app hides the line and uses it for text-to-speech. Do not put square-bracket tags anywhere else in a reply.',
+  );
   if (has('status_set')) {
     rules.push(
       '',

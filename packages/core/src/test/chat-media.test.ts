@@ -70,12 +70,12 @@ test('schema v14 keeps the attachments that were there and accepts videos', () =
   const file = path.join(dir, 'mimi.db');
   const first = openDb(file);
   first.prepare(`INSERT INTO attachments (id, kind, name, mime, size, text) VALUES ('a', 'image', 'cat.png', 'image/png', 7, 'แมว')`).run();
-  // Back to how a v13 file looks: the columns of v15 do not exist yet.
-  first.exec('ALTER TABLE messages DROP COLUMN pinned_at; ALTER TABLE messages DROP COLUMN reactions;');
+  // Back to how a v13 file looks: the columns of v16 do not exist yet.
+  first.exec('ALTER TABLE messages DROP COLUMN pinned_at; ALTER TABLE messages DROP COLUMN reactions; ALTER TABLE messages DROP COLUMN speech;');
   first.pragma('user_version = 13');
   first.close();
   const again = openDb(file);
-  assert.equal(again.pragma('user_version', { simple: true }), 15);
+  assert.equal(again.pragma('user_version', { simple: true }), 16);
   assert.deepEqual(again.prepare(`SELECT id, kind, text FROM attachments`).all(), [{ id: 'a', kind: 'image', text: 'แมว' }]);
   again.prepare(`INSERT INTO attachments (id, kind, name, mime, size) VALUES ('b', 'video', 'x.mp4', 'video/mp4', 1)`).run();
   assert.throws(() => again.prepare(`INSERT INTO attachments (id, kind, name, mime, size) VALUES ('c', 'gif', 'x', 'x/y', 1)`).run());

@@ -41,6 +41,8 @@ export interface ModelCost {
 export interface ModelInfo {
   ref: ModelRef;
   name: string;
+  /** What the model is for (models.dev `type`): chat, image, speech, video, transcription, embedding… */
+  type?: string;
   /** SDK package that speaks this model's API dialect. */
   npm: string;
   baseURL: string | undefined;
@@ -52,6 +54,13 @@ export interface ModelInfo {
   toolCall: boolean;
   /** False for models that do not produce text (image, speech, embeddings). */
   textOutput: boolean;
+  /**
+   * What the model can take and make, from models.dev (`text`, `image`, `audio`, `video`,
+   * `pdf`). Undefined when the catalog has no entry: then its abilities are unknown, not
+   * empty, so the model is still offered everywhere.
+   */
+  inputs?: string[];
+  outputs?: string[];
   /** Per-model provider options from the settings file. */
   options: Record<string, unknown>;
 }
@@ -253,6 +262,7 @@ export class ProviderRegistry {
     return {
       ref: { provider: provider.id, model: modelId },
       name: def?.name ?? modelId,
+      type: def?.type,
       npm: def?.provider?.npm ?? provider.npm,
       baseURL: def?.provider?.api ?? provider.api,
       contextLimit: def?.limit?.context ?? DEFAULT_CONTEXT_LIMIT,
@@ -261,6 +271,8 @@ export class ProviderRegistry {
       imageInput: def?.modalities?.input.includes('image') ?? def?.attachment ?? false,
       toolCall: def?.tool_call ?? true,
       textOutput: def?.modalities?.output.includes('text') ?? true,
+      inputs: def?.modalities?.input,
+      outputs: def?.modalities?.output,
       options: def?.options ?? {},
     };
   }

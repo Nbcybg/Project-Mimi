@@ -67,6 +67,39 @@ test('plain answer: streams text, stores both messages, logs usage', async () =>
   assert.equal(calls.n, 1);
 });
 
+test('voice direction is stored apart from the visible answer', async () => {
+  const model = scriptedModel([textStep('[emotion: เศร้า][tone: กระซิบ][speed: 0.9]\nฉันขอโทษนะ')]);
+  const harness = makeHarness(model);
+
+  const events = await collect(runAgent(harness.deps, { agent: makeAgent(), userText: 'เป็นอะไร' }));
+
+  const finish = eventsOf(events, 'run-finish')[0]!;
+  assert.equal(finish.text, 'ฉันขอโทษนะ');
+  assert.deepEqual(finish.speech, { emotion: 'เศร้า', tone: 'กระซิบ', speed: 0.9 });
+  assert.equal(eventsOf(events, 'text-delta').map((event) => event.text).join(''), 'ฉันขอโทษนะ');
+  const row = harness.db.prepare('SELECT text, speech FROM messages WHERE role = ?').get('assistant') as {
+    text: string;
+    speech: string | null;
+  };
+  assert.equal(row.text, 'ฉันขอโทษนะ');
+  assert.deepEqual(JSON.parse(row.speech!), { emotion: 'เศร้า', tone: 'กระซิบ', speed: 0.9 });
+
+  await collect(runAgent(harness.deps, { agent: makeAgent(), userText: 'ต่อ' }));
+  assert.match(promptOf(model, 1), /ฉันขอโทษนะ/);
+  assert.doesNotMatch(promptOf(model, 1), /\[emotion: เศร้า\]/);
+});
+
+test('ordinary bracket text still streams when it starts the reply', async () => {
+  const model = scriptedModel([textStep('[1] หมายเหตุ')]);
+  const harness = makeHarness(model);
+
+  const events = await collect(runAgent(harness.deps, { agent: makeAgent(), userText: 'hi' }));
+
+  assert.equal(eventsOf(events, 'text-delta').map((event) => event.text).join(''), '[1] หมายเหตุ');
+  assert.equal(eventsOf(events, 'run-finish')[0]!.text, '[1] หมายเหตุ');
+  assert.equal(eventsOf(events, 'run-finish')[0]!.speech, undefined);
+});
+
 test('tool call: runs the tool, feeds the result back, then answers', async () => {
   const model = scriptedModel([toolStep('echo', { text: 'ping' }), textStep('done')]);
   const harness = makeHarness(model);

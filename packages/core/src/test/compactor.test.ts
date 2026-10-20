@@ -215,7 +215,7 @@ test('the real prompt size from the provider triggers compaction even when the e
   assert.equal(await target.compactor.maybeCompact('main', agent, 1949), null);
   const result = await target.compactor.maybeCompact('main', agent, 1950);
   // The estimate (~950) is about half the real size, so the keep budget is halved too.
-  assert.equal(result!.summarized!.toId, 6, 'only the newest turn fits the rescaled budget');
+  assert.equal(result!.summarized!.toId, 4, 'only the newest turns fit the rescaled budget');
 });
 
 test('context_cap bounds the window; auto=false disables automatic compaction only', async () => {

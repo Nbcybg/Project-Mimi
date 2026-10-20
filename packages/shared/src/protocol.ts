@@ -1,6 +1,7 @@
 import type { AgentEvent } from './events.ts';
 import type { MessageRole } from './messages.ts';
 import type { PermissionDecision, PermissionRequest } from './permissions.ts';
+import type { SpeechStyle } from './speech.ts';
 import type { CustomToolSpec, McpServerSpec, McpServerView, ToolPreset, ToolSettingField } from './tools.ts';
 
 /**
@@ -81,6 +82,8 @@ export interface ChatMessageView {
   role: MessageRole;
   agent: string;
   text: string;
+  /** How this reply should sound when it is read aloud. */
+  speech?: SpeechStyle;
   createdAt: string;
   attachments: AttachmentView[];
   /** Tools the agent called in this step. */
@@ -367,8 +370,12 @@ export interface SettingsView {
   }>;
   /** Every provider of the models.dev catalog, to pick from when adding one. */
   catalog: Array<{ id: string; name: string; baseURL: string | null }>;
-  /** Models of the connected providers. */
-  models: Array<{ ref: string; label: string }>;
+  /**
+   * Models of the connected providers, with what each can take and make (`text`, `image`,
+   * `audio`, `video`, `pdf`). `input` / `output` are absent when the catalog does not say:
+   * unknown abilities, so a picker still offers the model.
+   */
+  models: Array<{ ref: string; label: string; type?: string; input?: string[]; output?: string[] }>;
   /** Default model per capability, used by agents that leave that capability empty. */
   defaults: ModelChoice;
   /** The model pool. A preset name can be used wherever a model is chosen. */

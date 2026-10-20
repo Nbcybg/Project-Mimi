@@ -21,7 +21,9 @@ import {
 import type { ToolDefinition } from '@mimi/shared';
 import { makeTestCore } from './core-helpers.ts';
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mimi-browser-'));
+// realpath: on macOS os.tmpdir() is /var/..., a symlink to /private/var/..., and the
+// path guard and screenshots work with the canonical path.
+const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'mimi-browser-')));
 after(() => {
   setBrowserSession(null);
   try {

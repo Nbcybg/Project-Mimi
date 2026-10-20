@@ -6,6 +6,7 @@ import { SpriteSet } from './sprite-set.ts';
 
 /** Same shape as an agent id, so `{{wa01}}` reads the same as `{{tim}}`. */
 export const OUTFIT_ID = /^[a-z][a-z0-9_-]*$/;
+const MAX_MODEL_BYTES = 128 * 1024 * 1024;
 const NAME_LIMIT = 80;
 const DESCRIPTION_LIMIT = 1000;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
@@ -63,12 +64,14 @@ export class WardrobeStore {
       // a hand-edited broken file still lists, so the user can fix it in the app
     }
     const image = this.findImage(id);
+    const model = path.join(folder, 'model.vrm');
     return {
       id,
       name: typeof meta.name === 'string' && meta.name ? meta.name : id,
       description: typeof meta.description === 'string' ? meta.description : '',
       image: image ? String(Math.round(fs.statSync(image.file).mtimeMs)) : null,
       sprites: new SpriteSet(path.join(folder, 'sprites')).list(),
+      model: fs.existsSync(model) ? String(Math.round(fs.statSync(model).mtimeMs)) : null,
     };
   }
 
@@ -147,6 +150,29 @@ export class WardrobeStore {
     if (data.length === 0 || data.length > MAX_IMAGE_BYTES) throw new Error('The image must be smaller than 8 MB.');
     this.removeImage(id);
     fs.writeFileSync(path.join(folder, `image.${extension}`), data);
+  }
+
+  // ---------- the outfit as a 3D model: the agent's VRM wearing these clothes ----------
+
+  readModel(id: string): Buffer | undefined {
+    const folder = this.folder(id);
+    const file = folder && path.join(folder, 'model.vrm');
+    return file && fs.existsSync(file) ? fs.readFileSync(file) : undefined;
+  }
+
+  saveModel(id: string, data: Buffer): void {
+    const folder = this.folder(id);
+    if (!folder || !this.has(id)) throw new Error(`No outfit "${id}". Save it first.`);
+    if (data.length === 0 || data.length > MAX_MODEL_BYTES) throw new Error('The VRM file must be smaller than 128 MB.');
+    // glTF binary: "glTF" magic. Anything else is not a VRM.
+    if (data.subarray(0, 4).toString('latin1') !== 'glTF') throw new Error('This is not a .vrm file (glTF binary).');
+    fs.writeFileSync(path.join(folder, 'model.vrm'), data);
+  }
+
+  removeModel(id: string): void {
+    const folder = this.folder(id);
+    const file = folder && path.join(folder, 'model.vrm');
+    if (file && fs.existsSync(file)) fs.rmSync(file);
   }
 
   removeImage(id: string): void {

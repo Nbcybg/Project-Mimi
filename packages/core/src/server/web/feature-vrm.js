@@ -246,7 +246,6 @@ async function loadModel(agent) {
     vrm.scene.traverse((obj) => {
       obj.frustumCulled = false;
     });
-    vrm.scene.rotation.y = Math.PI; // หันหน้าเข้ากล้อง
 
     if (engine.vrm) {
       engine.scene.remove(engine.vrm.scene);
@@ -634,6 +633,7 @@ function renderVrm(container, agent) {
       .then(async () => {
         await syncAssets(agent);
         if (formState.idle) playMotion(formState.idle);
+        if (uiContainer && uiContainer.isConnected && formState.agent === agent.name && formState.mode === 'vrm') render(uiContainer, agent);
       })
       .catch((error) => M().toast('โหลดโมเดล VRM ไม่สำเร็จ', error.message, true));
   } else {
@@ -706,3 +706,226 @@ function form() {
 
 window.MimiHooks = window.MimiHooks || {};
 window.MimiHooks.character = { render, form };
+
+// ---------- the chat stage: the agent as a live 3D model (instead of a picture) ----------
+// feature-stage.js decides when (direct chat, agent shown as VRM) and which file (the
+// outfit's model or the agent's own); this draws it: a relaxed standing pose, breathing,
+// blinking, eyes on the viewer, the mood of the last emoji, and the mouth moving while a
+// reply streams in. Spring bones (hair, clothes) move by themselves.
+
+/** Emoji (code points in hex, as feature-stage.js keys them) -> expression preset. */
+const EMOJI_MOOD = {};
+for (const [preset, keys] of Object.entries({
+  happy: '1f60a 1f604 1f601 1f603 1f600 1f970 1f60d 263a 1f642 1f606 1f917 1f60b 1f61d 1f61c 2764 1f495 1f496 1f973 1f44b 1f60e 1f929 2728 1f389 1f338',
+  angry: '1f620 1f621 1f624 1f4a2 1f92c 1f47f 1f612 1f644',
+  sad: '1f622 1f62d 1f61e 1f614 1f97a 1f63f 1f625 1f613 1f494 1f61f 1f629',
+  relaxed: '1f60c 1f634 1f607 1f60f 1f375 1f64f 1f917',
+  surprised: '1f632 1f62e 1f631 1f92f 1f633 2757 203c 1f62f 1f640 2049',
+})) {
+  for (const key of keys.split(' ')) EMOJI_MOOD[key] = preset;
+}
+const MOOD_WEIGHT = { happy: 0.75, angry: 0.7, sad: 0.75, relaxed: 0.7, surprised: 0.65, neutral: 0 };
+
+const live = {
+  renderer: null,
+  scene: null,
+  camera: null,
+  clock: null,
+  observer: null,
+  wrap: null,
+  vrm: null,
+  path: '',
+  loading: '',
+  mood: 'neutral',
+  talkUntil: 0,
+  blinkTimer: 2,
+  blinkUntil: 0,
+};
+
+function liveStart() {
+  if (live.renderer) return;
+  live.renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+  live.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  live.renderer.outputColorSpace = THREE.SRGBColorSpace;
+  const canvas = live.renderer.domElement;
+  canvas.className = 'vrm-live';
+  live.scene = new THREE.Scene();
+  live.camera = new THREE.PerspectiveCamera(24, 1, 0.05, 30);
+  const light = new THREE.DirectionalLight(0xffffff, Math.PI * 0.9);
+  light.position.set(0.6, 1.6, 1.4).normalize();
+  live.scene.add(light, new THREE.AmbientLight(0xffffff, 0.75));
+  live.clock = new THREE.Timer();
+  live.observer = new ResizeObserver(() => liveResize());
+
+  const tick = () => {
+    requestAnimationFrame(tick);
+    if (!canvas.isConnected || document.hidden || !live.vrm) return;
+    live.clock.update();
+    const delta = Math.min(live.clock.getDelta(), 0.1);
+    const t = live.clock.getElapsed();
+    liveIdle(t);
+    liveFace(delta, t);
+    live.vrm.update(delta);
+    live.renderer.render(live.scene, live.camera);
+  };
+  tick();
+}
+
+function liveResize() {
+  const wrap = live.wrap;
+  if (!wrap) return;
+  const rect = wrap.getBoundingClientRect();
+  if (rect.width < 2 || rect.height < 2) return;
+  live.camera.aspect = rect.width / rect.height;
+  live.camera.updateProjectionMatrix();
+  live.renderer.setSize(rect.width, rect.height, false);
+  liveFrame();
+}
+
+/** Whole figure in view, feet at the bottom of the stage. */
+function liveFrame() {
+  if (!live.vrm) return;
+  const box = new THREE.Box3().setFromObject(live.vrm.scene);
+  const height = Math.max(box.max.y - box.min.y, 0.5);
+  const fov = THREE.MathUtils.degToRad(live.camera.fov);
+  const fitHeight = height * 1.06;
+  let distance = fitHeight / 2 / Math.tan(fov / 2);
+  // A narrow stage must also fit the arms' width.
+  const width = Math.max(box.max.x - box.min.x, 0.4) * 1.1;
+  const fitWidth = width / 2 / (Math.tan(fov / 2) * live.camera.aspect);
+  distance = Math.max(distance, fitWidth);
+  const middle = box.min.y + height * 0.5;
+  live.camera.position.set(0, middle, distance);
+  live.camera.lookAt(0, middle, 0);
+}
+
+/** A relaxed standing pose with breathing; the rest pose of a VRM is a T-pose. */
+function liveIdle(t) {
+  const humanoid = live.vrm.humanoid;
+  const bone = (name) => humanoid.getNormalizedBoneNode(name);
+  const set = (name, x, y, z) => {
+    const node = bone(name);
+    if (node) node.rotation.set(x, y, z);
+  };
+  const breath = Math.sin(t * 1.7);
+  set('leftUpperArm', 0.05, 0, -1.22 - breath * 0.015);
+  set('rightUpperArm', 0.05, 0, 1.22 + breath * 0.015);
+  set('leftLowerArm', 0, -0.25, -0.12);
+  set('rightLowerArm', 0, 0.25, 0.12);
+  set('leftHand', 0, 0, -0.1);
+  set('rightHand', 0, 0, 0.1);
+  set('spine', breath * 0.012, 0, 0);
+  set('chest', breath * 0.018, 0, 0);
+  set('neck', 0, Math.sin(t * 0.45) * 0.04, 0);
+  set('head', Math.sin(t * 0.7) * 0.025, Math.sin(t * 0.37) * 0.07, Math.sin(t * 0.53) * 0.02);
+  set('hips', 0, Math.sin(t * 0.3) * 0.02, 0);
+}
+
+/** Blinks, the mood of the last emoji (eased in), and the mouth while talking. */
+function liveFace(delta, t) {
+  const manager = live.vrm.expressionManager;
+  if (!manager) return;
+  live.blinkTimer -= delta;
+  if (live.blinkTimer <= 0) {
+    live.blinkTimer = 2.2 + Math.random() * 3.5;
+    live.blinkUntil = t + 0.13;
+  }
+  const blinking = t < live.blinkUntil;
+  const ease = Math.min(1, delta * 6);
+  for (const preset of ['happy', 'angry', 'sad', 'relaxed', 'surprised']) {
+    if (!manager.getExpression(preset)) continue;
+    const target = live.mood === preset ? MOOD_WEIGHT[preset] : 0;
+    const now = manager.getValue(preset) || 0;
+    manager.setValue(preset, now + (target - now) * ease);
+  }
+  // happy/relaxed close the eyes on their own; a blink on top would look odd
+  manager.setValue('blink', blinking && live.mood !== 'happy' && live.mood !== 'relaxed' ? 1 : 0);
+  const talking = performance.now() < live.talkUntil;
+  const mouth = talking ? 0.15 + 0.55 * Math.abs(Math.sin(t * 15)) : 0;
+  const was = manager.getValue('aa') || 0;
+  if (manager.getExpression('aa')) manager.setValue('aa', was + (mouth - was) * Math.min(1, delta * 18));
+}
+
+async function liveLoad(path) {
+  live.loading = path;
+  const response = await api(path);
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const buffer = await response.arrayBuffer();
+  if (live.loading !== path) return; // another model was asked for meanwhile
+  const loader = new GLTFLoader();
+  loader.register((parser) => new VRMLoaderPlugin(parser));
+  const gltf = await loader.parseAsync(buffer, '');
+  const vrm = gltf.userData.vrm;
+  if (!vrm) throw new Error('ไฟล์นี้ไม่ใช่ VRM');
+  if (live.loading !== path) {
+    VRMUtils.deepDispose(gltf.scene);
+    return;
+  }
+  VRMUtils.removeUnnecessaryVertices(gltf.scene);
+  VRMUtils.combineSkeletons(gltf.scene);
+  VRMUtils.combineMorphs(vrm);
+  if (vrm.meta.metaVersion === '0') VRMUtils.rotateVRM0(vrm);
+  vrm.humanoid.resetNormalizedPose();
+  vrm.scene.traverse((object) => {
+    object.frustumCulled = false;
+  });
+  if (vrm.lookAt) vrm.lookAt.target = live.camera;
+  const canvas = live.renderer.domElement;
+  const old = live.vrm;
+  // A change of outfit: fade out, swap, fade in.
+  if (old) {
+    canvas.classList.add('swap');
+    await new Promise((resolve) => setTimeout(resolve, 260));
+    live.scene.remove(old.scene);
+    VRMUtils.deepDispose(old.scene);
+  }
+  live.vrm = vrm;
+  live.path = path;
+  live.loading = '';
+  live.scene.add(vrm.scene);
+  liveIdle(0);
+  vrm.update(0);
+  liveFrame();
+  canvas.classList.remove('swap');
+}
+
+/** Shows the model at `path` in `wrap` (the stage's figure layer) with the mood of `moodKey`. */
+function liveShow(wrap, path, moodKey) {
+  liveStart();
+  const canvas = live.renderer.domElement;
+  if (canvas.parentElement !== wrap) {
+    wrap.append(canvas);
+    live.observer.disconnect();
+    live.observer.observe(wrap);
+  }
+  live.wrap = wrap;
+  liveResize();
+  live.mood = (moodKey && EMOJI_MOOD[moodKey]) || 'neutral';
+  if (path === live.path || path === live.loading) return;
+  liveLoad(path).catch((error) => {
+    live.loading = '';
+    console.error(error);
+    M().toast('โหลดโมเดล VRM บนหน้าแชตไม่สำเร็จ', error.message, true);
+  });
+}
+
+function liveHide() {
+  if (!live.renderer) return;
+  live.loading = '';
+  if (live.vrm) {
+    live.scene.remove(live.vrm.scene);
+    VRMUtils.deepDispose(live.vrm.scene);
+    live.vrm = null;
+  }
+  live.path = '';
+  live.renderer.domElement.remove();
+  live.observer.disconnect();
+  live.wrap = null;
+}
+
+/** The mouth moves for a moment; called for every piece of a reply that streams in. */
+function liveTalk() {
+  live.talkUntil = performance.now() + 450;
+}
+
+window.MimiHooks.vrmStage = { show: liveShow, hide: liveHide, talk: liveTalk };

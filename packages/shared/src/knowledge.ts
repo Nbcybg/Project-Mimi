@@ -104,4 +104,6 @@ export interface WardrobeOutfitView {
   image: string | null;
   /** This outfit's expression pictures by emoji key, each with a version. */
   sprites: Record<string, string>;
+  /** Version stamp of this outfit's own 3D model (model.vrm); null when it has none. */
+  model?: string | null;
 }

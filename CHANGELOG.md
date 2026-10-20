@@ -7,6 +7,9 @@
 - The tray window behaves like a tray panel: in the corner above the taskbar, above other windows, not on the taskbar, hides when it loses focus, the tray icon toggles it.
 - No translate / sign-in prompts in the app windows.
 - The figure on the stage retries when its picture failed to load.
+- VRoid on the chat stage: an agent set to "โมเดล 3D (VRM)" is drawn live in the chat (relaxed standing pose instead of the T-pose, breathing, blinking, eyes on the viewer, spring bones, the mood of the last emoji as an expression, the mouth moving while a reply streams in).
+- Outfits can carry their own `.vrm` (Hub → ตู้เสื้อผ้า): when the agent's "ชุด" status is that outfit, the stage swaps to its model with a short fade. Agents with `status_set` change clothes themselves.
+- The agent editor's 3D preview faces the camera (it showed the model's back) and shows the expression buttons once the model has loaded.
 
 ## 0.3.0 — 2026-10-19
 

@@ -290,6 +290,21 @@ export async function handleHttpApi(
       } else {
         throw new HttpError(405, 'Method not allowed.');
       }
+    } else if (resource === 'wardrobe-model' && rest.length === 1) {
+      const id = rest[0]!;
+      if (request.method === 'GET') {
+        const model = deps.wardrobe.readModel(id);
+        if (!model) throw new HttpError(404, 'No VRM model.');
+        sendBytes(response, model, 'model/vrm', `${id}.vrm`);
+      } else if (request.method === 'POST' || request.method === 'DELETE') {
+        if (!deps.wardrobe.has(id)) throw new HttpError(404, `No outfit "${id}".`);
+        if (request.method === 'DELETE') deps.wardrobe.removeModel(id);
+        else deps.wardrobe.saveModel(id, await readBody(request, 128 * 1024 * 1024));
+        deps.wardrobeChanged();
+        sendJson(response, 200, { ok: true });
+      } else {
+        throw new HttpError(405, 'Method not allowed.');
+      }
     } else if (resource === 'wardrobe-image' && rest.length === 1) {
       const id = rest[0]!;
       if (request.method === 'GET') {

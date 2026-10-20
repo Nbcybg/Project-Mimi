@@ -134,6 +134,28 @@
       }
       picture.append(frame, row, choose);
       panel.append(picture, el('p', 'hint', `ใช้ใน prompt: {{${outfit.id}}}`));
+      // The same outfit as a 3D model: an agent shown as VRM wears it when its status says so.
+      panel.append(el('h4', '', 'โมเดล 3D ของชุดนี้ (VRM)'));
+      const modelRow = el('div', 'row');
+      const chooseModel = el('input');
+      chooseModel.type = 'file';
+      chooseModel.accept = '.vrm';
+      chooseModel.hidden = true;
+      chooseModel.onchange = async () => {
+        const file = chooseModel.files[0];
+        chooseModel.value = '';
+        if (!file) return;
+        M().toast('กำลังอัปโหลดโมเดล…', `${file.name} (${(file.size / 1048576).toFixed(1)} MB)`);
+        const response = await M().api(`/api/wardrobe-model/${encodeURIComponent(outfit.id)}`, { method: 'POST', headers: { 'content-type': 'model/vrm' }, body: file });
+        if (!response.ok) M().toast('อัปโหลดโมเดลไม่สำเร็จ', (await response.json()).error, true);
+        else M().toast('อัปโหลดโมเดลแล้ว', 'agent ที่ใส่ชุดนี้ (แบบ VRM) จะเปลี่ยนเป็นโมเดลนี้');
+      };
+      modelRow.append(
+        el('span', 'faint', outfit.model ? `model.vrm (${new Date(Number(outfit.model)).toLocaleString('th-TH')})` : 'ยังไม่มีโมเดล'),
+        button('btn', outfit.model ? 'เปลี่ยนไฟล์ .vrm' : 'อัปโหลด .vrm', () => chooseModel.click()),
+      );
+      if (outfit.model) modelRow.append(button('btn ghost', 'ลบโมเดล', () => M().api(`/api/wardrobe-model/${encodeURIComponent(outfit.id)}`, { method: 'DELETE' })));
+      panel.append(modelRow, chooseModel, el('p', 'hint', 'ใช้กับ agent ที่ตั้งตัวละครเป็น "โมเดล 3D (VRM)" · เมื่อสถานะ "ชุด" ของ agent เป็นรหัสชุดนี้ บนหน้าแชตจะแสดงโมเดลนี้แทนโมเดลหลักของ agent'));
       panel.append(el('h4', '', 'รูปตามอีโมจิของชุดนี้'));
       panel.append(el('p', 'hint', 'เมื่อ agent ใส่ชุดนี้และส่งอีโมจิ จะใช้รูปที่ตั้งไว้ที่นี่ · อีโมจิที่ไม่มีรูป จะใช้รูปชุดด้านบนแทน'));
       panel.append(window.MimiHooks.stage.spriteEditor('outfit', outfit.id, outfit.sprites || {}));

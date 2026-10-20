@@ -387,3 +387,23 @@ test('agent messages notify the user only when that chat is not on screen', asyn
   assert.equal(history.messages.at(-1)?.text, 'มีอีเมลด่วนจากลูกค้า');
   await app.stop();
 });
+
+test('an outfit can carry its own VRM model', async () => {
+  const app = await boot();
+  await app.ask({ type: 'wardrobe-save', outfit: { id: 'swim', name: 'ชุดว่ายน้ำ' } }, 'wardrobe');
+  const vrm = Buffer.concat([Buffer.from('glTF'), Buffer.alloc(16, 1)]);
+  const post = (body: Buffer, id = 'swim') => app.api(`/api/wardrobe-model/${id}`, { method: 'POST', body, headers: { 'content-type': 'model/vrm' } });
+  assert.equal((await post(Buffer.from('<html>'))).status, 400, 'not a glTF binary');
+  assert.equal((await post(vrm, 'ghost')).status, 404);
+  assert.equal((await app.api('/api/wardrobe-model/swim')).status, 404);
+  const changed = app.ask(null, 'wardrobe', (reply) => Boolean(reply.outfits[0]?.model));
+  assert.equal((await post(vrm)).status, 200);
+  assert.ok((await changed).outfits[0]!.model);
+  const fetched = await app.api('/api/wardrobe-model/swim');
+  assert.ok(Buffer.from(await fetched.arrayBuffer()).equals(vrm));
+  assert.equal((await app.api('/api/wardrobe-model/swim', {}, null)).status, 401);
+  const removed = app.ask(null, 'wardrobe', (reply) => reply.outfits[0]?.model === null);
+  assert.equal((await app.api('/api/wardrobe-model/swim', { method: 'DELETE' })).status, 200);
+  await removed;
+  await app.stop();
+});

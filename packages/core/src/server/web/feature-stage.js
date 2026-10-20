@@ -56,6 +56,14 @@
   };
   const wardrobe = () => M().state.wardrobe || [];
 
+  /** The VRM to show: the model of the outfit the agent wears, else the agent's own; null without one. */
+  function modelPath(agent) {
+    const outfit = wardrobe().find((item) => item.id === ((agent.status && agent.status.outfit) || ''));
+    if (outfit && outfit.model) return `/api/wardrobe-model/${encodeURIComponent(outfit.id)}?v=${outfit.model}`;
+    if (agent.model) return `/api/agent-model/${encodeURIComponent(agent.name)}?v=${agent.model}`;
+    return null;
+  }
+
   /** Which picture to show for this agent, as { path, outfit } or null. */
   function pick(agent) {
     const outfitId = (agent.status && agent.status.outfit) || '';
@@ -82,6 +90,19 @@
     window.MimiHooks.backgrounds?.apply();
     window.MimiHooks.gallery?.apply();
     const agent = directAgent();
+    // An agent shown as a 3D model: the VRM of the outfit it wears, else its own (feature-vrm.js).
+    const live = window.MimiHooks.vrmStage;
+    const model = agent && agent.character === 'vrm' && live ? modelPath(agent) : null;
+    if (model) {
+      stage.classList.add('has-figure');
+      wrap.hidden = false;
+      for (const old of wrap.querySelectorAll('img.fig')) old.remove();
+      shown = { path: '', outfit: '' };
+      pending = '';
+      live.show(wrap, model, moodKey);
+      return;
+    }
+    live?.hide();
     const target = agent && pick(agent);
     stage.classList.toggle('has-figure', Boolean(target));
     wrap.hidden = !target;
@@ -136,6 +157,7 @@
 
   /** The reply that is streaming in: its last emoji so far drives the picture. */
   function onText(text) {
+    window.MimiHooks.vrmStage?.talk();
     const key = lastEmojiKey(text);
     if (key && key !== moodKey) {
       moodKey = key;

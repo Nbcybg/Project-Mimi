@@ -16,7 +16,7 @@ test('wardrobe store: outfits are folders; ids are checked; pictures, rename and
   const store = new WardrobeStore(path.join(tmp, 'a'), () => ['tim', 'mimi']);
   assert.deepEqual(store.list(), []);
   const saved = store.save({ id: 'wa01', name: ' ชุดทำงาน ', description: 'เชิ้ตขาว กระโปรงดำ' });
-  assert.deepEqual(saved, { id: 'wa01', name: 'ชุดทำงาน', description: 'เชิ้ตขาว กระโปรงดำ', image: null, sprites: {} });
+  assert.deepEqual(saved, { id: 'wa01', name: 'ชุดทำงาน', description: 'เชิ้ตขาว กระโปรงดำ', image: null, sprites: {}, model: null });
   assert.throws(() => store.save({ id: 'Bad Id' }), /lowercase/);
   assert.throws(() => store.save({ id: 'user' }), /reserved/);
   assert.throws(() => store.save({ id: 'tim' }), /id of an agent/);

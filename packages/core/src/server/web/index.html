@@ -36,7 +36,8 @@
       <div class="stack" id="chat-avatars"></div>
       <div class="ttl"><h1 id="chat-title">Mimi</h1><div class="sub" id="chat-sub"></div></div>
       <div class="right">
-        <button class="btn ghost hide-narrow" id="new-session" type="button" title="เริ่ม session ใหม่เอง (ปกติระบบเริ่มให้อัตโนมัติเมื่อเงียบไปนาน)">+ session</button>
+        <button class="btn ghost" id="new-session" type="button" title="เริ่ม session ใหม่เอง (ปกติระบบเริ่มให้อัตโนมัติเมื่อเงียบไปนาน)">+ session</button>
+        <button class="btn ghost" id="toggle-char" type="button" hidden>ตัวละคร</button>
         <button class="btn ghost" id="toggle-rail" type="button">ข้อมูล</button>
       </div>
     </div>
@@ -52,6 +53,7 @@
       <div class="banner" id="old-session" hidden><span>กำลังดู session เก่า</span><button class="btn" id="to-latest" type="button">กลับไป session ล่าสุด</button></div>
       <div class="box" id="box">
         <div class="menu" id="attach-menu" hidden>
+          <button type="button" data-camera="1">ถ่ายรูป <small>เปิดกล้อง</small></button>
           <button type="button" data-pick="image/*">รูปภาพ <small>หลายรูปได้</small></button>
           <button type="button" data-pick="">ไฟล์ / เอกสาร <small>PDF, CSV, …</small></button>
           <button type="button" data-pick="audio/*">ไฟล์เสียง</button>
@@ -99,6 +101,7 @@
   }
 }
 </script>
+<script src="i18n.js"></script>
 <script src="app.js"></script>
 <script src="feature-tools.js"></script>
 <script src="feature-providers.js"></script>
@@ -107,6 +110,7 @@
 <script src="feature-workflows.js"></script>
 <script src="feature-secrets.js"></script>
 <script src="feature-chat.js"></script>
+<script src="feature-voice.js"></script>
 <script src="feature-knowledge.js"></script>
 <script src="feature-wardrobe.js"></script>
 <script src="feature-stage.js"></script>

@@ -12,11 +12,34 @@
     localStorage.setItem(TOKEN_KEY, fromHash);
     history.replaceState(null, '', location.pathname + location.search);
   }
-  // ?ui=compact: the phone-sized window of the tray app. Chats stay in it; Agent, Hub and
-  // Settings open in a normal desktop-sized window. ?view=<name> opens on that screen.
-  const pageQuery = new URLSearchParams(location.search);
-  const compact = pageQuery.get('ui') === 'compact';
-  if (compact) document.documentElement.classList.add('compact');
+  // The app is designed for mobile mode: a window up to 820px wide, one pane at a time (the
+  // native window opens at phone size). Wider windows are desktop mode: the chat list sits beside the chat.
+  const MOBILE_MAX = 820;
+  const modeNow = () => (window.innerWidth <= MOBILE_MAX ? 'mobile' : 'desktop');
+  document.documentElement.dataset.mode = modeNow();
+  const store = {
+    get(key) {
+      try {
+        return localStorage.getItem(key);
+      } catch {
+        return null;
+      }
+    },
+    set(key, value) {
+      try {
+        localStorage.setItem(key, value);
+      } catch {
+        // private window: not remembered
+      }
+    },
+  };
+  /** How much of the chat shows over the character: 0 none, 1 only the newest message, 2 all (the usual). Per mode. */
+  const bubbleLevel = () => {
+    const level = Number(store.get(`mimi.bubbles.${modeNow()}`));
+    return level === 0 || level === 1 ? level : 2;
+  };
+  /** The character on the chat stage can be switched off (to read more of the chat); remembered per mode. */
+  const characterOn = () => store.get(`mimi.character.${modeNow()}`) !== '0';
   /** Tray window: tool calls and other details are hidden unless "แสดง prompt" is on. */
   let showPrompt = false;
   try {
@@ -25,10 +48,6 @@
     // private window: the default
   }
   if (showPrompt) document.documentElement.classList.add('show-prompt');
-  function openDesktop(view) {
-    const opened = window.open(`/?view=${encodeURIComponent(view)}`, 'mimi-desktop', 'popup,width=1200,height=840');
-    if (opened) opened.focus();
-  }
   const token = () => localStorage.getItem(TOKEN_KEY) || '';
 
   function el(tag, className, text) {
@@ -52,6 +71,8 @@
     mic: svg('<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0014 0M12 18v3"/>'),
     send: svg('<path d="M4 12l16-8-6 16-3-6.5z"/>'),
     stop: svg('<rect x="7" y="7" width="10" height="10" rx="1.5" fill="currentColor"/>'),
+    settings: svg('<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>'),
+    back: svg('<path d="M15 5l-7 7 7 7"/>'),
   };
   $('attach').innerHTML = ICONS.clip;
   $('mic').innerHTML = ICONS.mic;
@@ -123,7 +144,8 @@
     session: null,
     sessions: [],
     latest: true,
-    railOpen: window.innerWidth > 1180,
+    railOpen: window.innerWidth <= 1180 ? false : store.get('mimi.rail') === null ? window.innerWidth >= 1480 : store.get('mimi.rail') === '1',
+    pins: [],
     busyChat: null,
     typing: null,
     staged: [],
@@ -383,11 +405,28 @@
     const right = el('div');
     right.style.minWidth = '0';
     const name = el('div', 'nm', nameOf(agent));
-    name.append(el('small', '', iso ? fmtTime(iso) : ''));
     const body = el('div', 'body');
     right.append(name, body);
     node.append(avatar(agent), right);
     return { node, body, agent, bubble: null, raw: '', dots: null, nest: null, tools: new Map() };
+  }
+  /** Under a bubble: the reactions and pin of a stored message, and when it was sent. */
+  function metaRow(message) {
+    const row = el('div', 'mrow');
+    if (message.id !== undefined) row.dataset.mrow = message.id;
+    fillMeta(row, message);
+    return row;
+  }
+  function fillMeta(row, message) {
+    row.replaceChildren();
+    const marks = window.MimiHooks?.chat?.marks;
+    if (marks && message.id !== undefined) row.append(...marks(message));
+    row.append(el('span', 'time', fmtTime(message.createdAt)));
+  }
+  /** A stored message's reactions or pin changed: its row under the bubble and its buttons follow. */
+  function refreshMarks(message) {
+    for (const row of logInner.querySelectorAll(`[data-mrow="${message.id}"]`)) fillMeta(row, message);
+    window.MimiHooks?.chat?.refresh?.(message);
   }
   function dots() {
     const node = el('span', 'dots');
@@ -544,7 +583,8 @@
       renderText(bubble, message.text);
       column.append(bubble);
     }
-    column.append(el('div', 'time', fmtTime(message.createdAt)));
+    column.append(metaRow(message));
+    window.MimiHooks?.chat?.decorate?.(column, message);
     row.append(actions, column);
     return row;
   }
@@ -569,7 +609,8 @@
       bubble.dataset.agent = message.agent;
       renderText(bubble, message.text);
       bubble.append(speakButton(message.text));
-      target.body.append(bubble);
+      window.MimiHooks?.chat?.decorate?.(bubble, message);
+      target.body.append(bubble, metaRow(message));
     }
     if (message.approval) target.body.append(approvalNode(message.approval));
     for (const tool of message.tools || []) target.body.append(toolRow(tool.name, tool.summary, false).node);
@@ -579,6 +620,7 @@
       const box = el('div', 'agentfiles');
       box.append(...attachmentNodes(files));
       target.body.append(box);
+      if (!message.text) target.body.append(metaRow(message));
     }
     return target;
   }
@@ -745,7 +787,7 @@
         if (!live.bubble) {
           live.bubble = el('div', 'tx');
           live.raw = '';
-          live.body.append(live.bubble);
+          live.body.append(live.bubble, metaRow({ createdAt: new Date().toISOString() }));
         }
         live.raw += event.text;
         window.MimiHooks?.stage?.onText(live.raw);
@@ -845,8 +887,15 @@
     );
     $('chat-title').textContent = chat ? chatTitle(chat) : 'Mimi';
     // The tray window shows a one-to-one chat like a character-chat app (the stage is the screen).
-    $('app').classList.toggle('solo', Boolean(compact && direct));
-    input.placeholder = compact && direct ? `ทัก${nameOf(direct.name)}…` : 'พิมพ์ข้อความ…';
+    const showCharacter = characterOn();
+    $('app').classList.toggle('solo', Boolean(direct && showCharacter));
+    $('app').classList.toggle('char-off', Boolean(direct && !showCharacter));
+    $('app').dataset.bubbles = direct && showCharacter ? bubbleLevel() : 2;
+    $('toggle-char').hidden = !direct;
+    $('toggle-char').classList.toggle('on', showCharacter);
+    $('toggle-char').title = t(showCharacter ? 'setting.characterHide' : 'setting.characterShow');
+    syncTopButtons();
+    input.placeholder = direct ? t('composer.placeholderTo', { name: nameOf(direct.name) }) : t('composer.placeholder');
     const sub = $('chat-sub');
     sub.className = `sub${state.typing ? ' typing' : ''}`;
     sub.textContent = !chat
@@ -878,8 +927,51 @@
     $('box').hidden = !chat || !state.latest;
     $('old-session').hidden = !chat || state.latest;
     $('new-session').hidden = !chat;
-    $('stop').hidden = !(chat && state.busyChat === chat.id);
+    const busyHere = Boolean(chat && state.busyChat === chat.id);
+    $('stop').hidden = !busyHere;
+    $('box').classList.toggle('busy', busyHere);
+    markEmpty();
     renderHints();
+  }
+
+  /** The two buttons at the top of the chat: with the character on in mobile mode they are the clean ones (≡ and "Chat setting"). */
+  function syncTopButtons() {
+    const clean = modeNow() === 'mobile' && $('app').classList.contains('solo');
+    const open = !$('rail').hidden;
+    $('back').textContent = clean ? '≡' : '‹';
+    if (clean) {
+      // An icon: settings while closed, back (to close it) while open.
+      $('toggle-rail').innerHTML = open ? ICONS.back : ICONS.settings;
+      $('toggle-rail').setAttribute('aria-label', t(open ? 'top.settingClose' : 'setting.title'));
+      $('toggle-rail').title = t(open ? 'top.settingClose' : 'setting.title');
+    } else {
+      $('toggle-rail').textContent = modeNow() === 'mobile' ? '⋯' : t('top.info');
+      $('toggle-rail').removeAttribute('aria-label');
+      $('toggle-rail').title = '';
+    }
+    $('toggle-char').textContent = modeNow() === 'mobile' ? '🧍' : t('top.character');
+  }
+
+  /** "แสดง prompt": a switch (tray window only) for the tool calls and other details. */
+  function promptSwitch() {
+    const toggle = el('button', `tg${showPrompt ? ' on' : ''}`);
+    toggle.type = 'button';
+    toggle.setAttribute('aria-label', t('setting.showPrompt'));
+    const label = el('label', 'tglabel');
+    label.append(el('span', '', t('setting.showPrompt')), toggle);
+    toggle.onclick = () => {
+      showPrompt = !showPrompt;
+      document.documentElement.classList.toggle('show-prompt', showPrompt);
+      try {
+        localStorage.setItem('mimi.showPrompt', showPrompt ? '1' : '0');
+      } catch {
+        // not remembered, still switched
+      }
+      renderHints();
+      renderRail();
+      scrollDown();
+    };
+    return label;
   }
 
   function renderRail() {
@@ -887,9 +979,50 @@
     rail.hidden = !(state.railOpen && state.view === 'chat' && state.chat);
     $('app').classList.toggle('with-rail', !rail.hidden);
     $('toggle-rail').classList.toggle('pri', !rail.hidden);
+    syncTopButtons();
     if (rail.hidden) return;
     const chat = state.chat;
     const nodes = [];
+
+    // A floating panel always has a way back; in mobile mode it also carries what the clean screen leaves out.
+    const railHead = el('div', 'rail-head');
+    railHead.append(el('b', '', t('setting.title')), button('btn ghost', t('setting.fold'), () => setRail(false), t('setting.foldHint')));
+    nodes.push(railHead);
+    const quick = el('div', 'rail-quick');
+    if (chat.kind === 'direct') {
+      quick.append(button(`btn${characterOn() ? ' on' : ''}`, t(characterOn() ? 'setting.characterOn' : 'setting.characterOff'), toggleCharacter, t('setting.characterHint')));
+    }
+    quick.append(
+      button('btn', t('setting.search'), () => {
+        setRail(false);
+        $('open-search').click();
+      }),
+      button('btn', t('setting.newSession'), () => {
+        setRail(false);
+        $('new-session').click();
+      }),
+    );
+    quick.append(promptSwitch());
+    nodes.push(quick);
+    if (chat.kind === 'direct' && characterOn()) {
+      // How much chat shows over the character.
+      const levels = el('div');
+      levels.append(el('h3', '', t('bubbles.title')));
+      const row = el('div', 'seg');
+      for (const level of [0, 1, 2]) {
+        row.append(
+          button(bubbleLevel() === level ? 'on' : '', t(`bubbles.${level}`), () => {
+            store.set(`mimi.bubbles.${modeNow()}`, String(level));
+            renderHeader();
+            renderRail();
+          }, t(`bubbles.${level}.hint`)),
+        );
+      }
+      levels.append(row);
+      nodes.push(levels);
+      const placing = window.MimiHooks?.stage?.viewControls?.();
+      if (placing) nodes.push(placing);
+    }
 
     if (chat.kind === 'direct') {
       const agent = agentOf(chat.agents[0]);
@@ -967,6 +1100,15 @@
     if (state.sessions.length === 0) sessions.append(el('div', 'empty', 'ยังไม่มี session — เริ่มเองอัตโนมัติเมื่อส่งข้อความแรก'));
     nodes.push(sessions);
 
+    const languages = el('div');
+    languages.append(el('h3', '', t('setting.language')));
+    const languageRow = el('div', 'seg');
+    for (const { code, name } of window.MimiI18n.languages()) {
+      languageRow.append(button(window.MimiI18n.current() === code ? 'on' : '', name, () => window.MimiI18n.set(code)));
+    }
+    languages.append(languageRow);
+    nodes.push(languages);
+
     nodes.push(
       button('btn danger', 'ลบแชตนี้', () => {
         if (confirm(`ลบแชต "${chatTitle(chat)}" ?\nประวัติจะไม่แสดงอีก (ความจำที่บันทึกไว้แล้วยังอยู่)`)) {
@@ -990,36 +1132,11 @@
     input.style.height = 'auto';
     input.style.height = `${Math.min(input.scrollHeight, 180)}px`;
   }
-  let recorder = null;
-  let recordStarted = 0;
-  let recordTimer = null;
   function renderHints() {
     const hints = $('hints');
-    if (recorder) {
-      const seconds = Math.floor((Date.now() - recordStarted) / 1000);
-      hints.replaceChildren(el('span', 'rec', `● กำลังอัดเสียง ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')} — กดไมค์อีกครั้งเพื่อหยุด`));
-      return;
-    }
-    if (compact) {
-      // The tray window: a switch for the details, and where the work runs.
-      const toggle = el('button', `tg${showPrompt ? ' on' : ''}`);
-      toggle.type = 'button';
-      toggle.setAttribute('aria-label', 'แสดง prompt');
-      const label = el('label', 'tglabel');
-      label.append(el('span', '', 'แสดง prompt'), toggle);
-      toggle.onclick = () => {
-        showPrompt = !showPrompt;
-        document.documentElement.classList.toggle('show-prompt', showPrompt);
-        try {
-          localStorage.setItem('mimi.showPrompt', showPrompt ? '1' : '0');
-        } catch {
-          // not remembered, still switched
-        }
-        renderHints();
-        scrollDown();
-      };
-      const busyElsewhere = state.busyChat !== null && state.chat && state.busyChat !== state.chat.id;
-      hints.replaceChildren(label, el('span', 'grow'), el('span', '', busyElsewhere ? 'แชตอื่นกำลังตอบ — ข้อความนี้จะเข้าคิว' : state.pcOnline ? 'sync กับ PC แล้ว' : 'ทำงานบนเครื่องนี้'));
+    const speaking = window.MimiHooks?.voice?.hint();
+    if (speaking) {
+      hints.replaceChildren(el('span', 'rec', speaking));
       return;
     }
     const parts = ['Enter ส่ง · Shift+Enter ขึ้นบรรทัดใหม่'];
@@ -1030,6 +1147,7 @@
   function renderStaged() {
     const box = $('staged');
     box.hidden = state.staged.length === 0;
+    markEmpty();
     box.replaceChildren(
       ...state.staged.map((entry) => {
         const remove = el('u', '', '×');
@@ -1089,40 +1207,9 @@
     autosize();
     state.staged = [];
     renderStaged();
+    markEmpty();
     $('mention').hidden = true;
     if (window.Notification && Notification.permission === 'default') Notification.requestPermission();
-  }
-  async function toggleRecord() {
-    if (recorder) return recorder.stop();
-    if (!navigator.mediaDevices || !window.MediaRecorder) return toast('อัดเสียงไม่ได้', 'เบราว์เซอร์นี้ไม่รองรับ แนบไฟล์เสียงแทนได้', true);
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mime = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'].find((type) => MediaRecorder.isTypeSupported(type));
-      const chunks = [];
-      recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
-      recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) chunks.push(event.data);
-      };
-      recorder.onstop = () => {
-        const type = (recorder.mimeType || 'audio/webm').split(';')[0];
-        stream.getTracks().forEach((track) => track.stop());
-        recorder = null;
-        clearInterval(recordTimer);
-        $('mic').classList.remove('rec');
-        renderHints();
-        const blob = new Blob(chunks, { type });
-        const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
-        if (blob.size > 0) stageFile(new File([blob], `voice-${stamp}.${type.includes('mp4') ? 'm4a' : 'webm'}`, { type }));
-      };
-      recorder.start();
-      recordStarted = Date.now();
-      $('mic').classList.add('rec');
-      recordTimer = setInterval(renderHints, 500);
-      renderHints();
-    } catch (error) {
-      recorder = null;
-      toast('ใช้ไมโครโฟนไม่ได้', error.message, true);
-    }
   }
   /** In a group: offers the members while the user types "@na…". */
   function renderMention() {
@@ -1160,21 +1247,8 @@
     renderMention();
     markEmpty();
   });
-  if (compact) {
-    $('toggle-rail').textContent = '⋯';
-    $('toggle-rail').title = 'ข้อมูลแชต';
-    const find = button('btn ghost icon', '⌕', () => $('open-search').click(), 'ค้นหา');
-    $('toggle-rail').before(find);
-    const camera = el('button', 'ic camera');
-    camera.type = 'button';
-    camera.title = 'ส่งรูป';
-    camera.textContent = '📷';
-    camera.onclick = () => document.querySelector('#attach-menu [data-pick="image/*"]').click();
-    $('mic').before(camera);
-    $('box').before($('hints')); // the switch row sits above the box
-    markEmpty();
-    setInterval(markEmpty, 800); // files staged or sent change it too
-  }
+  // Search is in the chat list's side pane on desktop; in mobile mode it is a button at the top.
+  $('toggle-rail').before(button('btn ghost icon', '⌕', () => $('open-search').click(), t('top.search')));
   input.addEventListener('keydown', (event) => {
     const mention = $('mention');
     if (!mention.hidden && (event.key === 'Tab' || event.key === 'Enter')) {
@@ -1182,7 +1256,10 @@
       mention.firstElementChild.click();
       return;
     }
-    if (event.key === 'Escape') mention.hidden = true;
+    if (event.key === 'Escape') {
+      mention.hidden = true;
+      if (!input.value && !$('stop').hidden) send({ type: 'abort' });
+    }
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
       event.preventDefault();
       sendMessage();
@@ -1196,14 +1273,47 @@
   });
   $('send').onclick = sendMessage;
   $('stop').onclick = () => send({ type: 'abort' });
-  $('mic').onclick = toggleRecord;
+  // The attach button. With a finger: a tap opens the camera, a long press the list (picture, file,
+  // sound, video). With a mouse: a click opens the list.
+  const cameraInput = el('input');
+  cameraInput.type = 'file';
+  cameraInput.accept = 'image/*';
+  cameraInput.setAttribute('capture', 'environment');
+  cameraInput.hidden = true;
+  $('file-input').after(cameraInput);
+  cameraInput.onchange = (event) => {
+    [...event.target.files].forEach(stageFile);
+    event.target.value = '';
+  };
+  if (window.matchMedia('(pointer: coarse)').matches) $('attach').title = t('composer.attachTouch');
+  let attachTouch = false;
+  let attachLong = false;
+  let attachTimer = null;
+  $('attach').addEventListener('pointerdown', (event) => {
+    attachLong = false;
+    attachTouch = event.pointerType === 'touch';
+    if (!attachTouch) return;
+    attachTimer = setTimeout(() => {
+      attachLong = true;
+      $('attach-menu').hidden = false;
+      if (navigator.vibrate) navigator.vibrate(15);
+    }, 450);
+  });
+  for (const type of ['pointerup', 'pointercancel', 'pointerleave']) $('attach').addEventListener(type, () => clearTimeout(attachTimer));
+  $('attach').addEventListener('contextmenu', (event) => event.preventDefault());
   $('attach').onclick = (event) => {
     event.stopPropagation();
-    $('attach-menu').hidden = !$('attach-menu').hidden;
+    if (attachLong) {
+      attachLong = false; // the list is already open
+      return;
+    }
+    if (attachTouch && event.detail !== 0) cameraInput.click();
+    else $('attach-menu').hidden = !$('attach-menu').hidden;
   };
   for (const item of $('attach-menu').querySelectorAll('button')) {
     item.onclick = () => {
       $('attach-menu').hidden = true;
+      if (item.dataset.camera) return cameraInput.click();
       $('file-input').accept = item.dataset.pick;
       $('file-input').click();
     };
@@ -1231,10 +1341,43 @@
   box.addEventListener('drop', (event) => [...event.dataTransfer.files].forEach(stageFile));
 
   $('back').onclick = () => $('app').classList.add('show-side');
-  $('toggle-rail').onclick = () => {
-    state.railOpen = !state.railOpen;
+  /** Up to 1180px wide the chat settings panel floats over the chat (a card in mobile mode) instead of sitting beside it. */
+  const railFloats = () => window.innerWidth <= 1180;
+  function setRail(open) {
+    state.railOpen = open;
+    if (!railFloats()) store.set('mimi.rail', open ? '1' : '0');
     renderRail();
-  };
+  }
+  $('toggle-rail').onclick = () => setRail(!state.railOpen);
+  // A floating panel folds back when the chat is tapped, or with Esc (capture: before a click re-renders its content).
+  document.addEventListener(
+    'click',
+    (event) => {
+      if (!railFloats() || !state.railOpen || $('rail').hidden) return;
+      if ($('rail').contains(event.target) || $('toggle-rail').contains(event.target)) return;
+      if (event.target.closest('#overlay, .dialog, .ctxmenu')) return;
+      setRail(false);
+    },
+    true,
+  );
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && railFloats() && state.railOpen && !$('rail').hidden && !document.querySelector('#overlay .dialog')) setRail(false);
+  });
+  function toggleCharacter() {
+    store.set(`mimi.character.${modeNow()}`, characterOn() ? '0' : '1');
+    renderHeader();
+    renderRail();
+  }
+  $('toggle-char').onclick = toggleCharacter;
+  // Crossing the width where the app changes mode re-lays the screen out.
+  window.addEventListener('resize', () => {
+    const mode = modeNow();
+    if (document.documentElement.dataset.mode === mode) return;
+    document.documentElement.dataset.mode = mode;
+    if (mode === 'mobile') state.railOpen = false;
+    renderHeader();
+    renderRail();
+  });
   $('new-session').onclick = () => {
     if (state.chat && confirm('เริ่ม session ใหม่? บทสนทนาเดิมยังเปิดดูได้จากรายการ session และ agent ยังจำเรื่องสำคัญได้')) {
       send({ type: 'session-new', chatId: state.chat.id });
@@ -1273,7 +1416,6 @@
   }
   for (const item of $('nav').children) {
     item.onclick = () => {
-      if (compact && item.dataset.view !== 'chat') return openDesktop(item.dataset.view);
       setView(item.dataset.view);
       if (item.dataset.view !== 'chat' || state.chat) $('app').classList.remove('show-side');
       if (item.dataset.view === 'hub') {
@@ -2249,7 +2391,6 @@
   // ---------- messages from the core ----------
   function setPc(online, name) {
     state.pcOnline = Boolean(online);
-    if (compact) renderHints();
     $('pc-dot').classList.toggle('on', Boolean(online));
     $('pc').textContent = online ? `PC agent: ${name || 'online'}` : 'PC agent: ไม่ได้เชื่อมต่อ';
   }
@@ -2269,21 +2410,15 @@
       $('app').classList.remove('show-side');
     } else if (!state.chat) {
       const remembered = Number(localStorage.getItem(CHAT_KEY));
-      // The tray window opens straight into a chat: the last one, else the main agent's.
+      // Mobile mode opens straight into a chat: the last one, else the main agent's. Desktop: the first in the list.
+      const mobile = modeNow() === 'mobile';
       const main = state.defaultAgent || state.agents[0].name;
       const chat =
         state.chats.find((entry) => entry.id === remembered) ||
-        (compact ? state.chats.find((entry) => entry.kind === 'direct' && entry.agents[0] === main) : undefined) ||
-        (compact ? undefined : state.chats[0]);
-      if (chat) {
-        const narrow = window.innerWidth <= 820;
-        send({ type: 'chat-open', chatId: chat.id });
-        if (narrow && !compact) $('app').classList.add('show-side');
-        else $('app').classList.remove('show-side');
-      } else if (compact) {
-        send({ type: 'chat-create', kind: 'direct', agents: [main] });
-        $('app').classList.remove('show-side');
-      }
+        (mobile ? state.chats.find((entry) => entry.kind === 'direct' && entry.agents[0] === main) : state.chats[0]);
+      if (chat) send({ type: 'chat-open', chatId: chat.id });
+      else if (mobile) send({ type: 'chat-create', kind: 'direct', agents: [main] });
+      if (chat || mobile) $('app').classList.remove('show-side');
     }
   }
 
@@ -2315,6 +2450,7 @@
         }
         state.chat = message.chat;
         state.session = message.session;
+        state.pins = message.pins || [];
         state.sessions = message.sessions;
         state.latest = !message.session || message.sessions[0].id === message.session.id;
         state.typing = null;
@@ -2324,7 +2460,20 @@
         renderHeader();
         renderRail();
         renderLog(message);
+        window.MimiHooks?.chat?.renderPins?.();
         reportPresence();
+        break;
+      }
+      case 'message-marks': {
+        if (!state.chat || state.chat.id !== message.chatId) break;
+        state.pins = message.pins;
+        const known = messageStore.get(message.messageId);
+        if (known) {
+          known.pinned = message.pinned;
+          known.reactions = message.reactions;
+          refreshMarks(known);
+        }
+        window.MimiHooks?.chat?.renderPins?.();
         break;
       }
       case 'chat-session': {
@@ -2359,10 +2508,13 @@
         if (message.chatId === null) {
           state.typing = null;
           live = null;
-          if (refreshAfterTurn && showing(refreshAfterTurn.chatId, refreshAfterTurn.sessionId)) {
-            send({ type: 'chat-open', chatId: refreshAfterTurn.chatId, sessionId: state.latest ? undefined : refreshAfterTurn.sessionId });
+          // The reply that streamed in is reloaded from the log, so its bubbles know their ids (pin, react, reply).
+          if (refreshAfterTurn && state.chat && state.chat.id === refreshAfterTurn.chatId) {
+            send({ type: 'chat-open', chatId: refreshAfterTurn.chatId, sessionId: state.latest ? undefined : state.session && state.session.id });
           }
           refreshAfterTurn = null;
+        } else if (state.chat && state.chat.id === message.chatId) {
+          refreshAfterTurn = { chatId: message.chatId };
         }
         renderChatList();
         renderHeader();
@@ -2596,6 +2748,12 @@
     SPEAK_KEY,
     openChat,
     setView,
+    characterOn,
+    store,
+    refreshMarks,
+    stageFile,
+    sendMessage,
+    renderHints,
   };
 
   function connect() {
@@ -2673,10 +2831,6 @@
 
   renderHeader();
   renderChatList();
-  const startView = pageQuery.get('view');
-  if (!compact && ['agents', 'hub', 'settings'].includes(startView)) {
-    setView(startView);
-  }
   connect();
   fetch('/health')
     .then((response) => response.json())

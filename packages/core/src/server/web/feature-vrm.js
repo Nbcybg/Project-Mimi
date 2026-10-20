@@ -727,6 +727,8 @@ for (const [preset, keys] of Object.entries({
 const MOOD_WEIGHT = { happy: 0.75, angry: 0.7, sad: 0.75, relaxed: 0.7, surprised: 0.65, neutral: 0 };
 
 const live = {
+  /** Where the user put the camera: yaw / pitch in degrees, zoom as a factor, x / y as % of the figure's height. */
+  view: { yaw: 0, pitch: 0, zoom: 1, x: 0, y: 0 },
   renderer: null,
   scene: null,
   camera: null,
@@ -795,8 +797,31 @@ function liveFrame() {
   const fitWidth = width / 2 / (Math.tan(fov / 2) * live.camera.aspect);
   distance = Math.max(distance, fitWidth);
   const middle = box.min.y + height * 0.5;
-  live.camera.position.set(0, middle, distance);
-  live.camera.lookAt(0, middle, 0);
+  // Orbit around the middle of the figure, then slide camera and target together (x / y: where the figure goes on screen).
+  const { yaw, pitch, zoom, x, y } = live.view;
+  const radius = distance / Math.max(zoom, 0.1);
+  const turn = THREE.MathUtils.degToRad(yaw);
+  const tilt = THREE.MathUtils.degToRad(pitch);
+  const target = new THREE.Vector3(0, middle, 0);
+  live.camera.position.set(
+    Math.sin(turn) * Math.cos(tilt) * radius,
+    middle + Math.sin(tilt) * radius,
+    Math.cos(turn) * Math.cos(tilt) * radius,
+  );
+  live.camera.lookAt(target);
+  live.camera.updateMatrixWorld();
+  const right = new THREE.Vector3().setFromMatrixColumn(live.camera.matrixWorld, 0);
+  const up = new THREE.Vector3().setFromMatrixColumn(live.camera.matrixWorld, 1);
+  const shift = right.multiplyScalar((-x / 100) * height).add(up.multiplyScalar((-y / 100) * height));
+  live.camera.position.add(shift);
+  target.add(shift);
+  live.camera.lookAt(target);
+}
+
+/** The chat stage's camera, as set in Chat setting. */
+function liveSetView(view) {
+  live.view = { yaw: 0, pitch: 0, zoom: 1, x: 0, y: 0, ...view };
+  liveFrame();
 }
 
 /** A relaxed standing pose with breathing; the rest pose of a VRM is a T-pose. */
@@ -928,4 +953,4 @@ function liveTalk() {
   live.talkUntil = performance.now() + 450;
 }
 
-window.MimiHooks.vrmStage = { show: liveShow, hide: liveHide, talk: liveTalk };
+window.MimiHooks.vrmStage = { show: liveShow, hide: liveHide, talk: liveTalk, setView: liveSetView };

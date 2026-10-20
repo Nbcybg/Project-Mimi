@@ -49,6 +49,8 @@ log(`sources copied to ${path.relative(ROOT, APP)}`);
 // binaries and would otherwise make npm run node-gyp, which needs Visual Studio.
 log('installing production dependencies (npm ci --omit=dev)...');
 run('cmd.exe', ['/d', '/s', '/c', 'npm ci --omit=dev --ignore-scripts --no-audit --no-fund'], APP);
+// Electron (the native window) downloads its program in a script of its own, which --ignore-scripts skipped.
+run(process.execPath, [path.join('node_modules', 'electron', 'install.js')], APP);
 
 // 4. The Node runtime, same version as this machine so native modules match.
 const runtimeZip = path.join(CACHE, `node-v${NODE_VERSION}-win-x64.zip`);
@@ -93,9 +95,9 @@ fs.writeFileSync(
     `2. ดับเบิลคลิก install.cmd ครั้งเดียว เพื่อสร้างไอคอน "Mimi" บน Desktop\r\n` +
     `3. เปิดแอปจากไอคอน Mimi แล้วใส่ API key ของ provider ในหน้า Settings\r\n\r\n` +
     `หมายเหตุ\r\n` +
-    `- ข้อมูลทั้งหมด (แชท, memory, key) อยู่ในโฟลเดอร์ app\\user ของแอปนี้ สำรองข้อมูล = คัดลอกโฟลเดอร์นี้\r\n` +
-    `- start.cmd เปิดแอปแบบเห็น log ไว้ใช้แก้ปัญหา\r\n` +
-    `- ต้องมี Microsoft Edge หรือ Google Chrome ในเครื่องสำหรับหน้าต่างแอป\r\n`,
+    `- ข้อมูลทั้งหมด (แชท, memory, key) อยู่ในโฟลเดอร์ Documents\\Mimi สำรองข้อมูล = คัดลอกโฟลเดอร์นี้\r\n` +
+    `- กดปิดหน้าต่าง = ซ่อนไว้ที่ถาด (tray) ออกจากแอปจริง ๆ ที่เมนูของไอคอน Mimi\r\n` +
+    `- start.cmd เปิดแอปแบบเห็น log ไว้ใช้แก้ปัญหา\r\n`,
   'utf8',
 );
 log('install.cmd / start.cmd / README.txt written');

@@ -1,0 +1,11 @@
+{
+  "name": "@mimi/desktop",
+  "version": "0.5.0",
+  "private": true,
+  "type": "commonjs",
+  "main": "main.cjs",
+  "description": "The native window of Mimi: tray icon and the chat windows, around the local core.",
+  "dependencies": {
+    "electron": "^44.9.1"
+  }
+}

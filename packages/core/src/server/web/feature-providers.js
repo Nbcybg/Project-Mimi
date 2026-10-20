@@ -8,9 +8,6 @@
 
   let editingId = null;
 
-  const parseModels = (value) =>
-    [...new Set(String(value).split(/[\n,]/).map((model) => model.trim()).filter(Boolean))];
-
   function row(provider, panel) {
     const line = el('div', 'prov');
     const info = el('div');
@@ -53,8 +50,8 @@
         'p',
         'hint',
         editing
-          ? 'เว้น API key ว่าง = ใช้คีย์เดิมในเครื่องนี้ · แก้รายชื่อโมเดลได้ทีละบรรทัด (คั่นด้วย , ก็ได้)'
-          : 'เลือกจากรายชื่อ (เช่น deepseek, opencode, google) หรือพิมพ์ชื่อของคุณเองแล้วใส่ URL ระบบจะดึงรายชื่อโมเดลและเก็บ credential ให้ · คีย์เก็บในเครื่องนี้เท่านั้น ไม่ถูก sync',
+          ? 'เว้น API key ว่าง = ใช้คีย์เดิมในเครื่องนี้ · เปลี่ยน URL หรือคีย์แล้วระบบจะดึงรายชื่อโมเดลใหม่ให้เอง'
+          : 'เลือกจากรายชื่อ (เช่น deepseek, opencode, google) หรือพิมพ์ชื่อของคุณเองแล้วใส่ URL กับคีย์ ระบบจะดึงรายชื่อโมเดลและเก็บ credential ให้เอง · คีย์เก็บในเครื่องนี้เท่านั้น ไม่ถูก sync',
       ),
     );
     const id = M().textInput(editing ? editing.id : '', 'ชื่อผู้ให้บริการ เช่น deepseek');
@@ -76,13 +73,19 @@
       if (hit) url.value = hit.baseURL || '';
       url.placeholder = hit && !hit.baseURL ? `ใช้ที่อยู่มาตรฐานของ ${hit.name} (ไม่ต้องกรอก)` : 'URL ของ API เช่น https://example.com/v1';
     };
-    const modelsText = el('textarea');
-    modelsText.value = editing ? (editing.modelIds || []).join('\n') : '';
-    modelsText.placeholder = 'ไม่บังคับ: รหัสโมเดล บรรทัดละตัว (เมื่อ URL นี้ดึงรายชื่อโมเดลเองไม่ได้)';
     const name = M().textInput(editing ? editing.name : '', 'ชื่อที่แสดง (เว้นว่าง = ใช้ชื่อผู้ให้บริการ)');
     const grid = el('div', 'grid2');
     grid.append(M().labelled('ชื่อ', id), M().labelled('ชื่อที่แสดง', name), M().labelled('URL', url), M().labelled('API key', key));
-    form.append(grid, M().labelled('โมเดล', modelsText), datalist);
+    form.append(grid, datalist);
+    // The models come from the provider itself; here they are only shown.
+    if (editing) {
+      const ids = editing.modelIds || [];
+      const list = el('div', 'hstack models');
+      for (const model of ids.slice(0, 60)) list.append(el('span', 'chip', model));
+      if (ids.length > 60) list.append(el('span', 'chip', `+${ids.length - 60}`));
+      if (ids.length === 0) list.append(el('span', 'hint', 'ยังไม่มีรายชื่อโมเดล — กด "ดึงโมเดลใหม่"'));
+      form.append(M().labelled(`โมเดลที่ดึงมา (${ids.length})`, list));
+    }
 
     const foot = el('div', 'foot');
     foot.append(el('span', 'msg'));
@@ -99,27 +102,21 @@
       button('btn pri', editing ? 'บันทึก' : 'เชื่อมต่อและดึงโมเดล', () => {
         const providerId = id.value.trim().toLowerCase();
         if (!providerId) return M().toast('ต้องมีชื่อผู้ให้บริการ', null, true);
-        const models = parseModels(modelsText.value);
         if (editing) {
           M().ui.providerDirty = false;
-          if (key.value.trim()) {
-            M().toast('กำลังบันทึกและตรวจคีย์…', providerId);
+          const urlChanged = url.value.trim().replace(/\/+$/, '') !== (editing.baseURL || '').replace(/\/+$/, '');
+          if (key.value.trim() || urlChanged) {
+            // A new key or address: ask the provider for its models again.
+            M().toast('กำลังบันทึกและดึงรายชื่อโมเดล…', providerId);
             M().send({
               type: 'provider-connect',
               id: providerId,
               name: name.value.trim() || undefined,
               baseURL: url.value.trim() || undefined,
-              apiKey: key.value.trim(),
-              models: models.length ? models : undefined,
+              apiKey: key.value.trim() || undefined,
             });
           } else {
-            M().send({
-              type: 'provider-update',
-              id: providerId,
-              name: name.value.trim(),
-              baseURL: url.value.trim(),
-              models,
-            });
+            M().send({ type: 'provider-update', id: providerId, name: name.value.trim() });
           }
         } else {
           M().ui.providerDirty = false;
@@ -133,7 +130,6 @@
             name: name.value.trim() || undefined,
             baseURL: url.value.trim() || undefined,
             apiKey: key.value.trim() || undefined,
-            models: models.length ? models : undefined,
           });
         }
       }),

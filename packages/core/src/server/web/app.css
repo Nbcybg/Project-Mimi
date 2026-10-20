@@ -509,12 +509,13 @@ kbd { font: 11px var(--mono); padding: 1px 6px; border: 1px solid var(--line); b
   .back { display: block; }
   .top { padding: 6px 10px; gap: 8px; }
   .top .right .btn { padding: 5px 8px; }
-  .hide-narrow { display: none; }
   .statusbar { padding: 6px 10px; gap: 6px; }
   .wrap { width: calc(100% - 20px); }
   .row-user .col { max-width: 88%; }
-  .page { padding: 14px 12px 40px; }
-  .split, .grid2, .grid4 { grid-template-columns: minmax(0, 1fr); }
+  .page { padding: 14px 12px 40px; overflow-x: hidden; }
+  .knob { grid-template-columns: 92px minmax(0, 1fr) 70px; gap: 8px; }
+  /* !important: some screens set their column widths inline */
+  .split, .grid2, .grid4, .kbsplit { grid-template-columns: minmax(0, 1fr) !important; }
   .wcondrow.wrow4 { grid-template-columns: minmax(0, 1fr) 96px; }
   .wrunrow { grid-template-columns: auto auto minmax(0, 1fr); }
   .pftop { grid-template-columns: minmax(0, 1fr) auto; }
@@ -528,6 +529,8 @@ kbd { font: 11px var(--mono); padding: 1px 6px; border: 1px solid var(--line); b
   .stage .figure { width: 90%; right: -6%; opacity: .7; }
   .presets > * { grid-template-columns: 90px minmax(0, 1fr) 40px 40px; }
   .presets > * > :nth-child(n+5) { display: none; }
+  .poolrows > * { grid-template-columns: minmax(0, 1fr) 54px auto; }
+  .poolrows > * > :nth-child(3), .poolrows > * > :nth-child(4) { display: none; }
   .toolrows > * { grid-template-columns: 130px 60px minmax(0, 1fr); }
   .toolrows > * > :nth-child(4) { display: none; }
   .trigrows > * { grid-template-columns: minmax(0, 1fr) auto; }
@@ -605,27 +608,22 @@ kbd { font: 11px var(--mono); padding: 1px 6px; border: 1px solid var(--line); b
 .char-slider input[type="range"] { accent-color: var(--accent); width: 100%; }
 .toast.link { cursor: pointer; }
 .toast.link:hover { border-color: var(--accent); }
-/* tray app: phone-sized chat window */
-.compact #nav button[data-view="agents"]::after, .compact #nav button[data-view="hub"]::after, .compact #nav button[data-view="settings"]::after { content: " ↗"; font-size: 10px; opacity: .6; }
 
-/* ---------- tray window: one-to-one chat like a character-chat app (design/screens/11-mobile-direct.png) ---------- */
-.compact .solo .top { border: 0; background: rgba(18,20,26,.94); min-height: 58px; }
-.compact .solo .top .sub, .compact .solo #new-session { display: none; }
-.compact .solo #chat-avatars .av { width: 38px; height: 38px; border: 2px solid var(--accent); }
-.compact .solo .top h1 { font-size: 16px; }
-.compact .top .btn.icon, .compact #toggle-rail { border: 0; background: none; font-size: 18px; padding: 4px 8px; color: var(--ink-2); }
-.compact .solo .statusbar { background: rgba(18,20,26,.94); border: 0; padding: 4px 12px 10px; }
-.compact .solo .stage:not(.has-bg) {
+/* ---------- the character stage: one-to-one chat like a character-chat app ----------
+   Both modes (design/screens/8-direct.png on desktop, 11-mobile-direct.png on mobile): a night
+   scene, the character in the middle, the newest messages over the lower half. */
+.solo .stage:not(.has-bg) {
   background:
     radial-gradient(circle at 96% 38%, rgba(250,232,160,.16) 0, rgba(250,232,160,0) 42%),
     linear-gradient(180deg, #0e1530 0%, #18224a 48%, #121829 100%);
 }
-.compact .solo .stage:not(.has-bg)::before {
-  content: ""; position: absolute; right: -14%; top: 26%; width: 42%; aspect-ratio: 1; border-radius: 50%;
+.solo .stage:not(.has-bg)::before {
+  content: ""; position: absolute; right: -4%; top: 14%; width: min(30%, 300px); aspect-ratio: 1; border-radius: 50%;
   background: radial-gradient(circle at 42% 40%, #fff3c4 0%, #f4dc8a 55%, #e2c264 100%);
   box-shadow: 0 0 70px 24px rgba(250,228,150,.16); pointer-events: none;
 }
-.compact .solo .stage:not(.has-bg)::after {
+html[data-mode="mobile"] .solo .stage:not(.has-bg)::before { right: -14%; top: 26%; width: 42%; }
+.solo .stage:not(.has-bg)::after {
   content: ""; position: absolute; inset: 0; pointer-events: none; opacity: .8;
   background-image:
     radial-gradient(1.6px 1.6px at 14% 16%, #dfe6ff 50%, transparent 51%),
@@ -635,42 +633,202 @@ kbd { font: 11px var(--mono); padding: 1px 6px; border: 1px solid var(--line); b
     radial-gradient(1.2px 1.2px at 8% 44%, #dfe6ff 50%, transparent 51%),
     radial-gradient(1.4px 1.4px at 52% 8%, #dfe6ff 50%, transparent 51%);
 }
-.compact .solo .stage .figure { left: 0; right: 0; width: 100%; height: 94%; z-index: 1; }
-.compact .solo .stage .figure img.fig { object-position: bottom center; opacity: 1; }
-.compact .solo .stage .fade { position: absolute; inset: auto 0 0 0; height: 62%; z-index: 2; pointer-events: none;
+.solo .stage .figure { left: 0; right: 0; width: 100%; height: 94%; z-index: 1; }
+.solo .stage .figure img.fig { object-position: bottom center; opacity: 1; }
+.solo .stage .fade { position: absolute; inset: auto 0 0 0; height: 62%; z-index: 2; pointer-events: none;
   background: linear-gradient(180deg, rgba(14,15,19,0) 0%, rgba(14,15,19,.22) 50%, rgba(14,15,19,.6) 100%); }
-.compact .solo .log { padding: 12px 0 10px; display: flex; flex-direction: column;
+.solo .log { padding: 12px 0 10px; display: flex; flex-direction: column;
   /* older messages fade out towards the top, so the character's face stays in view */
   -webkit-mask-image: linear-gradient(180deg, transparent 0%, transparent 18%, #000 46%); mask-image: linear-gradient(180deg, transparent 0%, transparent 18%, #000 46%); }
-.compact .solo .log > .wrap { margin-top: auto; width: calc(100% - 24px); }
-.compact .solo .gmsg { display: block; }
-.compact .solo .gmsg > .av, .compact .solo .gmsg .nm, .compact .solo .time, .compact .solo .acts { display: none; }
-.compact .solo .gmsg .body { margin-top: 0; gap: 8px; }
-.compact .solo .tx { background: rgba(20,22,28,.8); border: 1px solid rgba(255,255,255,.1); border-radius: 16px; padding: 10px 14px; max-width: 86%;
+.solo .log > .wrap { margin-top: auto; }
+.solo .gmsg { display: block; }
+.solo .gmsg > .av, .solo .gmsg .nm { display: none; }
+.solo .gmsg .body { margin-top: 0; gap: 6px; }
+.solo .mrow .time { color: rgba(255,255,255,.58); }
+.solo .tx { background: rgba(20,22,28,.8); border: 1px solid rgba(255,255,255,.1); border-radius: 16px; padding: 10px 14px; max-width: min(680px, 86%);
   box-shadow: 0 6px 20px rgba(0,0,0,.28); }
-.compact .solo .user { background: #ece8e1; color: #1f1c18; border: 0; border-radius: 18px; padding: 9px 15px; box-shadow: 0 6px 20px rgba(0,0,0,.25); }
-.compact .solo .user .act { color: #6d5a3c; }
-.compact .solo .row-user .col { max-width: 80%; }
-.compact .solo .divider { font-size: 11px; opacity: .75; }
-html.compact:not(.show-prompt) .solo .tool, html.compact:not(.show-prompt) .solo .nest, html.compact:not(.show-prompt) .solo .note.use { display: none; }
-html.compact:not(.show-prompt) .solo .tx:empty { display: none; }
-.compact .solo .composer { background: var(--panel); border-top: 1px solid var(--line); padding-top: 8px; }
-.compact .composer .wrap { width: calc(100% - 20px); }
-.compact .hints { padding: 0 6px 8px; align-items: center; }
-.compact .box { border-radius: 18px; }
-.compact .hints .grow { flex: 1; }
-.compact .tglabel { display: inline-flex; gap: 8px; align-items: center; cursor: pointer; }
-.compact .tg { width: 30px; height: 17px; border-radius: 999px; background: #3a3f48; position: relative; border: 0; padding: 0; }
-.compact .tg::after { content: ""; position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%; background: #c9cdd4; transition: left .15s; }
-.compact .tg.on { background: var(--accent); } .compact .tg.on::after { left: 15px; background: #fff; }
-.compact .ic.camera { font-size: 16px; }
-.compact .line #emoji { order: 1; } .compact .line .camera { order: 2; } .compact .line #mic, .compact .line #stop, .compact .line #send { order: 3; }
-.compact .box.empty #send { display: none; }
-.compact .box:not(.empty) #mic:not(.rec) { display: none; }
-.compact .box #mic, .compact .box #send { width: 40px; height: 40px; border-radius: 50%; }
-.compact .box.empty #mic { background: var(--accent); color: var(--accent-ink); }
+.solo .user { background: #ece8e1; color: #1f1c18; border: 0; border-radius: 18px; padding: 9px 15px; box-shadow: 0 6px 20px rgba(0,0,0,.25); }
+.solo .user .act { color: #6d5a3c; }
+.solo .row-user .col { max-width: min(560px, 80%); }
+.solo .divider { font-size: 11px; opacity: .75; }
+
+/* the character switched off: the plain chat, all of it readable */
+.char-off .stage .bgwrap, .char-off .stage .fade { display: none; }
+.char-off .stage.has-bg { background: none; }
+
+/* ---------- mobile mode (a window up to 820px wide) ---------- */
+html[data-mode="mobile"] .top .btn.icon, html[data-mode="mobile"] #toggle-rail, html[data-mode="mobile"] #toggle-char { border: 0; background: none; font-size: 18px; padding: 4px 8px; color: var(--ink-2); }
+html[data-mode="mobile"] #toggle-char.on { color: var(--accent-text); }
+html[data-mode="mobile"] #toggle-char:not(.on) { opacity: .45; }
+html[data-mode="mobile"] .acts { display: none; }
+html[data-mode="mobile"]:not(.show-prompt) .tool, html[data-mode="mobile"]:not(.show-prompt) .nest, html[data-mode="mobile"]:not(.show-prompt) .note.use { display: none; }
+html[data-mode="mobile"]:not(.show-prompt) .tx:empty { display: none; }
+html[data-mode="mobile"] .composer { background: var(--panel); border-top: 1px solid var(--line); padding-top: 8px; }
+html[data-mode="mobile"] .box { border-radius: 18px; }
+html[data-mode="mobile"] #hints:not(:has(.rec)) { display: none; }
+html[data-mode="mobile"] .line #emoji { order: 1; } html[data-mode="mobile"] .line #mic, html[data-mode="mobile"] .line #stop, html[data-mode="mobile"] .line #send { order: 3; }
+html[data-mode="mobile"] .box.empty #send { display: none; }
+html[data-mode="mobile"] .box:not(.empty) #mic:not(.rec) { display: none; }
+html[data-mode="mobile"] .box #mic, html[data-mode="mobile"] .box #send { width: 40px; height: 40px; border-radius: 50%; }
+html[data-mode="mobile"] .box.empty #mic { background: var(--accent); color: var(--accent-ink); }
+.top .btn.icon { display: none; }
+html[data-mode="mobile"] .top .btn.icon { display: inline-block; }
+.tglabel { display: inline-flex; gap: 8px; align-items: center; cursor: pointer; }
+.tg { width: 30px; height: 17px; border-radius: 999px; background: #3a3f48; position: relative; border: 0; padding: 0; }
+.tg::after { content: ""; position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%; background: #c9cdd4; transition: left .15s; }
+.tg.on { background: var(--accent); } .tg.on::after { left: 15px; background: #fff; }
 
 /* the chat stage: an agent shown as a live VRM */
 .stage .figure canvas.vrm-live { position: absolute; inset: 0; width: 100%; height: 100%; display: block; transition: opacity .26s ease; }
 .stage .figure canvas.vrm-live.swap { opacity: 0; }
 .stage .figure:has(canvas.vrm-live) { animation: none; filter: drop-shadow(0 20px 36px rgba(0,0,0,.4)); }
+
+/* ---------- messages: time, reactions, pin, the button bar ---------- */
+.mrow { display: flex; gap: 6px; align-items: center; min-height: 16px; }
+.row-user .mrow { justify-content: flex-end; }
+.mrow .time { font-size: 11px; color: var(--faint); }
+.mrow .react { font-size: 13px; line-height: 1; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--line); background: var(--raised); }
+.mrow .react:hover { border-color: rgba(238,128,121,.6); }
+.mrow .pinmark { font-size: 11px; }
+.hasbar { position: relative; }
+.msgbar { position: absolute; top: -17px; right: 8px; z-index: 6; display: none; gap: 1px; padding: 2px; border-radius: 999px; background: var(--raised); border: 1px solid #3a3f46; box-shadow: 0 6px 18px rgba(0,0,0,.45); }
+.row-user .msgbar { right: auto; left: 8px; }
+.hasbar:hover > .msgbar, .hasbar:focus-within > .msgbar, .hasbar.sel > .msgbar { display: flex; }
+.msgbar .b { width: 26px; height: 24px; border-radius: 999px; font-size: 13px; line-height: 1; color: var(--ink-2); display: grid; place-items: center; }
+.msgbar .b:hover { background: var(--hover); color: var(--ink); }
+.msgbar .b.on { background: var(--accent-soft); }
+.reactpick { position: absolute; top: 30px; left: 0; display: flex; gap: 2px; padding: 4px; border-radius: 12px; background: var(--raised); border: 1px solid #3a3f46; box-shadow: 0 10px 26px rgba(0,0,0,.5); }
+.reactpick button { width: 28px; height: 28px; border-radius: 8px; font-size: 16px; }
+.reactpick button:hover { background: var(--hover); }
+.pinbar { display: flex; gap: 8px; align-items: center; padding: 5px 18px; border-bottom: 1px solid var(--line); background: var(--panel); flex: none; }
+.pinbar[hidden] { display: none; }
+.pinbar .pinbody { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; text-align: left; border-left: 2px solid var(--accent); padding-left: 9px; }
+.pinbar .pinbody b { font-size: 11px; color: var(--accent-text); font-weight: 600; }
+.pinbar .txt { font-size: 12.5px; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#toggle-char.on { border-color: rgba(224,138,91,.5); color: var(--accent-text); background: var(--accent-soft); }
+.hstack.models { max-height: 130px; overflow-y: auto; }
+
+/* ---------- the stop button: while a reply is coming it takes the place of mic / send ---------- */
+.ic.stop { width: 38px; height: 38px; border-radius: 50%; box-shadow: 0 0 0 3px rgba(238,128,121,.22); animation: stop-pulse 1.6s ease-in-out infinite; }
+@keyframes stop-pulse { 0%, 100% { box-shadow: 0 0 0 3px rgba(238,128,121,.22); } 50% { box-shadow: 0 0 0 6px rgba(238,128,121,.1); } }
+@media (prefers-reduced-motion: reduce) { .ic.stop { animation: none; } }
+.box.busy #mic:not(.rec) { display: none; }
+.box.busy.empty #send { display: none; }
+
+/* ---------- chat settings panel: a floating panel always has a way back ---------- */
+.rail-head, .rail-quick { display: none; }
+@media (max-width: 1180px) {
+  .rail-head { display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 2; margin: -14px -16px 0; padding: 12px 16px 8px; background: var(--panel); border-bottom: 1px solid var(--line-soft); }
+}
+html[data-mode="mobile"] .rail-quick { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.rail-quick .btn.on { border-color: rgba(224,138,91,.5); color: var(--accent-text); background: var(--accent-soft); }
+.rail-quick .tglabel { margin-left: auto; }
+/* mobile mode: the panel is a card that unfolds from the "Chat setting" button */
+html[data-mode="mobile"] .rail {
+  position: fixed; top: 64px; right: 10px; left: auto; bottom: auto; z-index: 30;
+  width: min(340px, calc(100vw - 20px)); height: auto; max-height: calc(100vh - 84px);
+  border: 1px solid rgba(255,255,255,.14); border-radius: 20px;
+  background: rgba(24,26,31,.84); -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px);
+  box-shadow: 0 18px 50px rgba(0,0,0,.55); transform-origin: top right; animation: rail-pop .18s ease-out both;
+}
+html[data-mode="mobile"] .rail-head { background: rgba(24,26,31,.96); border-radius: 20px 20px 0 0; }
+@keyframes rail-pop { from { opacity: 0; transform: scale(.9) translateY(-8px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { html[data-mode="mobile"] .rail { animation: none; } }
+
+/* ---------- mobile mode, character on: a clean screen ----------
+   Only the character, the newest messages and a few glass buttons: ≡ (chats) and "Chat setting"
+   at the top; talk, attach and the message box (send / stop inside it) at the bottom. */
+html[data-mode="mobile"] .solo { --glass: rgba(255,255,255,.16); --glass-line: rgba(255,255,255,.3); }
+html[data-mode="mobile"] .solo #view-chat { position: relative; }
+html[data-mode="mobile"] .solo .stage { position: absolute; inset: 0; flex: none; }
+html[data-mode="mobile"] .solo .log { padding-bottom: 96px; }
+html[data-mode="mobile"] .solo .top { position: absolute; top: 0; left: 0; right: 0; z-index: 25; min-height: 0; padding: 12px 12px 0; background: none; border: 0; pointer-events: none; }
+html[data-mode="mobile"] .solo .top > * { pointer-events: auto; }
+html[data-mode="mobile"] .solo .top .stack, html[data-mode="mobile"] .solo .top .ttl, html[data-mode="mobile"] .solo .top .btn.icon,
+html[data-mode="mobile"] .solo #new-session, html[data-mode="mobile"] .solo #toggle-char, html[data-mode="mobile"] .solo .statusbar { display: none; }
+html[data-mode="mobile"] .solo #back, html[data-mode="mobile"] .solo #toggle-rail,
+html[data-mode="mobile"] .solo #mic, html[data-mode="mobile"] .solo #attach, html[data-mode="mobile"] .solo #input {
+  background: var(--glass); border: 1px solid var(--glass-line); color: #fff;
+  -webkit-backdrop-filter: blur(16px) saturate(1.4); backdrop-filter: blur(16px) saturate(1.4); box-shadow: 0 4px 16px rgba(0,0,0,.18);
+}
+html[data-mode="mobile"] .solo #back { display: grid; place-items: center; width: 44px; height: 44px; padding: 0; border-radius: 50%; font-size: 24px; line-height: 1; }
+html[data-mode="mobile"] .solo #toggle-rail { display: grid; place-items: center; width: 44px; height: 44px; padding: 0; border-radius: 50%; }
+html[data-mode="mobile"] .solo #toggle-rail svg { width: 22px; height: 22px; }
+html[data-mode="mobile"] .solo #toggle-rail.pri { background: rgba(255,255,255,.28); }
+html[data-mode="mobile"] .solo .pinbar { position: absolute; top: 66px; left: 12px; right: 12px; z-index: 24; padding: 6px 8px 6px 12px; border: 1px solid var(--glass-line); border-radius: 16px; background: rgba(20,22,28,.45); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
+html[data-mode="mobile"] .solo .composer { position: absolute; left: 0; right: 0; bottom: 0; z-index: 25; padding: 0 0 12px; background: none; border: 0; }
+html[data-mode="mobile"] .solo .box { padding: 0; border: 0; border-radius: 0; background: none; box-shadow: none; }
+html[data-mode="mobile"] .solo .box:focus-within { border: 0; box-shadow: none; }
+html[data-mode="mobile"] .solo .staged { padding: 8px; margin-bottom: 8px; border: 0; border-radius: 16px; background: rgba(20,22,28,.6); }
+html[data-mode="mobile"] .solo .line { align-items: flex-end; gap: 8px; }
+html[data-mode="mobile"] .solo .line #mic { order: 1; display: grid !important; background: var(--glass) !important; color: #fff !important; width: 48px; height: 48px; border-radius: 50%; }
+html[data-mode="mobile"] .solo .line #mic.rec { background: rgba(238,128,121,.55) !important; }
+html[data-mode="mobile"] .solo .line #attach { order: 2; width: 48px; height: 48px; border-radius: 50%; }
+html[data-mode="mobile"] .solo .line #input { order: 3; flex: 1; min-height: 48px; max-height: 140px; padding: 13px 58px 13px 20px; border-radius: 24px; }
+html[data-mode="mobile"] .solo .line #input::placeholder { color: rgba(255,255,255,.72); }
+html[data-mode="mobile"] .solo .line #send, html[data-mode="mobile"] .solo .line #stop { order: 4; position: relative; z-index: 2; width: 40px; height: 40px; margin: 0 4px 4px -52px; border-radius: 50%; }
+html[data-mode="mobile"] .solo .line #emoji, html[data-mode="mobile"] .solo .line .camera { display: none; }
+html[data-mode="mobile"] .solo #hints { display: none; }
+
+/* ---------- the mic: hold to talk, tap for hands-free ---------- */
+#mic { touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+#rec-bar { display: none; }
+html[data-mode="mobile"] .solo .box.recording #rec-bar {
+  display: flex; align-items: center; gap: 10px; position: absolute; left: 56px; right: 0; bottom: 0; height: 48px; z-index: 3; padding: 0 8px 0 18px;
+  border-radius: 24px; color: #fff; font-size: 14px; background: rgba(54,18,22,.88); border: 1px solid rgba(255,110,110,.45);
+  -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); transition: background .15s;
+}
+#rec-bar .dot { width: 10px; height: 10px; border-radius: 50%; background: #ff5a5a; flex: none; animation: rec-blink 1s ease-in-out infinite; }
+#rec-bar .t { font-variant-numeric: tabular-nums; min-width: 34px; }
+#rec-bar .wave { display: flex; align-items: center; gap: 3px; height: 28px; flex: none; }
+#rec-bar .wave i { width: 3px; height: 26px; border-radius: 2px; background: #fff; opacity: .85; transform: scaleY(.25); animation: rec-wave .9s ease-in-out infinite; animation-delay: calc(var(--i) * -.11s); }
+#rec-bar .msg { flex: 1; min-width: 0; text-align: right; font-size: 12.5px; color: rgba(255,255,255,.78); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#rec-bar .cancel { flex: none; height: 34px; padding: 0 12px; border-radius: 17px; background: rgba(255,255,255,.16); color: #fff; font-size: 13px; }
+html[data-mode="mobile"] .solo .box.recording[data-rec-mode="hold"] #rec-bar .msg { animation: rec-nudge 1.2s ease-in-out infinite; }
+html[data-mode="mobile"] .solo .box.rec-armed #rec-bar { background: rgba(120,16,16,.95); border-color: #ff6b6b; }
+html[data-mode="mobile"] .solo .box.rec-armed #rec-bar .msg { animation: none; color: #fff; font-weight: 600; }
+html[data-mode="mobile"] .solo .box.rec-armed #rec-bar .wave { opacity: .3; }
+/* the mic itself: glows red with rings that spread out; bigger while it is held, and it breathes with the voice (--lvl) */
+html[data-mode="mobile"] .solo .line #mic.rec { position: relative; z-index: 4; background: rgba(238,72,72,.85) !important; transform: scale(calc(1 + var(--lvl, 0) * .16)); transition: transform .08s linear; box-shadow: 0 0 22px rgba(255,80,80,.55); }
+html[data-mode="mobile"] .solo .box[data-rec-mode="hold"] #mic.rec { transform: scale(calc(1.28 + var(--lvl, 0) * .2)); }
+html[data-mode="mobile"] .solo .line #mic.rec::before, html[data-mode="mobile"] .solo .line #mic.rec::after {
+  content: ""; position: absolute; inset: -2px; border-radius: 50%; border: 2px solid rgba(255,100,100,.75); pointer-events: none; animation: rec-ring 1.5s ease-out infinite;
+}
+html[data-mode="mobile"] .solo .line #mic.rec::after { animation-delay: .75s; }
+html[data-mode="mobile"] .solo .box.rec-armed #mic.rec { background: rgba(70,70,76,.95) !important; box-shadow: none; }
+html[data-mode="mobile"] .solo .box.rec-armed #mic.rec::before, html[data-mode="mobile"] .solo .box.rec-armed #mic.rec::after { animation: none; opacity: 0; }
+@keyframes rec-ring { from { transform: scale(1); opacity: .85; } to { transform: scale(2.1); opacity: 0; } }
+@keyframes rec-blink { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+@keyframes rec-wave { 0%, 100% { transform: scaleY(calc(.2 + var(--lvl, 0) * .5)); } 50% { transform: scaleY(calc(.45 + var(--lvl, 0) * .55)); } }
+@keyframes rec-nudge { 0%, 100% { transform: translateX(0); } 50% { transform: translateX(-8px); } }
+@media (prefers-reduced-motion: reduce) {
+  #rec-bar .dot, #rec-bar .wave i, #rec-bar .msg, #mic.rec::before, #mic.rec::after { animation: none !important; }
+}
+
+/* ---------- how much chat shows over the character (data-bubbles on #app) ---------- */
+#app[data-bubbles="0"] #log-inner > :not(.perm):not(.gmsg) { display: none; }
+#app[data-bubbles="0"] #log-inner > .gmsg:not(:has(.perm, .approval)) { display: none; }
+#app[data-bubbles="0"] .gmsg .body > :not(.perm):not(.approval) { display: none; }
+#app[data-bubbles="0"] .gmsg > .av, #app[data-bubbles="0"] .gmsg .nm { display: none; }
+#app[data-bubbles="1"] #log-inner > :not(.perm):not(:nth-last-child(1 of .gmsg, .row-user)) { display: none; }
+
+/* ---------- Chat setting: message level and where the character stands ---------- */
+.seg { display: flex; gap: 4px; padding: 3px; border-radius: 12px; background: var(--bg); border: 1px solid var(--line); }
+.seg button { flex: 1; padding: 7px 4px; border-radius: 9px; font-size: 12.5px; color: var(--ink-2); white-space: nowrap; }
+.seg button.on { background: var(--accent-soft); color: var(--accent-text); box-shadow: inset 0 0 0 1px rgba(224,138,91,.5); }
+.viewctl { display: flex; flex-direction: column; gap: 6px; }
+.viewrow { display: grid; grid-template-columns: 74px minmax(0, 1fr) 46px; gap: 8px; align-items: center; font-size: 12.5px; color: var(--ink-2); margin: 0; }
+.viewrow .v { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+.viewrow input[type="range"] { width: 100%; accent-color: var(--accent); }
+html[data-mode="mobile"] .rail.peek { opacity: .16; transition: opacity .12s; }
+html[data-mode="mobile"] .rail { transition: opacity .2s; }
+/* 2D picture: size and slide (3D uses the camera instead) */
+.stage .figure { translate: var(--vx, 0%) var(--vy, 0%); scale: var(--vs, 1); }
+
+/* ---------- native feel: it is an app, not a page ---------- */
+html { -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; overscroll-behavior: none; scrollbar-width: thin; scrollbar-color: #3a3f46 transparent; }
+body { cursor: default; }
+button, select, summary, label { cursor: default; }
+input, textarea, .tx, .user, .tr, .tool .b, .perm .kv, pre, code, .quote span, .hint, .note { -webkit-user-select: text; user-select: text; }
+input, textarea { cursor: text; }
+img, a { -webkit-user-drag: none; }

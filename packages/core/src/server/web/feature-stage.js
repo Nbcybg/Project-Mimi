@@ -79,6 +79,86 @@
     return null;
   }
 
+  // ---------- where the character stands ----------
+  // 3D: the camera (turn, tilt, zoom, slide). 2D: size and slide of the picture. Remembered per
+  // agent, per kind and per mode, because the mobile and the desktop stage are not the same shape.
+  const DEFAULT_VIEW = { '3d': { yaw: 0, pitch: 0, zoom: 1, x: 0, y: 0 }, '2d': { zoom: 1, x: 0, y: 0 } };
+  let kind = null; // '3d' | '2d' | null: what the stage shows now
+  const viewKey = (agent) => `mimi.view.${document.documentElement.dataset.mode}.${agent.name}.${kind}`;
+  function loadView(agent) {
+    try {
+      return { ...DEFAULT_VIEW[kind], ...JSON.parse(M().store.get(viewKey(agent)) || '{}') };
+    } catch {
+      return { ...DEFAULT_VIEW[kind] };
+    }
+  }
+  function applyView(agent) {
+    const wrap = document.getElementById('figure');
+    if (!agent || !kind) return;
+    const view = loadView(agent);
+    if (kind === '3d') {
+      window.MimiHooks.vrmStage?.setView(view);
+      for (const name of ['--vx', '--vy', '--vs']) wrap.style.removeProperty(name);
+    } else {
+      wrap.style.setProperty('--vx', `${view.x}%`);
+      wrap.style.setProperty('--vy', `${-view.y}%`);
+      wrap.style.setProperty('--vs', String(view.zoom));
+    }
+  }
+
+  /** The sliders for Chat setting; null when no character is on the stage. */
+  function viewControls() {
+    const agent = M().characterOn() ? directAgent() : null;
+    if (!agent || !kind) return null;
+    const box = el('div', 'viewctl');
+    box.append(el('h3', '', t(kind === '3d' ? 'view.title3d' : 'view.title2d')));
+    const rows =
+      kind === '3d'
+        ? [['view.yaw', 'yaw', -180, 180, 1, '°'], ['view.pitch', 'pitch', -40, 40, 1, '°'], ['view.zoom', 'zoom', 0.5, 2.5, 0.05, '×'], ['view.x', 'x', -50, 50, 1, '%'], ['view.y', 'y', -50, 50, 1, '%']]
+        : [['view.size', 'zoom', 0.5, 2.5, 0.05, '×'], ['view.x', 'x', -60, 60, 1, '%'], ['view.y', 'y', -70, 70, 1, '%']];
+    const view = loadView(agent);
+    const peek = (on) => document.getElementById('rail')?.classList.toggle('peek', on);
+    const inputs = [];
+    for (const [label, key, min, max, step, unit] of rows) {
+      const line = el('label', 'viewrow');
+      const shown = el('span', 'v');
+      const slider = el('input');
+      slider.type = 'range';
+      slider.min = String(min);
+      slider.max = String(max);
+      slider.step = String(step);
+      slider.value = String(view[key]);
+      const show = () => {
+        shown.textContent = `${key === 'zoom' ? Number(slider.value).toFixed(2) : Math.round(Number(slider.value))}${unit}`;
+      };
+      show();
+      slider.oninput = () => {
+        view[key] = Number(slider.value);
+        M().store.set(viewKey(agent), JSON.stringify(view));
+        show();
+        applyView(agent);
+      };
+      // While a slider is held the panel fades, so the character can be seen behind it.
+      slider.addEventListener('pointerdown', () => peek(true));
+      for (const type of ['pointerup', 'pointercancel', 'change', 'blur']) slider.addEventListener(type, () => peek(false));
+      inputs.push([key, slider, show]);
+      line.append(el('span', 'l', t(label)), slider, shown);
+      box.append(line);
+    }
+    box.append(
+      button('btn ghost', t('view.reset'), () => {
+        const fresh = { ...DEFAULT_VIEW[kind] };
+        M().store.set(viewKey(agent), JSON.stringify(fresh));
+        for (const [key, slider, show] of inputs) {
+          slider.value = String(fresh[key]);
+          show();
+        }
+        applyView(agent);
+      }),
+    );
+    return box;
+  }
+
   function refresh() {
     const stage = document.getElementById('stage');
     const wrap = document.getElementById('figure');
@@ -89,7 +169,7 @@
     }
     window.MimiHooks.backgrounds?.apply();
     window.MimiHooks.gallery?.apply();
-    const agent = directAgent();
+    const agent = M().characterOn() ? directAgent() : null;
     // An agent shown as a 3D model: the VRM of the outfit it wears, else its own (feature-vrm.js).
     const live = window.MimiHooks.vrmStage;
     const model = agent && agent.character === 'vrm' && live ? modelPath(agent) : null;
@@ -100,6 +180,8 @@
       shown = { path: '', outfit: '' };
       pending = '';
       live.show(wrap, model, moodKey);
+      kind = '3d';
+      applyView(agent);
       return;
     }
     live?.hide();
@@ -107,11 +189,14 @@
     stage.classList.toggle('has-figure', Boolean(target));
     wrap.hidden = !target;
     if (!target) {
+      kind = null;
       wrap.replaceChildren();
       shown = { path: '', outfit: '' };
       pending = '';
       return;
     }
+    kind = '2d';
+    applyView(agent);
     if (target.path === shown.path || target.path === pending) return;
     pending = target.path;
     M()
@@ -240,5 +325,5 @@
   }
 
   window.MimiHooks = window.MimiHooks || {};
-  window.MimiHooks.stage = { refresh, reset, onText, spriteEditor, lastEmojiKey, emojiKey, keyToEmoji };
+  window.MimiHooks.stage = { refresh, reset, onText, spriteEditor, lastEmojiKey, emojiKey, keyToEmoji, viewControls };
 })();

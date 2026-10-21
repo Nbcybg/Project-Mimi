@@ -193,6 +193,9 @@ test('hubs over the socket: model pool, skills, status and agent pictures', asyn
     body: 'REPORT RULES',
   });
   assert.match(fs.readFileSync(path.join(app.root, 'user', 'skills', 'report.md'), 'utf8'), /model: creative\ntools:\n  - read_memory/);
+  const builtin = skills.skills.find((skill) => skill.name === 'workflow-builder')!;
+  assert.equal(builtin.builtin, true);
+  assert.match(builtin.body, /workflow_save/);
   await refuse({ type: 'skill-save', skill: { name: 'x', description: 'x', model: 'nope', tools: [], body: 'x' } }, /Unknown model preset "nope"/);
   await refuse({ type: 'skill-save', skill: { name: 'y', description: 'y', model: '', tools: ['no_tool'], body: 'y' } }, /Unknown tool "no_tool"/);
 

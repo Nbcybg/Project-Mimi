@@ -12,11 +12,26 @@
   const button = (cls, text, onClick, title) => M().button(cls, text, onClick, title);
 
   const NODE_GROUPS = [
+    {
+      label: 'ทริกเกอร์',
+      types: [
+        'trigger_manual',
+        'trigger_schedule',
+        'trigger_webhook',
+        'trigger_form',
+        'trigger_mail',
+        'trigger_poll',
+        'trigger_chat',
+        'trigger_telegram',
+        'trigger_tool',
+        'trigger_custom',
+      ],
+    },
     { label: 'AI', types: ['agent', 'llm', 'classify', 'extract', 'knowledge'] },
     { label: 'ทางแยก', types: ['if', 'switch', 'filter', 'merge'] },
     { label: 'ข้อมูล', types: ['set', 'datetime', 'split_out', 'sort', 'limit', 'aggregate', 'remove_duplicates', 'code'] },
-    { label: 'ไฟล์', types: ['file', 'extract_file'] },
-    { label: 'วน / รอ', types: ['loop', 'workflow', 'wait', 'approval'] },
+    { label: 'ไฟล์', types: ['file', 'extract_file', 'sheets'] },
+    { label: 'วน / รอ', types: ['loop', 'workflow', 'wait', 'stop', 'approval'] },
     { label: 'เชื่อมต่อ', types: ['http', 'tool', 'chat', 'telegram', 'respond'] },
   ];
   const OPERATORS = ['equals', 'not_equals', 'contains', 'not_contains', 'starts_with', 'ends_with', 'regex', 'gt', 'lt', 'gte', 'lte', 'is_empty', 'is_not_empty', 'is_true', 'is_false'];
@@ -39,6 +54,8 @@
   let selectedNode = null;
   let sideTab = 'node';
   let canvasApi = null;
+  /** Search text of the persistent node library. */
+  let libraryQuery = '';
   /** Stored runs of the workflow being edited (newest first), from `workflow-runs`. */
   let runs = [];
   /** { nodeId, result } while a single-node test dialog is open. */
@@ -150,6 +167,31 @@
   const poolOf = (name) => pool().find((entry) => entry.name === name);
   const agentOptions = () => M().state.agents.map((agent) => [agent.name, `${M().nameOf(agent.name)} (${agent.name})`]);
 
+  /** Trigger nodes map to trigger-pool entries; each type is its own node. */
+  const TRIGGER_POOLS = {
+    trigger_manual: 'manual',
+    trigger_schedule: 'schedule',
+    trigger_webhook: 'webhook',
+    trigger_form: 'form',
+    trigger_mail: 'mail',
+    trigger_poll: 'poll',
+    trigger_chat: 'chat',
+    trigger_telegram: 'telegram',
+    trigger_tool: 'agent_tool',
+  };
+  const isTrigger = (type) => type === 'trigger_custom' || Object.hasOwn(TRIGGER_POOLS, type);
+  const triggerPoolOfNode = (node) =>
+    !node ? undefined : node.type === 'trigger_custom' ? String(node.config?.pool || '').trim() || undefined : TRIGGER_POOLS[node.type];
+  const triggerNode = () => (draft ? draft.nodes.find((node) => isTrigger(node.type)) : null);
+  const triggerEntryOf = (node) => poolOf(triggerPoolOfNode(node) || draft?.trigger?.pool || 'manual');
+  const triggerSample = (node) => triggerEntryOf(node)?.sample || {};
+  const triggerLabelOf = (type, config) => {
+    const poolName = type === 'trigger_custom' ? String(config?.pool || '').trim() : TRIGGER_POOLS[type];
+    const entry = poolOf(poolName);
+    return entry ? `ทริกเกอร์: ${entry.label}` : specOf(type)?.label || type;
+  };
+  const triggerTitleOf = (node) => triggerLabelOf(node.type, node.config);
+
   function selectOf(options, value, emptyLabel) {
     const select = el('select');
     if (emptyLabel !== undefined) {
@@ -169,7 +211,7 @@
   // ---------- list (inside the agent editor) ----------
   function render(container, agent) {
     const list = (M().state.workflows || []).filter((workflow) => workflow.agent === agent);
-    container.append(el('p', 'hint', 'ต่อ flow ของ agent นี้: trigger (จาก pool) → node ต่าง ๆ → chat · ใช้ {{ $json.Field }} อ้างข้อมูลจาก trigger/node ก่อนหน้า · รันแล้วเห็น input/output ทุก node'));
+    container.append(el('p', 'hint', 'ต่อ flow ของ agent นี้: node ทริกเกอร์ → node ต่าง ๆ → chat · ใช้ {{ $json.Field }} อ้างข้อมูลจาก trigger/node ก่อนหน้า · รันแล้วเห็น input/output ทุก node'));
     const rows = el('div', 'tbl wfrows');
     for (const workflow of list) {
       const row = el('div');
@@ -216,20 +258,57 @@
       webhook: null,
       vars: {},
       nodes: [
-        { id: 'n1', type: 'agent', title: 'AI agent', config: { agent: firstAgent, instruction: '' }, links: { main: ['n2'] } },
-        { id: 'n2', type: 'chat', title: 'ส่งเข้าแชต', config: { text: '{{ $json.text }}' }, links: { main: [] } },
+        { id: 'n1', type: 'trigger_manual', title: 'ทริกเกอร์: กดรันเอง', config: {}, links: { main: ['n2'] } },
+        { id: 'n2', type: 'agent', title: 'AI agent', config: { agent: firstAgent, instruction: '' }, links: { main: ['n3'] } },
+        { id: 'n3', type: 'chat', title: 'ส่งเข้าแชต', config: { text: '{{ $json.text }}' }, links: { main: [] } },
       ],
     };
   }
 
+  /** Old workflows kept the trigger outside the graph; put it on the canvas as a real node. */
+  function migrateDraft(view) {
+    const ref = view.trigger || { pool: 'manual', config: {} };
+    const builtinType = Object.entries(TRIGGER_POOLS).find(([, poolName]) => poolName === ref.pool)?.[0];
+    const type = builtinType || 'trigger_custom';
+    const existing = view.nodes.some((node) => isTrigger(node.type));
+    if (!existing) {
+      const fed = new Set(view.nodes.flatMap((node) => Object.values(node.links || {}).flat()));
+      const starts = view.nodes.filter((node) => !fed.has(node.id));
+      const position =
+        starts.length > 0
+          ? [Math.min(...starts.map((node) => node.position?.[0] ?? 320)) - 250, starts.reduce((sum, node) => sum + (node.position?.[1] ?? 60), 0) / starts.length]
+          : [60, 60];
+      let id = 'trigger';
+      let n = 1;
+      while (view.nodes.some((node) => node.id === id)) id = `trigger${n++}`;
+      const config = type === 'trigger_custom' ? { ...(ref.config || {}), pool: ref.pool } : { ...(ref.config || {}) };
+      view.nodes.unshift({
+        id,
+        type,
+        title: triggerLabelOf(type, config),
+        config,
+        links: { main: starts.map((node) => node.id) },
+        position,
+      });
+    }
+    const node = view.nodes.find((entry) => isTrigger(entry.type));
+    if (node) {
+      const config = { ...(node.config || {}) };
+      if (node.type === 'trigger_custom') delete config.pool;
+      view.trigger = { pool: triggerPoolOfNode(node) || 'manual', config };
+    }
+    return view;
+  }
+
   function openEditor(agent, workflow) {
-    draft = workflow ? JSON.parse(JSON.stringify(workflow)) : newDraft(agent);
+    draft = workflow ? migrateDraft(JSON.parse(JSON.stringify(workflow))) : newDraft(agent);
     isNew = !workflow;
     runResult = null;
     runs = [];
     selectedNode = null;
     sideTab = 'node';
     historyShown = 12;
+    libraryQuery = '';
     resetHistory();
     showEditor();
     if (workflow) M().send({ type: 'workflow-runs', agent: workflow.agent, name: workflow.name });
@@ -261,8 +340,6 @@
       if (errorWorkflow.value) draft.errorWorkflow = errorWorkflow.value;
       else delete draft.errorWorkflow;
     }
-    // trigger config
-    for (const node of root.querySelectorAll('[data-trigger-field]')) draft.trigger.config[node.dataset.triggerField] = fieldValue(node);
     // nodes
     for (const card of root.querySelectorAll('.wcard')) {
       const node = draft.nodes.find((entry) => entry.id === card.dataset.id);
@@ -272,6 +349,12 @@
       for (const field of card.querySelectorAll('[data-field]')) node.config[field.dataset.field] = fieldValue(field);
       for (const field of card.querySelectorAll('[data-nodefield]')) node[field.dataset.nodefield] = fieldValue(field);
       // Links are edited on the draft directly (see linkGridFor), so there is nothing to read here.
+    }
+    const trigger = draft.nodes.find((node) => isTrigger(node.type));
+    if (trigger) {
+      const config = { ...(trigger.config || {}) };
+      if (trigger.type === 'trigger_custom') delete config.pool;
+      draft.trigger = { pool: triggerPoolOfNode(trigger) || 'manual', config };
     }
   }
 
@@ -290,6 +373,7 @@
 
   function fieldInput(field, value, node) {
     if (field.key === 'conditions') return conditionsField(field, value, node);
+    if (field.key === 'cases' && node && node.type === 'switch') return switchCasesField(field, value, node);
     if (field.key === 'categories' && node) {
       return rowsField(field, value, {
         columns: [
@@ -327,6 +411,18 @@
       node_ = el('input');
       node_.type = 'checkbox';
       node_.checked = value === true || value === 'true';
+    } else if (field.type === 'account') {
+      const accounts = ((M().state.settings || {}).accounts || []).filter(
+        (account) => !field.service || account.service === field.service,
+      );
+      node_ = selectOf(
+        accounts.map((account) => [
+          account.id,
+          `${account.name}${account.default ? ' ★' : ''}${field.service ? '' : ` · ${account.service}`}${account.connected ? '' : ' (ยังไม่เชื่อมต่อ)'}`,
+        ]),
+        String(value ?? ''),
+        '— บัญชีเริ่มต้น —',
+      );
     } else if (Array.isArray(field.options)) {
       node_ = selectOf(field.options.map((option) => [option, option]), String(value ?? field.options[0] ?? ''));
     } else if (field.key === 'workflow') {
@@ -343,8 +439,10 @@
     } else if (field.key === 'agent') {
       node_ = selectOf(agentOptions(), String(value ?? ''), field.required ? undefined : '— agent เริ่มต้น —');
     } else if (field.key === 'tool') {
+      const items = M().toolItems ? M().toolItems() : (M().state.tools || []);
+      const describe = M().describeTool || ((tool) => `${tool.name} (${tool.risk})`);
       node_ = selectOf(
-        (M().state.tools || []).map((tool) => [tool.name, `${tool.name} (${tool.risk})`]),
+        items.map((tool) => [tool.name, describe(tool)]),
         String(value ?? ''),
         '— เลือกเครื่องมือ —',
       );
@@ -389,9 +487,9 @@
       rows.textContent = '';
       list.forEach((condition, index) => {
         const row = el('div', 'hstack wcondrow');
-        const left = M().textInput(condition.left, '{{ $json.field }}');
-        left.oninput = () => {
-          condition.left = left.value;
+        const left = expressionField(node, condition.left, '{{ $json.field }}');
+        left.input.oninput = () => {
+          condition.left = left.input.value;
           write();
         };
         const operator = selectOf(OPERATORS.map((op) => [op, op]), condition.operator);
@@ -399,9 +497,9 @@
           condition.operator = operator.value;
           write();
         };
-        const right = M().textInput(condition.right, 'ค่าเทียบ');
-        right.oninput = () => {
-          condition.right = right.value;
+        const right = expressionField(node, condition.right, 'ค่าเทียบ');
+        right.input.oninput = () => {
+          condition.right = right.input.value;
           write();
         };
         const remove = button('btn ghost', '✕', () => {
@@ -409,7 +507,7 @@
           write();
           build();
         });
-        row.append(left, operator, right, remove);
+        row.append(left.box, operator, right.box, remove);
         rows.append(row);
       });
       if (list.length === 0) rows.append(el('p', 'hint', 'ยังไม่มีเงื่อนไข — กด "เพิ่มเงื่อนไข"'));
@@ -421,6 +519,99 @@
     });
     build();
     write();
+    wrap.append(rows, add, hidden);
+    return wrap;
+  }
+
+  /** Text input that understands {{ … }}: live preview plus the field picker. */
+  function expressionField(node, value, placeholder) {
+    const box = el('div', 'wexpr');
+    const input = M().textInput(value, placeholder);
+    box.append(input);
+    if (node) {
+      exprAssist(input, node);
+      addPicker(box, input, node);
+    }
+    return { box, input };
+  }
+
+  /**
+   * Switch cases. "value" mode: one value per case, compared with the node's
+   * `value`. "rules" mode: a condition (left / operator / right) per case. The
+   * config stays a JSON array, so imported n8n switches keep working.
+   */
+  function switchCasesField(field, value, node) {
+    const rules = String(node.config.mode || 'value') === 'rules';
+    const raw = Array.isArray(value) ? value : [];
+    const list = rules
+      ? raw
+          .filter((entry) => entry && typeof entry === 'object' && !Array.isArray(entry))
+          .map((entry) => ({ left: String(entry.left ?? ''), operator: String(entry.operator || 'contains'), right: String(entry.right ?? '') }))
+      : raw.map((entry) => (entry && typeof entry === 'object' && !Array.isArray(entry) ? '' : String(entry ?? '')));
+    const wrap = el('div', 'wcond wswitch');
+    const rows = el('div');
+    const hidden = el('textarea');
+    hidden.style.display = 'none';
+    hidden.dataset.field = field.key;
+    hidden.dataset.kind = 'json';
+    const write = (persist = true) => {
+      const kept = rules ? list.filter((condition) => !(condition.left === '' && condition.right === '' && condition.operator === 'contains')) : list;
+      // In rules mode an empty condition is dropped right away, so the output ports match the rows.
+      if (persist || rules) node.config[field.key] = kept;
+      hidden.value = JSON.stringify(kept);
+    };
+    const changed = () => {
+      write();
+      refreshLinks(node);
+    };
+    const remove = (index) => {
+      list.splice(index, 1);
+      changed();
+      build();
+    };
+    const build = () => {
+      rows.textContent = '';
+      list.forEach((condition, index) => {
+        if (rules) {
+          const row = el('div', 'hstack wcondrow');
+          const left = expressionField(node, condition.left, '{{ $json.field }}');
+          left.input.oninput = () => {
+            condition.left = left.input.value;
+            write();
+          };
+          const operator = selectOf(OPERATORS.map((op) => [op, op]), condition.operator);
+          operator.onchange = () => {
+            condition.operator = operator.value;
+            write();
+          };
+          const right = expressionField(node, condition.right, 'ค่าเทียบ');
+          right.input.oninput = () => {
+            condition.right = right.input.value;
+            write();
+          };
+          row.append(left.box, operator, right.box, button('btn ghost', '✕', () => remove(index), 'ลบเงื่อนไขนี้'));
+          rows.append(row);
+        } else {
+          const row = el('div', 'wcaserow');
+          row.append(el('span', 'wn', String(index + 1)));
+          const input = expressionField(node, condition, 'ค่า เช่น urgent (ใส่ {{ }} ได้)');
+          input.input.oninput = () => {
+            list[index] = input.input.value;
+            write();
+          };
+          row.append(input.box, button('btn ghost', '✕', () => remove(index), 'ลบกรณีนี้'));
+          rows.append(row);
+        }
+      });
+      if (list.length === 0) rows.append(el('p', 'hint', rules ? 'ยังไม่มีเงื่อนไข — กด "เพิ่มเงื่อนไข"' : 'ยังไม่มีกรณี — กด "เพิ่มกรณี"'));
+    };
+    const add = button('btn ghost', rules ? '+ เพิ่มเงื่อนไข' : '+ เพิ่มกรณี', () => {
+      list.push(rules ? { left: '', operator: 'contains', right: '' } : '');
+      changed();
+      build();
+    });
+    build();
+    write(false);
     wrap.append(rows, add, hidden);
     return wrap;
   }
@@ -568,7 +759,8 @@
       sample = parent?.output?.[0]?.json;
     }
     if (!sample) {
-      sample = draft.trigger.pool === 'manual' && draft.trigger.config.input ? draft.trigger.config.input : poolOf(draft.trigger.pool)?.sample;
+      const trigger = triggerNode();
+      sample = triggerPoolOfNode(trigger) === 'manual' && trigger?.config?.input ? trigger.config.input : triggerEntryOf(trigger)?.sample;
       note = 'ตัวอย่างจาก trigger — รันก่อนเพื่อเห็นข้อมูลจริง';
     }
     groups.push({ label: `ข้อมูลที่ไหลเข้ามา ($json) · ${note}`, items: pathsOf(sample || {}, '$json') });
@@ -609,7 +801,10 @@
     const ran = (id) => runResult?.nodes?.find((entry) => entry.id === id);
     let json = ran(node.id)?.input?.[0]?.json;
     if (!json) json = ancestorsOf(node.id).map((other) => ran(other.id)).find((entry) => entry && entry.output.length > 0)?.output?.[0]?.json;
-    if (!json) json = (draft.trigger.pool === 'manual' && draft.trigger.config.input) || poolOf(draft.trigger.pool)?.sample || {};
+    if (!json) {
+      const trigger = triggerNode();
+      json = (triggerPoolOfNode(trigger) === 'manual' && trigger?.config?.input) || triggerEntryOf(trigger)?.sample || {};
+    }
     const nodes = {};
     for (const view of runResult?.nodes || []) {
       if (view.output.length === 0) continue;
@@ -789,8 +984,115 @@
     return spec ? spec.outputs : [{ key: 'main', label: 'main' }];
   }
 
+  /**
+   * n8n-style parameter panel: only the fields that matter for the chosen
+   * mode/operation are shown. Hidden values stay in the config, so switching
+   * back and forth never loses what was typed.
+   */
+  function fieldVisible(node, field) {
+    const config = node.config || {};
+    const text = (key, fallback = '') => String(config[key] ?? fallback);
+    const operation = text(
+      'operation',
+      node.type === 'file' ? 'read' : node.type === 'aggregate' ? 'collect' : node.type === 'knowledge' ? 'search' : node.type === 'datetime' ? 'format' : '',
+    );
+    const mode = text('mode', node.type === 'switch' ? 'value' : node.type === 'wait' ? 'duration' : node.type === 'stop' ? 'success' : '');
+    switch (node.type) {
+      case 'switch':
+        return !(field.key === 'value' && mode === 'rules');
+      case 'wait':
+        if (field.key === 'amount' || field.key === 'unit') return mode === 'duration';
+        if (field.key === 'until') return mode === 'until';
+        return true;
+      case 'aggregate':
+        if (field.key === 'field') return ['sum', 'average', 'min', 'max', 'join'].includes(operation);
+        if (field.key === 'name') return operation !== 'collect' && operation !== 'count';
+        if (field.key === 'separator') return operation === 'join';
+        if (field.key === 'fields') return operation === 'collect';
+        return true;
+      case 'knowledge':
+        if (field.key === 'operation' || field.key === 'collection') return true;
+        if (['query', 'limit', 'output'].includes(field.key)) return operation === 'search';
+        if (['text', 'title', 'source'].includes(field.key)) return operation === 'add';
+        return true;
+      case 'datetime':
+        if (field.key === 'value' || field.key === 'timezone' || field.key === 'name') return true;
+        if (field.key === 'amount') return operation === 'add' || operation === 'subtract';
+        if (field.key === 'unit') return operation !== 'format';
+        if (field.key === 'other') return operation === 'diff';
+        if (field.key === 'format') return operation !== 'diff';
+        return true;
+      case 'file':
+        if (field.key === 'operation' || field.key === 'path') return true;
+        if (field.key === 'destination' || field.key === 'overwrite') return operation === 'copy' || operation === 'move';
+        if (field.key === 'recursive') return operation === 'delete';
+        if (field.key === 'format' || field.key === 'name') return operation === 'read';
+        if (field.key === 'source') return operation === 'write';
+        if (field.key === 'content') return operation === 'append' || (operation === 'write' && text('source', 'content') === 'content');
+        if (field.key === 'pattern') return operation === 'list';
+        return true;
+      case 'extract_file': {
+        if (field.key === 'path' || field.key === 'attachment' || field.key === 'type') return true;
+        const type = text('type', 'auto');
+        if (field.key === 'sheet') return type === 'xlsx' || type === 'auto';
+        if (field.key === 'header') return type === 'csv' || type === 'xlsx' || type === 'auto';
+        if (field.key === 'instruction') return ['pdf', 'image', 'audio', 'video', 'auto'].includes(type);
+        if (field.key === 'name') return ['text', 'html', 'pdf', 'image', 'audio', 'video', 'auto'].includes(type);
+        return true;
+      }
+      default:
+        return true;
+    }
+  }
+
+  /** The node's input/output from the run on screen, right on its card. */
+  function nodeIoSection(node) {
+    const run = runResult?.nodes?.find((entry) => entry.id === node.id);
+    if (!run && mode !== 'canvas') return null;
+    const box = el('div', 'wnodeio');
+    if (!run) {
+      box.append(el('p', 'hint', 'ยังไม่มีข้อมูลของ node นี้ — กด "รันทดสอบ" แล้ว input/output จะแสดงที่นี่'));
+      return box;
+    }
+    const details = el('details');
+    details.open = run.status === 'error';
+    const summary = el('summary');
+    summary.append(
+      el('span', `pill ${run.status === 'ok' ? 'ok' : run.status === 'waiting' ? 'warn' : 'todo'}`, run.status === 'ok' ? 'ok' : run.status === 'waiting' ? 'รอ' : 'error'),
+      el('span', '', ` ข้อมูลเข้า / ออก · ${run.input.length} → ${run.output.length}`),
+    );
+    if (run.note) summary.append(el('span', 'pill', run.note === 'pinned' ? '📌 ใช้ pin' : 'ปิดอยู่ (ส่งผ่าน)'));
+    details.append(summary);
+    if (run.error) details.append(el('p', 'hint badtxt', run.error));
+    details.append(
+      jsonBlock(`input (${run.input.length})`, run.input.map((item) => item.json)),
+      jsonBlock(`output (${run.output.length})`, run.output.map((item) => item.json)),
+    );
+    box.append(details);
+    return box;
+  }
+
+  /** A custom trigger node edits the chosen pool's fields, plus the pool name itself. */
+  function fieldsOfNode(node) {
+    const spec = specOf(node.type);
+    if (node.type !== 'trigger_custom') return spec ? spec.fields : [];
+    const custom = pool().filter((entry) => !entry.builtin);
+    const entry = triggerEntryOf(node);
+    return [
+      {
+        key: 'pool',
+        label: 'trigger จาก pool',
+        type: 'string',
+        required: true,
+        options: custom.map((item) => item.name),
+        description: custom.length === 0 ? 'ยังไม่มี trigger ที่สร้างเอง — สร้างได้ที่ Hub → Trigger' : undefined,
+      },
+      ...(entry ? entry.fields.filter((field) => field.key !== 'pool') : []),
+    ];
+  }
+
   function nodeCard(node, index) {
-    const card = el('div', 'wcard');
+    const card = el('div', `wcard${isTrigger(node.type) ? ' wtrigger' : ''}`);
     card.dataset.id = node.id;
     const head = el('div', 'whead');
     const title = M().textInput(node.title || '', 'ชื่อขั้นนี้');
@@ -801,13 +1103,24 @@
     };
     title.style.maxWidth = '280px';
     const type = selectOf(
-      nodeTypes().map((spec) => [spec.type, spec.label]),
+      nodeTypes()
+        .filter((spec) => (isTrigger(node.type) ? isTrigger(spec.type) : !isTrigger(spec.type)))
+        .filter((spec) => spec.type !== 'trigger_custom' || node.type === 'trigger_custom' || pool().some((entry) => !entry.builtin))
+        .map((spec) => [spec.type, spec.label]),
       node.type,
     );
     type.onchange = () => {
       sync();
+      // A trigger stays a trigger (and every other node stays non-trigger).
+      if (isTrigger(node.type) !== isTrigger(type.value)) {
+        type.value = node.type;
+        return;
+      }
+      const wasTrigger = isTrigger(node.type);
       node.type = type.value;
-      node.links = {};
+      node.config = defaultConfig(node.type);
+      if (isTrigger(node.type)) node.title = triggerTitleOf(node);
+      if (!wasTrigger) node.links = {};
       showEditor();
     };
     head.append(el('span', 'wn', String(index + 1)), title, type);
@@ -820,13 +1133,15 @@
         ? [button('btn ghost', '▶ จากตรงนี้', () => runFrom(node, runId), 'บันทึก แล้วรันใหม่ตั้งแต่ node นี้ ด้วย input เดิมของ run ที่เปิดอยู่ (node ก่อนหน้าไม่รันซ้ำ)')]
         : []),
       ...(mode === 'list' ? [button('btn ghost', '↑', () => move(node.id, -1)), button('btn ghost', '↓', () => move(node.id, 1))] : []),
-      button('btn danger', 'ลบ', () => removeNode(node.id)),
+      ...(isTrigger(node.type) ? [] : [button('btn danger', 'ลบ', () => removeNode(node.id))]),
     );
     head.append(actions);
     card.append(head);
+    const io = nodeIoSection(node);
+    if (io) card.append(io);
 
-    const spec = specOf(node.type);
-    for (const field of spec ? spec.fields : []) {
+    for (const field of fieldsOfNode(node)) {
+      if (!fieldVisible(node, field)) continue;
       const input = fieldInput(field, node.config[field.key], node);
       const label = M().labelled(`${field.label}${field.required ? ' *' : ''}`, input);
       if (pickable(field, input)) {
@@ -836,12 +1151,31 @@
       if (field.description) label.append(el('p', 'hint', field.description));
       card.append(label);
     }
-    // switch grows one output per case, however many the user types.
-    if (node.type === 'switch') {
-      const cases = card.querySelector('[data-field="cases"]');
-      if (cases) {
-        cases.onchange = () => {
+    if (isTrigger(node.type)) card.append(triggerSection(node));
+    // Mode / operation selects change which fields apply: redraw the card around them.
+    const controllingFields = {
+      switch: ['mode'],
+      wait: ['mode'],
+      aggregate: ['mode'],
+      knowledge: ['operation'],
+      datetime: ['operation'],
+      file: ['operation', 'source'],
+      extract_file: ['type'],
+    };
+    for (const key of controllingFields[node.type] || []) {
+      const control = card.querySelector(`[data-field="${key}"]`);
+      if (control) {
+        control.onchange = () => {
           sync();
+          // Switch cases are plain values in "value" mode and conditions in "rules" mode.
+          if (node.type === 'switch' && key === 'mode') {
+            const cases = Array.isArray(node.config.cases) ? node.config.cases : [];
+            const isObject = (entry) => entry && typeof entry === 'object' && !Array.isArray(entry);
+            node.config.cases =
+              control.value === 'rules'
+                ? cases.filter(isObject).map((entry) => ({ left: entry.left ?? '', operator: entry.operator || 'contains', right: entry.right ?? '' }))
+                : cases.map((entry) => (isObject(entry) ? String(entry.right ?? entry.left ?? '') : String(entry ?? '')));
+          }
           showEditor();
         };
       }
@@ -880,7 +1214,6 @@
       M().labelled('ลองซ้ำ (ครั้ง)', retries),
       M().labelled('รอระหว่างลอง (ms)', retryWait),
     );
-    card.append(errorGrid);
 
     // Switch off (passes items on) and pinned output (stands in for the node in editor runs).
     const extra = el('div', 'hstack wextra');
@@ -920,7 +1253,11 @@
         }, 'ใช้ output นี้แทนการรันจริง เวลารันจาก editor (ประหยัดเวลา/ค่า API) — trigger จริงไม่ใช้ pin'),
       );
     }
-    card.append(extra);
+    // Less-used settings stay folded away, like n8n's node settings.
+    const advanced = el('details', 'wadvanced');
+    if (Array.isArray(node.pinned) || node.disabled) advanced.open = true;
+    advanced.append(el('summary', '', 'ตัวเลือกเพิ่มเติม (error / retry / pin / ปิด node)'), errorGrid, extra);
+    card.append(advanced);
     card.append(linkGridFor(node));
     return card;
   }
@@ -1119,49 +1456,34 @@
     return box;
   }
 
-  function triggerSection() {
+  /** Hints for a trigger node. Its settings are ordinary node fields on the card. */
+  function triggerSection(node = triggerNode()) {
     const box = el('div');
-    const entry = poolOf(draft.trigger.pool);
-    const select = selectOf(pool().map((item) => [item.name, `${item.label} (${item.kind})`]), draft.trigger.pool);
-    select.onchange = () => {
-      sync();
-      draft.trigger.pool = select.value;
-      draft.trigger.config = {};
-      showEditor();
-    };
-    box.append(M().labelled('trigger (จาก pool)', select));
-    if (entry) {
-      box.append(el('p', 'hint', entry.description));
-      for (const field of entry.fields) {
-        const input = fieldInput(field, draft.trigger.config[field.key], null);
-        input.dataset.triggerField = field.key;
-        box.append(M().labelled(`${field.label}${field.required ? ' *' : ''}`, input));
-      }
-      if (entry.kind === 'chat') {
-        box.append(el('p', 'hint', `พิมพ์ในแชตตรงกับ ${M().nameOf(draft.agent)} แล้วข้อความที่ตรงเงื่อนไขจะเข้า workflow นี้ · {{ $json.rest }} = ข้อความหลังคำขึ้นต้น · "workflow_only" = agent ไม่ตอบข้อความนั้น`));
-        box.append(el('p', 'hint', 'ไฟล์ที่แนบมาอยู่ใน {{ $json.files }} — แต่ละไฟล์มี id, kind (image / audio / video / file), name, mime, size และ text (คำบรรยายรูป/วิดีโอ, คำถอดเสียง หรือข้อความในไฟล์ ถ้าเลือกให้อ่านก่อน) · อ่านไฟล์ใหม่ด้วยคำสั่งของคุณเอง: node "ดึงข้อมูลจากไฟล์" ช่อง "ไฟล์จากแชต" = {{ $json.files[0].id }} · "ไฟล์แนบ" = image แปลว่ารันเฉพาะข้อความที่มีรูป'));
-      }
-      if (entry.kind === 'tool') {
-        const toolName = `workflow_${String(draft.name || '<ชื่อ>').replace(/[^a-zA-Z0-9_-]/g, '_')}`;
-        const callers = [draft.agent, ...String(draft.trigger.config.agents || '').split(/[\s,]+/).filter(Boolean)];
-        box.append(el('p', 'hint', `agent ที่เรียกได้: ${[...new Set(callers)].map((name) => M().nameOf(name)).join(', ')} · จะเห็นเครื่องมือชื่อ ${toolName} พร้อมคำอธิบายจากช่อง "ใช้เมื่อไหร่" — เขียนให้ชัดว่าทำอะไร และควรใช้ตอนไหน agent จะเลือกถูกขึ้น`));
-        box.append(el('p', 'hint', 'ค่าที่ agent ส่งมา: {{ $json.<ชื่อช่อง> }} และ {{ $json.agent }} = agent ที่เรียก · ผลที่ agent ได้กลับ = body ของ node "ตอบกลับ" ถ้ามี ไม่งั้นเป็น output ของ node สุดท้ายที่รัน · "ask" = ถามคุณก่อนรันทุกครั้ง'));
-      }
-      if (entry.kind === 'telegram') {
-        const secret = String(draft.trigger.config.tokenSecret || '').trim() || 'TELEGRAM_BOT_TOKEN';
-        const has = (M().state.secrets || []).includes(secret);
-        box.append(el('p', has ? 'hint' : 'hint badtxt', has ? `มี secret "${secret}" แล้ว ✓` : `ยังไม่มี secret "${secret}" — ใส่ bot token ที่ ตั้งค่า → secret ก่อน`));
-        box.append(el('p', 'hint', 'ตอบกลับด้วย node "ส่ง Telegram" (chat id = {{ $json.chatId }}) · หา chat id ของตัวเอง: ทักบอทแล้วดู input ในประวัติการรัน'));
-      }
-      if (entry.kind === 'webhook') {
-        if (draft.webhook) box.append(el('p', 'hint', `POST มาที่: ${location.origin}${draft.webhook} (ไม่ต้องใช้ token)`));
-        else box.append(el('p', 'hint', 'บันทึกแล้วระบบจะสร้าง URL ให้'));
-      }
-      box.append(el('p', 'hint', `trigger นี้ให้ข้อมูลแบบนี้ (ใช้ {{ $json.x }}): ${JSON.stringify(entry.sample).slice(0, 220)}`));
-      if (entry.kind === 'manual') {
-        box.append(el('p', 'hint', 'กด "รัน" แล้วจะให้ใส่ input JSON เองได้'));
-      }
+    const entry = triggerEntryOf(node);
+    if (!entry) return box;
+    box.append(el('p', 'hint', 'node นี้เป็นจุดเริ่มของ workflow — ข้อมูลจากช่องทางนี้จะไหลออกทาง main ไปยัง node ถัดไป'));
+    if (entry.kind === 'chat') {
+      box.append(el('p', 'hint', `พิมพ์ในแชตตรงกับ ${M().nameOf(draft.agent)} แล้วข้อความที่ตรงเงื่อนไขจะเข้า workflow นี้ · {{ $json.rest }} = ข้อความหลังคำขึ้นต้น · "workflow_only" = agent ไม่ตอบข้อความนั้น`));
+      box.append(el('p', 'hint', 'ไฟล์ที่แนบมาอยู่ใน {{ $json.files }} — แต่ละไฟล์มี id, kind (image / audio / video / file), name, mime, size และ text (คำบรรยายรูป/วิดีโอ, คำถอดเสียง หรือข้อความในไฟล์ ถ้าเลือกให้อ่านก่อน) · อ่านไฟล์ใหม่ด้วยคำสั่งของคุณเอง: node "ดึงข้อมูลจากไฟล์" ช่อง "ไฟล์จากแชต" = {{ $json.files[0].id }} · "ไฟล์แนบ" = image แปลว่ารันเฉพาะข้อความที่มีรูป'));
     }
+    if (entry.kind === 'tool') {
+      const toolName = `workflow_${String(draft.name || '<ชื่อ>').replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+      const callers = [draft.agent, ...String(node?.config?.agents || '').split(/[\s,]+/).filter(Boolean)];
+      box.append(el('p', 'hint', `agent ที่เรียกได้: ${[...new Set(callers)].map((name) => M().nameOf(name)).join(', ')} · จะเห็นเครื่องมือชื่อ ${toolName} พร้อมคำอธิบายจากช่อง "ใช้เมื่อไหร่" — เขียนให้ชัดว่าทำอะไร และควรใช้ตอนไหน agent จะเลือกถูกขึ้น`));
+      box.append(el('p', 'hint', 'ค่าที่ agent ส่งมา: {{ $json.<ชื่อช่อง> }} และ {{ $json.agent }} = agent ที่เรียก · ผลที่ agent ได้กลับ = body ของ node "ตอบกลับ" ถ้ามี ไม่งั้นเป็น output ของ node สุดท้ายที่รัน · "ask" = ถามคุณก่อนรันทุกครั้ง'));
+    }
+    if (entry.kind === 'telegram') {
+      const secret = String(node?.config?.tokenSecret || '').trim() || 'TELEGRAM_BOT_TOKEN';
+      const has = (M().state.secrets || []).includes(secret);
+      box.append(el('p', has ? 'hint' : 'hint badtxt', has ? `มี secret "${secret}" แล้ว ✓` : `ยังไม่มี secret "${secret}" — ใส่ bot token ที่ ตั้งค่า → secret ก่อน`));
+      box.append(el('p', 'hint', 'ตอบกลับด้วย node "ส่ง Telegram" (chat id = {{ $json.chatId }}) · หา chat id ของตัวเอง: ทักบอทแล้วดู input ในประวัติการรัน'));
+    }
+    if (entry.kind === 'webhook') {
+      if (draft.webhook) box.append(el('p', 'hint', `POST มาที่: ${location.origin}${draft.webhook} (ไม่ต้องใช้ token)`));
+      else box.append(el('p', 'hint', 'บันทึกแล้วระบบจะสร้าง URL ให้'));
+    }
+    box.append(el('p', 'hint', `trigger นี้ให้ข้อมูลแบบนี้ (ใช้ {{ $json.x }}): ${JSON.stringify(entry.sample).slice(0, 220)}`));
+    if (entry.kind === 'manual') box.append(el('p', 'hint', 'กด "รัน" แล้วจะให้ใส่ input JSON เองได้'));
     return box;
   }
 
@@ -1169,6 +1491,7 @@
   function defaultConfig(type) {
     const config = {};
     if (type === 'agent') config.agent = draft.agent;
+    if (type === 'trigger_custom') config.pool = pool().find((entry) => !entry.builtin)?.name || '';
     if (type === 'llm') Object.assign(config, { format: 'text', name: 'text', prompt: '{{ $json.text }}' });
     if (type === 'classify') Object.assign(config, { input: '{{ $json.text }}', categories: [] });
     if (type === 'extract') Object.assign(config, { input: '{{ $json.text }}', attributes: [] });
@@ -1196,11 +1519,32 @@
    * Adds a node. `from` links it after that node's output; without one (the list's
    * add buttons) it hangs off the last node's first free output.
    */
-  function createNode(type, position, from) {
+  function createNode(type, position, from, poolName) {
     sync();
+    if (isTrigger(type)) {
+      const existing = triggerNode();
+      if (existing) {
+        const pool = type === 'trigger_custom' ? String(poolName ?? existing.config?.pool ?? '').trim() : undefined;
+        if (existing.type !== type || (type === 'trigger_custom' && pool && String(existing.config?.pool || '') !== pool)) {
+          existing.type = type;
+          existing.config = defaultConfig(type);
+          if (type === 'trigger_custom' && pool) existing.config.pool = pool;
+          existing.title = triggerTitleOf(existing);
+        }
+        return existing;
+      }
+    }
     const spec = specOf(type);
     const id = nextId();
-    const node = { id, type, title: spec?.label || type, config: defaultConfig(type), links: { main: [] } };
+    const config = defaultConfig(type);
+    if (type === 'trigger_custom' && poolName) config.pool = poolName;
+    const node = {
+      id,
+      type,
+      title: isTrigger(type) ? triggerLabelOf(type, config) : spec?.label || type,
+      config,
+      links: { main: [] },
+    };
     if (position) node.position = position;
     if (from) {
       const source = draft.nodes.find((entry) => entry.id === from.id);
@@ -1218,6 +1562,7 @@
 
   function removeNode(id) {
     sync();
+    if (isTrigger(draft.nodes.find((entry) => entry.id === id)?.type)) return;
     draft.nodes = draft.nodes.filter((entry) => entry.id !== id);
     for (const other of draft.nodes) {
       for (const key of Object.keys(other.links)) other.links[key] = other.links[key].filter((target) => target !== id);
@@ -1248,7 +1593,7 @@
     return box;
   }
 
-  /** A popover with a search box and the node palette, at `anchor` inside the canvas. */
+  /** Link dropped on empty canvas: choose what to create there (searches the same palette). */
   function paletteMenu(anchor, onPick) {
     anchor.host.querySelector('.wcv-menu')?.remove();
     const menu = el('div', 'wcv-menu');
@@ -1276,6 +1621,104 @@
     anchor.host.append(menu);
     setTimeout(() => document.addEventListener('pointerdown', outside, true));
     search.focus();
+  }
+
+  /** Add a node from the side library: tools are ordinary `tool` nodes with the tool pre-filled. */
+  function addFromLibrary(entry) {
+    if (!draft || !document.querySelector('#wfEditor')) return;
+    sync();
+    let node;
+    if (entry.startsWith('tool@')) {
+      node = createNode('tool', canvasApi?.center() || null, null);
+      node.config.tool = entry.slice('tool@'.length);
+      node.title = entry.slice('tool@'.length);
+    } else if (entry.startsWith('trigger_custom@')) {
+      node = createNode('trigger_custom', canvasApi?.center() || null, null, entry.slice('trigger_custom@'.length));
+    } else {
+      node = createNode(entry, canvasApi?.center() || null, null);
+    }
+    selectedNode = node.id;
+    sideTab = 'node';
+    showEditor();
+  }
+
+  function libraryEntry(type, label, description) {
+    const item = button('wlib-item', label, () => {
+      if (item._timer) return;
+      item._timer = setTimeout(() => {
+        item._timer = null;
+        addFromLibrary(type);
+      }, 180);
+    }, description);
+    item.draggable = true;
+    item.ondblclick = () => {
+      clearTimeout(item._timer);
+      item._timer = null;
+      addFromLibrary(type);
+    };
+    item.ondragstart = (event) => {
+      event.dataTransfer.setData('application/x-mimi-node', type);
+      event.dataTransfer.effectAllowed = 'copy';
+    };
+    return item;
+  }
+
+  /** Persistent left panel: every node type and every tool, searchable, click or drag onto the canvas. */
+  function nodeLibrary() {
+    const box = el('div', 'wfc-library');
+    const head = el('div', 'wlib-head');
+    head.append(el('b', '', 'Node'));
+    const search = M().textInput(libraryQuery, 'ค้นหา node หรือ tool…');
+    search.className = 'wlib-search';
+    head.append(search);
+    const list = el('div', 'wlib-list');
+    const draw = () => {
+      const query = libraryQuery.trim().toLowerCase();
+      const match = (text) => !query || text.toLowerCase().includes(query);
+      const groups = new Map();
+      for (const spec of nodeTypes()) {
+        if (spec.type === 'trigger_custom') continue;
+        if (!match(`${spec.label} ${spec.type} ${spec.description}`)) continue;
+        const label = NODE_GROUPS.find((group) => group.types.includes(spec.type))?.label || 'อื่น ๆ';
+        if (!groups.has(label)) groups.set(label, []);
+        groups.get(label).push(libraryEntry(spec.type, spec.label, spec.description));
+      }
+      const customTriggers = pool()
+        .filter((entry) => !entry.builtin && match(`${entry.label} ${entry.name} ${entry.description}`))
+        .map((entry) =>
+          libraryEntry(`trigger_custom@${entry.name}`, `ทริกเกอร์: ${entry.label}`, entry.description || `trigger จาก pool: ${entry.name}`),
+        );
+      if (customTriggers.length > 0) {
+        const label = NODE_GROUPS[0].label;
+        if (!groups.has(label)) groups.set(label, []);
+        groups.get(label).push(...customTriggers);
+      }
+      const items = M().toolItems ? M().toolItems() : M().state.tools || [];
+      const tools = items
+        .filter((tool) => !tool.preset && match(`${tool.name} ${tool.desc || ''}`))
+        .map((tool) => libraryEntry(`tool@${tool.name}`, `tool: ${tool.name}`, M().describeTool?.(tool) || tool.desc || tool.name));
+      list.replaceChildren();
+      for (const label of [...NODE_GROUPS.map((group) => group.label), 'อื่น ๆ'].filter((name) => groups.has(name))) {
+        const group = el('div', 'wlib-group');
+        group.append(el('span', 'wlib-label', label));
+        group.append(...groups.get(label));
+        list.append(group);
+      }
+      if (tools.length > 0) {
+        const group = el('div', 'wlib-group');
+        group.append(el('span', 'wlib-label', 'เครื่องมือ'));
+        group.append(...tools);
+        list.append(group);
+      }
+      if (list.childElementCount === 0) list.append(el('p', 'hint', 'ไม่พบ node'));
+    };
+    search.oninput = () => {
+      libraryQuery = search.value;
+      draw();
+    };
+    draw();
+    box.append(head, list);
+    return box;
   }
 
   /** Name, title, enabled, variables and error workflow. */
@@ -1354,7 +1797,6 @@
     const head = el('div', 'hstack');
     head.append(el('h3', '', isNew ? 'Workflow ใหม่' : `แก้ไข ${draft.name || ''}`), el('span', 'pill ok', `agent: ${draft.agent}`), modeToggle());
     dialog.append(head, settingsSection());
-    dialog.append(el('h4', '', 'ทริกเกอร์'), triggerSection());
     dialog.append(el('h4', '', 'ลำดับการทำงาน'), diagram());
     for (const [index, node] of draft.nodes.entries()) dialog.append(nodeCard(node, index));
     const palette = paletteGroups((type) => {
@@ -1376,7 +1818,6 @@
 
   const SIDE_TABS = [
     ['node', 'Node'],
-    ['trigger', 'ทริกเกอร์'],
     ['settings', 'ตั้งค่า'],
     ['runs', 'ผลการรัน'],
   ];
@@ -1392,9 +1833,9 @@
     actions.append(el('span', 'msg'), ...editorButtons());
     head.append(label, modeToggle(), actions);
     const body = el('div', 'wfc-body');
-    const host = el('div');
+    const host = el('div', 'wfc-canvas');
     const side = el('div', 'wfc-side');
-    body.append(host, side);
+    body.append(nodeLibrary(), host, side);
     dialog.append(head, body);
     M().overlay(dialog).classList.add('scrim-full');
     dialog.addEventListener('change', () => {
@@ -1423,8 +1864,6 @@
             el('p', 'hint', 'Ctrl+Z ย้อน · Ctrl+Y ทำซ้ำ · Ctrl+C / Ctrl+V คัดลอก-วาง node · Ctrl+D ทำสำเนา · 📝 เพิ่มโน้ต'),
           );
         }
-      } else if (sideTab === 'trigger') {
-        content.append(triggerSection());
       } else if (sideTab === 'settings') {
         content.append(settingsSection());
       } else {
@@ -1440,18 +1879,12 @@
       titleOf,
       typeLabel: (type) => specOf(type)?.label || type,
       groupOf: (type) => String(NODE_GROUPS.findIndex((group) => group.types.includes(type))),
-      triggerLabel: () => poolOf(draft.trigger.pool)?.label || draft.trigger.pool,
       run: runResult,
       selected: selectedNode,
       onSelect: (id) => {
         sync();
-        if (id === '__trigger') {
-          selectedNode = null;
-          sideTab = 'trigger';
-        } else {
-          selectedNode = id;
-          if (id) sideTab = 'node';
-        }
+        selectedNode = id;
+        if (id) sideTab = 'node';
         renderSide();
       },
       onChange: () => {
@@ -1465,12 +1898,22 @@
       undo,
       redo,
       addNodeAt: (type, position, from) => {
-        const node = createNode(type, position, from);
+        let node;
+        if (type.startsWith('tool@')) {
+          node = createNode('tool', position, from);
+          node.config.tool = type.slice('tool@'.length);
+          node.title = type.slice('tool@'.length);
+        } else if (type.startsWith('trigger_custom@')) {
+          node = createNode('trigger_custom', position, from, type.slice('trigger_custom@'.length));
+        } else {
+          node = createNode(type, position, from);
+        }
         selectedNode = node.id;
         sideTab = 'node';
         showEditor();
       },
       removeNode: (id) => {
+        if (isTrigger(draft.nodes.find((entry) => entry.id === id)?.type)) return;
         if (confirm(`ลบ node "${titleOf(id)}" ?`)) removeNode(id);
       },
       palette: paletteMenu,
@@ -1481,13 +1924,16 @@
 
   /** Manual run: show the trigger's sample as editable input JSON. */
   function promptRun(workflow) {
-    const entry = poolOf(workflow.trigger.pool);
+    const trigger = workflow.nodes?.find((node) => isTrigger(node.type));
+    const poolName = trigger ? triggerPoolOfNode(trigger) : workflow.trigger.pool;
+    const entry = poolOf(poolName);
     running = true;
     runResult = null;
     const dialog = el('div', 'dialog form');
-    dialog.append(el('h3', '', `รัน ${workflow.title || workflow.name}`), el('p', 'hint', `trigger: ${entry?.label || workflow.trigger.pool} · ให้ input แบบ JSON (ใช้เป็น {{ $json.x }} ของ node แรก)`));
+    dialog.append(el('h3', '', `รัน ${workflow.title || workflow.name}`), el('p', 'hint', `trigger: ${entry?.label || poolName} · ให้ input แบบ JSON (ใช้เป็น {{ $json.x }} ของ node แรก)`));
     const area = el('textarea');
-    area.value = JSON.stringify(entry?.sample || {}, null, 2);
+    const sample = trigger && triggerPoolOfNode(trigger) === 'manual' && trigger.config?.input ? trigger.config.input : entry?.sample;
+    area.value = JSON.stringify(sample || {}, null, 2);
     dialog.append(M().labelled('input JSON', area));
     const foot = el('div', 'foot');
     foot.append(
@@ -1514,7 +1960,7 @@
     sync();
     const current = runResult?.nodes?.find((entry) => entry.id === node.id);
     const sample =
-      current && current.input.length > 0 ? current.input.map((item) => item.json) : (poolOf(draft.trigger.pool)?.sample ?? {});
+      current && current.input.length > 0 ? current.input.map((item) => item.json) : (triggerEntryOf(triggerNode())?.sample ?? {});
     nodeTest = { nodeId: node.id, input: JSON.stringify(sample, null, 2), result: null };
     showNodeTest();
   }
@@ -1556,6 +2002,15 @@
     const foot = el('div', 'foot');
     foot.append(
       el('span', 'msg'),
+      button('btn ghost', 'แก้ node นี้', () => {
+        const id = nodeTest?.nodeId;
+        nodeTest = null;
+        if (draft) {
+          selectedNode = id || null;
+          sideTab = 'node';
+          showEditor();
+        } else M().closeOverlay();
+      }, 'ปิดหน้าทดสอบ แล้วกลับไปแก้การตั้งค่า (เงื่อนไข/กรณี) ของ node'),
       button('btn ghost', 'ปิด', () => {
         nodeTest = null;
         if (draft) showEditor();

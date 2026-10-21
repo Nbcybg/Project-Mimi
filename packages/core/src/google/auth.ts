@@ -36,6 +36,14 @@ export class GoogleNotConfiguredError extends Error {
   }
 }
 
+/** Either one auth, or a resolver that picks one per account id (`undefined` = the default account). */
+export type GoogleAuthSource = GoogleAuth | ((account?: string) => GoogleAuth);
+
+/** Normalizes the two forms the tool factories accept, so tests can keep passing a single auth. */
+export function googleAuthResolver(source: GoogleAuthSource): (account?: string) => GoogleAuth {
+  return typeof source === 'function' ? source : () => source;
+}
+
 /** Turns the stored refresh token into short-lived access tokens, and calls Google APIs with them. */
 export class GoogleAuth {
   private readonly options: GoogleAuthOptions;

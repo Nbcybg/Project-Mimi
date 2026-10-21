@@ -27,6 +27,8 @@ const CostSchema = z.object({
 /** Model metadata, in the shape models.dev publishes (USD per 1M tokens, token limits). */
 export const ModelDefSchema = z.object({
   name: z.string().optional(),
+  /** What the model is for: chat, image, speech, video, transcription, embedding… */
+  type: z.string().optional(),
   status: z.string().optional(),
   attachment: z.boolean().optional(),
   tool_call: z.boolean().optional(),

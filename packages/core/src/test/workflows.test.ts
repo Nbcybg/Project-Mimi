@@ -3,9 +3,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { after, test } from 'node:test';
-import type { FlowItem, WorkflowView } from '@mimi/shared';
+import type { FlowItem, JsonValue, WorkflowView } from '@mimi/shared';
 import { z } from 'zod';
 import { SecretStore } from '../app/secrets.ts';
+import { defineTool } from '../tools/registry.ts';
 import { applyOperator, contextFor, resolveString } from '../workflows/expressions.ts';
 import { normalizeItems, runWorkflow, runWorkflowNode, triggerItems, type WorkflowRunnerDeps, WorkflowState } from '../workflows/runner.ts';
 import { TriggerPool } from '../workflows/trigger-pool.ts';
@@ -71,7 +72,7 @@ test('expressions: $vars, $node, $execution, $today and the helpers', () => {
 test('trigger pool: built-ins always available, custom entries are files', () => {
   const pool = new TriggerPool(path.join(tmp, 'pool'));
   const names = pool.list().map((entry) => entry.name);
-  for (const builtin of ['manual', 'schedule', 'webhook', 'mail', 'poll']) assert.ok(names.includes(builtin));
+  for (const builtin of ['manual', 'schedule', 'webhook', 'form', 'mail', 'poll']) assert.ok(names.includes(builtin));
   assert.ok(pool.get('mail')!.builtin);
 
   const saved = pool.save({
@@ -143,6 +144,65 @@ test('workflow store: per-agent folders, graph validation, webhook keys', () => 
   assert.equal(store.get('mimi', 'renamed')!.name, 'renamed');
   assert.deepEqual(store.forgetAgent('mimi'), ['renamed']);
   assert.equal(store.list().length, 0);
+});
+
+test('workflow store: a trigger node supplies and overrides the trigger ref', () => {
+  const store = new WorkflowStore(path.join(tmp, 'trigger-nodes'));
+  const view = workflowView({
+    name: 'hooked',
+    trigger: { pool: 'manual', config: {} },
+    nodes: [
+      { id: 't', type: 'trigger_webhook', title: 'Webhook', config: { secret: 's3cret' }, links: { main: ['n1'] } },
+      { id: 'n1', type: 'chat', title: 'แจ้ง', config: {}, links: { main: [] } },
+    ],
+  });
+  const saved = store.save(view);
+  assert.deepEqual(saved.trigger, { pool: 'webhook', config: { secret: 's3cret' } });
+  assert.deepEqual(store.get('mimi', 'hooked')!.trigger, { pool: 'webhook', config: { secret: 's3cret' } });
+  assert.equal(store.get('mimi', 'hooked')!.nodes[0]!.type, 'trigger_webhook');
+});
+
+test('workflow store: a custom trigger node keeps its pool and config', () => {
+  const store = new WorkflowStore(path.join(tmp, 'custom-trigger-nodes'));
+  const view = workflowView({
+    name: 'custom-hook',
+    trigger: { pool: 'manual', config: {} },
+    nodes: [
+      { id: 't', type: 'trigger_custom', title: 'GitHub', config: { pool: 'github', event: 'push' }, links: { main: ['n1'] } },
+      { id: 'n1', type: 'chat', title: 'แชต', config: {}, links: { main: [] } },
+    ],
+  });
+  const saved = store.save(view);
+  assert.deepEqual(saved.trigger, { pool: 'github', config: { event: 'push' } });
+  const loaded = store.get('mimi', 'custom-hook')!;
+  assert.deepEqual(loaded.trigger, { pool: 'github', config: { event: 'push' } });
+  assert.equal(loaded.nodes[0]!.type, 'trigger_custom');
+  assert.deepEqual(loaded.nodes[0]!.config, { pool: 'github', event: 'push' });
+});
+
+test('workflow store: old workflows keep their trigger without a trigger node', () => {
+  const store = new WorkflowStore(path.join(tmp, 'legacy'));
+  const saved = store.save(workflowView({ name: 'legacy', trigger: { pool: 'schedule', config: { cron: '0 8 * * *' } } }));
+  assert.deepEqual(saved.trigger, { pool: 'schedule', config: { cron: '0 8 * * *' } });
+  assert.equal(saved.nodes.some((node) => String(node.type).startsWith('trigger_')), false);
+});
+
+test('runner: a trigger node passes its items to the next node', async () => {
+  const workflow = stored(
+    workflowView({
+      trigger: { pool: 'manual', config: {} },
+      nodes: [
+        { id: 't', type: 'trigger_manual', title: 'เริ่ม', config: {}, links: { main: ['n1'] } },
+        { id: 'n1', type: 'chat', title: 'แจ้ง', config: { text: '{{ $json.text }}' }, links: { main: [] } },
+      ],
+    }),
+  );
+  const calls: string[] = [];
+  const run = await runWorkflow(workflow, [{ json: { text: 'hello' } }], fakeDeps(calls));
+  assert.equal(run.ok, true);
+  assert.deepEqual(run.nodes.map((node) => node.id), ['t', 'n1']);
+  assert.deepEqual(run.nodes[0]!.output[0]!.json, { text: 'hello' });
+  assert.deepEqual(calls, ['chat:mimi:hello']);
 });
 
 function fakeDeps(calls: string[], runAgent?: (agent: string) => Promise<string>): WorkflowRunnerDeps {
@@ -407,6 +467,30 @@ test('runner: a HTTP node turns a JSON response into items', async () => {
   assert.deepEqual(calls, ['fetch:https://api.example.com/7', 'chat:mimi:ได้ ผลลัพธ์']);
 });
 
+test('runner: HTTP timeoutMs aborts a request that hangs', async () => {
+  const workflow = stored(
+    workflowView({
+      nodes: [
+        {
+          id: 'n1',
+          type: 'http',
+          title: 'เรียก API',
+          config: { url: 'https://api.example.com/hang', timeoutMs: 1_000 },
+          links: { main: [] },
+        },
+      ],
+    }),
+  );
+  const deps = fakeDeps([]);
+  deps.fetchFn = ((_url: string | URL | Request, init?: RequestInit) =>
+    new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(new Error('request timed out')));
+    })) as typeof fetch;
+  const run = await runWorkflow(workflow, [{ json: {} }], deps);
+  assert.equal(run.ok, false);
+  assert.match(run.nodes[0]!.error ?? '', /timed out|abort/i);
+});
+
 test('trigger items: manual input, schedule timestamp, poll response, webhook body', async () => {
   const pool = new TriggerPool(path.join(tmp, 'pool2'));
   const deps = fakeDeps([]);
@@ -581,6 +665,118 @@ test('runner: merge joins branches by position and by key', async () => {
   calls.length = 0;
   await runWorkflow(byKey, [{ json: { id: 1, n: 'a1', m: 'b1' } }], fakeDeps(calls));
   assert.deepEqual(calls, ['chat:mimi:a1b1']);
+});
+
+test('runner: tool node passes the owning agent to tools', async () => {
+  const seen: string[] = [];
+  const who = defineTool({
+    name: 'who',
+    description: 'records the agent it runs for',
+    risk: 'read',
+    target: 'core',
+    inputSchema: z.object({}),
+    summarize: () => 'who',
+    execute: async (_input, context) => {
+      seen.push(context.agent);
+      return 'ok';
+    },
+  });
+  const deps = fakeDeps([]);
+  deps.tool = (name) => (name === 'who' ? who : undefined);
+
+  const own = await runWorkflow(
+    stored(workflowView({ nodes: [{ id: 'n1', type: 'tool', config: { tool: 'who', input: {} }, links: { main: [] } }] })),
+    [{ json: {} }],
+    deps,
+  );
+  assert.equal(own.ok, true);
+  const chosen = await runWorkflow(
+    stored(
+      workflowView({
+        nodes: [{ id: 'n1', type: 'tool', config: { tool: 'who', input: {}, agent: 'tim' }, links: { main: [] } }],
+      }),
+    ),
+    [{ json: {} }],
+    deps,
+  );
+  assert.equal(chosen.ok, true);
+  assert.deepEqual(seen, ['mimi', 'tim']);
+});
+
+test('runner: wait until a date, and an abort ends the wait', async () => {
+  const workflow = stored(workflowView({}));
+  const node = (config: Record<string, JsonValue>) => ({ id: 'n1', type: 'wait' as const, config, links: { main: [] } });
+  const until = new Date(Date.now() + 80).toISOString();
+  const started = Date.now();
+  const run = await runWorkflowNode(workflow, node({ mode: 'until', until: '{{ $json.at }}' }), [{ json: { at: until } }], fakeDeps([]));
+  assert.equal(run.ok, true);
+  assert.ok(Date.now() - started >= 50, 'waited until the time');
+
+  const past = await runWorkflowNode(workflow, node({ mode: 'until', until: '2000-01-01T00:00:00.000Z' }), [{ json: {} }], fakeDeps([]));
+  assert.equal(past.ok, true);
+  const missing = await runWorkflowNode(workflow, node({ mode: 'until' }), [{ json: {} }], fakeDeps([]));
+  assert.equal(missing.ok, false);
+  assert.match(missing.error!, /set a date\/time/);
+});
+
+test('runner: stop ends the run, and stop with error fails it', async () => {
+  const calls: string[] = [];
+  const stopped = stored(
+    workflowView({
+      nodes: [
+        { id: 'n1', type: 'set', config: { fields: { n: 1 } }, links: { main: ['n2'] } },
+        { id: 'n2', type: 'stop', title: 'จบ', config: { mode: 'success', message: 'done' }, links: { main: ['n3'] } },
+        { id: 'n3', type: 'chat', config: { text: 'must not run' }, links: { main: [] } },
+      ],
+    }),
+  );
+  const run = await runWorkflow(stopped, [{ json: {} }], fakeDeps(calls));
+  assert.equal(run.ok, true);
+  assert.deepEqual(calls, []);
+  assert.equal(run.nodes.find((entry) => entry.id === 'n2')!.status, 'ok');
+  assert.equal(run.nodes.some((entry) => entry.id === 'n3'), false);
+
+  const failed = await runWorkflow(
+    stored(workflowView({ nodes: [{ id: 'n1', type: 'stop', config: { mode: 'error', message: 'no data' }, links: { main: [] } }] })),
+    [{ json: {} }],
+    fakeDeps([]),
+  );
+  assert.equal(failed.ok, false);
+  assert.match(failed.result, /no data/);
+  assert.equal(failed.nodes[0]!.status, 'error');
+
+  const tested = await runWorkflowNode(stopped, { id: 'n2', type: 'stop', config: { mode: 'success' }, links: { main: [] } }, [], fakeDeps([]));
+  assert.equal(tested.ok, true);
+});
+
+test('runner: file node copies, moves, stats and deletes inside allowed folders', async () => {
+  const dir = fs.mkdtempSync(path.join(tmp, 'files-'));
+  const deps = fakeDeps([]);
+  deps.allowedDirs = [dir];
+  const workflow = stored(workflowView({}));
+  const run = (config: Record<string, JsonValue>) =>
+    runWorkflowNode(workflow, { id: 'n1', type: 'file', config, links: { main: [] } }, [{ json: {} }], deps);
+  fs.writeFileSync(path.join(dir, 'a.txt'), 'hello');
+
+  assert.equal((await run({ operation: 'copy', path: 'a.txt', destination: 'b.txt' })).ok, true);
+  assert.equal(fs.readFileSync(path.join(dir, 'b.txt'), 'utf8'), 'hello');
+  assert.equal((await run({ operation: 'copy', path: 'a.txt', destination: 'b.txt' })).ok, false);
+  assert.equal((await run({ operation: 'copy', path: 'a.txt', destination: 'b.txt', overwrite: true })).ok, true);
+  assert.equal((await run({ operation: 'move', path: 'b.txt', destination: 'c.txt' })).ok, true);
+  assert.equal(fs.existsSync(path.join(dir, 'b.txt')), false);
+
+  const stat = await run({ operation: 'stat', path: 'c.txt' });
+  assert.equal(stat.ok, true);
+  assert.deepEqual([stat.outputs.main![0]!.json.exists, stat.outputs.main![0]!.json.size], [true, 5]);
+  const missing = await run({ operation: 'stat', path: 'missing.txt' });
+  assert.equal(missing.outputs.main![0]!.json.exists, false);
+  assert.equal((await run({ operation: 'delete', path: 'c.txt' })).ok, true);
+  assert.equal(fs.existsSync(path.join(dir, 'c.txt')), false);
+
+  fs.mkdirSync(path.join(dir, 'sub'));
+  assert.equal((await run({ operation: 'delete', path: 'sub' })).ok, false);
+  assert.equal((await run({ operation: 'delete', path: 'sub', recursive: true })).ok, true);
+  assert.equal(fs.existsSync(path.join(dir, 'sub')), false);
 });
 
 test('runner: wait holds the items, and an abort ends the wait', async () => {

@@ -11,7 +11,9 @@ import { LocalExecutor } from '../tools/executor.ts';
 import { magicPacket } from '../tools/wake-tools.ts';
 import { makeTestCore } from './core-helpers.ts';
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mimi-machine-'));
+// realpath: on macOS os.tmpdir() is /var/..., a symlink to /private/var/..., and the
+// path guard and snapshots work with the canonical path.
+const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'mimi-machine-')));
 after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
 const folder = path.join(tmp, 'work');

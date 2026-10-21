@@ -215,6 +215,31 @@ test('core / server: import saves disabled workflows of the agent', async () => 
   await target.cleanup();
 });
 
+test('n8n import: wait-until and stop-and-error become native nodes', () => {
+  const { workflows } = importN8n(
+    {
+      name: 'wait-stop',
+      nodes: [
+        { name: 'Manual', type: 'n8n-nodes-base.manualTrigger', parameters: {} },
+        { name: 'Later', type: 'n8n-nodes-base.wait', parameters: { resume: 'specificTime', dateTime: '2026-11-01T09:00:00+07:00' } },
+        { name: 'Halt', type: 'n8n-nodes-base.stopAndError', parameters: { errorMessage: 'no data' } },
+      ],
+      connections: {
+        Manual: { main: [[{ node: 'Later' }]] },
+        Later: { main: [[{ node: 'Halt' }]] },
+      },
+    },
+    { ...options, existingNames: [] },
+  );
+  const [workflow] = workflows;
+  const later = workflow!.nodes.find((node) => node.title === 'Later')!;
+  const halt = workflow!.nodes.find((node) => node.title === 'Halt')!;
+  assert.equal(later.type, 'wait');
+  assert.deepEqual(later.config, { mode: 'until', until: '2026-11-01T09:00:00+07:00' });
+  assert.equal(halt.type, 'stop');
+  assert.deepEqual(halt.config, { mode: 'error', message: 'no data' });
+});
+
 test('canvas positions: stored with the node, carried over from n8n', () => {
   const { workflows } = importN8n(
     {

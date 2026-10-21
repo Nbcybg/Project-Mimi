@@ -17,7 +17,49 @@ export interface Skill {
   /** Tools the skill may use when it runs as a separate job. */
   tools: string[];
   file: string;
+  /** Instructions shipped with the app instead of a file in the user's skills folder. */
+  body?: string;
+  builtin?: boolean;
 }
+
+const WORKFLOW_BUILDER = `You build and maintain workflows for this Mimi agent. A workflow is a trigger plus
+nodes (items of JSON) connected by links, in n8n's style.
+
+Tools:
+- workflow_schema: read the trigger list, every node type and its fields/outputs, and the expression rules. Call it before writing.
+- workflow_list / workflow_get: inspect the agent's existing workflows.
+- workflow_validate: check a draft without saving.
+- workflow_save: create or replace a workflow. It is ALWAYS saved disabled.
+- workflow_run: test a saved workflow with input JSON.
+- workflow_delete: delete a workflow after the user approves.
+
+How to work:
+1. Clarify only what is missing: what starts it, what data comes in, what must happen, and what the user should see.
+2. Call workflow_schema and pick the smallest trigger + node graph that does the job.
+3. Write the full workflow object: name, title, description, trigger {pool, config}, and nodes.
+   Every node needs an id, type, config and links. Link every non-terminal node; use true/false for if, case0/.../fallback for switch.
+4. Validate, save, then run it with realistic input and fix failures.
+5. Tell the user what you built, show the important settings, and ask them to review and enable it.
+
+Rules:
+- Never put API keys, passwords or tokens in a workflow. Use the secret name in the relevant tool/trigger setting instead.
+- Prefer existing tools through a "tool" node before writing code. Use "code" only when no node/tool fits.
+- Use expressions like {{ $json.field }}, {{ $node["Get report"].json.field }}, {{ $trigger.json.field }}.
+- A "chat" node posts to the user's chat; a "respond" node answers a webhook. End with one of them when the user should get a result.
+- Saves stay disabled on purpose: code, HTTP and tool nodes can change things. The user must review the graph and enable it.
+- If a workflow would send messages, spend money, delete files or run shell commands, say so explicitly before asking to enable it.`;
+
+/** Skills that ship with the app; a user file with the same name overrides one. */
+export const BUILTIN_SKILLS: Skill[] = [
+  {
+    name: 'workflow-builder',
+    description: 'Build, test and repair this agent\'s workflows: triggers, nodes, expressions, validation and safe enabling.',
+    tools: ['workflow_schema', 'workflow_list', 'workflow_get', 'workflow_validate', 'workflow_save', 'workflow_run', 'workflow_delete'],
+    file: '(builtin:workflow-builder)',
+    body: WORKFLOW_BUILDER,
+    builtin: true,
+  },
+];
 
 const SKILL_NAME = /^[a-z][a-z0-9-]*$/;
 const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/;
@@ -39,24 +81,28 @@ function parseSkill(source: string, file: string): Skill {
 
 /** Reads `skills/<name>.md` files. Only the frontmatter is kept in memory. */
 export function loadSkills(skillsDir: string): Skill[] {
-  if (!fs.existsSync(skillsDir)) return [];
   const skills: Skill[] = [];
-  for (const entry of fs.readdirSync(skillsDir, { withFileTypes: true })) {
-    if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
-    const name = entry.name.slice(0, -3);
-    if (!SKILL_NAME.test(name)) continue;
-    const file = path.join(skillsDir, entry.name);
-    const skill = parseSkill(fs.readFileSync(file, 'utf8'), file);
-    if (skill.name !== name) {
-      throw new Error(`${file}: frontmatter name "${skill.name}" must match the file name`);
+  if (fs.existsSync(skillsDir)) {
+    for (const entry of fs.readdirSync(skillsDir, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
+      const name = entry.name.slice(0, -3);
+      if (!SKILL_NAME.test(name)) continue;
+      const file = path.join(skillsDir, entry.name);
+      const skill = parseSkill(fs.readFileSync(file, 'utf8'), file);
+      if (skill.name !== name) {
+        throw new Error(`${file}: frontmatter name "${skill.name}" must match the file name`);
+      }
+      skills.push(skill);
     }
-    skills.push(skill);
   }
+  const taken = new Set(skills.map((skill) => skill.name));
+  skills.push(...BUILTIN_SKILLS.filter((skill) => !taken.has(skill.name)));
   return skills.sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /** The instructions of a skill. Read at call time, so edits apply without a restart. */
 export function readSkillBody(skill: Skill): string {
+  if (skill.body !== undefined) return skill.body;
   return fs.readFileSync(skill.file, 'utf8').replace(FRONTMATTER, '').trim();
 }
 

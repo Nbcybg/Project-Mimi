@@ -1,6 +1,8 @@
 import type { AgentEvent } from './events.ts';
 import type { MessageRole } from './messages.ts';
+import type { OAuthAccountInput, OAuthAccountView } from './oauth.ts';
 import type { PermissionDecision, PermissionRequest } from './permissions.ts';
+import type { SpeechStyle } from './speech.ts';
 import type { CustomToolSpec, McpServerSpec, McpServerView, ToolPreset, ToolSettingField } from './tools.ts';
 
 /**
@@ -81,6 +83,8 @@ export interface ChatMessageView {
   role: MessageRole;
   agent: string;
   text: string;
+  /** How this reply should sound when it is read aloud. */
+  speech?: SpeechStyle;
   createdAt: string;
   attachments: AttachmentView[];
   /** Tools the agent called in this step. */
@@ -153,6 +157,8 @@ export interface SkillView {
   tools: string[];
   /** The instructions. */
   body: string;
+  /** Ships with the app; editing it creates a user copy. */
+  builtin?: boolean;
 }
 
 /** An entry of the model pool: a model plus sampling settings, referred to by name. */
@@ -367,8 +373,12 @@ export interface SettingsView {
   }>;
   /** Every provider of the models.dev catalog, to pick from when adding one. */
   catalog: Array<{ id: string; name: string; baseURL: string | null }>;
-  /** Models of the connected providers. */
-  models: Array<{ ref: string; label: string }>;
+  /**
+   * Models of the connected providers, with what each can take and make (`text`, `image`,
+   * `audio`, `video`, `pdf`). `input` / `output` are absent when the catalog does not say:
+   * unknown abilities, so a picker still offers the model.
+   */
+  models: Array<{ ref: string; label: string; type?: string; input?: string[]; output?: string[] }>;
   /** Default model per capability, used by agents that leave that capability empty. */
   defaults: ModelChoice;
   /** The model pool. A preset name can be used wherever a model is chosen. */
@@ -379,6 +389,8 @@ export interface SettingsView {
   google: { hasClient: boolean; connected: boolean };
   /** Outlook mail, calendar and To Do: `hasClient` once the Azure app's client ID is saved. */
   microsoft: { hasClient: boolean; connected: boolean };
+  /** Every OAuth account (Google / Microsoft) with its own client and token. */
+  accounts: OAuthAccountView[];
   /** Spending limit and notification choices, plus what was spent today. */
   preferences: PreferencesView;
   spentTodayUsd: number;
@@ -442,6 +454,12 @@ export type ClientMessage =
   | { type: 'google-connect' }
   /** Starts the Microsoft sign-in; the core answers with the link to open. */
   | { type: 'microsoft-connect' }
+  /** The OAuth account hub: list, add/edit, remove, choose default, connect one. */
+  | { type: 'oauth-accounts' }
+  | { type: 'oauth-account-save'; account: OAuthAccountInput; id?: string }
+  | { type: 'oauth-account-remove'; id: string }
+  | { type: 'oauth-account-default'; id: string }
+  | { type: 'oauth-account-connect'; id: string }
   | { type: 'agents-list' }
   /** Creates or replaces an agent. `renameFrom` is the old name when the name changed. */
   | { type: 'agent-save'; agent: AgentView; renameFrom?: string }
@@ -595,6 +613,10 @@ export type ServerMessage =
   | { type: 'settings'; settings: SettingsView; saved?: boolean }
   | { type: 'google-auth-url'; url: string }
   | { type: 'microsoft-auth-url'; url: string }
+  /** The OAuth account hub list. */
+  | { type: 'oauth-accounts'; accounts: OAuthAccountView[]; saved?: boolean }
+  /** Sign-in link for one account; `accountId` tells the hub where to show it. */
+  | { type: 'oauth-auth-url'; accountId: string; service: 'google' | 'microsoft'; url: string }
   /** The agents, plus what the editor offers: tools and the effective default models. */
   | { type: 'agents'; agents: AgentView[]; tools: ToolView[]; defaultAgent: string | null; saved?: string }
   | { type: 'memory'; entries: MemoryView[] }

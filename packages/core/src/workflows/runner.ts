@@ -1,17 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import type {
-  FlowItem,
-  JsonValue,
-  Operator,
-  WorkflowNode,
-  WorkflowNodeTestResult,
-  WorkflowResponse,
-  WorkflowRunNodeView,
-  WorkflowRunResult,
-  WorkflowView,
-} from '@mimi/shared';
+import { isTriggerNodeType, type FlowItem, type JsonValue, type Operator, type WorkflowNode, type WorkflowNodeTestResult, type WorkflowResponse, type WorkflowRunNodeView, type WorkflowRunResult, type WorkflowView } from '@mimi/shared';
 import type { ToolContext, ToolDefinition } from '../tools/registry.ts';
 import { type Ask, askJson, attributesOf, categoriesOf, classifyText, extractFields } from './ai-nodes.ts';
 import type { KnowledgeStore } from '../knowledge/store.ts';
@@ -66,8 +56,8 @@ export interface WorkflowRunnerDeps {
    */
   speak(agentName: string | null, text: string, files?: string[]): void;
   mail: {
-    list(source: 'google' | 'microsoft', query: string, max: number): Promise<WorkflowMailItem[]>;
-    markRead(source: 'google' | 'microsoft', ids: string[]): Promise<void>;
+    list(source: 'google' | 'microsoft', query: string, max: number, account?: string): Promise<WorkflowMailItem[]>;
+    markRead(source: 'google' | 'microsoft', ids: string[], account?: string): Promise<void>;
   };
   state: WorkflowState;
   allowedDirs: string[];
@@ -332,6 +322,7 @@ async function runHttp(config: Record<string, JsonValue>, item: FlowItem, index:
     headers?: JsonValue;
     query?: JsonValue;
     body?: JsonValue;
+    timeoutMs?: JsonValue;
   };
   const url = asText(resolved.url);
   if (!url) throw new Error('HTTP node: no URL');
@@ -353,7 +344,8 @@ async function runHttp(config: Record<string, JsonValue>, item: FlowItem, index:
     body = typeof resolved.body === 'string' ? resolved.body : JSON.stringify(resolved.body);
     headers['content-type'] ??= 'application/json';
   }
-  const timeout = AbortSignal.timeout(60_000);
+  const timeoutMs = Math.min(120_000, Math.max(1_000, Number(resolved.timeoutMs) || 60_000));
+  const timeout = AbortSignal.timeout(timeoutMs);
   const response = await (ctx.deps.fetchFn ?? fetch)(target, {
     method,
     headers,
@@ -371,6 +363,8 @@ async function runHttp(config: Record<string, JsonValue>, item: FlowItem, index:
 
 async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeContext): Promise<Record<string, FlowItem[]>> {
   const { deps, workflow } = ctx;
+  // A trigger node only marks where the run began; its items already came from triggerItems().
+  if (isTriggerNodeType(node.type)) return { main: items };
   switch (node.type) {
     case 'agent': {
       const first = firstOrEmpty(items);
@@ -553,7 +547,7 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
     case 'tool': {
       const out: FlowItem[] = [];
       for (const [index, item] of items.entries()) {
-        const config = resolveValue(node.config, contextAt(ctx, item, index, items)) as { tool?: JsonValue; input?: JsonValue };
+        const config = resolveValue(node.config, contextAt(ctx, item, index, items)) as { tool?: JsonValue; input?: JsonValue; agent?: JsonValue };
         const toolName = asText(config.tool);
         const tool = deps.tool(toolName);
         if (!tool) throw new Error(`tool node: unknown tool "${toolName}"`);
@@ -569,7 +563,7 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
         const context: ToolContext = {
           traceId: `workflow:${ctx.thread}`,
           thread: ctx.thread,
-          agent: 'workflow',
+          agent: asText(config.agent) || workflow.agent,
           allowedDirs: deps.allowedDirs,
           signal: ctx.signal,
         };
@@ -618,16 +612,37 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
     }
     case 'wait': {
       const config = resolveValue(node.config, contextAt(ctx, firstOrEmpty(items), 0, items)) as Record<string, JsonValue>;
-      const amount = Math.max(0, Number(config.amount ?? 0));
-      const unit = asText(config.unit || 'seconds');
-      const factor = unit === 'days' ? 86_400 : unit === 'hours' ? 3600 : unit === 'minutes' ? 60 : 1;
-      const wanted = amount * factor * 1000;
+      const mode = asText(config.mode || 'duration');
+      let wanted: number;
+      if (mode === 'until') {
+        const until = asText(config.until).trim();
+        if (!until) throw new Error('wait node: set a date/time to wait until');
+        const zone = deps.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+        wanted = Math.max(0, parseDate(until, zone).getTime() - Date.now());
+      } else if (mode === 'duration') {
+        const amount = Math.max(0, Number(config.amount ?? 0));
+        const unit = asText(config.unit || 'seconds');
+        const factor = unit === 'days' ? 86_400 : unit === 'hours' ? 3600 : unit === 'minutes' ? 60 : 1;
+        wanted = amount * factor * 1000;
+      } else {
+        throw new Error(`wait node: unknown mode "${mode}"`);
+      }
       if (!Number.isFinite(wanted)) throw new Error('wait node: "amount" must be a number');
       // Over a minute, a stored run is paused and woken up later (up to 30 days); in memory the cap is an hour.
-      if (ctx.suspendable && wanted > 60_000) throw new RunSuspended({ kind: 'wait', resumeAt: new Date(Date.now() + Math.min(wanted, 30 * 86_400_000)).toISOString() });
-      const ms = Math.min(3_600_000, wanted);
-      if (ms > 0) await sleep(ms, ctx.signal);
+      if (ctx.suspendable && wanted > 60_000) {
+        if (wanted > 30 * 86_400_000) throw new Error('wait node: cannot wait more than 30 days');
+        throw new RunSuspended({ kind: 'wait', resumeAt: new Date(Date.now() + wanted).toISOString() });
+      }
+      if (wanted > 3_600_000) throw new Error('wait node: waiting more than an hour needs a top-level run');
+      if (wanted > 0) await sleep(wanted, ctx.signal);
       return { main: items };
+    }
+    case 'stop': {
+      const config = resolveValue(node.config, contextAt(ctx, firstOrEmpty(items), 0, items)) as Record<string, JsonValue>;
+      const mode = asText(config.mode || 'success');
+      const message = asText(config.message).trim();
+      if (mode !== 'success' && mode !== 'error') throw new Error(`stop node: unknown mode "${mode}"`);
+      throw new WorkflowStop(mode === 'error', message);
     }
     case 'workflow': {
       const config = resolveValue(node.config, contextAt(ctx, firstOrEmpty(items), 0, items)) as Record<string, JsonValue>;
@@ -826,6 +841,54 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
       for (const [index, item] of items.entries()) {
         const config = at(item, index);
         const file = allowedPath(asText(config.path), deps.allowedDirs);
+        if (operation === 'copy' || operation === 'move') {
+          const destination = asText(config.destination).trim();
+          if (!destination) throw new Error('file node: set a destination path for copy / move');
+          const target = allowedPath(destination, deps.allowedDirs);
+          const overwrite = config.overwrite === true;
+          const exists = await fsp.lstat(target).then(() => true, () => false);
+          if (exists && !overwrite) throw new Error(`file node: "${target}" already exists (tick overwrite)`);
+          await fsp.mkdir(path.dirname(target), { recursive: true });
+          if (operation === 'copy') {
+            await fsp.cp(file, target, { recursive: true, force: overwrite, errorOnExist: !overwrite });
+          } else {
+            if (overwrite && exists) await fsp.rm(target, { recursive: true, force: true });
+            try {
+              await fsp.rename(file, target);
+            } catch (error) {
+              // A different drive cannot be renamed across: copy, then remove the source.
+              if ((error as NodeJS.ErrnoException).code !== 'EXDEV') throw error;
+              await fsp.cp(file, target, { recursive: true, force: overwrite });
+              await fsp.rm(file, { recursive: true, force: true });
+            }
+          }
+          out.push({ json: { ...item.json, file: { operation, from: file, to: target } } });
+          continue;
+        }
+        if (operation === 'delete') {
+          const stat = await fsp.lstat(file).catch((error: NodeJS.ErrnoException) => {
+            if (error.code === 'ENOENT') throw new Error(`file node: "${file}" does not exist`);
+            throw error;
+          });
+          if (stat.isDirectory() && config.recursive !== true) throw new Error(`file node: "${file}" is a folder; tick recursive to delete it`);
+          await fsp.rm(file, { recursive: config.recursive === true, force: false });
+          out.push({ json: { ...item.json, deleted: file, wasDir: stat.isDirectory() } });
+          continue;
+        }
+        if (operation === 'stat') {
+          const stat = await fsp.stat(file).catch(() => null);
+          out.push({
+            json: {
+              ...item.json,
+              path: file,
+              exists: Boolean(stat),
+              ...(stat
+                ? { isDir: stat.isDirectory(), size: stat.size, modified: stat.mtime.toISOString(), created: stat.birthtime.toISOString() }
+                : {}),
+            },
+          });
+          continue;
+        }
         if (operation === 'list') {
           const filter = asText(config.pattern).trim() ? wildcard(asText(config.pattern).trim()) : null;
           const entries = await fsp.readdir(file, { withFileTypes: true });
@@ -958,6 +1021,59 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
       }
       return { main: out };
     }
+    case 'sheets': {
+      const out: FlowItem[] = [];
+      for (const [index, item] of items.entries()) {
+        const config = resolveValue(node.config, contextAt(ctx, item, index, items)) as {
+          account?: JsonValue;
+          spreadsheetId?: JsonValue;
+          operation?: JsonValue;
+          range?: JsonValue;
+          values?: JsonValue;
+        };
+        const operation = asText(config.operation || 'read');
+        if (operation !== 'info' && operation !== 'read' && operation !== 'append' && operation !== 'update') {
+          throw new Error(`sheets node: unknown operation "${operation}"`);
+        }
+        const spreadsheetId = asText(config.spreadsheetId).trim();
+        if (!spreadsheetId) throw new Error('sheets node: give the spreadsheet id or URL');
+        const range = asText(config.range).trim();
+        const payload: Record<string, JsonValue> = {};
+        if (operation === 'read' || operation === 'append' || operation === 'update') {
+          if (!range) throw new Error(`sheets node: "${operation}" needs a range`);
+          payload.range = range;
+        }
+        if (operation === 'append' || operation === 'update') {
+          if (!Array.isArray(config.values) || config.values.length === 0) {
+            throw new Error(`sheets node: "${operation}" needs values: rows of cells as JSON`);
+          }
+          payload.values = config.values;
+        }
+        const toolName = operation === 'info' ? 'sheets_info' : operation === 'read' ? 'sheets_read' : operation === 'append' ? 'sheets_append' : 'sheets_write';
+        const tool = deps.tool(toolName);
+        if (!tool) throw new Error(`sheets node: tool "${toolName}" is not available`);
+        // Same rule as the tool node: reading is free, writing needs the node's own consent
+        // (or an "allow" in the settings file). A "deny" there always wins.
+        const policy = deps.permissions?.[toolName];
+        if (policy === 'deny') throw new Error(`sheets node: "${toolName}" is denied in the settings file`);
+        if (tool.risk !== 'read' && policy !== 'allow' && node.config.allow !== true) {
+          throw new Error(`sheets node: "${operation}" changes the spreadsheet (${tool.risk}); tick "อนุญาตให้ทำงานนี้" on the node to let the workflow run it`);
+        }
+        const parsed = tool.inputSchema.safeParse(payload);
+        if (!parsed.success) throw new Error(`sheets node "${toolName}": invalid input`);
+        const context: ToolContext = {
+          traceId: `workflow:${ctx.thread}`,
+          thread: ctx.thread,
+          agent: workflow.agent,
+          allowedDirs: deps.allowedDirs,
+          signal: ctx.signal,
+        };
+        const settings = { account: asText(config.account).trim() || undefined, spreadsheetId };
+        const text = await tool.execute(parsed.data, context, settings);
+        out.push({ json: { ...item.json, text } });
+      }
+      return { main: out };
+    }
     default:
       throw new Error(`Unknown node type "${String((node as { type: string }).type)}".`);
   }
@@ -1015,6 +1131,16 @@ export class RunSuspended extends Error {
   constructor(wait: SuspendWait) {
     super(wait.kind === 'approval' ? 'waiting for approval' : `waiting until ${wait.resumeAt}`);
     this.wait = wait;
+  }
+}
+
+/** The stop node ends the whole run, successfully or as a failure. */
+class WorkflowStop extends Error {
+  readonly failed: boolean;
+  constructor(failed: boolean, message: string) {
+    super(message || (failed ? 'stopped by the workflow' : ''));
+    this.name = 'WorkflowStop';
+    this.failed = failed;
   }
 }
 
@@ -1128,6 +1254,7 @@ async function drive(workflow: WorkflowView, state: RunState, deps: WorkflowRunn
     // A failing node retries first; what happens after that is its onError policy.
     let outputs: Record<string, FlowItem[]> = {};
     let error: string | undefined;
+    let stop: WorkflowStop | undefined;
     const attempts = 1 + Math.max(0, Math.floor(Number(node.retries ?? 0)));
     for (let attempt = 0; attempt < attempts; attempt++) {
       try {
@@ -1135,6 +1262,10 @@ async function drive(workflow: WorkflowView, state: RunState, deps: WorkflowRunn
         error = undefined;
         break;
       } catch (caught) {
+        if (caught instanceof WorkflowStop) {
+          stop = caught;
+          break;
+        }
         if (caught instanceof RunSuspended && deps.park) {
           // The run is stored and ends here; it goes on when the answer / time comes.
           view.status = 'waiting';
@@ -1149,6 +1280,19 @@ async function drive(workflow: WorkflowView, state: RunState, deps: WorkflowRunn
           await sleep(Number(node.retryWaitMs), context.signal);
         }
       }
+    }
+    if (stop) {
+      // Stop ends the run here: no other branch may continue.
+      view.status = stop.failed ? 'error' : 'ok';
+      if (stop.failed) {
+        view.error = stop.message;
+        state.failed = true;
+      }
+      view.output = input;
+      state.views.push(view);
+      recordOutput(state, node, view);
+      state.queue.length = 0;
+      break;
     }
     if (error !== undefined) {
       view.status = 'error';
@@ -1303,7 +1447,8 @@ async function guardUrl(url: string, allowLocal: boolean, deps: WorkflowRunnerDe
     case 'mail': {
       const source = asText(config.source) === 'microsoft' ? 'microsoft' : 'google';
       const query = asText(resolveValue(config.query ?? '', empty));
-      const items = await deps.mail.list(source, query, 5);
+      const account = asText(resolveValue(config.account ?? '', empty)).trim() || undefined;
+      const items = await deps.mail.list(source, query, 5, account);
       return items.map((mail) => ({
         json: { Id: mail.id, From: mail.from, To: mail.to, Date: mail.date ?? '', Subject: mail.subject, Content: mail.content },
       }));
@@ -1363,6 +1508,7 @@ export async function runWorkflowNode(
     const outputs = await executeNode(node, items, context);
     return { ok: true, input: items, outputs };
   } catch (error) {
+    if (error instanceof WorkflowStop && !error.failed) return { ok: true, input: items, outputs: {} };
     return { ok: false, error: (error as Error).message, input: items, outputs: {} };
   }
 }

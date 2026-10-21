@@ -23,6 +23,7 @@ export type NodeTypeName =
   | 'remove_duplicates'
   | 'merge'
   | 'wait'
+  | 'stop'
   | 'workflow'
   | 'respond'
   | 'llm'
@@ -35,7 +36,20 @@ export type NodeTypeName =
   | 'datetime'
   | 'file'
   | 'extract_file'
-  | 'knowledge';
+  | 'knowledge'
+  | 'sheets'
+  | 'trigger_manual'
+  | 'trigger_schedule'
+  | 'trigger_webhook'
+  | 'trigger_form'
+  | 'trigger_mail'
+  | 'trigger_poll'
+  | 'trigger_chat'
+  | 'trigger_telegram'
+  | 'trigger_tool'
+  | 'trigger_custom';
+
+export type NodeFieldType = 'string' | 'number' | 'boolean' | 'text' | 'json' | 'expression' | 'account';
 
 /** One field the extract node asks the model for. */
 export interface ExtractAttribute {
@@ -106,6 +120,8 @@ export interface WorkflowView {
   nodes: WorkflowNode[];
   /** Sticky notes on the canvas. */
   notes?: WorkflowNote[];
+  /** Where the virtual trigger box sits on the editor canvas; missing = beside the start nodes. */
+  triggerPosition?: [number, number];
 }
 
 export interface WorkflowRunNodeView {
@@ -175,7 +191,9 @@ export interface WorkflowNodeTestResult {
 export interface NodeTypeField {
   key: string;
   label: string;
-  type: 'string' | 'number' | 'boolean' | 'text' | 'json' | 'expression';
+  type: NodeFieldType;
+  /** For `account` fields: which OAuth accounts the dropdown offers; missing = every service. */
+  service?: import('./oauth.ts').OAuthService;
   placeholder?: string;
   required?: boolean;
   description?: string;
@@ -189,6 +207,8 @@ export interface NodeTypeView {
   description: string;
   fields: NodeTypeField[];
   outputs: Array<{ key: string; label: string }>;
+  /** Set for trigger nodes: the trigger-pool entry whose settings and sample this node uses. */
+  triggerPool?: string;
 }
 
 /** The condition operators `if` and `switch` understand. */
@@ -251,6 +271,7 @@ export const NODE_TYPES: NodeTypeView[] = [
         type: 'json',
         required: true,
         placeholder: '[{"left":"{{ $json.text }}","operator":"contains","right":"spam"}]',
+        description: 'แต่ละแถวคือหนึ่งเงื่อนไข · ใช้ and/or จากช่อง "รวมเงื่อนไขแบบ"',
       },
     ],
     outputs: [
@@ -263,13 +284,14 @@ export const NODE_TYPES: NodeTypeView[] = [
     label: 'switch',
     description: 'เทียบกับหลายกรณี ไม่จำกัดจำนวน (โหมด value = เทียบค่า, rules = เงื่อนไข)',
     fields: [
-      { key: 'mode', label: 'โหมด', type: 'string', options: ['value', 'rules'] },
-      { key: 'value', label: 'ค่า (expression) — โหมด value', type: 'expression', placeholder: '{{ $json.Subject }}' },
+      { key: 'mode', label: 'โหมด', type: 'string', options: ['value', 'rules'], description: 'value = เทียบค่าตรง ๆ กับแต่ละกรณี · rules = ตั้งเงื่อนไขของแต่ละกรณีเอง' },
+      { key: 'value', label: 'ค่า (expression) — โหมด value', type: 'expression', placeholder: '{{ $json.Subject }}', description: 'ค่าที่จะเอาไปเทียบกับแต่ละกรณี' },
       {
         key: 'cases',
-        label: 'กรณี (JSON array)',
+        label: 'กรณี',
         type: 'json',
         placeholder: '["urgent","invoice"] หรือ [{"left":"{{ $json.n }}","operator":"gt","right":10}]',
+        description: 'แต่ละกรณีมี output ของตัวเอง (case0, case1, …) · item ที่ไม่ตรงกรณีไหนไปที่ fallback',
       },
     ],
     outputs: [
@@ -301,6 +323,7 @@ export const NODE_TYPES: NodeTypeView[] = [
       { key: 'headers', label: 'headers (JSON)', type: 'json', placeholder: '{"authorization": "Bearer {{ $vars.key }}"}' },
       { key: 'query', label: 'query (JSON)', type: 'json', placeholder: '{"limit": 5}' },
       { key: 'body', label: 'body (JSON)', type: 'json', placeholder: '{"subject": "{{ $json.Subject }}"}' },
+      { key: 'timeoutMs', label: 'timeout (ms)', type: 'number', placeholder: '60000', description: '1000-120000; ค่าเริ่มต้น 60000' },
       { key: 'allowLocal', label: 'อนุญาตเรียกเครือข่ายภายใน (localhost, 192.168.x.x, เครื่องในบ้าน)', type: 'boolean' },
     ],
     outputs: [{ key: 'main', label: 'main' }],
@@ -311,6 +334,7 @@ export const NODE_TYPES: NodeTypeView[] = [
     description: 'เรียกเครื่องมือ/preset จากกองเครื่องมือ',
     fields: [
       { key: 'tool', label: 'เครื่องมือ / preset', type: 'string', required: true },
+      { key: 'agent', label: 'agent เจ้าของเครื่องมือ (เว้นว่าง = เจ้าของ workflow)', type: 'string', description: 'ใช้กับเครื่องมือที่อ่านค่าจาก agent เช่น ไฟล์ ความจำ โปรไฟล์ หรือการแจ้งเตือน' },
       { key: 'input', label: 'input (JSON + expression)', type: 'json', placeholder: '{"range": "A1", "values": [["{{ $json.Subject }}"]]}' },
       { key: 'allow', label: 'อนุญาตให้ทำงานนี้ (เครื่องมือที่ส่ง / แก้ / ลบข้อมูล ต้องติ๊ก เพราะ workflow รันเองโดยไม่มีใครกดยืนยัน)', type: 'boolean' },
     ],
@@ -328,6 +352,7 @@ export const NODE_TYPES: NodeTypeView[] = [
         type: 'json',
         required: true,
         placeholder: '[{"left":"{{ $json.text }}","operator":"not_contains","right":"spam"}]',
+        description: 'แต่ละแถวคือหนึ่งเงื่อนไข · item ที่ผ่านทุกเงื่อนไข (หรือข้อใดข้อหนึ่งเมื่อเลือก or) จะไหลต่อไป',
       },
     ],
     outputs: [{ key: 'main', label: 'main' }],
@@ -389,10 +414,22 @@ export const NODE_TYPES: NodeTypeView[] = [
   {
     type: 'wait',
     label: 'wait (หน่วงเวลา)',
-    description: 'รอตามเวลาก่อนไปต่อ · เกิน 1 นาที run จะถูกพักเก็บไว้แล้วปลุกเมื่อถึงเวลา (สูงสุด 30 วัน แม้ปิดแอประหว่างนั้น)',
+    description: 'รอตามเวลาหรือรอถึงเวลาที่กำหนดก่อนไปต่อ · เกิน 1 นาที run จะถูกพักเก็บไว้แล้วปลุกเมื่อถึงเวลา (สูงสุด 30 วัน แม้ปิดแอประหว่างนั้น)',
     fields: [
-      { key: 'amount', label: 'จำนวน', type: 'number', required: true, placeholder: '1' },
-      { key: 'unit', label: 'หน่วย', type: 'string', options: ['seconds', 'minutes', 'hours', 'days'] },
+      { key: 'mode', label: 'แบบ', type: 'string', options: ['duration', 'until'] },
+      { key: 'amount', label: 'จำนวน (โหมด duration)', type: 'number', placeholder: '1' },
+      { key: 'unit', label: 'หน่วย (โหมด duration)', type: 'string', options: ['seconds', 'minutes', 'hours', 'days'] },
+      { key: 'until', label: 'รอถึงวันที่ / เวลา (โหมด until)', type: 'expression', placeholder: '{{ $json.due }} หรือ 2026-10-31 09:00' },
+    ],
+    outputs: [{ key: 'main', label: 'main' }],
+  },
+  {
+    type: 'stop',
+    label: 'หยุด workflow',
+    description: 'จบ workflow ที่ node นี้ทันที: success = จบแบบสำเร็จ, error = ทำให้ run ล้มเหลวพร้อมข้อความ',
+    fields: [
+      { key: 'mode', label: 'แบบ', type: 'string', options: ['success', 'error'] },
+      { key: 'message', label: 'ข้อความ (error / หมายเหตุ)', type: 'text', placeholder: 'หยุดเพราะไม่พบข้อมูลที่ต้องใช้' },
     ],
     outputs: [{ key: 'main', label: 'main' }],
   },
@@ -526,11 +563,14 @@ export const NODE_TYPES: NodeTypeView[] = [
   },
   {
     type: 'file',
-    label: 'ไฟล์ (อ่าน / เขียน)',
-    description: 'อ่าน เขียน ต่อท้าย หรือดูรายชื่อไฟล์ ในโฟลเดอร์ที่อนุญาตเท่านั้น (path สั้น ๆ = นับจากโฟลเดอร์แรก)',
+    label: 'ไฟล์ (อ่าน / เขียน / คัดลอก / ลบ)',
+    description: 'อ่าน เขียน ต่อท้าย ดูรายชื่อ คัดลอก ย้าย ลบ หรือดูข้อมูลไฟล์ ในโฟลเดอร์ที่อนุญาตเท่านั้น (path สั้น ๆ = นับจากโฟลเดอร์แรก)',
     fields: [
-      { key: 'operation', label: 'ทำอะไร', type: 'string', options: ['read', 'write', 'append', 'list'] },
+      { key: 'operation', label: 'ทำอะไร', type: 'string', options: ['read', 'write', 'append', 'list', 'copy', 'move', 'delete', 'stat'] },
       { key: 'path', label: 'path ของไฟล์ / โฟลเดอร์', type: 'expression', required: true, placeholder: 'notes/{{ $today }}.md' },
+      { key: 'destination', label: 'path ปลายทาง (copy / move)', type: 'expression', placeholder: 'backup/{{ $today }}.md' },
+      { key: 'overwrite', label: 'เขียนทับถ้าปลายทางมีอยู่แล้ว (copy / move)', type: 'boolean' },
+      { key: 'recursive', label: 'ลบทั้งโฟลเดอร์ (delete)', type: 'boolean', description: 'ถ้าไม่ติ๊ก จะลบได้เฉพาะไฟล์' },
       { key: 'format', label: 'อ่านเป็น (read)', type: 'string', options: ['text', 'json', 'csv', 'lines'] },
       { key: 'source', label: 'เขียนอะไร (write)', type: 'string', options: ['content', 'items_json', 'items_csv'] },
       { key: 'content', label: 'เนื้อหา (write / append)', type: 'text', placeholder: '- {{ $json.rest }}' },
@@ -570,6 +610,33 @@ export const NODE_TYPES: NodeTypeView[] = [
     ],
     outputs: [{ key: 'main', label: 'main' }],
   },
+  {
+    type: 'sheets',
+    label: 'Google Sheets',
+    description:
+      'อ่าน/เขียน Google Sheets โดยตรง: เลือกบัญชีและไฟล์ แล้วใส่ช่วง (range) กับค่าที่จะเขียน · ไม่ต้องสร้าง tool preset ก่อน',
+    fields: [
+      { key: 'account', label: 'บัญชี Google (เว้นว่าง = บัญชีเริ่มต้น)', type: 'account', service: 'google' },
+      {
+        key: 'spreadsheetId',
+        label: 'สเปรดชีต (ID หรือ URL)',
+        type: 'expression',
+        required: true,
+        placeholder: 'https://docs.google.com/spreadsheets/d/…',
+      },
+      { key: 'operation', label: 'ทำอะไร', type: 'string', options: ['info', 'read', 'append', 'update'] },
+      { key: 'range', label: 'ช่วง (range)', type: 'expression', placeholder: 'Sheet1!A1:D20', description: 'read/append/update' },
+      { key: 'values', label: 'ค่าที่จะเขียน (JSON rows)', type: 'json', placeholder: '[["มกราคม", 1200]]', description: 'append/update' },
+    ],
+    outputs: [{ key: 'main', label: 'main' }],
+  },
+  {
+    type: 'trigger_custom',
+    label: 'ทริกเกอร์จาก pool',
+    description: 'จุดเริ่มของ workflow จาก trigger ที่ผู้ใช้สร้างเองใน Hub → Trigger · เลือก trigger แล้วกรอกค่าตามที่ trigger นั้นกำหนด',
+    fields: [{ key: 'pool', label: 'trigger จาก pool', type: 'string', required: true }],
+    outputs: [{ key: 'main', label: 'main' }],
+  },
 ];
 
 export interface TriggerPoolView {
@@ -581,6 +648,39 @@ export interface TriggerPoolView {
   fields: NodeTypeField[];
   /** Example of the JSON this trigger produces; shown in the editor. */
   sample: Record<string, JsonValue>;
+}
+
+/** Trigger nodes are real nodes on the canvas; each one maps to a trigger-pool entry. */
+export const TRIGGER_NODE_POOLS: Partial<Record<NodeTypeName, string>> = {
+  trigger_manual: 'manual',
+  trigger_schedule: 'schedule',
+  trigger_webhook: 'webhook',
+  trigger_form: 'form',
+  trigger_mail: 'mail',
+  trigger_poll: 'poll',
+  trigger_chat: 'chat',
+  trigger_telegram: 'telegram',
+  trigger_tool: 'agent_tool',
+};
+
+export function isTriggerNodeType(type: string): boolean {
+  return type === 'trigger_custom' || Object.hasOwn(TRIGGER_NODE_POOLS, type);
+}
+
+export function triggerPoolOfNode(type: string): string | undefined {
+  return isTriggerNodeType(type) ? TRIGGER_NODE_POOLS[type as NodeTypeName] : undefined;
+}
+
+/** The pool a trigger node points at; `trigger_custom` keeps the name in its config. */
+export function triggerPoolOfNodeConfig(node: { type: string; config: WorkflowNode['config'] }): string | undefined {
+  if (node.type !== 'trigger_custom') return triggerPoolOfNode(node.type);
+  const name = node.config.pool;
+  return typeof name === 'string' && name.trim() ? name.trim() : undefined;
+}
+
+/** The one trigger node of a workflow (the editor keeps exactly one). */
+export function triggerNodeOf(nodes: readonly WorkflowNode[]): WorkflowNode | undefined {
+  return nodes.find((node) => isTriggerNodeType(node.type));
 }
 
 export const BUILTIN_TRIGGERS: TriggerPoolView[] = [
@@ -612,13 +712,23 @@ export const BUILTIN_TRIGGERS: TriggerPoolView[] = [
     sample: { event: 'order.created', orderId: 42 },
   },
   {
+    name: 'form',
+    label: 'ฟอร์ม / HTML form',
+    description: 'รับค่าจาก HTML form (application/x-www-form-urlencoded) หรือ GET query; ทุกค่าในฟอร์มกลายเป็น item เดียว',
+    kind: 'webhook',
+    builtin: true,
+    fields: [{ key: 'secret', label: 'secret (ไม่บังคับ) - ส่งมาทาง ?secret= หรือ header x-mimi-secret', type: 'string', placeholder: 'ปล่อยว่างได้' }],
+    sample: { name: 'สมชาย', email: 'somchai@example.com', message: 'สวัสดี' },
+  },
+  {
     name: 'mail',
     label: 'อีเมลใหม่ (Gmail / Outlook)',
     description: 'เช็คอีเมลใหม่เป็นรอบ แล้วรันทีละฉบับ',
     kind: 'mail',
     builtin: true,
     fields: [
-      { key: 'source', label: 'บัญชี', type: 'string', placeholder: 'google | microsoft' },
+      { key: 'source', label: 'เจ้า (google | microsoft)', type: 'string', placeholder: 'google | microsoft' },
+      { key: 'account', label: 'บัญชี (เว้นว่าง = บัญชีเริ่มต้นของเจ้านั้น)', type: 'account' },
       { key: 'query', label: 'ค้นหา (Gmail query)', type: 'string', placeholder: 'เว้นว่าง = is:unread' },
       { key: 'everyMinutes', label: 'เช็คทุก (นาที)', type: 'number', placeholder: '15' },
       { key: 'markRead', label: 'มาร์คอ่านแล้ว', type: 'boolean' },
@@ -702,3 +812,28 @@ export const BUILTIN_TRIGGERS: TriggerPoolView[] = [
     sample: { item: 'กาแฟ', amount: 65, note: '', agent: 'mimi' },
   },
 ];
+
+const TRIGGER_NODE_LABELS: Partial<Record<NodeTypeName, string>> = {
+  trigger_manual: 'ทริกเกอร์: กดรันเอง',
+  trigger_schedule: 'ทริกเกอร์: ตามเวลา (cron)',
+  trigger_webhook: 'ทริกเกอร์: Webhook',
+  trigger_form: 'ทริกเกอร์: ฟอร์ม / HTML form',
+  trigger_mail: 'ทริกเกอร์: อีเมลใหม่',
+  trigger_poll: 'ทริกเกอร์: HTTP poll',
+  trigger_chat: 'ทริกเกอร์: ข้อความในแชต',
+  trigger_telegram: 'ทริกเกอร์: Telegram',
+  trigger_tool: 'ทริกเกอร์: agent เรียกใช้',
+};
+
+for (const [type, pool] of Object.entries(TRIGGER_NODE_POOLS)) {
+  const entry = BUILTIN_TRIGGERS.find((trigger) => trigger.name === pool);
+  if (!entry) continue;
+  NODE_TYPES.push({
+    type: type as NodeTypeName,
+    label: TRIGGER_NODE_LABELS[type as NodeTypeName] ?? entry.label,
+    description: `จุดเริ่มของ workflow · ${entry.description}`,
+    fields: entry.fields,
+    outputs: [{ key: 'main', label: 'main' }],
+    triggerPool: entry.name,
+  });
+}

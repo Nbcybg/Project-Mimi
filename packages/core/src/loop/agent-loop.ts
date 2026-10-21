@@ -4,10 +4,12 @@ import type {
   MeshContext,
   MessageRole,
   RunFinishReason,
+  SpeechStyle,
   ToolCall,
   ToolResult,
   UsageSnapshot,
 } from '@mimi/shared';
+import { parseSpeech, stripSpeechFromContent } from '@mimi/shared';
 import {
   type LanguageModelUsage,
   type ModelMessage,
@@ -66,15 +68,20 @@ export interface AgentLoopDeps {
   /** Tools that exist only for this run (the agent's skills). */
   extraTools?: (agent: AgentDefinition, input: RunInput) => ToolDefinition<any>[];
   now?: () => Date;
-  /** The user's files: tied to the message that carries them, and shown as they are to a model that can see. */
+  /** The user's files: tied to the message that carries them, and shown as they are to a model that can read them. */
   media?: {
     link(attachmentIds: string[], messageId: number): void;
-    imageParts(messageIds: number[], limit: number): Map<number, Array<{ type: 'file'; data: Buffer; mediaType: string; filename: string }>>;
+    promptFiles(
+      messageIds: number[],
+      options: { images: number; pdfs: number },
+    ): Map<number, { parts: Array<{ type: 'file'; data: Buffer; mediaType: string; filename: string }>; stripIds: Set<string> }>;
   };
 }
 
 /** How many of a session's newest images a vision-capable chat model gets as pictures. */
 const MAX_PROMPT_IMAGES = 6;
+/** How many of a session's newest PDFs a document-capable chat model gets as documents. */
+const MAX_PROMPT_PDFS = 3;
 
 export interface RunInput {
   agent: AgentDefinition;
@@ -258,16 +265,19 @@ export async function* runAgent(deps: AgentLoopDeps, input: RunInput): AsyncGene
     },
   };
 
-  const persist = (role: MessageRole, content: unknown, context?: string) =>
-    deps.messages.append({
+  const persist = (role: MessageRole, content: unknown, context?: string, speech?: SpeechStyle) => {
+    const clean = role === 'assistant' && speech === undefined ? stripSpeechFromContent(content) : { content };
+    return deps.messages.append({
       thread,
       traceId,
       agent: agent.name,
       role,
-      content,
-      text: extractText(role, content),
+      content: clean.content,
+      text: extractText(role, clean.content),
+      speech: speech ?? clean.speech,
       context,
     });
+  };
 
   // Prompt = stable prefix (persona, memory snapshot, summaries) -> raw messages since the
   // last compaction -> the new user message with the volatile block. Only the tail is new.
@@ -293,12 +303,14 @@ export async function* runAgent(deps: AgentLoopDeps, input: RunInput): AsyncGene
   );
   if (input.attachments?.length) deps.media?.link(input.attachments, userMessageId);
   const tail = deps.messages.after(thread, state.summarizedThrough);
-  // A model that can see gets the pictures themselves, not only their description.
+  // A model that can see documents gets the files themselves, not only their description.
+  const wantsImages = modelInfo.imageInput;
+  const wantsPdf = modelInfo.inputs?.includes('pdf') ?? false;
   const media =
-    modelInfo.imageInput && deps.media
-      ? deps.media.imageParts(
+    deps.media && (wantsImages || wantsPdf)
+      ? deps.media.promptFiles(
           tail.filter((message) => message.role === 'user').map((message) => message.id),
-          MAX_PROMPT_IMAGES,
+          { images: wantsImages ? MAX_PROMPT_IMAGES : 0, pdfs: wantsPdf ? MAX_PROMPT_PDFS : 0 },
         )
       : undefined;
   const messages = buildHistory(tail, agent.name, { group: input.group, media });
@@ -310,6 +322,7 @@ export async function* runAgent(deps: AgentLoopDeps, input: RunInput): AsyncGene
   let rounds = 0;
   let contextTokens = 0;
   let text = '';
+  let speech: SpeechStyle | undefined;
   let reason: RunFinishReason = 'stop';
   let error: string | undefined;
   /** Some models end a turn with no text at all (everything went into reasoning); they get one more go. */
@@ -348,10 +361,39 @@ export async function* runAgent(deps: AgentLoopDeps, input: RunInput): AsyncGene
       const calls: ToolCall[] = [];
       let usage: LanguageModelUsage | undefined;
       let aborted = false;
+      // The voice direction line is metadata, not answer text; keep it out of the
+      // live stream too so the CLI and any other client never show the brackets.
+      const stream = {
+        buffer: '',
+        settled: false,
+        push(delta: string): string {
+          if (this.settled) return delta;
+          this.buffer += delta;
+          if (!this.buffer.trimStart().startsWith('[')) {
+            this.settled = true;
+            const visible = this.buffer;
+            this.buffer = '';
+            return visible;
+          }
+          if (this.buffer.indexOf('\n') === -1 && this.buffer.length < 600) return '';
+          return this.release();
+        },
+        release(): string {
+          const parsed = parseSpeech(this.buffer);
+          const visible = parsed.speech ? parsed.text : this.buffer;
+          this.buffer = '';
+          this.settled = true;
+          return visible;
+        },
+        flush(): string {
+          return this.settled ? '' : this.release();
+        },
+      };
       for await (const part of result.stream) {
         if (part.type === 'text-delta') {
           text += part.text;
-          yield { type: 'text-delta', text: part.text };
+          const visible = stream.push(part.text);
+          if (visible) yield { type: 'text-delta', text: visible };
         } else if (part.type === 'tool-call') {
           calls.push({ id: part.toolCallId, name: part.toolName, input: part.input });
         } else if (part.type === 'finish-step') {
@@ -362,6 +404,8 @@ export async function* runAgent(deps: AgentLoopDeps, input: RunInput): AsyncGene
           throw part.error;
         }
       }
+      const rest = stream.flush();
+      if (rest) yield { type: 'text-delta', text: rest };
       if (aborted) {
         reason = 'aborted';
         break;
@@ -370,9 +414,13 @@ export async function* runAgent(deps: AgentLoopDeps, input: RunInput): AsyncGene
       // The SDK rejects malformed calls (unknown tool, bad input) itself and puts the
       // error result in the response; only the calls still open are ours to run.
       const rejected = new Map<string, string>();
-      for (const message of await result.responseMessages) {
+      for (const raw of await result.responseMessages) {
+        // Keep the direction line out of the transcript the model sees next round too.
+        const clean = raw.role === 'assistant' ? stripSpeechFromContent(raw.content) : { content: raw.content };
+        const message: ModelMessage = clean.content === raw.content ? raw : ({ ...raw, content: clean.content } as ModelMessage);
         messages.push(message);
-        const storedId = persist(message.role, message.content);
+        if (message.role === 'system') continue;
+        const storedId = persist(message.role, message.content, undefined, clean.speech);
         // Files a tool of this round sends are shown under the message that called it.
         if (message.role === 'assistant') toolContext.messageId = storedId;
         if (message.role !== 'tool') continue;
@@ -404,7 +452,7 @@ export async function* runAgent(deps: AgentLoopDeps, input: RunInput): AsyncGene
       yield { type: 'usage', round: rounds, usage: snapshot };
 
       if (calls.length === 0) {
-        if (text.trim() || nudged || rounds >= agent.budgets.maxRounds) break;
+        if (parseSpeech(text).text.trim() || nudged || rounds >= agent.budgets.maxRounds) break;
         nudged = true;
         // Not stored: it only steers this run.
         messages.push({ role: 'user', content: '(Your last reply came out empty. Write your answer to the message above now, as plain text.)' });
@@ -463,6 +511,9 @@ export async function* runAgent(deps: AgentLoopDeps, input: RunInput): AsyncGene
     durationMs: Date.now() - startedAt,
     error,
   });
+  const spoken = parseSpeech(text);
+  text = spoken.text;
+  speech = spoken.speech;
   yield {
     type: 'run-finish',
     traceId,
@@ -471,6 +522,7 @@ export async function* runAgent(deps: AgentLoopDeps, input: RunInput): AsyncGene
     usage: total,
     contextTokens,
     text,
+    speech,
     handoff: reason === 'handoff' ? handoff : undefined,
     error,
   };

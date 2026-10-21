@@ -35,7 +35,9 @@
   };
   /** How much of the chat shows over the character: 0 none, 1 only the newest message, 2 all (the usual). Per mode. */
   const bubbleLevel = () => {
-    const level = Number(store.get(`mimi.bubbles.${modeNow()}`));
+    const saved = store.get(`mimi.bubbles.${modeNow()}`);
+    if (saved === null) return 2;
+    const level = Number(saved);
     return level === 0 || level === 1 ? level : 2;
   };
   /** The character on the chat stage can be switched off (to read more of the chat); remembered per mode. */
@@ -79,16 +81,65 @@
   $('send').innerHTML = ICONS.send;
   $('stop').innerHTML = ICONS.stop;
 
-  const fmtTime = (iso) => new Date(iso).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
+  const localeNow = () => (window.MimiI18n?.current() === 'th' ? 'th-TH' : 'en-GB');
+  const fmtTime = (iso) => new Date(iso).toLocaleTimeString(localeNow(), { hour: '2-digit', minute: '2-digit' });
   function fmtDay(iso) {
     const date = new Date(iso);
     return date.toDateString() === new Date().toDateString()
       ? fmtTime(iso)
-      : date.toLocaleDateString('th-TH', { day: 'numeric', month: 'short' });
+      : date.toLocaleDateString(localeNow(), { day: 'numeric', month: 'short' });
   }
-  const fmtDate = (iso) => new Date(iso).toLocaleString('th-TH', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  const fmtDate = (iso) => new Date(iso).toLocaleString(localeNow(), { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
   const fmtSize = (bytes) =>
     bytes < 1024 ? `${bytes} B` : bytes < 1048576 ? `${Math.round(bytes / 1024)} KB` : `${(bytes / 1048576).toFixed(1)} MB`;
+
+  // A reply may start with one line of voice direction, e.g.
+  // [emotion: เศร้า][tone: กระซิบ]. It is hidden from the text and shown as a badge;
+  // the same fields drive the speech provider.
+  const SPEECH_KEYS = new Set(['emotion', 'tone', 'voice', 'speed']);
+  const SPEECH_TAG = /\[([a-z]+)\s*:\s*([^\]\n]*)\]/gi;
+  function parseSpeech(text, live = false) {
+    const source = String(text || '');
+    const end = source.indexOf('\n');
+    const line = end === -1 ? source : source.slice(0, end);
+    const tags = [...line.matchAll(SPEECH_TAG)];
+    if (live && end === -1 && /^\s*\[(?:emotion|tone|voice|speed)\b/i.test(line)) {
+      const speech = speechOf(tags);
+      return { text: '', speech };
+    }
+    if (tags.length === 0 || tags.some((tag) => !SPEECH_KEYS.has(tag[1].toLowerCase()))) return { text: source };
+    if (line.replace(/\[([a-z]+)\s*:\s*([^\]\n]*)\]/gi, '').trim()) return { text: source };
+    const speech = speechOf(tags);
+    if (!speech) return { text: source };
+    return { text: source.slice(end === -1 ? source.length : end + 1), speech };
+  }
+  function speechOf(tags) {
+    const speech = {};
+    for (const tag of tags) {
+      const key = tag[1].toLowerCase();
+      const value = tag[2].trim();
+      if (!SPEECH_KEYS.has(key) || !value) continue;
+      if (key === 'speed') {
+        const speed = Number(value);
+        if (Number.isFinite(speed)) speech.speed = Math.min(2, Math.max(0.5, speed));
+      } else if (speech[key] === undefined) {
+        speech[key] = value.slice(0, 80);
+      }
+    }
+    return Object.keys(speech).length > 0 ? speech : null;
+  }
+  function speechBadge(speech) {
+    if (!speech) return null;
+    const row = el('div', 'speechmeta');
+    for (const [key, label] of [['emotion', t('speech.emotion')], ['tone', t('speech.tone')], ['voice', t('speech.voice')], ['speed', t('speech.speed')]]) {
+      if (speech[key] === undefined) continue;
+      row.append(el('span', '', `${label}: ${key === 'speed' ? `${speech[key]}×` : speech[key]}`));
+    }
+    if (row.children.length === 0) return null;
+    row.title = t('speech.title');
+    return row;
+  }
+
   function preview(value, limit = 160) {
     const text = (typeof value === 'string' ? value : JSON.stringify(value) || '').replace(/\s+/g, ' ').trim();
     return text.length > limit ? `${text.slice(0, limit)}…` : text;
@@ -254,29 +305,34 @@
     String(text || '')
       .replace(/```[\s\S]*?```/g, ' (โค้ด) ')
       .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+      .replace(/\[(?:emotion|tone|voice|speed)\s*:[^\]]*\]/gi, ' ')
       .replace(/https?:\/\/\S+/g, ' (ลิงก์) ')
       .replace(/[*_#>`|~]/g, ' ')
       .replace(/\s+/g, ' ')
       .trim();
-  function speak(text) {
+  function speak(text, speech) {
     if (!('speechSynthesis' in window)) return toast('อ่านออกเสียงไม่ได้', 'เบราว์เซอร์นี้ไม่มีเสียงอ่าน', true);
     const words = speakable(text);
     if (!words) return;
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(words.slice(0, 4000));
     utterance.lang = /[\u0E00-\u0E7F]/.test(words) ? 'th-TH' : 'en-US';
+    if (speech && Number.isFinite(speech.speed)) utterance.rate = speech.speed;
     const voices = window.speechSynthesis.getVoices().filter((voice) => voice.lang.replace('_', '-').toLowerCase().startsWith(utterance.lang.slice(0, 2).toLowerCase()));
-    const voice = voices.find((entry) => /natural|online|neural/i.test(entry.name)) || voices[0];
+    const wanted = speech && speech.voice ? speech.voice.toLowerCase() : '';
+    const voice = (wanted && voices.find((entry) => entry.name.toLowerCase().includes(wanted))) || voices.find((entry) => /natural|online|neural/i.test(entry.name)) || voices[0];
     if (voice) utterance.voice = voice;
     window.speechSynthesis.speak(utterance);
   }
-  function speakButton(text) {
-    const control = button('speak', '🔊', () => speak(text), 'อ่านออกเสียง');
+  function speakButton(text, speech) {
+    const control = button('speak', '🔊', () => speak(text, speech), 'อ่านออกเสียง');
     return control;
   }
 
-  function renderText(node, text) {
+  function renderText(node, text, speech) {
     node.replaceChildren();
+    const badge = speechBadge(speech);
+    if (badge) node.append(badge);
     text.split(/```(?:[\w-]*\n)?([\s\S]*?)```/g).forEach((part, index) => {
       // Blank lines next to a code block would only add empty space around it.
       if (index % 2) node.append(el('pre', '', part.replace(/\n$/, '')));
@@ -348,6 +404,10 @@
   const scrollDown = () => {
     logBox.scrollTop = logBox.scrollHeight;
   };
+  let followLog = true;
+  logBox.addEventListener('scroll', () => {
+    followLog = pinned();
+  }, { passive: true });
   function add(node) {
     const stick = pinned();
     logInner.append(node);
@@ -358,7 +418,7 @@
   function sessionDivider(session, automatic) {
     const node = el('div', 'divider');
     const label = el('span');
-    label.append(el('b', '', automatic ? 'เริ่ม session ใหม่อัตโนมัติ' : 'session'), ` · ${fmtDate(session.createdAt)}`);
+    label.append(el('b', '', automatic ? t('session.auto') : 'session'), ` · ${fmtDate(session.createdAt)}`);
     node.append(label);
     return node;
   }
@@ -368,9 +428,9 @@
     const date = new Date(iso);
     const startOf = (value) => new Date(value.getFullYear(), value.getMonth(), value.getDate()).getTime();
     const days = Math.round((startOf(new Date()) - startOf(date)) / 86_400_000);
-    if (days === 0) return 'วันนี้';
-    if (days === 1) return 'เมื่อวาน';
-    return date.toLocaleDateString('th-TH', { weekday: 'short', day: 'numeric', month: 'short', year: date.getFullYear() === new Date().getFullYear() ? undefined : 'numeric' });
+    if (days === 0) return t('day.today');
+    if (days === 1) return t('day.yesterday');
+    return date.toLocaleDateString(localeNow(), { weekday: 'short', day: 'numeric', month: 'short', year: date.getFullYear() === new Date().getFullYear() ? undefined : 'numeric' });
   }
 
   /** Puts a day divider into the log whenever the calendar day changes. */
@@ -607,8 +667,8 @@
       bubble.dataset.id = message.id;
       bubble.dataset.role = 'assistant';
       bubble.dataset.agent = message.agent;
-      renderText(bubble, message.text);
-      bubble.append(speakButton(message.text));
+      renderText(bubble, message.text, message.speech);
+      bubble.append(speakButton(message.text, message.speech));
       window.MimiHooks?.chat?.decorate?.(bubble, message);
       target.body.append(bubble, metaRow(message));
     }
@@ -787,12 +847,15 @@
         if (!live.bubble) {
           live.bubble = el('div', 'tx');
           live.raw = '';
+          live.speech = null;
           live.body.append(live.bubble, metaRow({ createdAt: new Date().toISOString() }));
         }
         live.raw += event.text;
-        window.MimiHooks?.stage?.onText(live.raw);
+        const parsed = parseSpeech(live.raw, true);
+        if (parsed.speech) live.speech = parsed.speech;
+        window.MimiHooks?.stage?.onText(parsed.text);
         const stick = pinned();
-        renderText(live.bubble, live.raw);
+        renderText(live.bubble, parsed.text, live.speech);
         if (stick) scrollDown();
         break;
       }
@@ -847,6 +910,12 @@
           break;
         }
         think(false);
+        if (event.text && live && live.bubble) {
+          const final = parseSpeech(event.text);
+          renderText(live.bubble, final.text, event.speech || final.speech || live.speech);
+          live.raw = final.text;
+          window.MimiHooks?.stage?.onText(final.text);
+        }
         if (event.reason === 'error') add(el('div', 'note bad', `ผิดพลาด: ${event.error}`));
         else if (!['stop', 'handoff'].includes(event.reason)) {
           add(el('div', 'note bad', `หยุด: ${REASONS[event.reason] || event.reason}${event.error ? ` — ${event.error}` : ''}`));
@@ -854,7 +923,7 @@
         const usage = event.usage;
         const hit = usage.inputTokens ? Math.round((usage.cachedTokens / usage.inputTokens) * 100) : 0;
         add(el('div', 'note use', `${event.rounds} รอบ · in ${usage.inputTokens} (cache ${hit}%) · out ${usage.outputTokens} · $${usage.costUsd.toFixed(5)}`));
-        if (event.reason === 'stop' && event.text && autoSpeak()) speak(event.text);
+        if (event.reason === 'stop' && event.text && autoSpeak()) speak(event.text, event.speech);
         live = null;
         state.typing = null;
         renderHeader();
@@ -1173,6 +1242,17 @@
   }
   async function stageFile(file) {
     if (file.size > 25 * 1024 * 1024) return toast('ไฟล์ใหญ่เกินไป', `${file.name} เกิน 25 MB`, true);
+    if (state.staged.length >= 20) return toast('แนบไฟล์ได้สูงสุด 20 ไฟล์', 'ส่งข้อความนี้ก่อน แล้วค่อยแนบชุดถัดไป', true);
+    const isImage = file.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|heic|heif|avif)$/i.test(file.name);
+    const images = state.staged.filter(
+      (entry) => entry.file.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|heic|heif|avif)$/i.test(entry.file.name),
+    ).length;
+    if (isImage && images >= 6) {
+      toast('รูปเกิน 6 รูป', 'โมเดลจะเห็นรูปจริง 6 รูปสุดท้าย รูปที่เหลือจะถูกอธิบายด้วยข้อความ', true);
+    }
+    if (/^image\/(heic|heif|avif)$/i.test(file.type) || /\.(heic|heif|avif)$/i.test(file.name)) {
+      toast('รูปชนิดนี้อาจไม่แสดงโดยตรง', 'โมเดลอาจเห็นได้เพียงคำอธิบายของรูป ไม่ใช่ตัวรูป', true);
+    }
     const entry = { file, id: null, uploading: true, url: file.type.startsWith('image/') ? URL.createObjectURL(file) : null };
     state.staged.push(entry);
     renderStaged();
@@ -1372,11 +1452,15 @@
   // Crossing the width where the app changes mode re-lays the screen out.
   window.addEventListener('resize', () => {
     const mode = modeNow();
-    if (document.documentElement.dataset.mode === mode) return;
+    if (document.documentElement.dataset.mode === mode) {
+      if (followLog) requestAnimationFrame(scrollDown);
+      return;
+    }
     document.documentElement.dataset.mode = mode;
     if (mode === 'mobile') state.railOpen = false;
     renderHeader();
     renderRail();
+    if (followLog) requestAnimationFrame(scrollDown);
   });
   $('new-session').onclick = () => {
     if (state.chat && confirm('เริ่ม session ใหม่? บทสนทนาเดิมยังเปิดดูได้จากรายการ session และ agent ยังจำเรื่องสำคัญได้')) {
@@ -1505,8 +1589,48 @@
     ['max', 'max — คิดเต็มที่ (ช้าสุด)'],
   ];
   const MEDIA_KEYS = ['image_model', 'speech_model', 'video_model'];
-  /** A model picker: presets from the model pool first, then the models of the connected providers. */
-  function modelSelect(current, emptyLabel, withPresets = true) {
+  /** What a model must be, take or make to be offered for a key (models.dev type and modalities). */
+  const CAPABILITY_NEEDS = {
+    model: { type: ['chat'], output: ['text'] },
+    vision_model: { type: ['chat'], input: ['image', 'pdf', 'video'], output: ['text'] },
+    transcript_model: { type: ['chat', 'transcription'], input: ['audio'], output: ['text'] },
+    small_model: { type: ['chat'], output: ['text'] },
+    image_model: { type: ['image'], output: ['image'] },
+    speech_model: { type: ['speech'], output: ['audio'] },
+    video_model: { type: ['video'], output: ['video'] },
+  };
+  /** A model without metadata has unknown abilities: keep it in every picker. */
+  function fitsCapability(model, capability) {
+    const need = CAPABILITY_NEEDS[capability];
+    if (!need) return true;
+    if (need.type && model.type && !need.type.includes(model.type)) return false;
+    if (need.input && model.input && !need.input.some((kind) => model.input.includes(kind))) return false;
+    if (need.output && model.output && !need.output.every((kind) => model.output.includes(kind))) return false;
+    return true;
+  }
+  /** Capabilities grouped by what they are for: reading the user's input, background work, making media. */
+  const CAPABILITY_GROUPS = [
+    [
+      'โมเดลหลักและตัวช่วยอ่าน',
+      [
+        ['model', 'โมเดลหลัก (core) — ตอบทุกอย่าง'],
+        ['vision_model', 'ตัวช่วยอ่านรูป / PDF / วิดีโอ → ข้อความ'],
+        ['transcript_model', 'ตัวช่วยถอดเสียง → ข้อความ'],
+      ],
+    ],
+    ['ข้อความสั้น / งานเบื้องหลัง', [['small_model', 'สรุป, ความจำ, งานเวิร์กโฟลว์ (@small)']]],
+    [
+      'เอาต์พุต — สร้างสื่อ',
+      [
+        ['image_model', 'สร้างรูปภาพ (generate_image)'],
+        ['speech_model', 'สร้างเสียงพูด (text_to_speech)'],
+        ['video_model', 'สร้างวิดีโอ (generate_video)'],
+      ],
+    ],
+  ];
+  const CAPABILITIES = CAPABILITY_GROUPS.flatMap(([, items]) => items);
+  /** A model picker: presets from the model pool first, then the models that fit this input / output. */
+  function modelSelect(current, emptyLabel, capability, withPresets = true) {
     const select = el('select');
     const view = state.settings || { models: [], presets: [] };
     const add = (value, text) => {
@@ -1515,25 +1639,22 @@
       select.append(option);
     };
     if (emptyLabel !== null) add('', `— ${emptyLabel} —`);
-    const presets = withPresets ? view.presets : [];
-    if (current && !presets.some((preset) => preset.name === current) && !view.models.some((model) => model.ref === current)) {
-      add(current, `${current} (ใช้ไม่ได้ตอนนี้: ยังไม่ได้เชื่อมต่อ หรือ preset ถูกลบ)`);
+    const byRef = new Map(view.models.map((model) => [model.ref, model]));
+    const models = view.models.filter((model) => fitsCapability(model, capability));
+    const presets = (withPresets ? view.presets : []).filter((preset) => {
+      const model = byRef.get(preset.model);
+      return !model || fitsCapability(model, capability);
+    });
+    const known = new Set([...presets.map((preset) => preset.name), ...models.map((model) => model.ref)]);
+    if (current && !known.has(current)) {
+      add(current, `${current} (ใช้ไม่ได้กับงานนี้ หรือยังไม่ได้เชื่อมต่อ)`);
     }
     for (const preset of presets) add(preset.name, presetLabel(preset));
-    for (const model of view.models) add(model.ref, model.label);
+    for (const model of models) add(model.ref, model.label);
     select.value = current || '';
     select.dataset.initial = current || '';
     return select;
   }
-  const CAPABILITIES = [
-    ['model', 'คุย (chat)'],
-    ['vision_model', 'ดูรูป / อ่าน PDF'],
-    ['transcript_model', 'ถอดเสียง'],
-    ['small_model', 'สรุป / ความจำ'],
-    ['image_model', 'สร้างรูป (generate_image)'],
-    ['speech_model', 'อ่านออกเสียงเป็นไฟล์ (text_to_speech)'],
-    ['video_model', 'สร้างวิดีโอ (generate_video)'],
-  ];
   /** Progress text next to the save buttons of the page that is open. */
   function flash(message) {
     for (const node of document.querySelectorAll(`#view-${state.view} .foot .msg`)) node.textContent = message;
@@ -1662,15 +1783,23 @@
     else charBox.append(el('p', 'hint', agent ? 'โหลดระบบตัวละคร 3D ไม่สำเร็จ — รีเฟรชหน้าใหม่' : 'บันทึก agent ก่อน แล้วจึงเลือกตัวละครได้'));
     form.append(charBox);
 
-    form.append(el('h4', '', 'โมเดล (เลือกแยกตามงาน)'));
+    form.append(el('h4', '', 'โมเดล (ตามอินพุตที่รับ และสื่อที่สร้าง)'));
+    form.append(el('p', 'hint', 'แต่ละช่องแสดงเฉพาะโมเดลที่รับหรือสร้างชนิดนั้นได้ · ช่องที่เว้นว่างใช้ค่าเริ่มต้นจาก Settings'));
     const models = el('div', 'grid2');
     const defaults = state.settings ? state.settings.defaults : {};
-    for (const [key, label] of CAPABILITIES) {
-      // Making media has no fallback: a chat model cannot draw, speak or film.
-      const fallback = defaults[key] || (key === 'model' ? '' : MEDIA_KEYS.includes(key) ? 'ไม่มี' : 'โมเดลคุยของ agent นี้');
-      const select = modelSelect(agent ? agent.models[key] : '', `ค่าเริ่มต้น${fallback ? `: ${fallback}` : ''}`);
-      select.dataset.capability = key;
-      models.append(labelled(label, select));
+    for (const [group, items] of CAPABILITY_GROUPS) {
+      const heading = el('div', 'hint', group);
+      heading.style.gridColumn = '1 / -1';
+      models.append(heading);
+      for (const [key, label] of items) {
+        // Making media has no fallback: a chat model cannot draw, speak or film.
+        const fallback =
+          defaults[key] ||
+          (key === 'model' ? '' : MEDIA_KEYS.includes(key) ? 'ไม่มี' : key === 'small_model' ? 'โมเดลคุยของ agent นี้' : 'ให้ core อ่านเอง');
+        const select = modelSelect(agent ? agent.models[key] : '', `ค่าเริ่มต้น${fallback ? `: ${fallback}` : ''}`, key);
+        select.dataset.capability = key;
+        models.append(labelled(label, select));
+      }
     }
     form.append(models);
 
@@ -1755,7 +1884,8 @@
   const HUB_TABS = [
     ['models', 'กองโมเดล'],
     ['skills', 'Skill'],
-    ['tools', 'เครื่องมือ'],
+    ['nodes', 'Node'],
+    ['accounts', 'บัญชี'],
     ['triggers', 'Trigger'],
     ['knowledge', 'คลังความรู้'],
     ['wardrobe', 'ตู้เสื้อผ้า'],
@@ -1774,9 +1904,10 @@
       );
     }
     const knowledge = () => (window.MimiHooks && window.MimiHooks.knowledge ? window.MimiHooks.knowledge.render() : el('div'));
+    const accounts = () => (window.MimiHooks && window.MimiHooks.accounts ? window.MimiHooks.accounts.render() : el('div'));
     const wardrobe = () => (window.MimiHooks && window.MimiHooks.wardrobe ? window.MimiHooks.wardrobe.render() : el('div'));
     const backgrounds = () => (window.MimiHooks && window.MimiHooks.backgrounds ? window.MimiHooks.backgrounds.render() : el('div'));
-    const body = { models: hubModels, skills: hubSkills, tools: hubTools, triggers: hubTriggers, knowledge, wardrobe, backgrounds, links: hubLinks }[ui.hubTab]();
+    const body = { models: hubModels, skills: hubSkills, nodes: hubTools, accounts, triggers: hubTriggers, knowledge, wardrobe, backgrounds, links: hubLinks }[ui.hubTab]();
     page.replaceChildren(pageHead('Hub', 'ของกลางที่ agent และ skill หยิบไปใช้: ตั้งค่าที่เดียว ใช้ได้ทุกตัว'), tabs, body);
   }
   const shown = (value) => (value === undefined || value === null ? '—' : String(value));
@@ -1817,7 +1948,7 @@
     form.append(el('h3', '', preset ? `แก้ไข ${preset.name}` : 'Preset ใหม่'));
     const name = textInput(preset ? preset.name : '', 'เช่น creative, precise, pro');
     name.readOnly = Boolean(preset);
-    const model = modelSelect(preset ? preset.model : '', 'เลือกโมเดล', false);
+    const model = modelSelect(preset ? preset.model : '', 'เลือกโมเดล', null, false);
     form.append(labelled('ชื่อ (ตัวพิมพ์เล็ก ไม่มีเว้นวรรค)', name), labelled('โมเดล', model));
     if (view.models.length === 0) form.append(el('p', 'hint', 'ยังไม่มีโมเดลให้เลือก: เชื่อมต่อผู้ให้บริการที่หน้า "ตั้งค่า" ก่อน'));
     const knobs = {};
@@ -1912,7 +2043,7 @@
         renderHub();
       });
       const info = el('div', 'one');
-      info.append(el('b', 'mono', entry.name), el('small', '', `${entry.model ? `โมเดล ${entry.model}` : 'agent ทำเอง'} · ${users.length ? `ใช้โดย ${users.join(', ')}` : 'ยังไม่มีใครใช้'}`));
+      info.append(el('b', 'mono', entry.name), el('small', '', `${entry.builtin ? 'built-in · ' : ''}${entry.model ? `โมเดล ${entry.model}` : 'agent ทำเอง'} · ${users.length ? `ใช้โดย ${users.join(', ')}` : 'ยังไม่มีใครใช้'}`));
       row.append(info);
       items.append(row);
     }
@@ -1933,7 +2064,7 @@
     form.append(el('h3', '', skill ? `แก้ไข ${skill.name}` : 'Skill ใหม่'));
     const name = textInput(skill ? skill.name : '', 'เช่น song-writer (a-z 0-9 -)');
     const description = textInput(skill ? skill.description : '', 'ใช้เมื่อไร: agent อ่านบรรทัดนี้เพื่อตัดสินใจว่าจะเรียก skill');
-    const model = modelSelect(skill ? skill.model : '', 'ไม่แยกโมเดล: agent อ่านคำสั่งแล้วทำเอง');
+    const model = modelSelect(skill ? skill.model : '', 'ไม่แยกโมเดล: agent อ่านคำสั่งแล้วทำเอง', 'model');
     const top = el('div', 'grid2');
     top.append(labelled('ชื่อ', name), labelled('โมเดลของ skill นี้', model));
     form.append(top, labelled('คำอธิบาย', description));
@@ -1947,7 +2078,7 @@
     form.append(tools);
     const foot = el('div', 'foot');
     foot.append(el('span', 'msg'));
-    if (skill) {
+    if (skill && !skill.builtin) {
       foot.append(
         button('btn danger', 'ลบ', () => {
           if (confirm(`ลบ skill "${skill.name}" ? (จะถูกเอาออกจาก agent ทุกตัวที่ใช้อยู่)`)) {
@@ -2026,10 +2157,10 @@
     const panel = el('div', 'panel');
     panel.append(
       el('h3', '', 'MCP และ CLI'),
-      el('p', '', 'MCP server: เพิ่มที่แท็บ "เครื่องมือ" → "+ MCP server" (คำสั่งในเครื่อง หรือ URL) เครื่องมือของ server จะเข้ากองชื่อ mcp_<server>_<tool> · ใส่ mcp_<server> ใน agent = ได้ทุกตัว · ดูจากเทอร์มินัล: npm run mcp / npm run mcp -- test <ชื่อ>'),
-      el('p', '', 'คำสั่ง CLI: สร้างเครื่องมือใหม่ชนิด "shell" ในแท็บ "เครื่องมือ" เช่น git status หรือ ping -n 1 {{input.host}} — ขออนุญาตก่อนรันทุกครั้ง · หรือให้ agent ใช้ run_shell บนเครื่อง PC'),
-      button('btn', 'ไปที่แท็บเครื่องมือ', () => {
-        ui.hubTab = 'tools';
+      el('p', '', 'MCP server: เพิ่มที่แท็บ "Node" → "+ MCP server" (คำสั่งในเครื่อง หรือ URL) เครื่องมือของ server จะเข้ากองชื่อ mcp_<server>_<tool> · ใส่ mcp_<server> ใน agent = ได้ทุกตัว · ดูจากเทอร์มินัล: npm run mcp / npm run mcp -- test <ชื่อ>'),
+      el('p', '', 'คำสั่ง CLI: สร้างเครื่องมือใหม่ชนิด "shell" ในแท็บ "Node" เช่น git status หรือ ping -n 1 {{input.host}} — ขออนุญาตก่อนรันทุกครั้ง · หรือให้ agent ใช้ run_shell บนเครื่อง PC'),
+      button('btn', 'ไปที่แท็บ Node', () => {
+        ui.hubTab = 'nodes';
         renderHub();
       }),
     );
@@ -2091,12 +2222,21 @@
     stack.append(secrets);
 
     const general = el('div', 'panel form');
-    general.append(el('h3', '', 'โมเดลเริ่มต้น'), el('p', 'hint', view.models.length ? 'ใช้กับ agent ที่ไม่ได้เลือกโมเดลของตัวเองในงานนั้น' : 'เชื่อมต่อผู้ให้บริการก่อน แล้วรายชื่อโมเดลจะขึ้นให้เลือก'));
+    general.append(el('h3', '', 'โมเดลเริ่มต้น'), el('p', 'hint', view.models.length ? 'core เป็นตัวตอบเสมอ · รูปที่ core ดูได้จะถูกส่งให้ core ด้วย · vision / transcript ใช้แปลงไฟล์เป็นข้อความเก็บในประวัติ · แต่ละช่องแสดงเฉพาะโมเดลที่ทำได้' : 'เชื่อมต่อผู้ให้บริการก่อน แล้วรายชื่อโมเดลจะขึ้นให้เลือก'));
     const defaults = el('div', 'grid2');
-    for (const [key, label] of CAPABILITIES) {
-      const select = modelSelect(view.defaults[key] || '', key === 'model' ? null : MEDIA_KEYS.includes(key) ? 'ไม่ใช้' : 'ใช้โมเดลคุย');
-      select.dataset.default = key;
-      defaults.append(labelled(label, select));
+    for (const [group, items] of CAPABILITY_GROUPS) {
+      const heading = el('div', 'hint', group);
+      heading.style.gridColumn = '1 / -1';
+      defaults.append(heading);
+      for (const [key, label] of items) {
+        const select = modelSelect(
+          view.defaults[key] || '',
+          key === 'model' ? null : MEDIA_KEYS.includes(key) ? 'ไม่ใช้' : key === 'small_model' ? 'ใช้โมเดลคุย' : 'ให้ core อ่านเอง',
+          key,
+        );
+        select.dataset.default = key;
+        defaults.append(labelled(label, select));
+      }
     }
     general.append(defaults);
     general.append(el('h4', '', 'โฟลเดอร์ที่อนุญาตให้อ่าน/เขียนไฟล์และรันคำสั่ง'), el('p', 'hint', 'บรรทัดละหนึ่งโฟลเดอร์ บรรทัดแรกคือโฟลเดอร์ทำงานหลัก'));
@@ -2370,8 +2510,9 @@
           text.append(rest.slice(0, at), el('mark', '', rest.slice(at, at + length)));
           rest = rest.slice(at + length);
         }
-        const who = hit.role === 'user' ? 'คุณ' : nameOf(hit.agent);
-        row.append(el('span', 'w', `${chat ? chatTitle(chat) : hit.chatTitle || 'แชต'} · ${who}`), text, el('span', 'd', fmtDay(hit.createdAt)));
+        const who = hit.role === 'user' ? t('you') : nameOf(hit.agent);
+        const title = chat ? chatTitle(chat) : hit.chatTitle || t('chat.default');
+        row.append(el('span', 'w', title === who ? title : `${title} · ${who}`), text, el('span', 'd', fmtDay(hit.createdAt)));
         return row;
       }),
     );
@@ -2632,7 +2773,7 @@
         state.toolSecretKeys = message.secretKeys || {};
         state.toolMcp = message.mcp || [];
         if (window.MimiHooks && window.MimiHooks.tools) window.MimiHooks.tools.onMessage(message);
-        if (state.view === 'hub' && ui.hubTab === 'tools' && (!ui.toolDirty || message.saved)) {
+        if (state.view === 'hub' && ui.hubTab === 'nodes' && (!ui.toolDirty || message.saved)) {
           renderHub();
           if (message.saved) saved();
         }
@@ -2650,6 +2791,7 @@
         if (window.MimiHooks && window.MimiHooks.agentWorkflows) window.MimiHooks.agentWorkflows.onMessage(message);
         if (state.view === 'agents' && !ui.agentDirty) renderAgents();
         if (state.view === 'hub' && ui.hubTab === 'triggers') renderHub();
+        if (state.view === 'hub' && ui.hubTab === 'nodes' && (!ui.toolDirty || message.saved)) renderHub();
         break;
       case 'workflow-result': {
         const result = message.result;
@@ -2725,6 +2867,8 @@
     toast,
     saved,
     nameOf,
+    toolItems,
+    describeTool,
     avatar,
     blobUrl,
     renderHub,
@@ -2775,6 +2919,10 @@
         if ((message.type.startsWith('knowledge') || message.type === 'error') && window.MimiHooks && window.MimiHooks.knowledge) {
           window.MimiHooks.knowledge.onMessage(message);
         }
+        if ((message.type === 'oauth-accounts' || message.type === 'oauth-auth-url') && window.MimiHooks && window.MimiHooks.accounts) {
+          window.MimiHooks.accounts.onMessage(message);
+        }
+        if (message.type === 'oauth-accounts' || message.type === 'oauth-auth-url') return;
         if (message.type.startsWith('knowledge')) return;
         if (message.type === 'gallery' || message.type === 'gallery-changed') {
           window.MimiHooks?.gallery?.onMessage(message);

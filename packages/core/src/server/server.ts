@@ -24,6 +24,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { deleteAgent, saveAgent } from '../agents/loader.ts';
 import { importN8n } from '../workflows/n8n-import.ts';
 import { contextFor, resolveString } from '../workflows/expressions.ts';
+import { validateWorkflowNode, validateWorkflowView, type WorkflowValidationContext } from '../workflows/validate.ts';
 import { REASONING_EFFORTS, type ReasoningEffort } from '@mimi/shared';
 import { renderIconPng } from '../app/icon.ts';
 import { AuthLimiter } from './auth-limiter.ts';
@@ -82,6 +83,7 @@ const WEB_FILES: Record<string, [string, string]> = {
   '/i18n.js': ['i18n.js', 'text/javascript; charset=utf-8'],
   '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
   '/feature-tools.js': ['feature-tools.js', 'text/javascript; charset=utf-8'],
+  '/feature-accounts.js': ['feature-accounts.js', 'text/javascript; charset=utf-8'],
   '/feature-providers.js': ['feature-providers.js', 'text/javascript; charset=utf-8'],
   '/feature-triggers.js': ['feature-triggers.js', 'text/javascript; charset=utf-8'],
   '/feature-workflows.js': ['feature-workflows.js', 'text/javascript; charset=utf-8'],
@@ -198,13 +200,38 @@ export async function startServer(
     speech_model: appSettings.defaults.speech_model ?? core.settings.speech_model,
     video_model: appSettings.defaults.video_model ?? core.settings.video_model,
   });
-  /** Rejects a model choice that names a model no connected provider offers. */
+  /** What a model must be, take or make to be usable for a key (the catalog's type and modalities). */
+  const MODEL_NEEDS: Record<
+    (typeof MODEL_KEYS)[number],
+    { types?: string[]; inputs?: string[]; outputs: string[] }
+  > = {
+    model: { types: ['chat'], outputs: ['text'] },
+    small_model: { types: ['chat'], outputs: ['text'] },
+    vision_model: { types: ['chat'], inputs: ['image', 'pdf', 'video'], outputs: ['text'] },
+    transcript_model: { types: ['chat', 'transcription'], inputs: ['audio'], outputs: ['text'] },
+    image_model: { types: ['image'], outputs: ['image'] },
+    speech_model: { types: ['speech'], outputs: ['audio'] },
+    video_model: { types: ['video'], outputs: ['video'] },
+  };
   /** A model string is `provider/model` or the name of a preset from the model pool. */
   const modelRef = (name: string) => resolveModelName(name, appSettings.presets);
+  /** Rejects a model choice that is unknown, or that the catalog says cannot do the job. */
   const checkModels = (choice: ModelChoice) => {
     for (const key of MODEL_KEYS) {
       const value = choice[key];
-      if (value) core.registry.info(modelRef(value));
+      if (!value) continue;
+      const info = core.registry.info(modelRef(value));
+      const needs = MODEL_NEEDS[key];
+      // Without metadata the abilities are unknown, not empty: do not guess against the user.
+      if (info.type && needs.types && !needs.types.includes(info.type)) {
+        throw new Error(`Model "${value}" is not usable for "${key}" (type: ${info.type}).`);
+      }
+      if (info.inputs && needs.inputs && !needs.inputs.some((kind) => info.inputs!.includes(kind))) {
+        throw new Error(`Model "${value}" does not take ${needs.inputs.join(' / ')} input: pick another model for "${key}".`);
+      }
+      if (info.outputs && !needs.outputs.every((kind) => info.outputs!.includes(kind))) {
+        throw new Error(`Model "${value}" does not produce ${needs.outputs.join(' / ')}: pick another model for "${key}".`);
+      }
     }
   };
 
@@ -340,33 +367,15 @@ export async function startServer(
     return name;
   };
 
-  /** One node may only name agents, tools and workflows that exist (expressions are checked at run time). */
-  const validateNode = (node: WorkflowNode, agent: string) => {
-    const where = `node "${node.id}"`;
-    const dynamic = (value: unknown) => typeof value === 'string' && value.includes('{{');
-    if (node.type === 'agent' && !dynamic(node.config.agent) && !core.agents.names().includes(String(node.config.agent ?? ''))) {
-      throw new Error(`${where}: agent "${String(node.config.agent ?? '')}" does not exist.`);
-    }
-    if ((node.type === 'chat' || node.type === 'approval') && node.config.agent && !dynamic(node.config.agent) && !core.agents.names().includes(String(node.config.agent))) {
-      throw new Error(`${where}: agent "${String(node.config.agent)}" does not exist.`);
-    }
-    if (node.type === 'tool' && !dynamic(node.config.tool) && !core.tools.get(String(node.config.tool ?? ''))) {
-      throw new Error(`${where}: unknown tool "${String(node.config.tool ?? '')}".`);
-    }
-    if ((node.type === 'workflow' || node.type === 'loop') && !dynamic(node.config.workflow) && !core.workflows.names(agent).includes(String(node.config.workflow ?? ''))) {
-      throw new Error(`${where}: unknown workflow "${String(node.config.workflow ?? '')}".`);
-    }
+  /** What the shared validators may ask the running app. */
+  const workflowRules: WorkflowValidationContext = {
+    hasAgent: (name) => core.agents.names().includes(name),
+    hasTool: (name) => core.tools.get(name) !== undefined,
+    hasTrigger: (pool) => core.triggerPool.get(pool) !== undefined,
+    workflowNames: (agent) => core.workflows.names(agent),
   };
-
-  /** A workflow may only name agents, tools and a trigger type that exist. */
-  const validateWorkflow = (view: WorkflowView) => {
-    if (!core.agents.names().includes(view.agent)) throw new Error(`Agent "${view.agent}" does not exist.`);
-    if (!core.triggerPool.get(view.trigger.pool)) throw new Error(`Unknown trigger "${view.trigger.pool}"; add it to the trigger pool first.`);
-    if (view.errorWorkflow && view.errorWorkflow !== view.name && !core.workflows.names(view.agent).includes(view.errorWorkflow)) {
-      throw new Error(`Error workflow "${view.errorWorkflow}" does not exist.`);
-    }
-    for (const node of view.nodes) validateNode(node, view.agent);
-  };
+  const validateNode = (node: WorkflowNode, agent: string) => validateWorkflowNode(node, agent, workflowRules);
+  const validateWorkflow = (view: WorkflowView) => validateWorkflowView(view, workflowRules);
 
   /** What the settings screen shows. Keys themselves are never sent back to a client. */
   const settingsView = (): SettingsView => {    const defaultAgent = core.defaultAgentName();
@@ -396,12 +405,20 @@ export async function startServer(
       }),
       catalog,
       models: available.flatMap((provider) =>
-        provider.models
-          .filter((model) => model.textOutput)
-          .map((model) => ({
+        provider.models.map((model) => {
+          const badges = model.inputs
+            ? model.inputs.filter((kind) => kind !== 'text').map((kind) => ` [${kind}]`).join('')
+            : model.imageInput
+              ? ' [image]'
+              : '';
+          return {
             ref: formatModelRef(model.ref),
-            label: `${provider.name} · ${model.name}${model.imageInput ? ' [image]' : ''}${model.cost ? ` ($${model.cost.input}/$${model.cost.output})` : ''}`,
-          })),
+            label: `${provider.name} · ${model.name}${badges}${model.cost ? ` ($${model.cost.input}/$${model.cost.output})` : ''}`,
+            ...(model.type ? { type: model.type } : {}),
+            ...(model.inputs ? { input: model.inputs } : {}),
+            ...(model.outputs ? { output: model.outputs } : {}),
+          };
+        }),
       ),
       defaults: effectiveDefaults(),
       presets: chatApi.presetViews(),
@@ -409,6 +426,7 @@ export async function startServer(
       allowedDirs: [...config.allowedDirs],
       google: { hasClient: core.google.hasClient, connected: core.google.isConfigured },
       microsoft: { hasClient: core.microsoft.hasClient, connected: core.microsoft.isConfigured },
+      accounts: core.oauth.views(),
       preferences: appSettings.preferences,
       spentTodayUsd: core.spentToday(),
       toolKeys: { serper: Boolean(process.env.SERPER_API_KEY), openweather: Boolean(process.env.OPENWEATHER_API_KEY) },
@@ -515,8 +533,10 @@ export async function startServer(
     if (change.keys) {
       appSettings.setKeys(change.keys, process.env);
       core.registry.reset();
-      core.google.reset();
-      core.microsoft.reset();
+      // Accounts made from the old env keys follow an edit there; accounts added in
+      // the hub keep their own client and are not touched.
+      core.oauth.syncLegacyEnv(process.env);
+      core.oauth.reset();
     }
     if (change.allowedDirs) {
       const dirs = change.allowedDirs
@@ -611,6 +631,11 @@ export async function startServer(
     if (session) broadcast({ type: 'chat-changed', chatId, sessionId: session.id });
     broadcast(chatApi.chatsMessage());
   };
+  // Workflows written by an agent show up in every open editor at once.
+  core.listeners.workflowChanged = () => {
+    broadcast({ type: 'workflows', workflows: core.workflows.list(), pool: core.triggerPool.list(), nodeTypes: NODE_TYPES });
+    broadcast(triggersMessage());
+  };
 
   /** Memory writer and compaction report back once they are done; nobody waits for them. */
   const reportJobs = () => {
@@ -638,6 +663,24 @@ export async function startServer(
 
   const handleClient = (socket: WebSocket, message: ClientMessage) => {
     const reply = (response: ServerMessage) => socket.send(JSON.stringify(response));
+    /** Starts the sign-in of one OAuth account and tells the client where to go. */
+    const beginOAuthConnect = (id: string) => {
+      void core.oauth.startConnect(id).then(
+        (flow) => {
+          const account = core.oauth.find(id);
+          reply({ type: 'oauth-auth-url', accountId: id, service: account?.service ?? 'google', url: flow.url });
+          flow.done.then(
+            () => {
+              core.oauth.reset(id);
+              broadcast({ type: 'oauth-accounts', accounts: core.oauth.views(), saved: true });
+              broadcast({ type: 'settings', settings: settingsView(), saved: true });
+            },
+            (error: Error) => reply({ type: 'error', message: error.message }),
+          );
+        },
+        (error: Error) => reply({ type: 'error', message: error.message }),
+      );
+    };
     if (chatApi.handle(message, reply)) return;
     switch (message.type) {
       case 'presence':
@@ -735,6 +778,11 @@ export async function startServer(
         broadcast({ type: 'settings', settings: settingsView(), saved: true });
         break;
       case 'google-connect': {
+        const account = core.oauth.defaultAccount('google');
+        if (account) {
+          beginOAuthConnect(account.id);
+          break;
+        }
         const clientId = process.env.GOOGLE_OAUTH_CLIENT_ID;
         const clientSecret = process.env.GOOGLE_OAUTH_CLIENT_SECRET;
         if (!clientId || !clientSecret) throw new Error('Save the Google OAuth client ID and secret first.');
@@ -742,7 +790,7 @@ export async function startServer(
           reply({ type: 'google-auth-url', url: flow.url });
           flow.done.then(
             () => {
-              core.google.reset();
+              core.oauth.reset();
               broadcast({ type: 'settings', settings: settingsView(), saved: true });
             },
             (error: Error) => reply({ type: 'error', message: error.message }),
@@ -750,7 +798,12 @@ export async function startServer(
         });
         break;
       }
-      case 'microsoft-connect':
+      case 'microsoft-connect': {
+        const account = core.oauth.defaultAccount('microsoft');
+        if (account) {
+          beginOAuthConnect(account.id);
+          break;
+        }
         void core.microsoft.startSignIn().then(
           (flow) => {
             reply({ type: 'microsoft-auth-url', url: flow.url });
@@ -761,6 +814,30 @@ export async function startServer(
           },
           (error: Error) => reply({ type: 'error', message: error.message }),
         );
+        break;
+      }
+      case 'oauth-accounts':
+        reply({ type: 'oauth-accounts', accounts: core.oauth.views() });
+        break;
+      case 'oauth-account-save': {
+        core.oauth.save(message.account, message.id);
+        broadcast({ type: 'oauth-accounts', accounts: core.oauth.views(), saved: true });
+        broadcast({ type: 'settings', settings: settingsView() });
+        break;
+      }
+      case 'oauth-account-remove': {
+        core.oauth.remove(message.id);
+        broadcast({ type: 'oauth-accounts', accounts: core.oauth.views(), saved: true });
+        broadcast({ type: 'settings', settings: settingsView() });
+        break;
+      }
+      case 'oauth-account-default': {
+        core.oauth.setDefault(message.id);
+        broadcast({ type: 'oauth-accounts', accounts: core.oauth.views(), saved: true });
+        break;
+      }
+      case 'oauth-account-connect':
+        beginOAuthConnect(message.id);
         break;
       case 'agents-list':
         reply(agentsMessage());

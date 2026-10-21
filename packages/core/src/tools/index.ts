@@ -37,6 +37,9 @@ export interface ToolServices {
   agents: AgentCatalog;
   google: GoogleAuth;
   microsoft: MicrosoftAuth;
+  /** Picks the auth of an OAuth account by id (`undefined` = the default account); without it the single `google` auth is used. */
+  googleFor?: (account?: string) => GoogleAuth;
+  microsoftFor?: (account?: string) => MicrosoftAuth;
   /** API keys of the web tools, by environment variable name; read at call time. */
   key?: (name: string) => string | undefined;
   /** A function is asked on every call, so skills added in the app are found without a restart. */
@@ -69,11 +72,11 @@ export function createToolRegistry(services: ToolServices): ToolRegistry {
     ...createSessionTools(services.chats, services.messages),
     ...createStateTools(services.status, services.memos),
     ...createTriggerTools(services.triggers, services.agents),
-    ...createGoogleTools(services.google, services.timezone),
-    ...createSheetTools(services.google),
-    ...createMicrosoftTools(services.microsoft, services.timezone),
-    ...createDriveTools(services.microsoft),
-    ...createMailAttachmentTools(services.google, services.microsoft),
+    ...createGoogleTools(services.googleFor ?? services.google, services.timezone),
+    ...createSheetTools(services.googleFor ?? services.google),
+    ...createMicrosoftTools(services.microsoftFor ?? services.microsoft, services.timezone),
+    ...createDriveTools(services.microsoftFor ?? services.microsoft),
+    ...createMailAttachmentTools(services.googleFor ?? services.google, services.microsoftFor ?? services.microsoft),
     ...(services.readDocument ? createDocumentTools(services.readDocument) : []),
     ...(services.media ? createMediaTools(services.media) : []),
     ...(services.gallery && services.media ? createGalleryTools(services.gallery, services.status, services.media.attachments) : []),

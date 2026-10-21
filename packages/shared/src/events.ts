@@ -1,5 +1,6 @@
 import type { PermissionDecision, PermissionRequest } from './permissions.ts';
 import type { AttachmentView } from './protocol.ts';
+import type { SpeechStyle } from './speech.ts';
 import type { RiskLevel, ToolCall, ToolResult } from './tools.ts';
 
 export type RunFinishReason =
@@ -48,8 +49,10 @@ export type AgentEvent =
       usage: UsageSnapshot;
       /** Size of the conversation in the model's context after this run (last prompt + reply). */
       contextTokens: number;
-      /** The text of the agent's final answer. */
+      /** The text of the agent's final answer, without its voice direction line. */
       text: string;
+      /** How the final answer should sound when it is read aloud. */
+      speech?: SpeechStyle;
       /** Set when reason is `handoff`. */
       handoff?: { messageId: number; to: string };
       error?: string;

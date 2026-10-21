@@ -1,6 +1,7 @@
 import { z } from 'zod';
+import { accountOf, accountSetting } from '../oauth/settings.ts';
 import { defineTool, type ToolDefinition } from '../tools/registry.ts';
-import type { MicrosoftAuth } from './auth.ts';
+import { microsoftAuthResolver, type MicrosoftAuthSource } from './auth.ts';
 
 const TEXT_MIME = /^(text\/|application\/(json|xml|csv|x-ndjson))/;
 const READ_LIMIT_BYTES = 512 * 1024;
@@ -29,20 +30,24 @@ function itemLine(item: DriveItem): string {
  * user), so the reading tools are untrusted input: an agent that has them cannot
  * also have a shell.
  */
-export function createDriveTools(auth: MicrosoftAuth): ToolDefinition<any>[] {
+export function createDriveTools(source: MicrosoftAuthSource): ToolDefinition<any>[] {
+  const resolve = microsoftAuthResolver(source);
+  const client = (settings?: { account?: unknown }) => resolve(accountOf(settings));
+
   const onedriveSearch = defineTool({
     name: 'onedrive_search',
     description: 'Search the user\'s OneDrive by file or folder name. Returns id, name, type, size and modified time per item.',
     risk: 'read',
     target: 'core',
     untrustedInput: true,
+    settings: [accountSetting('microsoft')],
     inputSchema: z.object({
       query: z.string().min(1),
       max_results: z.number().int().positive().max(25).optional(),
     }),
     summarize: (input) => `Search OneDrive: ${input.query}`,
-    async execute(input) {
-      const found = await auth.request<{ value?: DriveItem[] }>(
+    async execute(input, _context, settings) {
+      const found = await client(settings).request<{ value?: DriveItem[] }>(
         `/me/drive/root/search(q='${encodeURIComponent(input.query.replaceAll("'", "''"))}')?$top=${input.max_results ?? 10}&$select=id,name,size,webUrl,lastModifiedDateTime,file,folder`,
       );
       if (!found.value?.length) return 'No files match.';
@@ -57,12 +62,13 @@ export function createDriveTools(auth: MicrosoftAuth): ToolDefinition<any>[] {
     risk: 'read',
     target: 'core',
     untrustedInput: true,
+    settings: [accountSetting('microsoft')],
     inputSchema: z.object({
       path: z.string().optional().describe('Folder path from the OneDrive root, e.g. "Documents/Projects"'),
       max_results: z.number().int().positive().max(50).optional(),
     }),
     summarize: (input) => (input.path ? `List OneDrive folder ${input.path}` : 'List the OneDrive root'),
-    async execute(input) {
+    async execute(input, _context, settings) {
       const base = input.path?.trim()
         ? `/me/drive/root:/${input.path
             .split('/')
@@ -70,7 +76,7 @@ export function createDriveTools(auth: MicrosoftAuth): ToolDefinition<any>[] {
             .map(encodeURIComponent)
             .join('/')}:/children`
         : '/me/drive/root/children';
-      const found = await auth.request<{ value?: DriveItem[] }>(
+      const found = await client(settings).request<{ value?: DriveItem[] }>(
         `${base}?$top=${input.max_results ?? 25}&$select=id,name,size,webUrl,lastModifiedDateTime,file,folder&$orderby=name`,
       );
       if (!found.value?.length) return '(this folder is empty)';
@@ -85,11 +91,13 @@ export function createDriveTools(auth: MicrosoftAuth): ToolDefinition<any>[] {
     risk: 'read',
     target: 'core',
     untrustedInput: true,
+    settings: [accountSetting('microsoft')],
     inputSchema: z.object({
       item_id: z.string().min(1),
     }),
     summarize: (input) => `Read OneDrive file ${input.item_id}`,
-    async execute(input, context) {
+    async execute(input, context, settings) {
+      const auth = client(settings);
       const item = await auth.request<DriveItem>(
         `/me/drive/items/${encodeURIComponent(input.item_id)}?$select=id,name,size,webUrl,file,folder,lastModifiedDateTime,parentReference`,
       );

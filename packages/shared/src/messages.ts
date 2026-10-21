@@ -1,3 +1,5 @@
+import type { SpeechStyle } from './speech.ts';
+
 export const CAPABILITIES = ['chat', 'vision', 'transcript', 'summarize', 'image', 'speech', 'video'] as const;
 export type Capability = (typeof CAPABILITIES)[number];
 
@@ -14,6 +16,8 @@ export interface StoredMessage {
   content: unknown;
   /** Plain text used for display and full-text search. */
   text: string;
+  /** How this reply should sound when it is read aloud, taken from its direction line. */
+  speech?: SpeechStyle;
   /** Volatile prompt block (current time, status) that was sent with this user message. */
   context?: string;
   /** Id of the message this one answers. */

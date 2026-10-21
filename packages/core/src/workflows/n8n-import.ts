@@ -473,19 +473,27 @@ function convertNode(node: N8nNode, attached: N8nNode[], options: N8nImportOptio
     }
     case 'wait': {
       const resume = str(p.resume || 'timeInterval');
+      if (resume === 'specificTime') {
+        const until = str(p.dateTime ?? p.specificTime ?? p.until);
+        if (!until) {
+          warn(`wait "${node.name}" had no date; it was imported as a short wait`);
+          return { type: 'wait', config: { mode: 'duration', amount: 1, unit: 'seconds' }, output: main };
+        }
+        return { type: 'wait', config: { mode: 'until', until: conv(until) }, output: main };
+      }
       if (resume !== 'timeInterval') {
-        warn(`wait "${node.name}" waited for "${resume}"; Mimi waits by time only (an approval node can wait for you)`);
+        warn(`wait "${node.name}" waited for "${resume}"; Mimi waits by time or approval only`);
         return passthrough();
       }
       const unit = str(p.unit || 'seconds');
       const amount = Number(p.amount ?? 1);
-      if (unit === 'days') warn(`wait "${node.name}" of ${amount} day(s) is capped at 1 hour in Mimi`);
-      return { type: 'wait', config: { amount: unit === 'days' ? 1 : amount, unit: unit === 'days' ? 'hours' : unit }, output: main };
+      if (unit === 'days' && amount > 30) warn(`wait "${node.name}" is longer than Mimi's 30-day limit`);
+      return { type: 'wait', config: { mode: 'duration', amount, unit }, output: main };
     }
     case 'noOp':
       return passthrough();
     case 'stopAndError':
-      return { type: 'code', config: { code: `throw new Error(${JSON.stringify(str(p.errorMessage) || 'stopped')});` }, output: main };
+      return { type: 'stop', config: { mode: 'error', message: str(p.errorMessage) || 'stopped' }, output: main };
     case 'sort': {
       const first = isRecord(p.sortFieldsUi) && Array.isArray(p.sortFieldsUi.sortField) ? (p.sortFieldsUi.sortField[0] as Record<string, unknown> | undefined) : undefined;
       return { type: 'sort', config: { field: str(first?.fieldName), direction: str(first?.order) === 'descending' ? 'desc' : 'asc', type: 'auto' }, output: main };

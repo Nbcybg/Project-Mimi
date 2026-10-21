@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import type { WorkflowNode, WorkflowView } from '@mimi/shared';
+import { isTriggerNodeType, triggerPoolOfNodeConfig, type WorkflowNode, type WorkflowTriggerRef, type WorkflowView } from '@mimi/shared';
 import { z } from 'zod';
 
 export const WORKFLOW_NAME = /^[a-z][a-z0-9_-]*$/;
@@ -24,6 +24,7 @@ const NODE_TYPES = [
   'remove_duplicates',
   'merge',
   'wait',
+  'stop',
   'workflow',
   'respond',
   'llm',
@@ -37,6 +38,17 @@ const NODE_TYPES = [
   'file',
   'extract_file',
   'knowledge',
+  'sheets',
+  'trigger_manual',
+  'trigger_schedule',
+  'trigger_webhook',
+  'trigger_form',
+  'trigger_mail',
+  'trigger_poll',
+  'trigger_chat',
+  'trigger_telegram',
+  'trigger_tool',
+  'trigger_custom',
 ] as const;
 
 const nodeSchema = z.strictObject({
@@ -62,6 +74,24 @@ const noteSchema = z.strictObject({
   color: z.string().max(20).optional(),
 });
 
+/** The trigger node is the source of truth once a workflow has one; old files keep `trigger`. */
+function derivedTrigger(nodes: unknown, fallback: unknown): WorkflowTriggerRef | undefined {
+  if (Array.isArray(nodes)) {
+    const node = nodes.find(
+      (entry) => entry && typeof entry === 'object' && isTriggerNodeType(String((entry as { type?: unknown }).type ?? '')),
+    ) as { type?: unknown; config?: unknown } | undefined;
+    const pool = node
+      ? triggerPoolOfNodeConfig({ type: String(node.type ?? ''), config: (node.config && typeof node.config === 'object' ? node.config : {}) as WorkflowNode['config'] })
+      : undefined;
+    if (node && pool) {
+      const config = { ...((node.config && typeof node.config === 'object' ? node.config : {}) as WorkflowTriggerRef['config']) };
+      if (node.type === 'trigger_custom') delete config.pool;
+      return { pool, config };
+    }
+  }
+  return fallback as WorkflowTriggerRef | undefined;
+}
+
 const workflowSchema = z.strictObject({
   name: z.string().regex(WORKFLOW_NAME, 'lowercase letters, digits, "-" or "_"'),
   agent: z.string().regex(AGENT_NAME),
@@ -74,10 +104,22 @@ const workflowSchema = z.strictObject({
   errorWorkflow: z.string().optional(),
   nodes: z.array(nodeSchema).min(1, 'a workflow needs at least one node'),
   notes: z.array(noteSchema).max(100).optional(),
+  triggerPosition: z.tuple([z.number(), z.number()]).optional(),
 });
 
 export interface StoredWorkflow extends WorkflowView {
   webhookKey: string | null;
+}
+
+/** Checks the shape and graph without writing anything (used by the editor and agent drafts). */
+export function checkWorkflowData(view: WorkflowView): void {
+  const triggerNodes = view.nodes.filter((node) => isTriggerNodeType(node.type));
+  if (triggerNodes.length > 1) throw new Error(`workflow "${view.name}": only one trigger node is allowed.`);
+  const trigger = derivedTrigger(view.nodes, view.trigger) ?? view.trigger;
+  const { webhook: _derived, ...rest } = { ...view, trigger };
+  const parsed = workflowSchema.safeParse({ ...rest, webhookKey: null });
+  if (!parsed.success) throw new Error(`workflow "${view.name}":\n${z.prettifyError(parsed.error)}`);
+  checkGraph(parsed.data.nodes as WorkflowNode[], `workflow "${view.name}"`);
 }
 
 /** Nodes that nothing links into are the starts; the rest must be reachable from them. */
@@ -149,7 +191,9 @@ export class WorkflowStore {
     } catch (error) {
       throw new Error(`${file}: not valid JSON: ${(error as Error).message}`);
     }
-    const parsed = workflowSchema.safeParse(raw);
+    const record = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : undefined;
+    const trigger = record ? derivedTrigger(record.nodes, record.trigger) : undefined;
+    const parsed = workflowSchema.safeParse(record && trigger ? { ...record, trigger } : raw);
     if (!parsed.success) throw new Error(`${file}: invalid workflow:\n${z.prettifyError(parsed.error)}`);
     const stored = parsed.data as StoredWorkflow;
     return { ...stored, webhook: stored.webhookKey ? `/api/workflow/${stored.webhookKey}` : null };
@@ -171,9 +215,13 @@ export class WorkflowStore {
 
   save(view: WorkflowView, renameFrom?: string): StoredWorkflow {
     if (!AGENT_NAME.test(view.agent)) throw new Error(`Invalid agent "${view.agent}".`);
+    if (view.nodes.filter((node) => isTriggerNodeType(node.type)).length > 1) {
+      throw new Error(`workflow "${view.name}": only one trigger node is allowed.`);
+    }
     const keeping = this.get(view.agent, view.name)?.webhookKey;
     const webhookKey = keeping ?? randomBytes(18).toString('base64url');
-    const { webhook: _derived, ...rest } = view;
+    const trigger = derivedTrigger(view.nodes, view.trigger) ?? view.trigger;
+    const { webhook: _derived, ...rest } = { ...view, trigger };
     const parsed = workflowSchema.safeParse({ ...rest, webhookKey: webhookKey });
     if (!parsed.success) throw new Error(`workflow "${view.name}":\n${z.prettifyError(parsed.error)}`);
     checkGraph(parsed.data.nodes as WorkflowNode[], `workflow "${view.name}"`);

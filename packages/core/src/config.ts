@@ -38,6 +38,8 @@ export interface CoreConfig {
   googleTokenPath: string;
   /** Refresh token saved by signing in to Microsoft in the app. */
   microsoftTokenPath: string;
+  /** One OAuth account per file: `oauth/accounts.json` plus `oauth/<service>-<id>.json` refresh tokens. */
+  oauthDir: string;
   /** Keys, models and folders chosen inside the app (instead of editing .env). */
   appSettingsPath: string;
   /** Provider definitions as syncable files: `providers/<id>.json` (no secrets). */
@@ -140,6 +142,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
     personaPath: path.join(userDir, 'persona.md'),
     googleTokenPath: path.join(dataDir, 'google-token.json'),
     microsoftTokenPath: path.join(dataDir, 'microsoft-token.json'),
+    oauthDir: path.join(dataDir, 'oauth'),
     appSettingsPath: path.join(dataDir, 'app-settings.json'),
     providersDir: path.join(userDir, 'providers'),
     secretsPath: path.join(dataDir, 'secrets.json'),

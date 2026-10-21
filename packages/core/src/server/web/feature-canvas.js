@@ -12,8 +12,6 @@
   const W = 210;
   const HEAD = 46;
   const ROW = 22;
-  const TRIGGER_W = 180;
-  const TRIGGER_ID = '__trigger';
   const COLUMN = 270;
 
   /** Pan / zoom per workflow, so a re-render keeps the view where it was. */
@@ -64,10 +62,10 @@
 
   /**
    * Mounts the canvas into `host`. `ctx` gives the draft and the editor's hooks:
-   * nodes(), outputsOf(node), titleOf(id), typeLabel(type), groupOf(type), triggerLabel(),
+   * nodes(), outputsOf(node), titleOf(id), typeLabel(type), groupOf(type),
    * run (last run result or null), selected, onSelect(id), onChange(), addNodeAt(type, pos, from),
-   * removeNode(id), palette(anchor, onPick), notes() (the sticky notes array, edited in
-   * place), undo(), redo().
+   * removeNode(id), palette(anchor, onPick) for the link-to-empty popover, notes() (the
+   * sticky notes array, edited in place), undo(), redo().
    */
   function mount(host, ctx) {
     host.classList.add('wcv');
@@ -98,17 +96,6 @@
       return [(clientX - rect.left - state.x) / state.z, (clientY - rect.top - state.y) / state.z];
     };
 
-    const starts = () => {
-      const fed = new Set(nodes.flatMap((node) => Object.values(node.links || {}).flat()));
-      return nodes.filter((node) => !fed.has(node.id));
-    };
-    const triggerPosition = () => {
-      const first = starts();
-      if (first.length === 0) return [40, 60];
-      const minX = Math.min(...first.map((node) => node.position[0]));
-      const meanY = first.reduce((sum, node) => sum + node.position[1], 0) / first.length;
-      return [minX - 250, meanY];
-    };
     const runOf = (id) => ctx.run?.nodes?.find((entry) => entry.id === id);
 
     /** Sticky notes: under the nodes, dragged by their strip, text edited in place. */
@@ -164,24 +151,11 @@
     function drawNodes() {
       for (const box of boxes.values()) box.remove();
       boxes.clear();
-      // The trigger: where every start node gets its items.
-      const [tx, ty] = triggerPosition();
-      const trigger = el('div', `wcv-node wcv-trigger${state.selected === TRIGGER_ID ? ' sel' : ''}`);
-      trigger.dataset.id = TRIGGER_ID;
-      trigger.style.left = `${tx}px`;
-      trigger.style.top = `${ty}px`;
-      trigger.style.width = `${TRIGGER_W}px`;
-      trigger.append(el('b', '', '⚡ ทริกเกอร์'), el('small', '', ctx.triggerLabel()));
-      const triggerPort = el('span', 'wcv-port out');
-      triggerPort.style.top = `${HEAD / 2}px`;
-      trigger.append(triggerPort);
-      world.append(trigger);
-      boxes.set(TRIGGER_ID, trigger);
-
       for (const node of nodes) {
         const outputs = ctx.outputsOf(node);
         const run = runOf(node.id);
-        const box = el('div', `wcv-node g-${ctx.groupOf(node.type)}${state.selected === node.id ? ' sel' : ''}${node.disabled ? ' off' : ''}${run ? (run.status === 'ok' ? ' ok' : run.status === 'waiting' ? ' wait' : ' err') : ''}`);
+        const trigger = String(node.type).startsWith('trigger_');
+        const box = el('div', `wcv-node${trigger ? ' wcv-trigger' : ` g-${ctx.groupOf(node.type)}`}${state.selected === node.id ? ' sel' : ''}${node.disabled ? ' off' : ''}${run ? (run.status === 'ok' ? ' ok' : run.status === 'waiting' ? ' wait' : ' err') : ''}`);
         box.dataset.id = node.id;
         box.style.left = `${node.position[0]}px`;
         box.style.top = `${node.position[1]}px`;
@@ -191,9 +165,11 @@
         head.append(el('b', '', `${Array.isArray(node.pinned) ? '📌 ' : ''}${ctx.titleOf(node.id)}`), el('small', '', `${ctx.typeLabel(node.type)}${node.disabled ? ' · ปิดอยู่' : ''}`));
         box.append(head);
         if (run) box.append(el('span', 'wcv-badge', run.status === 'ok' ? `${run.input.length} → ${run.output.length}` : run.status === 'waiting' ? '⏸ รอ' : 'error'));
-        const input = el('span', 'wcv-port in');
-        input.style.top = `${HEAD / 2}px`;
-        box.append(input);
+        if (!trigger) {
+          const input = el('span', 'wcv-port in');
+          input.style.top = `${HEAD / 2}px`;
+          box.append(input);
+        }
         outputs.forEach((output, index) => {
           const y = HEAD + index * ROW + ROW / 2;
           if (outputs.length > 1 || output.key !== 'main') {
@@ -213,10 +189,6 @@
 
     /** Where a link leaves (output port) and arrives (input port), in world coordinates. */
     const outPoint = (id, key) => {
-      if (id === TRIGGER_ID) {
-        const [x, y] = triggerPosition();
-        return [x + TRIGGER_W, y + HEAD / 2];
-      }
       const node = nodes.find((entry) => entry.id === id);
       const outputs = ctx.outputsOf(node);
       const index = Math.max(0, outputs.findIndex((output) => output.key === key));
@@ -239,7 +211,7 @@
         const selected = state.edge && state.edge.from === from && state.edge.key === key && state.edge.to === to;
         const path = document.createElementNS(SVG, 'path');
         path.setAttribute('d', d);
-        path.setAttribute('class', `wcv-edge${selected ? ' sel' : ''}${from === TRIGGER_ID ? ' trig' : ''}${key === 'error' ? ' errpath' : ''}`);
+        path.setAttribute('class', `wcv-edge${selected ? ' sel' : ''}${key === 'error' ? ' errpath' : ''}`);
         svg.append(path);
         if (!removable) return;
         const hit = document.createElementNS(SVG, 'path');
@@ -259,7 +231,6 @@
           world.append(edgeButton);
         }
       };
-      for (const node of starts()) add(TRIGGER_ID, 'main', node.id, false);
       for (const node of nodes) {
         for (const [key, targets] of Object.entries(node.links || {})) {
           const known = ctx.outputsOf(node).some((output) => output.key === key) || key === 'error';
@@ -296,6 +267,9 @@
 
     function link(from, key, to) {
       if (from === to) return;
+      if (String(nodes.find((entry) => entry.id === to)?.type).startsWith('trigger_')) {
+        return M().toast('ต่อไม่ได้', 'node ทริกเกอร์เป็นจุดเริ่ม ไม่รับสายเข้า', true);
+      }
       if (makesLoop(from, to)) return M().toast('ต่อไม่ได้', 'สายนี้จะทำให้วนกลับ (Mimi รันจากหน้าไปหลังครั้งเดียว) — ถ้าจะวน ใช้ node Loop', true);
       const node = nodes.find((entry) => entry.id === from);
       const list = (node.links[key] ??= []);
@@ -320,14 +294,13 @@
 
     function fit() {
       const rect = host.getBoundingClientRect();
-      if (rect.width === 0) return;
-      const [tx, ty] = triggerPosition();
-      const xs = [tx, ...nodes.flatMap((node) => [node.position[0], node.position[0] + W])];
-      const ys = [ty, ...nodes.flatMap((node) => [node.position[1], node.position[1] + heightOf(ctx.outputsOf(node))])];
+      if (rect.width === 0 || nodes.length === 0) return;
+      const xs = nodes.flatMap((node) => [node.position[0], node.position[0] + W]);
+      const ys = nodes.flatMap((node) => [node.position[1], node.position[1] + heightOf(ctx.outputsOf(node))]);
       const minX = Math.min(...xs) - 40;
-      const maxX = Math.max(...xs, tx + TRIGGER_W) + 40;
+      const maxX = Math.max(...xs) + 40;
       const minY = Math.min(...ys) - 40;
-      const maxY = Math.max(...ys, ty + HEAD) + 40;
+      const maxY = Math.max(...ys) + 40;
       state.z = Math.max(0.3, Math.min(1, rect.width / (maxX - minX), rect.height / (maxY - minY)));
       state.x = (rect.width - (maxX - minX) * state.z) / 2 - minX * state.z;
       state.y = (rect.height - (maxY - minY) * state.z) / 2 - minY * state.z;
@@ -380,7 +353,6 @@
       const hit = event.target.closest('.wcv-hit');
       if (port && box) {
         const from = box.dataset.id;
-        if (from === TRIGGER_ID) return;
         gesture = { kind: 'link', from, key: port.dataset.key || 'main' };
         temp = document.createElementNS(SVG, 'path');
         temp.setAttribute('class', 'wcv-edge temp');
@@ -394,7 +366,8 @@
       } else if (box) {
         const id = box.dataset.id;
         const node = nodes.find((entry) => entry.id === id);
-        gesture = { kind: 'node', id, node, startX: event.clientX, startY: event.clientY, origin: node ? [...node.position] : null, moved: false };
+        const origin = node ? [...node.position] : null;
+        gesture = { kind: 'node', id, node, startX: event.clientX, startY: event.clientY, origin, moved: false };
       } else {
         gesture = { kind: 'pan', startX: event.clientX, startY: event.clientY, originX: state.x, originY: state.y, moved: false };
       }
@@ -426,20 +399,16 @@
         const [x1, y1] = outPoint(gesture.from, gesture.key);
         const [x2, y2] = toWorld(event.clientX, event.clientY);
         temp.setAttribute('d', curve(x1, y1, x2, y2));
-      } else if (gesture.kind === 'node' && gesture.node) {
+      } else if (gesture.kind === 'node' && gesture.origin) {
         const dx = (event.clientX - gesture.startX) / state.z;
         const dy = (event.clientY - gesture.startY) / state.z;
         if (!gesture.moved && Math.hypot(dx, dy) < 3) return;
         gesture.moved = true;
-        gesture.node.position = [Math.round(gesture.origin[0] + dx), Math.round(gesture.origin[1] + dy)];
+        const position = [Math.round(gesture.origin[0] + dx), Math.round(gesture.origin[1] + dy)];
+        gesture.node.position = position;
         const box = boxes.get(gesture.id);
-        box.style.left = `${gesture.node.position[0]}px`;
-        box.style.top = `${gesture.node.position[1]}px`;
-        // The trigger follows the start nodes.
-        const trigger = boxes.get(TRIGGER_ID);
-        const [tx, ty] = triggerPosition();
-        trigger.style.left = `${tx}px`;
-        trigger.style.top = `${ty}px`;
+        box.style.left = `${position[0]}px`;
+        box.style.top = `${position[1]}px`;
         drawEdges();
       } else if (gesture.kind === 'pan') {
         const dx = event.clientX - gesture.startX;
@@ -464,9 +433,9 @@
         temp?.remove();
         temp = null;
         const target = document.elementFromPoint(event.clientX, event.clientY)?.closest('.wcv-node');
-        if (target && target.dataset.id !== TRIGGER_ID) {
+        if (target) {
           link(current.from, current.key, target.dataset.id);
-        } else if (!target) {
+        } else {
           // Dropped on empty canvas: pick a node type to add right there, already linked.
           const position = toWorld(event.clientX, event.clientY);
           const rect = host.getBoundingClientRect();
@@ -503,7 +472,7 @@
       if (state.edge) {
         event.preventDefault();
         removeEdge(state.edge);
-      } else if (state.selected && state.selected !== TRIGGER_ID) {
+      } else if (state.selected) {
         event.preventDefault();
         ctx.removeNode(state.selected);
       }
@@ -517,14 +486,6 @@
       toolbar.append(button);
       return button;
     };
-    tool('+ เพิ่ม node', 'เพิ่ม node ใหม่ (หรือลากจากจุดขวาของ node ไปที่ว่าง)', (event) => {
-      const rect = host.getBoundingClientRect();
-      const buttonRect = event.currentTarget.getBoundingClientRect();
-      const center = toWorld(rect.left + rect.width / 2, rect.top + rect.height / 2);
-      ctx.palette({ left: buttonRect.left - rect.left, top: buttonRect.bottom - rect.top + 4, host }, (type) => {
-        ctx.addNodeAt(type, [Math.round(center[0] - W / 2), Math.round(center[1] - HEAD)], null);
-      });
-    }).classList.add('pri');
     if (ctx.undo) {
       tool('↶', 'ย้อน (Ctrl+Z)', () => ctx.undo());
       tool('↷', 'ทำซ้ำ (Ctrl+Y)', () => ctx.redo());
@@ -550,6 +511,19 @@
       redraw();
       fit();
       ctx.onChange();
+    });
+
+    host.addEventListener('dragover', (event) => {
+      if (!event.dataTransfer.types.includes('application/x-mimi-node')) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'copy';
+    });
+    host.addEventListener('drop', (event) => {
+      const type = event.dataTransfer.getData('application/x-mimi-node');
+      if (!type) return;
+      event.preventDefault();
+      const [x, y] = toWorld(event.clientX, event.clientY);
+      ctx.addNodeAt(type, [Math.round(x - W / 2), Math.round(y - HEAD / 2)], null);
     });
 
     redraw();

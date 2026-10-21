@@ -1,6 +1,7 @@
 import type { MessageRole, StoredMessage } from '@mimi/shared';
 import type { ModelMessage, SystemModelMessage } from 'ai';
 import type { AgentDefinition } from '../agents/loader.ts';
+import { stripAttachmentBlocks } from '../chat/attachments.ts';
 import type { Summary } from '../db/thread-repo.ts';
 import { renderPromptVars, type PromptVars } from './prompt-vars.ts';
 
@@ -58,6 +59,11 @@ export function buildInstructions(agent: AgentDefinition, workingDir: string | u
   if (has('search_history')) {
     rules.push('- Use search_history to recover exact wording or details from summarized messages.');
   }
+  rules.push(
+    '',
+    '## Voice',
+    '- A reply that should be spoken with a particular feeling may begin with one direction line: [emotion: …][tone: …][voice: …][speed: 0.5-2]. Use only these tags, only on the first line; the app hides the line and uses it for text-to-speech. Do not put square-bracket tags anywhere else in a reply.',
+  );
   if (has('status_set')) {
     rules.push(
       '',
@@ -196,8 +202,15 @@ export function buildHistory(
   agentName: string,
   options: {
     group?: boolean;
-    /** Files to show the model as they are, by user message id (images for a model that can see). */
-    media?: Map<number, Array<{ type: 'file'; data: Buffer; mediaType: string; filename: string }>>;
+    /** Files to show the model as they are, by user message id (images / PDFs it can read). */
+    media?: Map<
+      number,
+      {
+        parts: Array<{ type: 'file'; data: Buffer; mediaType: string; filename: string }>;
+        /** Attachments sent as bytes: their text description would only be duplicated. */
+        stripIds: Set<string>;
+      }
+    >;
   } = {},
 ): ModelMessage[] {
   const messages: ModelMessage[] = [];
@@ -219,7 +232,9 @@ export function buildHistory(
   for (const stored of history) {
     if (stored.role === 'user') {
       const own = !options.group || stored.agent === agentName;
-      if (stored.text) say([stored.text, own ? (stored.context ?? '') : ''], options.media?.get(stored.id));
+      const media = options.media?.get(stored.id);
+      const text = media ? stripAttachmentBlocks(stored.text, media.stripIds) : stored.text;
+      if (text || media?.parts.length) say([text, own ? (stored.context ?? '') : ''], media?.parts);
       else if (own) say([stored.context ?? '']);
     } else if (stored.agent === agentName) {
       messages.push({ role: stored.role, content: stored.content } as ModelMessage);

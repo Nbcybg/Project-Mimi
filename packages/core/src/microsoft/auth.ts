@@ -42,6 +42,14 @@ export class MicrosoftNotConfiguredError extends Error {
   }
 }
 
+/** Either one auth, or a resolver that picks one per account id (`undefined` = the default account). */
+export type MicrosoftAuthSource = MicrosoftAuth | ((account?: string) => MicrosoftAuth);
+
+/** Normalizes the two forms the tool factories accept, so tests can keep passing a single auth. */
+export function microsoftAuthResolver(source: MicrosoftAuthSource): (account?: string) => MicrosoftAuth {
+  return typeof source === 'function' ? source : () => source;
+}
+
 /**
  * Signs in to Microsoft as a public client (no secret: the app runs on the user's own
  * machine) and calls Microsoft Graph. Microsoft replaces the refresh token on every

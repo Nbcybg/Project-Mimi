@@ -32,9 +32,14 @@ test('skills: only name and description are indexed; load_skill returns the body
   fs.mkdirSync(path.join(dir, 'not-a-skill')); // folders are not skills either
   const skills = loadSkills(dir);
 
-  assert.deepEqual(skills.map((skill) => [skill.name, skill.description]), [['night-quiz', 'Bedtime quiz'], ['song-writer', 'Write lyrics']]);
+  assert.deepEqual(
+    skills.filter((skill) => !skill.builtin).map((skill) => [skill.name, skill.description]),
+    [['night-quiz', 'Bedtime quiz'], ['song-writer', 'Write lyrics']],
+  );
+  assert.ok(skills.some((skill) => skill.builtin && skill.name === 'workflow-builder'));
   const index = renderSkillIndex(skills);
   assert.match(index, /- night-quiz: Bedtime quiz\n- song-writer: Write lyrics/);
+  assert.match(index, /- workflow-builder: /);
   assert.doesNotMatch(index, /BODY/);
   assert.equal(renderSkillIndex([]), '');
 
@@ -43,13 +48,13 @@ test('skills: only name and description are indexed; load_skill returns the body
   assert.equal(await tool.execute({ name: 'song-writer' }, context), '# Song Writer\nBODY-A');
   fs.writeFileSync(path.join(dir, 'song-writer.md'), '---\nname: song-writer\ndescription: Write lyrics\n---\nEDITED');
   assert.equal(await tool.execute({ name: 'song-writer' }, context), 'EDITED', 'edits apply without a restart');
-  await assert.rejects(tool.execute({ name: 'nope' }, context), /No skill "nope". Available: night-quiz, song-writer/);
+  await assert.rejects(tool.execute({ name: 'nope' }, context), /No skill "nope". Available: night-quiz, song-writer, workflow-builder/);
 });
 
 test('skills: broken files fail loudly; a missing folder or persona is simply empty', () => {
   assert.throws(() => loadSkills(skillDir({ bad: 'no frontmatter' })), /invalid skill frontmatter/);
   assert.throws(() => loadSkills(skillDir({ renamed: '---\nname: other\ndescription: x\n---\nBody' })), /must match the file name/);
-  assert.deepEqual(loadSkills(path.join(tmp, 'missing')), []);
+  assert.deepEqual(loadSkills(path.join(tmp, 'missing')).filter((skill) => !skill.builtin), []);
   assert.equal(loadPersona(path.join(tmp, 'missing.md')), '');
 });
 

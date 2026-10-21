@@ -4,6 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import type { WorkflowView } from '@mimi/shared';
+import { MockLanguageModelV4 } from 'ai/test';
+import { AttachmentStore } from '../chat/attachments.ts';
 import { filesMatch } from '../core.ts';
 import { openDb } from '../db/db.ts';
 import { makeTestCore, type TestCore } from './core-helpers.ts';
@@ -70,17 +72,84 @@ test('schema v14 keeps the attachments that were there and accepts videos', () =
   const file = path.join(dir, 'mimi.db');
   const first = openDb(file);
   first.prepare(`INSERT INTO attachments (id, kind, name, mime, size, text) VALUES ('a', 'image', 'cat.png', 'image/png', 7, 'แมว')`).run();
-  // Back to how a v13 file looks: the columns of v15 do not exist yet.
-  first.exec('ALTER TABLE messages DROP COLUMN pinned_at; ALTER TABLE messages DROP COLUMN reactions;');
+  // Back to how a v13 file looks: the columns of v16 do not exist yet.
+  first.exec('ALTER TABLE messages DROP COLUMN pinned_at; ALTER TABLE messages DROP COLUMN reactions; ALTER TABLE messages DROP COLUMN speech;');
   first.pragma('user_version = 13');
   first.close();
   const again = openDb(file);
-  assert.equal(again.pragma('user_version', { simple: true }), 15);
+  assert.equal(again.pragma('user_version', { simple: true }), 17);
   assert.deepEqual(again.prepare(`SELECT id, kind, text FROM attachments`).all(), [{ id: 'a', kind: 'image', text: 'แมว' }]);
+  assert.equal((again.prepare(`SELECT hash FROM attachments`).get() as { hash: string | null }).hash, null);
   again.prepare(`INSERT INTO attachments (id, kind, name, mime, size) VALUES ('b', 'video', 'x.mp4', 'video/mp4', 1)`).run();
   assert.throws(() => again.prepare(`INSERT INTO attachments (id, kind, name, mime, size) VALUES ('c', 'gif', 'x', 'x/y', 1)`).run());
   again.close();
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('attachments are typed by their bytes, not by the upload header', () => {
+  const target = openDb(':memory:');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mimi-files-'));
+  const store = new AttachmentStore(target, dir);
+  const pdf = store.save({ name: 'note.bin', mime: 'text/plain', data: Buffer.from('%PDF-1.4\nreceipt') });
+  assert.deepEqual([pdf.kind, pdf.mime], ['file', 'application/pdf']);
+  const png = store.save({ name: 'photo.bin', mime: 'application/octet-stream', data: PNG });
+  assert.deepEqual([png.kind, png.mime], ['image', 'image/png']);
+  const heic = store.save({
+    name: 'photo.heic',
+    mime: 'application/octet-stream',
+    data: Buffer.concat([Buffer.from([0, 0, 0, 24]), Buffer.from('ftypheic'), Buffer.alloc(8)]),
+  });
+  assert.deepEqual([heic.kind, heic.mime], ['image', 'image/heic']);
+  target.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('the same bytes uploaded twice are read by the model once', async () => {
+  const mimi = scriptedModel([textStep('ok')]);
+  const small = reader();
+  const target = await makeTestCore({ models: { mimi }, small });
+  const first = target.core.attachments.save({ name: 'a.png', mime: 'image/png', data: PNG });
+  const second = target.core.attachments.save({ name: 'b.png', mime: 'image/png', data: PNG });
+  assert.equal(first.hash, second.hash);
+  await turn(target, { chatId: target.core.chats.directChat('mimi').id, text: 'สองรูป', attachments: [first.id, second.id] });
+  assert.equal(small.doGenerateCalls.length, 1);
+  assert.deepEqual([target.core.attachments.get(first.id)!.text, target.core.attachments.get(second.id)!.text], [
+    'แมวสีส้มนอนบนโซฟา',
+    'แมวสีส้มนอนบนโซฟา',
+  ]);
+  await target.cleanup();
+});
+
+test('a file that failed to read is tried again when it is sent once more', async () => {
+  let calls = 0;
+  const flaky = new MockLanguageModelV4({
+    doGenerate: async () => {
+      calls++;
+      if (calls === 1) throw new Error('provider exploded');
+      return {
+        content: [{ type: 'text', text: 'แมวสีดำ' }],
+        finishReason: { unified: 'stop', raw: undefined },
+        usage: {
+          inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: undefined },
+          outputTokens: { total: 1, text: 1, reasoning: undefined },
+        },
+        warnings: [],
+      };
+    },
+  });
+  const mimi = scriptedModel([textStep('ok')]);
+  const target = await makeTestCore({ models: { mimi }, small: flaky });
+  const cat = target.core.attachments.save({ name: 'cat.png', mime: 'image/png', data: PNG });
+  const chat = target.core.chats.directChat('mimi');
+  await turn(target, { chatId: chat.id, text: 'ดูนี่', attachments: [cat.id] });
+  assert.match(target.core.attachments.get(cat.id)!.text, /could not be read/);
+  await turn(target, { chatId: chat.id, text: 'ลองอีกที', attachments: [cat.id] });
+  assert.equal(target.core.attachments.get(cat.id)!.text, 'แมวสีดำ');
+  const visionCalls = flaky.doGenerateCalls.filter((call) =>
+    JSON.stringify(call.prompt).includes('Describe this image'),
+  );
+  assert.equal(visionCalls.length, 2);
+  await target.cleanup();
 });
 
 test('a chat model that can see gets the picture itself, also on later turns; one that cannot gets the description', async () => {
@@ -93,7 +162,7 @@ test('a chat model that can see gets the picture itself, also on later turns; on
   const first = promptOf(mimi, 0);
   assert.match(first, /"type":"file"/);
   assert.match(first, /"mediaType":"image\/png"/);
-  assert.match(first, /แมวสีส้มนอนบนโซฟา/, 'the description stays next to the picture');
+  assert.doesNotMatch(first, /แมวสีส้มนอนบนโซฟา/, 'the description is not duplicated next to the picture');
   await turn(target, { chatId: chat.id, text: 'สีอะไรนะ' });
   assert.match(promptOf(mimi, 1), /"mediaType":"image\/png"/, 'the picture is still there on the next turn');
   await target.cleanup();
@@ -116,6 +185,83 @@ test('only the newest six images go to the model as pictures', async () => {
   await turn(target, { chatId: target.core.chats.directChat('mimi').id, text: 'อัลบั้ม', attachments: ids });
   const files = promptOf(mimi, 0).match(/"type":"file"/g) ?? [];
   assert.equal(files.length, 6);
+  await target.cleanup();
+});
+
+test('a chat model that can read PDFs gets the document itself; one that cannot gets the extracted text', async () => {
+  const PDF = Buffer.from('%PDF-1.4\nreceipt');
+  const extract = () =>
+    replyingModel([(prompt) => (prompt.includes('Extract the content') ? { text: 'ยอดรวม 120 บาท' } : { text: 'nothing' })]);
+  const mimi = scriptedModel([textStep('อ่านแล้ว')]);
+  const target = await makeTestCore({ models: { mimi }, small: extract(), inputs: ['text', 'pdf'] });
+  const doc = target.core.attachments.save({ name: 'receipt.pdf', mime: 'application/pdf', data: PDF });
+
+  await turn(target, { chatId: target.core.chats.directChat('mimi').id, text: 'อ่านใบเสร็จ', attachments: [doc.id] });
+  const native = promptOf(mimi, 0);
+  assert.match(native, /"mediaType":"application\/pdf"/);
+  assert.doesNotMatch(native, /ยอดรวม 120 บาท/, 'the extracted text is not duplicated next to the document');
+  await target.cleanup();
+
+  const blind = scriptedModel([textStep('อ่านแล้ว')]);
+  const other = await makeTestCore({ models: { mimi: blind }, small: extract() });
+  const copy = other.core.attachments.save({ name: 'receipt.pdf', mime: 'application/pdf', data: PDF });
+  await turn(other, { chatId: other.core.chats.directChat('mimi').id, text: 'อ่านใบเสร็จ', attachments: [copy.id] });
+  const text = promptOf(blind, 0);
+  assert.doesNotMatch(text, /"mediaType":"application\/pdf"/);
+  assert.match(text, /ยอดรวม 120 บาท/);
+  await other.cleanup();
+});
+
+test('attachment reading runs a few files at once, in the order they were sent', async () => {
+  let active = 0;
+  let peak = 0;
+  const slow = new MockLanguageModelV4({
+    doGenerate: async () => {
+      active++;
+      peak = Math.max(peak, active);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      active--;
+      return {
+        content: [{ type: 'text', text: 'รูป' }],
+        finishReason: { unified: 'stop', raw: undefined },
+        usage: {
+          inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: undefined },
+          outputTokens: { total: 1, text: 1, reasoning: undefined },
+        },
+        warnings: [],
+      };
+    },
+  });
+  const mimi = scriptedModel([textStep('ok')]);
+  const target = await makeTestCore({ models: { mimi }, small: slow });
+  const ids = Array.from({ length: 5 }, (_, index) =>
+    target.core.attachments.save({
+      name: `p${index}.png`,
+      mime: 'image/png',
+      data: Buffer.concat([PNG, Buffer.from(String(index))]),
+    }).id,
+  );
+  await turn(target, { chatId: target.core.chats.directChat('mimi').id, text: 'ห้ารูป', attachments: ids });
+  assert.ok(peak > 1, 'more than one file is read at a time');
+  assert.ok(peak <= 3, `at most three reads at a time (saw ${peak})`);
+  assert.deepEqual(ids.map((id) => target.core.attachments.get(id)!.text), Array(5).fill('รูป'));
+  await target.cleanup();
+});
+
+test('mixed files share one total text budget and the full text stays on each attachment', async () => {
+  const mimi = scriptedModel([textStep('ok')]);
+  const target = await makeTestCore({ models: { mimi } });
+  const body = 'ก'.repeat(60_000);
+  const ids = Array.from({ length: 3 }, (_, index) =>
+    target.core.attachments.save({ name: `note${index}.txt`, mime: 'text/plain', data: Buffer.from(body) }).id,
+  );
+  const chat = target.core.chats.directChat('mimi');
+  await turn(target, { chatId: chat.id, text: 'อ่านทุกไฟล์', attachments: ids });
+  const [session] = target.core.chats.sessions(chat.id);
+  const stored = target.core.deps.messages.page(session!.thread, undefined, 10)[0]!;
+  assert.equal((stored.text.match(/\[file cut here:/g) ?? []).length, 3);
+  assert.ok(stored.text.length < 130_000, `stored text is ${stored.text.length} chars`);
+  for (const id of ids) assert.equal(target.core.attachments.get(id)!.text.length, 60_000, 'the full text is kept');
   await target.cleanup();
 });
 

@@ -12,7 +12,7 @@ import {
   type Attachment,
   type AttachmentStore,
   ingestAttachments,
-  renderAttachment,
+  renderAttachments,
   renderReply,
   stripAttachments,
 } from './attachments.ts';
@@ -154,7 +154,7 @@ export class ChatEngine {
       { store: deps.attachments, models: deps.models, usage: deps.usage },
       { ids: attachmentIds, agent: first, traceId, signal: input.signal },
     );
-    const userText = [quoted, input.text.trim(), ...files.map(renderAttachment)].filter(Boolean).join('\n\n');
+    const userText = [quoted, input.text.trim(), ...renderAttachments(files)].filter(Boolean).join('\n\n');
 
     const roster = members.map((member) => ({
       name: member.name,

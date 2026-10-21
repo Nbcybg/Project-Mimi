@@ -85,6 +85,8 @@ export interface TestCoreOptions {
   env?: NodeJS.ProcessEnv;
   /** The chat models can see images. */
   imageInput?: boolean;
+  /** The catalog's input modalities for the chat models. */
+  inputs?: string[];
   media?: FakeModelsOptions['media'];
 }
 
@@ -120,6 +122,7 @@ export function testCoreParts(options: TestCoreOptions = {}) {
       small,
       byModel: options.models,
       imageInput: options.imageInput,
+      inputs: options.inputs,
       media: options.media,
     }),
   };

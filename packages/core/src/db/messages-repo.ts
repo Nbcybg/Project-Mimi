@@ -1,4 +1,4 @@
-import type { MessageRole, StoredMessage } from '@mimi/shared';
+import type { MessageRole, SpeechStyle, StoredMessage } from '@mimi/shared';
 import type { Db } from './db.ts';
 
 export interface NewMessage {
@@ -8,6 +8,8 @@ export interface NewMessage {
   role: MessageRole;
   content: unknown;
   text: string;
+  /** Voice direction to store with an assistant reply. */
+  speech?: SpeechStyle;
   /** Volatile prompt block sent along with a user message. */
   context?: string;
 }
@@ -20,6 +22,7 @@ interface MessageRow {
   role: MessageRole;
   content: string;
   text: string;
+  speech: string | null;
   context: string | null;
   reply_to: number | null;
   forward_from: string | null;
@@ -38,6 +41,7 @@ function toMessage(row: MessageRow): StoredMessage {
     role: row.role,
     content: JSON.parse(row.content),
     text: row.text,
+    speech: row.speech ? (JSON.parse(row.speech) as SpeechStyle) : undefined,
     context: row.context ?? undefined,
     replyTo: row.reply_to ?? undefined,
     forwardFrom: row.forward_from ?? undefined,
@@ -66,12 +70,13 @@ export class MessagesRepo {
   append(message: NewMessage): number {
     const result = this.db
       .prepare(
-        `INSERT INTO messages (thread, trace_id, agent, role, content, text, context)
-         VALUES (@thread, @traceId, @agent, @role, @content, @text, @context)`,
+        `INSERT INTO messages (thread, trace_id, agent, role, content, text, speech, context)
+         VALUES (@thread, @traceId, @agent, @role, @content, @text, @speech, @context)`,
       )
       .run({
         ...message,
         content: JSON.stringify(message.content),
+        speech: message.speech ? JSON.stringify(message.speech) : null,
         context: message.context ?? null,
       });
     const id = Number(result.lastInsertRowid);

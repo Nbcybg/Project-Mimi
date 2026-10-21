@@ -1,12 +1,12 @@
-// Tools screen: the pool (built-ins + custom tools), their settings schema, and the
-// presets that turn a tool into a configured instance (e.g. "manager_sheet").
+// Node hub: every workflow node type (read-only reference) and every tool (editable when
+// custom) plus MCP servers. Workflows pick nodes from the canvas library, not from here.
 (() => {
   'use strict';
   const M = () => window.Mimi;
   const el = (tag, cls, text) => M().el(tag, cls, text);
   const button = (cls, text, onClick, title) => M().button(cls, text, onClick, title);
 
-  /** { mode: 'custom' | 'custom-new' | 'preset' | 'preset-new', name?, base? } */
+  /** { mode: 'node' | 'custom' | 'custom-new' | 'mcp' | 'mcp-new', name?, type? } */
   let sel = null;
 
   function go(next) {
@@ -35,29 +35,119 @@
   }
   const usersOf = (name) =>
     M().state.agents.filter((agent) => agent.tools.includes(name)).map((agent) => M().nameOf(agent.name));
+  const NODE_GROUPS = [
+    { label: 'AI', types: ['agent', 'llm', 'classify', 'extract', 'knowledge'] },
+    { label: 'ทางแยก', types: ['if', 'switch', 'filter', 'merge'] },
+    { label: 'ข้อมูล', types: ['set', 'datetime', 'split_out', 'sort', 'limit', 'aggregate', 'remove_duplicates', 'code'] },
+    { label: 'ไฟล์', types: ['file', 'extract_file', 'sheets'] },
+    { label: 'วน / รอ', types: ['loop', 'workflow', 'wait', 'stop', 'approval'] },
+    { label: 'เชื่อมต่อ', types: ['http', 'tool', 'chat', 'telegram', 'respond'] },
+  ];
+  const groupOf = (type) => {
+    if (String(type).startsWith('trigger_')) return 'ทริกเกอร์';
+    return NODE_GROUPS.find((group) => group.types.includes(type))?.label || 'อื่น ๆ';
+  };
+
+  // ---------- node reference ----------
+  function nodePanel(type) {
+    const spec = (M().state.nodeTypes || []).find((entry) => entry.type === type);
+    const panel = el('div', 'panel');
+    if (!spec) {
+      panel.append(el('h3', '', 'ไม่พบ node'), el('p', 'hint', 'node นี้อาจถูกถอดออกแล้ว'));
+      return panel;
+    }
+    panel.append(el('h3', '', spec.label), el('p', 'hint', `node กลางของ Workflow · ${groupOf(type)} · แก้ค่าต่อ workflow ได้ในหน้าผัง`));
+    const meta = el('div', 'grid2');
+    meta.append(M().labelled('ชนิด (type)', el('code', 'mono', spec.type)), M().labelled('กลุ่ม', el('span', '', groupOf(type))));
+    panel.append(meta);
+    panel.append(el('p', '', spec.description));
+    panel.append(el('h4', '', 'เอาต์พุต'));
+    const outputs = el('div', 'hstack');
+    for (const output of spec.outputs || []) outputs.append(el('span', 'chip', `${output.key} · ${output.label}`));
+    panel.append(outputs);
+    if ((spec.fields || []).length > 0) {
+      panel.append(el('h4', '', `ช่องตั้งค่า (${spec.fields.length})`));
+      const rows = el('div', 'tbl');
+      const head = el('div', 'hd');
+      head.append(el('span', '', 'ช่อง'), el('span', '', 'key'), el('span', '', 'ชนิด'), el('span', '', ''));
+      rows.append(head);
+      for (const field of spec.fields) {
+        const row = el('div');
+        row.append(
+          el('span', '', `${field.label}${field.required ? ' *' : ''}`),
+          el('span', 'mono', field.key),
+          el('span', 'muted', field.type),
+          el('span', 'muted', field.required ? 'จำเป็น' : 'ไม่บังคับ'),
+        );
+        rows.append(row);
+      }
+      panel.append(rows);
+    }
+    if (spec.triggerPool) {
+      const pool = (M().state.workflowPool || []).find((entry) => entry.name === spec.triggerPool);
+      if (pool) {
+        panel.append(el('h4', '', 'ทริกเกอร์'));
+        panel.append(el('p', 'hint', `${pool.label} (${pool.kind}) · ${pool.description}`));
+        panel.append(el('p', 'hint', `ข้อมูลตัวอย่าง: ${JSON.stringify(pool.sample)}`));
+      }
+    }
+    panel.append(el('p', 'hint', 'เพิ่ม node นี้ได้จากแถบ Node ด้านซ้ายของหน้าผัง — คลิกหรือลากมาวาง แล้วต่อสายได้เลย'));
+    return panel;
+  }
 
   // ---------- list ----------
   function listPanel() {
     const panel = el('div', 'panel');
+    const nodes = M().state.nodeTypes || [];
     const tools = M().state.tools || [];
-    const presets = M().state.toolPresets || [];
-    panel.append(el('h3', '', `กองเครื่องมือ (${tools.length}) · preset (${presets.length})`));
+    panel.append(el('h3', '', `Node (${nodes.length}) · เครื่องมือ (${tools.length})`));
     panel.append(
       el(
         'p',
         'hint',
-        'กอง = เครื่องมือทั้งหมด · preset = เครื่องมือที่ตั้งค่าแล้ว ตั้งชื่อใช้ซ้ำได้หลายตัว เช่น sheets_read → "Manager Sheet" · agent เลือกได้ทั้งสองแบบ',
+        'Node = ทุกชนิดที่เอาไปวางใน workflow ได้ รวม node ทริกเกอร์ · เครื่องมือ = ของที่ agent เรียกใช้ได้ (builtin / custom / MCP)',
       ),
     );
     const add = button('btn', '+ เครื่องมือใหม่', () => go({ mode: 'custom-new' }));
     add.style.margin = '0 0 10px';
     panel.append(add);
 
+    const groups = new Map();
+    for (const spec of nodes) {
+      const label = groupOf(spec.type);
+      if (!groups.has(label)) groups.set(label, []);
+      groups.get(label).push(spec);
+    }
+    if (nodes.length > 0) {
+      panel.append(el('h4', '', 'Node'));
+      for (const [label, specs] of groups) {
+        panel.append(el('p', 'hint', label));
+        const rows = el('div', 'tbl poolrows');
+        for (const spec of specs) {
+          const row = el('button');
+          row.type = 'button';
+          const name = el('span', 'nm2');
+          name.append(el('b', '', spec.label), el('small', 'badge', spec.type));
+          row.append(
+            name,
+            el('span', 'muted', String((spec.fields || []).length) + ' ช่อง'),
+            el('span', 'muted', (spec.outputs || []).map((output) => output.key).join(', ')),
+            el('span', 'muted', spec.description),
+            el('span', 'faint', 'ดู'),
+          );
+          row.onclick = () => go({ mode: 'node', type: spec.type });
+          if (sel && sel.mode === 'node' && sel.type === spec.type) row.classList.add('sel');
+          rows.append(row);
+        }
+        panel.append(rows);
+      }
+    }
+
+    panel.append(el('h4', '', 'เครื่องมือ'));
     const rows = el('div', 'tbl poolrows');
     const head = el('div', 'hd');
-    for (const label of ['ชื่อ', 'ระดับ', 'ที่รัน', 'preset', '']) head.append(el('span', '', label));
+    for (const label of ['ชื่อ', 'ระดับ', 'ที่รัน', 'ใช้โดย', '']) head.append(el('span', '', label));
     rows.append(head);
-
     for (const tool of tools) {
       const row = el('div');
       const name = el('span', 'nm2');
@@ -66,19 +156,12 @@
       if (tool.settings && tool.settings.length > 0) name.append(el('small', 'badge', `${tool.settings.length} settings`));
       const risk = el('span');
       risk.append(el('span', `risk${tool.risk === 'read' ? '' : ' w'}`, tool.risk));
-      const chips = el('span', 'hstack');
-      for (const presetName of tool.presets || []) {
-        const label = (presets.find((entry) => entry.name === presetName) || {}).label || presetName;
-        chips.append(button('chip', `★ ${presetName}${label !== presetName ? ` · ${label}` : ''}`, () => go({ mode: 'preset', name: presetName, base: tool.name })));
-      }
-      if ((tool.presets || []).length === 0) chips.append(el('span', 'faint', '—'));
+      const users = usersOf(tool.name);
       const actions = el('span', 'hstack');
       if (tool.mcp) actions.append(button('btn ghost', 'server', () => go({ mode: 'mcp', name: tool.mcp })));
-      else {
-        if (tool.target === 'core') actions.append(button('btn ghost', '+ preset', () => go({ mode: 'preset-new', base: tool.name }), 'สร้าง preset จากเครื่องมือนี้'));
-        if (!tool.builtin) actions.append(button('btn ghost', 'แก้ไข', () => go({ mode: 'custom', name: tool.name, base: tool.name })));
-      }
-      row.append(name, risk, el('span', 'muted', tool.target === 'pc' ? 'PC' : 'core'), chips, actions);
+      else if (!tool.builtin) actions.append(button('btn ghost', 'แก้ไข', () => go({ mode: 'custom', name: tool.name })));
+      else actions.append(el('span', 'faint', 'builtin'));
+      row.append(name, risk, el('span', 'muted', tool.target === 'pc' ? 'PC' : 'core'), el('span', 'muted', users.join(', ') || '—'), actions);
       rows.append(row);
     }
     panel.append(rows);
@@ -338,7 +421,7 @@
     const params = paramsEditor(spec.params || []);
     form.append(params);
 
-    form.append(el('h4', '', 'ค่าตั้งต้น (preset กรอกให้ตอนตั้งค่า)'));
+    form.append(el('h4', '', 'ค่าตั้งต้น'));
     const settings = settingsEditor(spec.settings || []);
     form.append(settings, el('p', 'hint', 'ในเทมเพลตใช้ {{input.ชื่อพารามิเตอร์}} {{settings.ชื่อค่าตั้งต้น}} {{secret.ชื่อ_ENV}}'));
 
@@ -347,51 +430,55 @@
     const configBox = el('div');
     form.append(configBox);
     let readConfig = () => ({});
-
-    if (spec.kind === 'http') {
-      const method = select(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'], String(config.method || 'GET').toUpperCase());
-      const bodyType = select(['json', 'text', 'form'], config.bodyType || 'json');
-      const methodRow = el('div', 'grid2');
-      methodRow.append(M().labelled('Method', method), M().labelled('รูปแบบ body', bodyType));
-      const url = M().textInput(config.url || '', 'https://api.example.com/items/{{input.id}}');
-      const headers = kvEditor(config.headers);
-      const query = kvEditor(config.query);
-      const body = textarea(config.body || '', '{"date":"{{input.date}}"}');
-      configBox.append(methodRow, M().labelled('URL', url));
-      configBox.append(el('h4', '', 'Headers'), headers, el('h4', '', 'Query'), query, el('h4', '', 'Body'), body);
-      readConfig = () => ({
-        method: method.value,
-        url: url.value.trim(),
-        headers: readKvs(headers),
-        query: readKvs(query),
-        bodyType: bodyType.value,
-        ...(body.value.trim() ? { body: body.value } : {}),
-      });
-    } else if (spec.kind === 'code') {
-      const code = textarea(config.code || '', '// input.x = ค่าที่โมเดลส่งมา, settings.x = ค่าตั้งต้น\nreturn "ผลลัพธ์"', 'tall');
-      const timeout = M().textInput(config.timeoutMs || '', '10000', 'number');
-      configBox.append(M().labelled('โค้ด JavaScript (ต้อง return ค่า)', code), M().labelled('timeout (ms)', timeout));
-      readConfig = () => ({ code: code.value, ...(timeout.value ? { timeoutMs: Number(timeout.value) } : {}) });
-    } else {
-      const command = M().textInput(config.command || '', 'เช่น ping -n 1 {{input.host}}');
-      const cwd = M().textInput(config.cwd || '', 'เว้นว่าง = โฟลเดอร์แรกที่อนุญาต');
-      const timeout = M().textInput(config.timeoutMs || '', '60000', 'number');
-      const runsOn = select(['core', 'pc'], config.runsOn || 'core');
-      configBox.append(M().labelled('คำสั่ง', command), M().labelled('โฟลเดอร์ทำงาน', cwd), M().labelled('timeout (ms)', timeout), M().labelled('รันที่ (core = เครื่องที่รัน Mimi · pc = คอมของคุณผ่าน PC agent)', runsOn));
-      readConfig = () => ({
-        command: command.value,
-        ...(runsOn.value === 'pc' ? { runsOn: 'pc' } : {}),
-        ...(cwd.value.trim() ? { cwd: cwd.value.trim() } : {}),
-        ...(timeout.value ? { timeoutMs: Number(timeout.value) } : {}),
-      });
-    }
+    const paintConfig = () => {
+      configBox.replaceChildren();
+      if (kind.value === 'http') {
+        const method = select(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'], String(config.method || 'GET').toUpperCase());
+        const bodyType = select(['json', 'text', 'form'], config.bodyType || 'json');
+        const methodRow = el('div', 'grid2');
+        methodRow.append(M().labelled('Method', method), M().labelled('รูปแบบ body', bodyType));
+        const url = M().textInput(config.url || '', 'https://api.example.com/items/{{input.id}}');
+        const headers = kvEditor(config.headers);
+        const query = kvEditor(config.query);
+        const body = textarea(config.body || '', '{"date":"{{input.date}}"}');
+        configBox.append(methodRow, M().labelled('URL', url));
+        configBox.append(el('h4', '', 'Headers'), headers, el('h4', '', 'Query'), query, el('h4', '', 'Body'), body);
+        readConfig = () => ({
+          method: method.value,
+          url: url.value.trim(),
+          headers: readKvs(headers),
+          query: readKvs(query),
+          bodyType: bodyType.value,
+          ...(body.value.trim() ? { body: body.value } : {}),
+        });
+      } else if (kind.value === 'code') {
+        const code = textarea(config.code || '', '// input.x = ค่าที่โมเดลส่งมา, settings.x = ค่าตั้งต้น\nreturn "ผลลัพธ์"', 'tall');
+        const timeout = M().textInput(config.timeoutMs || '', '10000', 'number');
+        configBox.append(M().labelled('โค้ด JavaScript (ต้อง return ค่า)', code), M().labelled('timeout (ms)', timeout));
+        readConfig = () => ({ code: code.value, ...(timeout.value ? { timeoutMs: Number(timeout.value) } : {}) });
+      } else {
+        const command = M().textInput(config.command || '', 'เช่น ping -n 1 {{input.host}}');
+        const cwd = M().textInput(config.cwd || '', 'เว้นว่าง = โฟลเดอร์แรกที่อนุญาต');
+        const timeout = M().textInput(config.timeoutMs || '', '60000', 'number');
+        const runsOn = select(['core', 'pc'], config.runsOn || 'core');
+        configBox.append(M().labelled('คำสั่ง', command), M().labelled('โฟลเดอร์ทำงาน', cwd), M().labelled('timeout (ms)', timeout), M().labelled('รันที่ (core = เครื่องที่รัน Mimi · pc = คอมของคุณผ่าน PC agent)', runsOn));
+        readConfig = () => ({
+          command: command.value,
+          ...(runsOn.value === 'pc' ? { runsOn: 'pc' } : {}),
+          ...(cwd.value.trim() ? { cwd: cwd.value.trim() } : {}),
+          ...(timeout.value ? { timeoutMs: Number(timeout.value) } : {}),
+        });
+      }
+    };
+    kind.onchange = paintConfig;
+    paintConfig();
 
     const foot = el('div', 'foot');
     foot.append(el('span', 'msg'));
     if (!isNew) {
       foot.append(
         button('btn danger', 'ลบ', () => {
-          if (confirm(`ลบเครื่องมือ "${spec.name}" ? preset ที่สร้างจากตัวนี้จะถูกลบด้วย`)) {
+          if (confirm(`ลบเครื่องมือ "${spec.name}" ?`)) {
             M().send({ type: 'tool-delete', name: spec.name });
             sel = null;
           }
@@ -419,106 +506,11 @@
     return form;
   }
 
-  // ---------- preset editor ----------
-  function settingInput(field, value) {
-    if (field.type === 'boolean') {
-      const node = el('input');
-      node.type = 'checkbox';
-      node.checked = value === true || value === 'true';
-      return node;
-    }
-    if (field.type === 'text') return textarea(value === undefined ? '' : String(value), field.placeholder || '');
-    const node = M().textInput(value === undefined || value === null ? '' : String(value), field.placeholder || '', field.type === 'number' ? 'number' : field.type === 'secret' ? 'password' : 'text');
-    return node;
-  }
-
-  function presetEditor(baseName, preset, isNew) {
-    const base = (M().state.tools || []).find((tool) => tool.name === baseName);
-    const form = el('div', 'panel form');
-    form.oninput = markDirty;
-    form.append(el('h3', '', isNew ? `Preset ใหม่ของ ${baseName}` : `แก้ไข preset ${preset.name}`));
-    if (!base) {
-      form.append(el('p', 'hint', `ไม่พบเครื่องมือ "${baseName}" — อาจถูกลบไปแล้ว`));
-      return form;
-    }
-    form.append(el('p', 'hint', `จากเครื่องมือ ${base.name} (${base.risk}) · ${base.description}`));
-    const name = M().textInput(preset ? preset.name : '', 'เช่น manager_sheet');
-    const label = M().textInput(preset ? preset.label || '' : '', 'ชื่อที่โชว์ เช่น Manager Sheet');
-    const top = el('div', 'grid2');
-    top.append(M().labelled('ชื่อ (a-z 0-9 - _)', name), M().labelled('ชื่อที่แสดง', label));
-    const description = M().textInput(preset ? preset.description || '' : '', 'คำอธิบายแทนของเดิม (เว้นว่างได้)');
-    form.append(top, M().labelled('คำอธิบาย', description));
-
-    const fields = base.settings || [];
-    const nodes = [];
-    const secretSet = new Set(((M().state.toolSecretKeys || {})[preset ? preset.name : ''] || []));
-    if (fields.length > 0) {
-      form.append(el('h4', '', 'ค่าของเครื่องมือนี้'));
-      for (const field of fields) {
-        const current = preset && preset.settings ? preset.settings[field.key] : field.default;
-        const node = settingInput(field, current);
-        if (field.type === 'secret' && secretSet.has(field.key) && !node.value) {
-          node.placeholder = 'ตั้งไว้แล้ว · เว้นว่าง = คงค่าเดิม';
-        }
-        nodes.push([field, node]);
-        const labelNode = M().labelled(`${field.label || field.key}${field.required === false ? ' (ไม่บังคับ)' : ''}`, node);
-        if (field.description) labelNode.append(el('p', 'hint', field.description));
-        form.append(labelNode);
-      }
-      form.append(el('p', 'hint', 'ช่องที่เป็นความลับ (secret) เก็บในเครื่องนี้เท่านั้น (ไม่ sync)'));
-    } else {
-      form.append(el('p', 'hint', 'เครื่องมือนี้ไม่มีค่าตั้งต้น — preset จะเป็นชื่อเรียกอีกชื่อของเครื่องมือ'));
-    }
-
-    const foot = el('div', 'foot');
-    foot.append(el('span', 'msg'));
-    if (preset) {
-      const users = usersOf(preset.name);
-      if (users.length > 0) foot.append(el('span', 'hint', `ใช้โดย ${users.join(', ')}`));
-      foot.append(
-        button('btn danger', 'ลบ', () => {
-          if (confirm(`ลบ preset "${preset.name}" ?`)) {
-            M().send({ type: 'tool-preset-delete', name: preset.name });
-            sel = null;
-          }
-        }),
-      );
-    }
-    foot.append(
-      button('btn pri', 'บันทึก', () => {
-        if (!name.value.trim()) return M().toast('กรอกไม่ครบ', 'ต้องมีชื่อ preset', true);
-        const settings = {};
-        const secrets = {};
-        for (const [field, node] of nodes) {
-          if (field.type === 'secret') {
-            // Secrets go to the machine-local vault, never into the synced preset file.
-            if (node.value !== '') secrets[field.key] = node.value;
-          } else if (field.type === 'boolean') settings[field.key] = node.checked;
-          else if (node.value !== '') settings[field.key] = field.type === 'number' ? Number(node.value) : node.value;
-        }
-        M().send({
-          type: 'tool-preset-save',
-          renameFrom: preset ? preset.name : undefined,
-          ...(Object.keys(secrets).length > 0 ? { secrets } : {}),
-          preset: {
-            name: name.value.trim(),
-            tool: baseName,
-            ...(label.value.trim() ? { label: label.value.trim() } : {}),
-            ...(description.value.trim() ? { description: description.value.trim() } : {}),
-            settings,
-          },
-        });
-      }),
-    );
-    form.append(foot);
-    return form;
-  }
-
   // ---------- render ----------
   function editor() {
     if (!sel) {
       const panel = el('div', 'panel');
-      panel.append(el('h3', '', 'รายละเอียด'), el('p', 'hint', 'เลือกเครื่องมือหรือ preset ทางซ้าย หรือกด "+ เครื่องมือใหม่"'));
+      panel.append(el('h3', '', 'รายละเอียด'), el('p', 'hint', 'เลือก node หรือเครื่องมือทางซ้ายเพื่อดูรายละเอียด'));
       panel.append(
         el(
           'p',
@@ -528,6 +520,7 @@
       );
       return panel;
     }
+    if (sel.mode === 'node') return nodePanel(sel.type);
     if (sel.mode === 'mcp-new') return mcpEditor({ name: '', enabled: true, transport: 'stdio', tools: [] }, true);
     if (sel.mode === 'mcp') {
       const server = (M().state.toolMcp || []).find((entry) => entry.name === sel.name);
@@ -540,21 +533,12 @@
     if (sel.mode === 'custom-new') {
       return customEditor({ name: '', description: '', kind: 'http', params: [], settings: [], config: {} }, true);
     }
-    if (sel.mode === 'custom') {
-      const spec = (M().state.toolCustom || []).find((entry) => entry.name === sel.name);
-      if (!spec) {
-        sel = null;
-        return editor();
-      }
-      return customEditor(spec, false);
-    }
-    if (sel.mode === 'preset-new') return presetEditor(sel.base, null, true);
-    const preset = (M().state.toolPresets || []).find((entry) => entry.name === sel.name);
-    if (!preset) {
+    const spec = (M().state.toolCustom || []).find((entry) => entry.name === sel.name);
+    if (!spec) {
       sel = null;
       return editor();
     }
-    return presetEditor(sel.base || preset.tool, preset, false);
+    return customEditor(spec, false);
   }
 
   function render() {
@@ -565,20 +549,12 @@
   }
 
   function onMessage(message) {
-    const state = M().state;
     if (message.saved) {
       M().ui.toolDirty = false;
-      if ((message.custom || []).some((entry) => entry.name === message.saved)) {
-        sel = { mode: 'custom', name: message.saved };
-      } else {
-        const preset = (message.presets || []).find((entry) => entry.name === message.saved);
-        if (preset) sel = { mode: 'preset', name: preset.name, base: preset.tool };
-      }
+      if ((message.custom || []).some((entry) => entry.name === message.saved)) sel = { mode: 'custom', name: message.saved };
       return;
     }
-    // A refresh: drop a selection whose item is gone.
     if (sel && sel.mode === 'custom' && !(message.custom || []).some((entry) => entry.name === sel.name)) sel = null;
-    if (sel && sel.mode === 'preset' && !(message.presets || []).some((entry) => entry.name === sel.name)) sel = null;
     if (sel && sel.mode === 'mcp' && !(message.mcp || []).some((entry) => entry.name === sel.name)) sel = null;
   }
 

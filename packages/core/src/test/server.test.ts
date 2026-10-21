@@ -419,6 +419,18 @@ test('workflows: saved under an agent, fired by their webhook URL without a toke
   const refused = await client.waitFor((message): message is Extract<ServerMessage, { type: 'error' }> => message.type === 'error' && message.message.includes('ghost'));
   assert.match(refused.message, /agent "ghost" does not exist/);
 
+  // A tool node may choose whose tools it calls, and that agent must exist too.
+  client.send({
+    type: 'workflow-save',
+    workflow: {
+      ...workflow,
+      name: 'bad-tool',
+      nodes: [{ id: 'n1', type: 'tool', config: { tool: 'notify_user', agent: 'ghost' }, links: { main: [] } }],
+    },
+  });
+  const refusedTool = await client.waitFor((message): message is Extract<ServerMessage, { type: 'error' }> => message.type === 'error' && message.message.includes('ghost'));
+  assert.match(refusedTool.message, /agent "ghost" does not exist/);
+
   const bad = await fetch(`${booted.http}/api/workflow/nope`, { method: 'POST', body: '{}' });
   assert.equal(bad.status, 404);
   const response = await fetch(`${booted.http}${saved.webhook}`, {
@@ -463,6 +475,31 @@ test('workflows: saved under an agent, fired by their webhook URL without a toke
   assert.deepEqual(await reply.json(), { got: 'hello' });
   client.send({ type: 'workflow-delete', agent: 'mimi', name: 'answer' });
   await poll(() => (core.workflows.get('mimi', 'answer') === undefined ? true : undefined));
+
+  // An HTML form works too: GET query values and urlencoded POST values become items.
+  client.send({
+    type: 'workflow-save',
+    workflow: {
+      ...workflow,
+      name: 'form',
+      title: 'ฟอร์ม',
+      trigger: { pool: 'form', config: {} },
+      nodes: [{ id: 'n1', type: 'respond', config: { body: '{{ $json.name }}' }, links: { main: [] } }],
+    },
+  });
+  const form = await poll(() => core.workflows.get('mimi', 'form'));
+  const byGet = await fetch(`${booted.http}${form.webhook}?name=Ann`);
+  assert.equal(byGet.status, 200);
+  assert.equal(await byGet.text(), 'Ann');
+  const byForm = await fetch(`${booted.http}${form.webhook}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: 'name=Bob&email=bob%40example.com',
+  });
+  assert.equal(byForm.status, 200);
+  assert.equal(await byForm.text(), 'Bob');
+  client.send({ type: 'workflow-delete', agent: 'mimi', name: 'form' });
+  await poll(() => (core.workflows.get('mimi', 'form') === undefined ? true : undefined));
 
   client.send({ type: 'workflow-delete', agent: 'mimi', name: 'triage' });
   await poll(() => (core.workflows.get('mimi', 'triage') === undefined ? true : undefined));

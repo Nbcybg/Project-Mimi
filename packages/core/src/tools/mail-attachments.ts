@@ -1,8 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import type { GoogleAuth } from '../google/auth.ts';
-import type { MicrosoftAuth } from '../microsoft/auth.ts';
+import { googleAuthResolver, type GoogleAuthSource } from '../google/auth.ts';
+import { microsoftAuthResolver, type MicrosoftAuthSource } from '../microsoft/auth.ts';
+import { accountOf, accountSetting } from '../oauth/settings.ts';
 import { defineTool, type ToolDefinition } from './registry.ts';
 
 /**
@@ -63,16 +64,20 @@ interface GmailPart {
   parts?: GmailPart[];
 }
 
-export function createMailAttachmentTools(google: GoogleAuth, microsoft: MicrosoftAuth): ToolDefinition[] {
+export function createMailAttachmentTools(googleSource: GoogleAuthSource, microsoftSource: MicrosoftAuthSource): ToolDefinition[] {
+  const resolveGoogle = googleAuthResolver(googleSource);
+  const resolveMicrosoft = microsoftAuthResolver(microsoftSource);
   const gmail = defineTool({
     name: 'gmail_attachments',
     description: 'List the attachments of a Gmail message, or save them (save: true) into the allowed folder so read_document can read them (receipts, invoices, PDFs, images).',
     risk: 'write',
     target: 'core',
     untrustedInput: true,
+    settings: [accountSetting('google')],
     inputSchema: input,
     summarize: (args) => `${args.save ? 'Save' : 'List'} attachments of Gmail message ${args.id}`,
-    async execute(args, context) {
+    async execute(args, context, settings) {
+      const google = resolveGoogle(accountOf(settings));
       const base = 'https://gmail.googleapis.com/gmail/v1/users/me/messages';
       const message = await google.request<{ payload?: GmailPart }>(`${base}/${encodeURIComponent(args.id)}?format=full`);
       const attachments: Attachment[] = [];
@@ -106,9 +111,11 @@ export function createMailAttachmentTools(google: GoogleAuth, microsoft: Microso
     risk: 'write',
     target: 'core',
     untrustedInput: true,
+    settings: [accountSetting('microsoft')],
     inputSchema: input,
     summarize: (args) => `${args.save ? 'Save' : 'List'} attachments of Outlook message ${args.id}`,
-    async execute(args, context) {
+    async execute(args, context, settings) {
+      const microsoft = resolveMicrosoft(accountOf(settings));
       const list = await microsoft.request<{ value?: Array<{ id: string; name?: string; contentType?: string; size?: number; '@odata.type'?: string }> }>(
         `/me/messages/${encodeURIComponent(args.id)}/attachments?$select=id,name,contentType,size`,
       );

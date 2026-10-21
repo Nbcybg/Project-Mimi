@@ -119,6 +119,8 @@ export interface FakeModelsOptions {
   npm?: string;
   /** The chat models can see images (the catalog's image input). */
   imageInput?: boolean;
+  /** The catalog's input modalities for the chat models (text, image, audio, video, pdf). */
+  inputs?: string[];
   /** Models that make pictures / speech / video (generate_image, text_to_speech, generate_video). */
   media?: Partial<Record<MediaKind, unknown>>;
   /** Chat models for agents that set `model: test/<name>` in their file. */
@@ -146,6 +148,7 @@ export function fakeModels(options: FakeModelsOptions): ModelService {
       outputLimit: undefined,
       cost: TEST_COST,
       imageInput: ref.model !== 'small' && (options.imageInput ?? false),
+      inputs: ref.model === 'small' ? undefined : options.inputs,
       toolCall: true,
       options: {},
     }),

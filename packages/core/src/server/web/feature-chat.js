@@ -113,6 +113,7 @@
   function decorate(node, message) {
     if (!message.id) return;
     node.classList.add('hasbar');
+    node.tabIndex = 0;
     node.dataset.bar = message.id;
     const bar = el('div', 'msgbar');
     const love = button(`b${loved(message) ? ' on' : ''}`, loved(message) ? '❤️' : '🤍', () => react(message, LOVE), t('like'));

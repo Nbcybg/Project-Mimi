@@ -20,6 +20,9 @@ const CATALOG = new ModelCatalog({
       'chat-strong': { name: 'Chat Strong' },
       'eyes': { name: 'Eyes', modalities: { input: ['text', 'image'], output: ['text'] } },
       'ears': { name: 'Ears' },
+      'text-only': { name: 'Text Only', modalities: { input: ['text'], output: ['text'] } },
+      'painter': { name: 'Painter', type: 'image', modalities: { input: ['text'], output: ['image'] } },
+      'embedder': { name: 'Embedder', type: 'embedding', modalities: { input: ['text', 'image', 'audio'], output: ['text'] } },
     },
   },
 });
@@ -89,7 +92,11 @@ test('the app starts with no agents; they are created, edited, renamed and delet
   assert.ok(empty.tools.some((tool) => tool.name === 'run_shell' && tool.risk === 'shell'));
   const settings = (await client.ask({ type: 'settings-get' }, 'settings')).settings;
   assert.deepEqual({ agents: settings.agents, ready: settings.ready, chat: settings.defaults.model }, { agents: 0, ready: false, chat: 'lab/chat-cheap' });
-  assert.ok(settings.models.some((model) => model.ref === 'lab/eyes' && model.label.includes('[image]')));
+  const eyes = settings.models.find((model) => model.ref === 'lab/eyes')!;
+  assert.ok(eyes.label.includes('[image]'));
+  assert.deepEqual([eyes.input, eyes.output], [['text', 'image'], ['text']], 'what the model takes and makes');
+  const painter = settings.models.find((model) => model.ref === 'lab/painter')!;
+  assert.deepEqual([painter.type, painter.output], ['image', ['image']], 'models that make media are offered too');
 
   // One agent, a different model for each capability.
   const models = { model: 'lab/chat-cheap', vision_model: 'lab/eyes', transcript_model: 'lab/ears', small_model: 'lab/chat-cheap' };
@@ -141,6 +148,9 @@ test('the app starts with no agents; they are created, edited, renamed and delet
     assert.match((await client.ask({ type: 'agent-save', agent }, 'error')).message, pattern);
   };
   await refuse(draft({ name: 'x1', models: { vision_model: 'lab/no-such-model' } }), /Unknown model "lab\/no-such-model"/);
+  await refuse(draft({ name: 'x6', models: { vision_model: 'lab/text-only' } }), /does not take image \/ pdf \/ video input/);
+  await refuse(draft({ name: 'x7', models: { image_model: 'lab/text-only' } }), /does not produce image/);
+  await refuse(draft({ name: 'x8', models: { vision_model: 'lab/embedder' } }), /is not usable for "vision_model" \(type: embedding\)/);
   await refuse(draft({ name: 'x2', tools: ['no_such_tool'] }), /Unknown tool "no_such_tool"/);
   await refuse(draft({ name: 'x3', tools: ['gmail_read', 'run_shell'] }), /cannot have both "gmail_read".*"run_shell"/);
   await refuse(draft({ name: 'x4', canMessage: ['ghost'] }), /Agent "ghost" does not exist/);

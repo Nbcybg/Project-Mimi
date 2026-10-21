@@ -19,6 +19,7 @@ import { MessagesRepo } from './db/messages-repo.ts';
 import { ThreadRepo } from './db/thread-repo.ts';
 import { GoogleAuth } from './google/auth.ts';
 import { gmailListUnread, gmailMarkRead } from './google/tools.ts';
+import { OAuthAccounts } from './oauth/accounts.ts';
 import { type AgentLoopDeps, runAgent, type RunInput } from './loop/agent-loop.ts';
 import { buildPromptVars } from './loop/prompt-vars.ts';
 import { WardrobeStore } from './wardrobe/wardrobe-store.ts';
@@ -65,6 +66,7 @@ import { loadOrCreateVapid, type VapidKeys } from './notify/web-push.ts';
 import { Approvals } from './workflows/approvals.ts';
 import { ParkedRuns } from './workflows/parked-runs.ts';
 import { allowedPath, documentText, htmlToText, kindOfFile } from './workflows/file-nodes.ts';
+import { createWorkflowAuthorTools } from './workflows/author-tools.ts';
 import { createWorkflowTool, workflowToolCallers } from './workflows/workflow-tools.ts';
 import { WorkflowRunStore } from './workflows/run-history.ts';
 import { DEFAULT_TOKEN_SECRET, TelegramHub, type TelegramListener } from './workflows/telegram.ts';
@@ -84,6 +86,8 @@ export interface CoreListeners {
   chatChanged?: (chatId: number) => void;
   /** An agent message landed in a chat outside a turn and nobody notified the user about it yet. */
   agentPosted?: (chatId: number, agent: string, text: string) => void;
+  /** An agent created, changed or deleted one of its workflows. */
+  workflowChanged?: (id?: string) => void;
 }
 
 export interface CoreOptions {
@@ -177,6 +181,8 @@ export interface Core {
   clearWorkflowSchedule(id: string): void;
   google: GoogleAuth;
   microsoft: MicrosoftAuth;
+  /** Every OAuth account: list, add, connect, remove, choose the default. */
+  oauth: OAuthAccounts;
   compactor: Compactor;
   jobs: PostTurnJobs;
   mesh: MeshRouter;
@@ -308,8 +314,17 @@ export async function createCore(
     const names = agents.names();
     return names.includes(settings.default_agent) ? settings.default_agent : (names[0] ?? null);
   };
-  const google = GoogleAuth.fromEnv(process.env, config.googleTokenPath);
-  const microsoft = MicrosoftAuth.fromEnv(process.env, config.microsoftTokenPath);
+  const secrets = new SecretStore(config.secretsPath);
+  // Every OAuth account keeps its own client and refresh token; the old single-account
+  // credentials in the environment become an account once, on first start.
+  const oauth = new OAuthAccounts({
+    dir: config.oauthDir,
+    secrets,
+    env: process.env,
+    legacyTokenFiles: { google: config.googleTokenPath, microsoft: config.microsoftTokenPath },
+  });
+  const googleFor = (account?: string) => oauth.google(account);
+  const microsoftFor = (account?: string) => oauth.microsoft(account);
   const triggers = new TriggerStore(db, config.timezone);
   // The database schedules; the files under `triggers/` mirror it so a synced folder
   // carries reminders and webhooks to another machine.
@@ -420,8 +435,10 @@ export async function createCore(
     messages,
     triggers,
     agents,
-    google,
-    microsoft,
+    google: googleFor(),
+    microsoft: microsoftFor(),
+    googleFor,
+    microsoftFor,
     skills: currentSkills,
     chats,
     status,
@@ -429,7 +446,6 @@ export async function createCore(
     timezone: config.timezone,
   });
   const toolStore = new ToolStore(config.toolsDir);
-  const secrets = new SecretStore(config.secretsPath);
   const pcRunner = makePcRunner(options.pc, config.localPcTools);
   const mcp = new McpHub({
     pc: pcRunner,
@@ -540,7 +556,33 @@ export async function createCore(
       const flows = workflowsOfKind('tool')
         .filter((workflow) => workflowToolCallers(workflow).includes(agent.name))
         .map((workflow) => createWorkflowTool(workflow, (items) => runWorkflowWithHandler(workflow, items, 'tool')));
-      return [...(own.length > 0 ? [createUseSkillTool(own, runSkill)] : []), ...flows];
+      const authoring = createWorkflowAuthorTools({
+        agent: agent.name,
+        workflows,
+        triggerPool,
+        hasAgent: (name) => agents.names().includes(name),
+        hasTool: (name) => toolPool.get(name) !== undefined,
+        agentNames: () => agents.names(),
+        tools: () =>
+          toolPool.names().map((name) => {
+            const tool = toolPool.get(name);
+            return { name, description: tool?.description ?? '', risk: tool?.risk ?? 'read' };
+          }),
+        run: async (name, input) => {
+          const workflow = workflows.get(agent.name, name);
+          if (!workflow) throw new Error(`No workflow "${name}" for agent "${agent.name}".`);
+          const items = await triggerItems(workflow, triggerPool, workflowRunner, { input });
+          return runWorkflowWithHandler(workflow, items, triggerPool.get(workflow.trigger.pool)?.kind ?? 'manual');
+        },
+        changed: (id) => {
+          const [who, name] = id?.split('/') ?? [];
+          const saved = who && name ? workflows.get(who, name) : undefined;
+          if (id && saved) syncWorkflowSchedule(saved);
+          else if (id) clearWorkflowSchedule(id);
+          listeners.workflowChanged?.(id);
+        },
+      });
+      return [...(own.length > 0 ? [createUseSkillTool(own, runSkill)] : []), ...flows, ...authoring];
     },
   };
   mesh.attach((input) => runAgent(deps, input));
@@ -644,8 +686,8 @@ export async function createCore(
       return text;
     },
     mail: {
-      list: (source, query, max) => (source === 'google' ? gmailListUnread(google, query, max) : outlookListUnread(microsoft, query, max)),
-      markRead: (source, ids) => (source === 'google' ? gmailMarkRead(google, ids) : outlookMarkRead(microsoft, ids)),
+      list: (source, query, max, account) => (source === 'google' ? gmailListUnread(googleFor(account), query, max) : outlookListUnread(microsoftFor(account), query, max)),
+      markRead: (source, ids, account) => (source === 'google' ? gmailMarkRead(googleFor(account), ids) : outlookMarkRead(microsoftFor(account), ids)),
     },
     state: workflowState,
     allowedDirs: config.allowedDirs,
@@ -1107,7 +1149,8 @@ export async function createCore(
       if (asBoolean(workflow.trigger.config.markRead, true)) {
         try {
           const source = String(workflow.trigger.config.source ?? '') === 'microsoft' ? 'microsoft' : 'google';
-          await workflowRunner.mail.markRead(source, fresh.map((item) => String(item.json.Id ?? '')));
+          const account = String(workflow.trigger.config.account ?? '').trim() || undefined;
+          await workflowRunner.mail.markRead(source, fresh.map((item) => String(item.json.Id ?? '')), account);
         } catch {
           // leaving them unread is fine: seen() keeps them from being handled twice
         }
@@ -1230,8 +1273,13 @@ export async function createCore(
     testWorkflowNode: (workflow, node, input) => runWorkflowNode(workflow, node, input, workflowRunner),
     syncWorkflowSchedule,
     clearWorkflowSchedule,
-    google,
-    microsoft,
+    get google() {
+      return oauth.google();
+    },
+    get microsoft() {
+      return oauth.microsoft();
+    },
+    oauth,
     compactor,
     jobs,
     mesh,

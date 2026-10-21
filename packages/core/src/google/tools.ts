@@ -1,6 +1,7 @@
 import { z } from 'zod';
+import { accountOf, accountSetting } from '../oauth/settings.ts';
 import { defineTool, type ToolDefinition } from '../tools/registry.ts';
-import type { GoogleAuth } from './auth.ts';
+import { googleAuthResolver, type GoogleAuth, type GoogleAuthSource } from './auth.ts';
 
 const GMAIL = 'https://gmail.googleapis.com/gmail/v1/users/me';
 const CALENDAR = 'https://www.googleapis.com/calendar/v3/calendars/primary';
@@ -82,19 +83,24 @@ function eventLine(event: CalendarEvent): string {
  * Gmail and Google Calendar tools. Mail and invitations are written by other people, so
  * the reading tools are marked as untrusted input: an agent that has them cannot have a shell.
  */
-export function createGoogleTools(auth: GoogleAuth, timezone: string): ToolDefinition<any>[] {
+export function createGoogleTools(source: GoogleAuthSource, timezone: string): ToolDefinition<any>[] {
+  const resolve = googleAuthResolver(source);
+  const client = (settings?: { account?: unknown }) => resolve(accountOf(settings));
+
   const gmailSearch = defineTool({
     name: 'gmail_search',
     description: 'Search the user\'s Gmail with Gmail search syntax (e.g. "is:unread newer_than:2d", "from:bank"). Returns sender, subject, date and a snippet per message.',
     risk: 'read',
     target: 'core',
     untrustedInput: true,
+    settings: [accountSetting('google')],
     inputSchema: z.object({
       query: z.string().min(1),
       max_results: z.number().int().positive().max(20).optional(),
     }),
     summarize: (input) => `Search Gmail: ${input.query}`,
-    async execute(input) {
+    async execute(input, _context, settings) {
+      const auth = client(settings);
       const list = await auth.request<{ messages?: Array<{ id: string }> }>(
         `${GMAIL}/messages?q=${encodeURIComponent(input.query)}&maxResults=${input.max_results ?? 10}`,
       );
@@ -118,10 +124,11 @@ export function createGoogleTools(auth: GoogleAuth, timezone: string): ToolDefin
     risk: 'read',
     target: 'core',
     untrustedInput: true,
+    settings: [accountSetting('google')],
     inputSchema: z.object({ id: z.string().min(1) }),
     summarize: (input) => `Read Gmail message ${input.id}`,
-    async execute(input) {
-      const message = await auth.request<GmailMessage>(`${GMAIL}/messages/${encodeURIComponent(input.id)}?format=full`);
+    async execute(input, _context, settings) {
+      const message = await client(settings).request<GmailMessage>(`${GMAIL}/messages/${encodeURIComponent(input.id)}?format=full`);
       const body = bodyText(message.payload);
       const clipped = body.length > BODY_LIMIT ? `${body.slice(0, BODY_LIMIT)}\n[truncated: ${body.length - BODY_LIMIT} more characters]` : body;
       return `From: ${header(message, 'From')}\nTo: ${header(message, 'To')}\nDate: ${header(message, 'Date')}\nSubject: ${header(message, 'Subject')}\n\n${clipped || '(no text body)'}`;
@@ -133,6 +140,7 @@ export function createGoogleTools(auth: GoogleAuth, timezone: string): ToolDefin
     description: 'Send an e-mail from the user\'s Gmail account. Only when the user asked for it; state recipient, subject and body exactly.',
     risk: 'network',
     target: 'core',
+    settings: [accountSetting('google')],
     inputSchema: z.object({
       to: z.string().min(3).describe('Recipient address(es), comma separated'),
       subject: z.string().min(1),
@@ -140,8 +148,8 @@ export function createGoogleTools(auth: GoogleAuth, timezone: string): ToolDefin
       cc: z.string().optional(),
     }),
     summarize: (input) => `Send e-mail to ${input.to}: "${input.subject}"`,
-    async execute(input) {
-      const sent = await auth.request<{ id: string }>(`${GMAIL}/messages/send`, {
+    async execute(input, _context, settings) {
+      const sent = await client(settings).request<{ id: string }>(`${GMAIL}/messages/send`, {
         method: 'POST',
         body: { raw: buildRawEmail(input) },
       });
@@ -155,13 +163,14 @@ export function createGoogleTools(auth: GoogleAuth, timezone: string): ToolDefin
     risk: 'read',
     target: 'core',
     untrustedInput: true,
+    settings: [accountSetting('google')],
     inputSchema: z.object({
       from: z.string().min(1),
       to: z.string().min(1),
       max_results: z.number().int().positive().max(50).optional(),
     }),
     summarize: (input) => `List calendar ${input.from} to ${input.to}`,
-    async execute(input) {
+    async execute(input, _context, settings) {
       const params = new URLSearchParams({
         timeMin: new Date(input.from).toISOString(),
         timeMax: new Date(input.to).toISOString(),
@@ -169,7 +178,7 @@ export function createGoogleTools(auth: GoogleAuth, timezone: string): ToolDefin
         orderBy: 'startTime',
         maxResults: String(input.max_results ?? 20),
       });
-      const list = await auth.request<{ items?: CalendarEvent[] }>(`${CALENDAR}/events?${params}`);
+      const list = await client(settings).request<{ items?: CalendarEvent[] }>(`${CALENDAR}/events?${params}`);
       return list.items?.length ? list.items.map(eventLine).join('\n') : 'No events in that range.';
     },
   });
@@ -179,6 +188,7 @@ export function createGoogleTools(auth: GoogleAuth, timezone: string): ToolDefin
     description: `Create an event on the user's primary Google Calendar. Date-times need an offset (e.g. 2026-10-20T12:00:00+07:00); the calendar time zone is ${timezone}.`,
     risk: 'write',
     target: 'core',
+    settings: [accountSetting('google')],
     inputSchema: z.object({
       summary: z.string().min(1).describe('Event title'),
       start: z.string().min(1),
@@ -187,8 +197,8 @@ export function createGoogleTools(auth: GoogleAuth, timezone: string): ToolDefin
       description: z.string().optional(),
     }),
     summarize: (input) => `Create calendar event "${input.summary}" ${input.start} - ${input.end}`,
-    async execute(input) {
-      const event = await auth.request<CalendarEvent>(`${CALENDAR}/events`, {
+    async execute(input, _context, settings) {
+      const event = await client(settings).request<CalendarEvent>(`${CALENDAR}/events`, {
         method: 'POST',
         body: {
           summary: input.summary,

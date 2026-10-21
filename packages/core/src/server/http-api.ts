@@ -123,7 +123,22 @@ export async function handleHttpApi(
     // in the path is the credential, and it only exists while the trigger is active.
     if ((resource === 'webhook' || resource === 'workflow') && rest.length === 1) {
       if (!['POST', 'PUT', 'GET'].includes(request.method ?? '')) throw new HttpError(405, 'Method not allowed.');
-      const payload = request.method === 'GET' ? '' : (await readBody(request, MAX_WEBHOOK_BYTES)).toString('utf8');
+      let payload = '';
+      if (request.method === 'GET') {
+        // A GET webhook carries its values in the query string; `secret` is the credential, not data.
+        const values: Record<string, string> = {};
+        for (const [key, value] of url.searchParams) if (key !== 'secret') values[key] = value;
+        payload = JSON.stringify(values);
+      } else {
+        const raw = (await readBody(request, MAX_WEBHOOK_BYTES)).toString('utf8');
+        const type = String(request.headers['content-type'] ?? '').split(';')[0]!.trim().toLowerCase();
+        // HTML forms post urlencoded values, not JSON.
+        if (type === 'application/x-www-form-urlencoded') {
+          const values: Record<string, string> = {};
+          for (const [key, value] of new URLSearchParams(raw)) values[key] = value;
+          payload = JSON.stringify(values);
+        } else payload = raw;
+      }
       const header = request.headers['x-mimi-secret'];
       const secret = (Array.isArray(header) ? header[0] : header) ?? url.searchParams.get('secret') ?? undefined;
       const reply = await deps.webhook(rest[0]!, payload, secret);

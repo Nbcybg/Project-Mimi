@@ -139,7 +139,7 @@ export function createChatApi(context: ChatApiContext) {
       const forwardedFrom = row.forwardFrom ? { from: row.forwardFrom, chat: row.forwardChat ?? '' } : null;
       if (!text && tools.length === 0 && attachments.length === 0) continue;
       const approval = approvals.get(row.id) ?? null;
-      views.push({ id: row.id, role: row.role, agent: row.agent, text, createdAt: row.createdAt, attachments, tools, replyTo, forwardedFrom, approval, pinned: row.pinnedAt !== undefined, reactions: row.reactions ?? [] });
+      views.push({ id: row.id, role: row.role, agent: row.agent, text, speech: row.speech, createdAt: row.createdAt, attachments, tools, replyTo, forwardedFrom, approval, pinned: row.pinnedAt !== undefined, reactions: row.reactions ?? [] });
     }
     return views;
   };
@@ -277,6 +277,7 @@ export function createChatApi(context: ChatApiContext) {
       model: skill.model ?? '',
       tools: skill.tools,
       body: readSkillBody(skill),
+      ...(skill.builtin ? { builtin: true } : {}),
     }));
   const skillsMessage = (saved?: string): ServerMessage => ({ type: 'skills', skills: skillViews(), saved });
 

@@ -73,9 +73,10 @@ test('store: notes, switched-off nodes and pins are kept; bad notes are refused'
     const nodes = structuredClone(NODES);
     nodes[2]!.disabled = true;
     nodes[0]!.pinned = [{ a: 1 }];
-    store.save({ ...flow(nodes), notes: [{ id: 'note1', text: 'อธิบาย', position: [10, 20], color: 'yellow' }] });
+    store.save({ ...flow(nodes), notes: [{ id: 'note1', text: 'อธิบาย', position: [10, 20], color: 'yellow' }], triggerPosition: [12, 34] });
     const saved = store.get('mimi', 'w')!;
     assert.equal(saved.notes![0]!.text, 'อธิบาย');
+    assert.deepEqual(saved.triggerPosition, [12, 34]);
     assert.equal(saved.nodes[2]!.disabled, true);
     assert.deepEqual(saved.nodes[0]!.pinned, [{ a: 1 }]);
     assert.throws(() => store.save({ ...flow(nodes), notes: [{ id: 'BAD ID', text: '', position: [0, 0] }] }));

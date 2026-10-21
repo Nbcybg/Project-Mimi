@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { MessageRole } from '@mimi/shared';
@@ -20,6 +20,8 @@ export interface Attachment {
   size: number;
   /** What the models can read of the file: a description, a transcript or its text. */
   text: string;
+  /** SHA-256 of the bytes; the same file uploaded twice shares what the models read. */
+  hash: string | null;
   createdAt: string;
 }
 
@@ -31,6 +33,7 @@ interface AttachmentRow {
   mime: string;
   size: number;
   text: string;
+  hash: string | null;
   created_at: string;
 }
 
@@ -42,11 +45,14 @@ const toAttachment = (row: AttachmentRow): Attachment => ({
   mime: row.mime,
   size: row.size,
   text: row.text,
+  hash: row.hash,
   createdAt: row.created_at,
 });
 
 export const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 const TEXT_FILE_LIMIT = 60_000;
+/** Total text one user message may carry from its files; the full text stays on each attachment. */
+export const TOTAL_ATTACHMENT_CHARS = 120_000;
 const TEXT_EXTENSIONS = /\.(txt|md|markdown|csv|tsv|json|jsonl|ya?ml|xml|html?|css|js|mjs|cjs|ts|tsx|jsx|py|rb|go|rs|java|kt|c|h|cpp|cs|php|sh|ps1|bat|sql|ini|toml|env|log|srt|vtt)$/i;
 
 function kindOf(mime: string): AttachmentKind {
@@ -64,6 +70,22 @@ function isTextFile(attachment: Attachment): boolean {
   );
 }
 
+/** The type the bytes really are, when their signature is one we know. */
+export function sniffMime(data: Buffer, declared: string): string {
+  const ascii = (start: number, end: number) => data.subarray(start, end).toString('latin1');
+  if (ascii(0, 5) === '%PDF-') return 'application/pdf';
+  if (data.length >= 4 && data[0] === 0x89 && ascii(1, 4) === 'PNG') return 'image/png';
+  if (data.length >= 3 && data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff) return 'image/jpeg';
+  if (ascii(0, 4) === 'GIF8') return 'image/gif';
+  if (ascii(0, 4) === 'RIFF' && ascii(8, 12) === 'WEBP') return 'image/webp';
+  if (ascii(4, 8) === 'ftyp') {
+    const brand = ascii(8, 12);
+    if (['heic', 'heix', 'hevc', 'hevx', 'mif1', 'msf1'].includes(brand)) return 'image/heic';
+    if (['avif', 'avis'].includes(brand)) return 'image/avif';
+  }
+  return declared;
+}
+
 /** Files the user sent: the bytes live in a folder, everything else in the database. */
 export class AttachmentStore {
   private readonly db: Db;
@@ -78,15 +100,17 @@ export class AttachmentStore {
     if (file.data.length === 0) throw new Error('The file is empty.');
     if (file.data.length > MAX_ATTACHMENT_BYTES) throw new Error('The file is larger than 25 MB.');
     const id = randomUUID();
-    const mime = /^[\w.+-]+\/[\w.+-]+$/.test(file.mime) ? file.mime.toLowerCase() : 'application/octet-stream';
+    const declared = sniffMime(file.data, file.mime);
+    const mime = /^[\w.+-]+\/[\w.+-]+$/.test(declared) ? declared.toLowerCase() : 'application/octet-stream';
+    const hash = createHash('sha256').update(file.data).digest('hex');
     // Only the last path segment, without characters a file system or a header would trip over.
     const base = file.name.split(/[\\/]/).pop() ?? '';
     const name = base.replace(/[:*?"<>|\u0000-\u001f]/g, '_').trim().slice(0, 200) || 'file';
     fs.mkdirSync(this.dir, { recursive: true });
     fs.writeFileSync(path.join(this.dir, id), file.data);
     this.db
-      .prepare(`INSERT INTO attachments (id, kind, name, mime, size) VALUES (?, ?, ?, ?, ?)`)
-      .run(id, kindOf(mime), name, mime, file.data.length);
+      .prepare(`INSERT INTO attachments (id, kind, name, mime, size, hash) VALUES (?, ?, ?, ?, ?, ?)`)
+      .run(id, kindOf(mime), name, mime, file.data.length, hash);
     return this.get(id)!;
   }
 
@@ -106,6 +130,14 @@ export class AttachmentStore {
     this.db.prepare(`UPDATE attachments SET text = ? WHERE id = ?`).run(text, id);
   }
 
+  /** What another copy of the same bytes was already read as, if any. */
+  textOfHash(hash: string, excludeId: string): string | undefined {
+    const row = this.db
+      .prepare(`SELECT text FROM attachments WHERE hash = ? AND id <> ? AND text <> '' ORDER BY created_at LIMIT 1`)
+      .get(hash, excludeId) as { text: string } | undefined;
+    return row?.text;
+  }
+
   link(ids: string[], messageId: number): void {
     const update = this.db.prepare(`UPDATE attachments SET message_id = ? WHERE id = ?`);
     for (const id of ids) update.run(messageId, id);
@@ -120,8 +152,8 @@ export class AttachmentStore {
     fs.mkdirSync(this.dir, { recursive: true });
     fs.writeFileSync(path.join(this.dir, copy), data);
     this.db
-      .prepare(`INSERT INTO attachments (id, kind, name, mime, size, text) VALUES (?, ?, ?, ?, ?, ?)`)
-      .run(copy, source.kind, source.name, source.mime, source.size, source.text);
+      .prepare(`INSERT INTO attachments (id, kind, name, mime, size, text, hash) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+      .run(copy, source.kind, source.name, source.mime, source.size, source.text, source.hash);
     return copy;
   }
 
@@ -143,26 +175,57 @@ export class AttachmentStore {
   }
 
   /**
-   * The images of the given messages as they are, for a chat model that can see them.
-   * Only the newest `limit` images, so a long session does not resend every photo;
-   * older ones stay in the prompt as their description.
+   * Files of the given messages to hand to a chat model as they are, when the model can
+   * take them. Only the newest images and PDFs are chosen, within a byte budget, so a long
+   * session does not resend every file. The ids that are sent as bytes come back with the
+   * parts: their text description must not be duplicated in the prompt.
    */
-  imageParts(messageIds: number[], limit: number): Map<number, MediaPart[]> {
-    const parts = new Map<number, MediaPart[]>();
-    const images = [...this.forMessages(messageIds).values()]
-      .flat()
-      .filter((attachment) => attachment.kind === 'image' && MODEL_IMAGE.test(attachment.mime))
-      .sort((a, b) => a.messageId! - b.messageId! || a.createdAt.localeCompare(b.createdAt))
-      .slice(-limit);
-    for (const image of images) {
-      const data = this.read(image.id);
-      if (!data) continue;
-      const list = parts.get(image.messageId!) ?? [];
-      list.push({ type: 'file', data, mediaType: image.mime, filename: image.name });
-      parts.set(image.messageId!, list);
+  promptFiles(
+    messageIds: number[],
+    options: { images: number; pdfs: number; maxPdfBytes?: number },
+  ): Map<number, PromptFiles> {
+    const selected = new Map<number, PromptFiles>();
+    if (messageIds.length === 0 || (options.images <= 0 && options.pdfs <= 0)) return selected;
+    const byDate = (a: Attachment, b: Attachment) =>
+      a.messageId! - b.messageId! || a.createdAt.localeCompare(b.createdAt);
+    const all = [...this.forMessages(messageIds).values()].flat();
+    const chosen: Attachment[] = [];
+    if (options.images > 0) {
+      chosen.push(
+        ...all
+          .filter((attachment) => attachment.kind === 'image' && MODEL_IMAGE.test(attachment.mime))
+          .sort(byDate)
+          .slice(-options.images),
+      );
     }
-    return parts;
+    if (options.pdfs > 0) {
+      const budget = options.maxPdfBytes ?? MAX_PROMPT_PDF_BYTES;
+      let used = 0;
+      const pdfs: Attachment[] = [];
+      for (const attachment of all.filter(isPdfAttachment).sort(byDate).reverse()) {
+        if (pdfs.length >= options.pdfs) break;
+        if (used + attachment.size > budget) continue;
+        pdfs.push(attachment);
+        used += attachment.size;
+      }
+      chosen.push(...pdfs);
+    }
+    for (const attachment of chosen.sort(byDate)) {
+      const data = this.read(attachment.id);
+      if (!data) continue;
+      const entry = selected.get(attachment.messageId!) ?? { parts: [], stripIds: new Set<string>() };
+      entry.parts.push({ type: 'file', data, mediaType: attachment.mime, filename: attachment.name });
+      entry.stripIds.add(attachment.id);
+      selected.set(attachment.messageId!, entry);
+    }
+    return selected;
   }
+}
+
+/** What a chat model gets as bytes, plus the attachments whose text was already sent. */
+export interface PromptFiles {
+  parts: MediaPart[];
+  stripIds: Set<string>;
 }
 
 /** A file handed to a model as it is (not as its description). */
@@ -175,11 +238,42 @@ export interface MediaPart {
 
 /** Image formats every vision-capable chat model takes. */
 const MODEL_IMAGE = /^image\/(png|jpeg|webp|gif)$/;
+/** Newer PDFs are not sent as bytes; only their extracted text goes to the model. */
+const MAX_PROMPT_PDF_BYTES = 20 * 1024 * 1024;
+
+export function isPdfAttachment(attachment: Pick<Attachment, 'mime' | 'name'>): boolean {
+  return attachment.mime === 'application/pdf' || /\.pdf$/i.test(attachment.name);
+}
 
 /** How an attachment appears inside the user's message, for the models. */
-export function renderAttachment(attachment: Attachment): string {
-  const body = attachment.text.trim() || '(could not be read)';
+export function renderAttachment(attachment: Attachment, maxChars = 0): string {
+  const full = attachment.text.trim() || '(could not be read)';
+  const body =
+    maxChars > 0 && full.length > maxChars
+      ? `${full.slice(0, maxChars)}\n[file cut here: ${full.length - maxChars} more characters]`
+      : full;
   return `<attachment id="${attachment.id}" kind="${attachment.kind}" name="${attachment.name}">\n${body}\n</attachment>`;
+}
+
+/** Renders every file of one message, sharing a total budget fairly, so none is starved. */
+export function renderAttachments(files: Attachment[], totalChars = TOTAL_ATTACHMENT_CHARS): string[] {
+  if (files.length === 0) return [];
+  const each = Math.max(2_000, Math.min(TEXT_FILE_LIMIT, Math.floor(totalChars / files.length)));
+  return files.map((attachment) => renderAttachment(attachment, each));
+}
+
+/** A note left on a file when its model call failed; the next send tries again. */
+export function isUnreadableText(text: string): boolean {
+  return /^\(this \w+ could not be read:/.test(text);
+}
+
+/** Drops the blocks of attachments the model already receives as bytes. */
+export function stripAttachmentBlocks(text: string, ids: ReadonlySet<string>): string {
+  if (ids.size === 0) return text;
+  const names = [...ids].map((id) => id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+  return text
+    .replace(new RegExp(`\\n*<attachment id="(?:${names})"[^>]*>[\\s\\S]*?<\\/attachment>`, 'g'), '')
+    .trim();
 }
 
 /**
@@ -216,6 +310,21 @@ export const PROMPTS: Record<'image' | 'audio' | 'video' | 'pdf', string> = {
 
 /** Attachments being read right now, by id. */
 const reading = new Map<string, Promise<string>>();
+/** Files read at once: enough to hide latency, few enough to stay under provider limits. */
+const INGEST_CONCURRENCY = 3;
+
+async function mapLimit<T, R>(items: readonly T[], limit: number, run: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await run(items[index]!);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
 
 export interface IngestDeps {
   store: AttachmentStore;
@@ -233,28 +342,36 @@ export async function ingestAttachments(
   deps: IngestDeps,
   input: { ids: string[]; agent: AgentDefinition; traceId: string; signal?: AbortSignal },
 ): Promise<Attachment[]> {
-  const done: Attachment[] = [];
   for (const id of input.ids) {
-    const attachment = deps.store.get(id);
-    if (!attachment) throw new Error(`Unknown attachment "${id}". Upload it again.`);
-    if (!attachment.text) {
-      // A chat trigger and the agent may read the same file at once: one model call serves both.
-      let pending = reading.get(id);
+    if (!deps.store.get(id)) throw new Error(`Unknown attachment "${id}". Upload it again.`);
+  }
+  return mapLimit(input.ids, INGEST_CONCURRENCY, async (id) => {
+    const attachment = deps.store.get(id)!;
+    if (!attachment.text || isUnreadableText(attachment.text)) {
+      // One read serves every copy of the same bytes, and a chat trigger's copy too.
+      const key = attachment.hash ?? id;
+      let pending = reading.get(key);
       if (!pending) {
-        pending = readAttachment(deps, attachment, input)
-          .catch((error: Error) => `(this ${attachment.kind} could not be read: ${error.message})`)
+        const known = attachment.hash ? deps.store.textOfHash(attachment.hash, id) : undefined;
+        pending = (
+          known && !isUnreadableText(known)
+            ? Promise.resolve(known)
+            : readAttachment(deps, attachment, input).catch(
+                (error: Error) => `(this ${attachment.kind} could not be read: ${error.message})`,
+              )
+        )
           .then((text) => {
             deps.store.setText(id, text);
             return text;
           })
-          .finally(() => reading.delete(id));
-        reading.set(id, pending);
+          .finally(() => reading.delete(key));
+        reading.set(key, pending);
       }
-      await pending;
+      const text = await pending;
+      if (deps.store.get(id)!.text !== text) deps.store.setText(id, text);
     }
-    done.push(deps.store.get(id)!);
-  }
-  return done;
+    return deps.store.get(id)!;
+  });
 }
 
 async function readAttachment(
@@ -271,7 +388,7 @@ async function readAttachment(
       ? `${text.slice(0, TEXT_FILE_LIMIT)}\n[file cut here: ${text.length - TEXT_FILE_LIMIT} more characters]`
       : text;
   }
-  const isPdf = attachment.mime === 'application/pdf' || /\.pdf$/i.test(attachment.name);
+  const isPdf = isPdfAttachment(attachment);
   if (attachment.kind === 'file' && /\.xlsx$/i.test(attachment.name)) {
     const text = xlsxText(data);
     return text.length > TEXT_FILE_LIMIT ? `${text.slice(0, TEXT_FILE_LIMIT)}\n[sheet cut here: ${text.length - TEXT_FILE_LIMIT} more characters]` : text;

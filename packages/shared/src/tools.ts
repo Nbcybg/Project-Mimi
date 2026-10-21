@@ -8,7 +8,9 @@ export type ToolTarget = 'core' | 'pc';
 export interface ToolSettingField {
   key: string;
   label: string;
-  type: 'string' | 'number' | 'boolean' | 'secret' | 'text';
+  type: 'string' | 'number' | 'boolean' | 'secret' | 'text' | 'account';
+  /** For `account` settings: which OAuth accounts the dropdown offers. */
+  service?: import('./oauth.ts').OAuthService;
   description?: string;
   required?: boolean;
   placeholder?: string;

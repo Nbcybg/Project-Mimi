@@ -1,6 +1,7 @@
 import type { AgentEvent } from './events.ts';
 import type { MessageRole } from './messages.ts';
-import type { OAuthAccountInput, OAuthAccountView } from './oauth.ts';
+import type { ConnectorConnectionInput, ConnectorConnectionView, OAuthAccountInput, OAuthAccountView } from './oauth.ts';
+import type { ConnectorView } from './connectors.ts';
 import type { PermissionDecision, PermissionRequest } from './permissions.ts';
 import type { SpeechStyle } from './speech.ts';
 import type { CustomToolSpec, McpServerSpec, McpServerView, ToolPreset, ToolSettingField } from './tools.ts';
@@ -248,6 +249,18 @@ export interface ModelChoice {
   video_model?: string;
 }
 
+/** The built-in helper that sets up agents, tools, skills and workflows for the user. */
+export interface OverseerView {
+  name: string;
+  displayName: string;
+  /** True once a chat model was chosen and its provider is connected. */
+  configured: boolean;
+  /** The model string in `agent.md` (empty until chosen). */
+  model: string;
+  /** The provider of that model is connected on this machine. */
+  providerConnected: boolean;
+}
+
 /** An agent as the agent editor shows and saves it. */
 export interface AgentView {
   name: string;
@@ -301,6 +314,12 @@ export interface ToolView {
   presets?: string[];
   /** The MCP server the tool comes from. */
   mcp?: string;
+  /** For connector tools: the service key (`slack`). */
+  connector?: string;
+  /** For connector tools: the operation key (`send_message`). */
+  operation?: string;
+  /** Grouping label for Quick Work, e.g. "Slack". */
+  familyLabel?: string;
 }
 
 /** What the tools screen shows: the whole pool, the presets and the custom definitions. */
@@ -312,6 +331,10 @@ export interface ToolPoolView {
   secretKeys: Record<string, string[]>;
   /** MCP servers and the tools each one offers. */
   mcp?: McpServerView[];
+  /** Native connector specs and their credential state, for the service node and hub. */
+  connectors?: ConnectorView[];
+  /** Stored connector credentials (never their values). */
+  connections?: ConnectorConnectionView[];
 }
 
 import type { KnowledgeCollectionView, KnowledgeDocumentView, KnowledgeHit, UserProfileView, WardrobeOutfitView, BackgroundView, BackgroundSettingsView, GalleryItemView } from './knowledge.ts';
@@ -460,7 +483,21 @@ export type ClientMessage =
   | { type: 'oauth-account-remove'; id: string }
   | { type: 'oauth-account-default'; id: string }
   | { type: 'oauth-account-connect'; id: string }
+  /** Native connector connections (API key, bot token, PAT, OAuth2). */
+  | { type: 'connector-connections' }
+  | { type: 'connector-connection-save'; connection: ConnectorConnectionInput; id?: string }
+  | { type: 'connector-connection-remove'; id: string }
+  | { type: 'connector-connection-default'; id: string }
+  | { type: 'connector-connection-test'; connector: string; operation: string; input: Record<string, unknown>; account?: string }
+  /** Starts the generic OAuth2 authorization-code flow for a connection. */
+  | { type: 'connector-connection-connect'; id: string }
+  /** Loads choices for a select field (`optionsFrom`) by running a read operation. */
+  | { type: 'connector-operation-options'; reqId: number; connector: string; operation: string; labelField: string; valueField: string; input?: Record<string, unknown>; account?: string }
   | { type: 'agents-list' }
+  /** The built-in AI Overseer; created on first use. */
+  | { type: 'overseer-get' }
+  /** Chooses the model the Overseer runs on (its provider must be connected first). */
+  | { type: 'overseer-save'; model: string }
   /** Creates or replaces an agent. `renameFrom` is the old name when the name changed. */
   | { type: 'agent-save'; agent: AgentView; renameFrom?: string }
   | { type: 'agent-delete'; name: string }
@@ -617,8 +654,18 @@ export type ServerMessage =
   | { type: 'oauth-accounts'; accounts: OAuthAccountView[]; saved?: boolean }
   /** Sign-in link for one account; `accountId` tells the hub where to show it. */
   | { type: 'oauth-auth-url'; accountId: string; service: 'google' | 'microsoft'; url: string }
+  /** Connector connections plus the specs they belong to. */
+  | { type: 'connector-connections'; connections: ConnectorConnectionView[]; connectors: ConnectorView[]; saved?: boolean }
+  /** The provider page for a generic OAuth2 connection; the callback stores the tokens. */
+  | { type: 'connector-auth-url'; connectionId: string; url: string }
+  /** Result of testing one operation with stored credentials; never includes the credential. */
+  | { type: 'connector-test-result'; ok: boolean; message: string }
+  /** Options for a connector select field; values are opaque ids from the provider. */
+  | { type: 'connector-options'; reqId: number; ok: boolean; options: Array<{ value: string; label: string }>; error?: string }
   /** The agents, plus what the editor offers: tools and the effective default models. */
   | { type: 'agents'; agents: AgentView[]; tools: ToolView[]; defaultAgent: string | null; saved?: string }
+  /** The AI Overseer setup; `saved` after choosing its model. */
+  | { type: 'overseer'; overseer: OverseerView; saved?: boolean }
   | { type: 'memory'; entries: MemoryView[] }
   | { type: 'chats'; chats: ChatView[] }
   | {

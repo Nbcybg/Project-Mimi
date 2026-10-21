@@ -1,0 +1,165 @@
+import type { ConnectorField, ConnectorSpec } from '@mimi/shared';
+
+const owner: ConnectorField = { key: 'owner', label: 'Owner', type: 'string', required: true, placeholder: 'octocat' };
+const repo: ConnectorField = { key: 'repo', label: 'Repository', type: 'string', required: true, placeholder: 'hello-world' };
+
+export const githubConnector: ConnectorSpec = {
+  key: 'github',
+  label: 'GitHub',
+  category: 'developer',
+  description: 'อ่าน repo และจัดการ issue/comment ผ่าน GitHub REST API',
+  baseUrl: 'https://api.github.com',
+  auth: {
+    kind: 'apiKey',
+    fields: [
+      {
+        key: 'token',
+        label: 'Personal access token',
+        type: 'secret',
+        required: true,
+        placeholder: 'github_pat_…',
+        description: 'สร้างที่ GitHub → Settings → Developer settings → Personal access tokens',
+      },
+    ],
+    scopes: ['repo'],
+    extra: {
+      headers: {
+        accept: 'application/vnd.github+json',
+        'x-github-api-version': '2022-11-28',
+      },
+    },
+  },
+  operations: [
+    {
+      key: 'list_repos',
+      label: 'ดูรายชื่อ repo',
+      description: 'อ่าน repo ที่ token เข้าถึงได้',
+      method: 'GET',
+      path: '/user/repos',
+      risk: 'read',
+      untrustedInput: true,
+      fields: [
+        { key: 'per_page', label: 'จำนวน', type: 'number', required: false, default: 20 },
+        {
+          key: 'sort',
+          label: 'เรียงตาม',
+          type: 'select',
+          required: false,
+          default: 'updated',
+          options: [
+            { value: 'updated', label: 'อัปเดตล่าสุด' },
+            { value: 'created', label: 'สร้างล่าสุด' },
+            { value: 'pushed', label: 'push ล่าสุด' },
+            { value: 'full_name', label: 'ชื่อ' },
+          ],
+        },
+        {
+          key: 'visibility',
+          label: 'การมองเห็น',
+          type: 'select',
+          required: false,
+          options: [
+            { value: 'all', label: 'ทั้งหมด' },
+            { value: 'public', label: 'Public' },
+            { value: 'private', label: 'Private' },
+          ],
+        },
+      ],
+    },
+    {
+      key: 'get_file',
+      label: 'อ่านไฟล์',
+      description: 'อ่านไฟล์จาก repo (ข้อความเป็นข้อความจากบุคคลที่สาม)',
+      method: 'GET',
+      path: '/repos/{owner}/{repo}/contents/{path}',
+      risk: 'read',
+      untrustedInput: true,
+      fields: [owner, repo, { key: 'path', label: 'Path', type: 'string', required: true, placeholder: 'README.md' }, { key: 'ref', label: 'Branch/Tag', type: 'string', required: false }],
+    },
+    {
+      key: 'create_issue',
+      label: 'สร้าง issue',
+      description: 'เปิด issue ใหม่',
+      method: 'POST',
+      path: '/repos/{owner}/{repo}/issues',
+      risk: 'write',
+      body: { title: '{{title}}', body: '{{body}}', labels: '{{labels}}', assignees: '{{assignees}}' },
+      fields: [
+        owner,
+        repo,
+        { key: 'title', label: 'ชื่อ issue', type: 'string', required: true },
+        { key: 'body', label: 'รายละเอียด', type: 'string', required: false },
+        { key: 'labels', label: 'Labels (JSON array)', type: 'json', required: false },
+        { key: 'assignees', label: 'Assignees (JSON array)', type: 'json', required: false },
+      ],
+    },
+    {
+      key: 'list_issues',
+      label: 'ดูรายการ issue',
+      description: 'อ่าน issue ของ repo',
+      method: 'GET',
+      path: '/repos/{owner}/{repo}/issues',
+      risk: 'read',
+      untrustedInput: true,
+      fields: [
+        owner,
+        repo,
+        {
+          key: 'state',
+          label: 'สถานะ',
+          type: 'select',
+          required: false,
+          default: 'open',
+          options: [
+            { value: 'open', label: 'Open' },
+            { value: 'closed', label: 'Closed' },
+            { value: 'all', label: 'ทั้งหมด' },
+          ],
+        },
+        { key: 'per_page', label: 'จำนวน', type: 'number', required: false, default: 20 },
+      ],
+    },
+    {
+      key: 'create_comment',
+      label: 'แสดงความคิดเห็น',
+      description: 'เพิ่ม comment ใน issue',
+      method: 'POST',
+      path: '/repos/{owner}/{repo}/issues/{issueNumber}/comments',
+      risk: 'write',
+      body: { body: '{{body}}' },
+      fields: [
+        owner,
+        repo,
+        { key: 'issueNumber', label: 'Issue number', type: 'number', required: true },
+        { key: 'body', label: 'ข้อความ', type: 'string', required: true },
+      ],
+    },
+    {
+      key: 'update_issue',
+      label: 'แก้ไข issue',
+      description: 'เปลี่ยนชื่อ รายละเอียด หรือสถานะ issue',
+      method: 'PATCH',
+      path: '/repos/{owner}/{repo}/issues/{issueNumber}',
+      risk: 'write',
+      body: { title: '{{title}}', body: '{{body}}', state: '{{state}}' },
+      fields: [
+        owner,
+        repo,
+        { key: 'issueNumber', label: 'Issue number', type: 'number', required: true },
+        { key: 'title', label: 'ชื่อใหม่', type: 'string', required: false },
+        { key: 'body', label: 'รายละเอียดใหม่', type: 'string', required: false },
+        {
+          key: 'state',
+          label: 'สถานะ',
+          type: 'select',
+          required: false,
+          options: [
+            { value: 'open', label: 'Open' },
+            { value: 'closed', label: 'Closed' },
+          ],
+        },
+      ],
+    },
+  ],
+  pagination: { mode: 'page', cursorParam: 'page', sizeParam: 'per_page', itemsPath: '' },
+};

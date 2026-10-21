@@ -182,3 +182,50 @@ test('skills: workflow-builder ships built in, and a user file overrides it', ()
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('author tools: a target-aware caller can work on another agent\'s workflows', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mimi-author-target-'));
+  const workflows = new WorkflowStore(path.join(root, 'workflows'));
+  const triggerPool = new TriggerPool(path.join(root, 'pool'));
+  const runs: Array<{ agent: string; name: string; input?: JsonValue }> = [];
+  const deps: WorkflowAuthorDeps = {
+    agent: 'overseer',
+    allowTarget: true,
+    workflows,
+    triggerPool,
+    hasAgent: (name) => ['overseer', 'mimi', 'tim'].includes(name),
+    hasTool: (name) => name === 'web_search',
+    agentNames: () => ['overseer', 'mimi', 'tim'],
+    tools: () => [{ name: 'web_search', description: 'Search the web.', risk: 'read' }],
+    run: async () => {
+      throw new Error('the owning agent call should not run');
+    },
+    runFor: async (agent, name, input) => {
+      runs.push({ agent, name, input });
+      return { name, ok: true, result: 'done', nodes: [] } satisfies WorkflowRunResult;
+    },
+    changed: () => {},
+  };
+  const tools = createWorkflowAuthorTools(deps);
+  const tool = (name: string) => tools.find((entry) => entry.name === name)!;
+  const context = { traceId: 't', thread: 'overseer', agent: 'overseer', allowedDirs: [] } satisfies ToolContext;
+  try {
+    const saved = String(await tool('workflow_save').execute({ agent: 'tim', workflow: draft }, context));
+    assert.match(saved, /agent "tim"/);
+    assert.equal(workflows.get('tim', 'daily-report')!.agent, 'tim');
+    assert.equal(workflows.get('overseer', 'daily-report'), undefined);
+
+    const listed = String(await tool('workflow_list').execute({ agent: 'tim' }, context));
+    assert.match(listed, /daily-report/);
+    assert.match(String(await tool('workflow_get').execute({ agent: 'tim', name: 'daily-report' }, context)), /"agent": "tim"/);
+
+    await tool('workflow_run').execute({ agent: 'tim', name: 'daily-report', input: '{"x":1}' }, context);
+    assert.deepEqual(runs, [{ agent: 'tim', name: 'daily-report', input: { x: 1 } }]);
+
+    await assert.rejects(tool('workflow_save').execute({ agent: 'nobody', workflow: draft }, context), /Unknown agent "nobody"/);
+    await tool('workflow_delete').execute({ agent: 'tim', name: 'daily-report' }, context);
+    assert.equal(workflows.get('tim', 'daily-report'), undefined);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

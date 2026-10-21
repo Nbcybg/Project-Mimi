@@ -32,7 +32,7 @@
     { label: 'ข้อมูล', types: ['set', 'datetime', 'split_out', 'sort', 'limit', 'aggregate', 'remove_duplicates', 'code'] },
     { label: 'ไฟล์', types: ['file', 'extract_file', 'sheets'] },
     { label: 'วน / รอ', types: ['loop', 'workflow', 'wait', 'stop', 'approval'] },
-    { label: 'เชื่อมต่อ', types: ['http', 'tool', 'chat', 'telegram', 'respond'] },
+    { label: 'เชื่อมต่อ', types: ['connector', 'http', 'tool', 'chat', 'telegram', 'respond'] },
   ];
   const OPERATORS = ['equals', 'not_equals', 'contains', 'not_contains', 'starts_with', 'ends_with', 'regex', 'gt', 'lt', 'gte', 'lte', 'is_empty', 'is_not_empty', 'is_true', 'is_false'];
 
@@ -62,6 +62,10 @@
   let nodeTest = null;
   /** How many stored runs the history list shows. */
   let historyShown = 12;
+  /** Options loaded for connector select fields, keyed by service/operation/input. */
+  const connectorOptionCache = new Map();
+  const connectorOptionCallbacks = new Map();
+  let connectorOptionSeq = 0;
 
   // ---------- undo / redo: whole-draft snapshots, taken after each change ----------
   let past = [];
@@ -347,6 +351,15 @@
       const titleInput = card.querySelector('.wtitle');
       if (titleInput) node.title = titleInput.value;
       for (const field of card.querySelectorAll('[data-field]')) node.config[field.dataset.field] = fieldValue(field);
+      const connectorInputs = card.querySelectorAll('[data-connector-field]');
+      if (connectorInputs.length > 0) {
+        const input = {};
+        for (const field of connectorInputs) {
+          const value = fieldValue(field);
+          if (value !== undefined && value !== '') input[field.dataset.connectorField] = value;
+        }
+        node.config.input = input;
+      }
       for (const field of card.querySelectorAll('[data-nodefield]')) node[field.dataset.nodefield] = fieldValue(field);
       // Links are edited on the draft directly (see linkGridFor), so there is nothing to read here.
     }
@@ -371,7 +384,64 @@
     return field.value;
   }
 
+  function connectorOptionsField(field, value, node) {
+    const input = el('input');
+    input.value = value === undefined || value === null ? '' : String(value);
+    input.placeholder = field.placeholder || 'พิมพ์ค่า หรือเลือกจากรายการ';
+    const list = el('datalist');
+    const listId = `connector-options-${++connectorOptionSeq}`;
+    list.id = listId;
+    input.setAttribute('list', listId);
+    document.body.append(list);
+    const fill = (options) => {
+      list.replaceChildren();
+      for (const option of options) {
+        const item = el('option');
+        item.value = option.value;
+        item.label = option.label;
+        list.append(item);
+      }
+    };
+    const payload = { ...(node.config.input || {}) };
+    const dependsOn = field.optionsFrom.dependsOn || [];
+    const missing = dependsOn.filter((key) => payload[key] === undefined || payload[key] === '');
+    if (missing.length > 0) {
+      input.placeholder = `เลือก ${missing.join(', ')} ก่อน หรือพิมพ์ค่าเอง`;
+      return input;
+    }
+    const cacheKey = [field.optionsFrom.connector, field.optionsFrom.operation, JSON.stringify(payload), node.config.account || ''].join('|');
+    const cached = connectorOptionCache.get(cacheKey);
+    if (cached) {
+      fill(cached);
+      return input;
+    }
+    input.placeholder = 'กำลังโหลดตัวเลือก… (พิมพ์ค่าเองได้)';
+    const reqId = ++connectorOptionSeq;
+    connectorOptionCallbacks.set(reqId, (message) => {
+      if (!input.isConnected) return;
+      if (!message.ok) {
+        input.placeholder = 'โหลดตัวเลือกไม่ได้ — พิมพ์ค่าเอง';
+        return;
+      }
+      connectorOptionCache.set(cacheKey, message.options);
+      fill(message.options);
+      input.placeholder = field.placeholder || 'พิมพ์ค่า หรือเลือกจากรายการ';
+    });
+    M().send({
+      type: 'connector-operation-options',
+      reqId,
+      connector: field.optionsFrom.connector,
+      operation: field.optionsFrom.operation,
+      labelField: field.optionsFrom.labelField,
+      valueField: field.optionsFrom.valueField,
+      input: payload,
+      ...(node.config.account ? { account: node.config.account } : {}),
+    });
+    return input;
+  }
+
   function fieldInput(field, value, node) {
+    if (field.connectorInput && field.optionsFrom) return connectorOptionsField(field, value, node);
     if (field.key === 'conditions') return conditionsField(field, value, node);
     if (field.key === 'cases' && node && node.type === 'switch') return switchCasesField(field, value, node);
     if (field.key === 'categories' && node) {
@@ -424,7 +494,14 @@
         '— บัญชีเริ่มต้น —',
       );
     } else if (Array.isArray(field.options)) {
-      node_ = selectOf(field.options.map((option) => [option, option]), String(value ?? field.options[0] ?? ''));
+      node_ = selectOf(
+        field.options.map((option) => {
+          if (Array.isArray(option)) return [option[0], option[1] ?? option[0]];
+          if (option && typeof option === 'object') return [option.value, option.label || option.value];
+          return [option, option];
+        }),
+        String(value ?? (Array.isArray(field.options[0]) ? field.options[0][0] : field.options[0]?.value ?? field.options[0]) ?? ''),
+      );
     } else if (field.key === 'workflow') {
       const options = (M().state.workflows || [])
         .filter((entry) => entry.agent === draft.agent && entry.name !== draft.name)
@@ -448,6 +525,12 @@
       );
     } else if (field.key === 'operator') {
       node_ = selectOf(OPERATORS.map((op) => [op, op]), String(value ?? 'contains'));
+    } else if (field.type === 'secret') {
+      node_ = el('input');
+      node_.type = 'password';
+      node_.autocomplete = 'new-password';
+      node_.value = value === undefined || value === null ? '' : String(value);
+      node_.placeholder = field.placeholder || '';
     } else {
       node_ = M().textInput(value === undefined || value === null ? '' : String(value), field.placeholder || '');
     }
@@ -1072,8 +1155,78 @@
     return box;
   }
 
+  /** Service + operation + the fields of that operation; credentials stay in the connection. */
+  function connectorFieldsOf(node) {
+    const config = node.config || {};
+    const connectors = M().state.connectors || [];
+    const connector = connectors.find((entry) => entry.key === config.connector) || connectors[0];
+    const fields = [
+      {
+        key: 'connector',
+        label: 'Service',
+        type: 'string',
+        required: true,
+        options: connectors.map((entry) => entry.key),
+        description: connector ? connector.description : 'ยังไม่มี connector ที่ติดตั้ง',
+      },
+    ];
+    if (!connector) return fields;
+    const operationKey = config.operation || connector.operations[0]?.key || '';
+    fields.push({
+      key: 'operation',
+      label: 'Operation',
+      type: 'string',
+      required: true,
+      options: connector.operations.map((entry) => entry.key),
+      description: connector.operations.find((entry) => entry.key === operationKey)?.description,
+    });
+    if (connector.key.startsWith('google_')) {
+      fields.push({
+        key: 'account',
+        label: 'บัญชี Google',
+        type: 'account',
+        service: 'google',
+        description: 'เว้นว่าง = บัญชี Google เริ่มต้น',
+      });
+    } else {
+      const connections = (M().state.connections || []).filter((entry) => entry.connector === connector.key);
+      fields.push({
+        key: 'account',
+        label: 'Connection',
+        type: 'string',
+        options: [['', '— connection เริ่มต้น —'], ...connections.map((entry) => [entry.id, `${entry.name}${entry.default ? ' ★' : ''}${entry.connected ? '' : ' (ยังไม่เชื่อมต่อ)'}`])],
+        description: connections.length === 0 ? 'ยังไม่มี connection — เพิ่มได้ที่ Hub → บัญชี' : undefined,
+      });
+    }
+    const operation = connector.operations.find((entry) => entry.key === operationKey);
+    for (const field of operation ? operation.fields : []) {
+      fields.push({
+        ...field,
+        connectorInput: true,
+        ...(field.type === 'select' && Array.isArray(field.options)
+          ? { options: field.options.map((option) => ({ value: option.value, label: option.label })) }
+          : {}),
+      });
+    }
+    if (operation && operation.risk !== 'read') {
+      fields.push({
+        key: 'allow',
+        label: 'อนุญาตให้ทำงานนี้ (write/delete)',
+        type: 'boolean',
+        description: 'ต้องเปิดเพื่อให้ workflow เรียก operation นี้ได้',
+      });
+    }
+    return fields;
+  }
+
+  function connectorOperationOf(node) {
+    const connector = (M().state.connectors || []).find((entry) => entry.key === node.config?.connector);
+    return connector?.operations.find((entry) => entry.key === node.config?.operation);
+  }
+
   /** A custom trigger node edits the chosen pool's fields, plus the pool name itself. */
   function fieldsOfNode(node) {
+    if (node.type === 'connector') return connectorFieldsOf(node);
     const spec = specOf(node.type);
     if (node.type !== 'trigger_custom') return spec ? spec.fields : [];
     const custom = pool().filter((entry) => !entry.builtin);
@@ -1142,7 +1295,19 @@
 
     for (const field of fieldsOfNode(node)) {
       if (!fieldVisible(node, field)) continue;
-      const input = fieldInput(field, node.config[field.key], node);
+      const initial = field.connectorInput ? (node.config.input || {})[field.key] : node.config[field.key];
+      const input = fieldInput(field, initial, node);
+      if (field.connectorInput) {
+        input.dataset.connectorField = field.key;
+        delete input.dataset.field;
+        input.addEventListener('change', () => {
+          const operation = connectorOperationOf(node);
+          if (operation?.fields.some((entry) => entry.optionsFrom?.dependsOn?.includes(field.key))) {
+            sync();
+            showEditor();
+          }
+        });
+      }
       const label = M().labelled(`${field.label}${field.required ? ' *' : ''}`, input);
       if (pickable(field, input)) {
         exprAssist(input, node);
@@ -1161,6 +1326,7 @@
       datetime: ['operation'],
       file: ['operation', 'source'],
       extract_file: ['type'],
+      connector: ['connector', 'operation'],
     };
     for (const key of controllingFields[node.type] || []) {
       const control = card.querySelector(`[data-field="${key}"]`);
@@ -1168,6 +1334,15 @@
         control.onchange = () => {
           sync();
           // Switch cases are plain values in "value" mode and conditions in "rules" mode.
+          if (node.type === 'connector') {
+            if (key === 'connector') {
+              const selected = (M().state.connectors || []).find((entry) => entry.key === control.value);
+              node.config.operation = selected?.operations[0]?.key || '';
+              node.config.input = {};
+            } else if (key === 'operation') {
+              node.config.input = {};
+            }
+          }
           if (node.type === 'switch' && key === 'mode') {
             const cases = Array.isArray(node.config.cases) ? node.config.cases : [];
             const isObject = (entry) => entry && typeof entry === 'object' && !Array.isArray(entry);
@@ -1491,6 +1666,10 @@
   function defaultConfig(type) {
     const config = {};
     if (type === 'agent') config.agent = draft.agent;
+    if (type === 'connector') {
+      const first = (M().state.connectors || [])[0];
+      Object.assign(config, { connector: first?.key || '', operation: first?.operations[0]?.key || '', input: {} });
+    }
     if (type === 'trigger_custom') config.pool = pool().find((entry) => !entry.builtin)?.name || '';
     if (type === 'llm') Object.assign(config, { format: 'text', name: 'text', prompt: '{{ $json.text }}' });
     if (type === 'classify') Object.assign(config, { input: '{{ $json.text }}', categories: [] });
@@ -1790,6 +1969,7 @@
 
   function showEditor() {
     if (!draft) return;
+    if (!M().state.connections) M().send({ type: 'connector-connections' });
     if (mode === 'canvas') return showCanvasEditor();
     canvasApi = null;
     const dialog = el('div', 'dialog wfedit form');
@@ -2043,6 +2223,12 @@
   }
 
   function onMessage(message) {
+    if (message.type === 'connector-options') {
+      const callback = connectorOptionCallbacks.get(message.reqId);
+      connectorOptionCallbacks.delete(message.reqId);
+      if (callback) callback(message);
+      return;
+    }
     if (message.saved && draft) {
       const saved = (message.workflows || []).find((workflow) => `${workflow.agent}/${workflow.name}` === message.saved);
       if (saved && draft.name === saved.name && draft.agent === saved.agent) {
@@ -2180,6 +2366,10 @@
     showImport();
   }
 
-  window.MimiHooks.agentWorkflows = { render, onMessage, onResult, onNodeResult, onRuns, onRunRecord, onImport, onExprPreview };
+  window.MimiHooks.agentWorkflows = { render, onMessage, onConnections: () => {
+    if (!draft) return;
+    sync();
+    showEditor();
+  }, onResult, onNodeResult, onRuns, onRunRecord, onImport, onExprPreview };
   window.MimiHooks.workflows = window.MimiHooks.agentWorkflows;
 })();

@@ -1,0 +1,104 @@
+{
+  "metadata": {
+    "version": 2
+  },
+  "zaps": [
+    {
+      "id": 1,
+      "title": "Lead intake",
+      "enabled": true,
+      "nodes": {
+        "1": {
+          "id": 1,
+          "type_of": "read",
+          "action": "catch_hook",
+          "selected_api": "WebHookAPI",
+          "authentication_id": null,
+          "parent_id": null,
+          "root_id": null,
+          "params": {},
+          "meta": {}
+        },
+        "2": {
+          "id": 2,
+          "type_of": "write",
+          "action": "append_row",
+          "selected_api": "GoogleSheetsV2API",
+          "authentication_id": "123456",
+          "parent_id": 1,
+          "root_id": 1,
+          "params": {
+            "spreadsheet": "sheet-demo",
+            "worksheet": "Leads",
+            "values": {
+              "email": "{{1__email}}",
+              "name": "{{1__name}}"
+            }
+          },
+          "meta": {}
+        },
+        "3": {
+          "id": 3,
+          "type_of": "filter",
+          "action": "filter",
+          "selected_api": "FilterAPI",
+          "authentication_id": null,
+          "parent_id": 2,
+          "root_id": 1,
+          "params": {
+            "filter_criteria": [
+              {
+                "key": "1__email",
+                "value": "",
+                "match": "iexist",
+                "action": "continue"
+              }
+            ]
+          },
+          "meta": {}
+        },
+        "4": {
+          "id": 4,
+          "type_of": "write",
+          "action": "channel_message",
+          "selected_api": "SlackAPI",
+          "authentication_id": "-",
+          "parent_id": 3,
+          "root_id": 1,
+          "params": {
+            "channel": "#leads",
+            "text": "New lead: {{1__name}}"
+          },
+          "meta": {}
+        },
+        "5": {
+          "id": 5,
+          "type_of": "write",
+          "action": "run_python",
+          "selected_api": "CodeAPI",
+          "authentication_id": null,
+          "parent_id": 4,
+          "root_id": 1,
+          "params": {
+            "code": "return {'ok': True}"
+          },
+          "meta": {}
+        },
+        "6": {
+          "id": 6,
+          "type_of": "write",
+          "action": "create_record",
+          "selected_api": "AirtableAPI",
+          "authentication_id": "987654",
+          "parent_id": 5,
+          "root_id": 1,
+          "params": {
+            "base": "app-demo",
+            "table": "Leads"
+          },
+          "meta": {}
+        }
+      }
+    }
+  ]
+}

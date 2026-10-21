@@ -17,6 +17,7 @@ const NODE_TYPES = [
   'code',
   'http',
   'tool',
+  'connector',
   'filter',
   'sort',
   'limit',

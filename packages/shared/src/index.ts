@@ -1,3 +1,4 @@
+export * from './connectors.ts';
 export * from './events.ts';
 export * from './knowledge.ts';
 export * from './messages.ts';

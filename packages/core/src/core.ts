@@ -2,13 +2,18 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { embedMany, generateText } from 'ai';
-import type { AgentEvent, HistoryMessage, Notification, WorkflowRunResult } from '@mimi/shared';
+import type { AgentEvent, ConnectorRuntime, HistoryMessage, Notification, WorkflowRunResult } from '@mimi/shared';
 import { AgentCatalog } from './agents/loader.ts';
 import type { AppSettings } from './app/app-settings.ts';
 import { SecretStore } from './app/secrets.ts';
 import { type AttachmentKind, AttachmentStore, ingestAttachments, MAX_ATTACHMENT_BYTES, PROMPTS } from './chat/attachments.ts';
 import { ChatStore } from './chat/chat-store.ts';
 import { ChatEngine } from './chat/engine.ts';
+import { ConnectorRegistry } from './connectors/registry.ts';
+import { ConnectorRuntimeImpl } from './connectors/runtime.ts';
+import { connectorSpecs } from './connectors/services/index.ts';
+import { connectorTools } from './connectors/tool-adapter.ts';
+import type { ConnectorAuthResolver } from './connectors/types.ts';
 import { FileSnapshots, SnapshotExecutor } from './chat/file-snapshots.ts';
 import { HistoryFiles } from './chat/history-files.ts';
 import { SessionFiles } from './chat/session-files.ts';
@@ -20,6 +25,7 @@ import { ThreadRepo } from './db/thread-repo.ts';
 import { GoogleAuth } from './google/auth.ts';
 import { gmailListUnread, gmailMarkRead } from './google/tools.ts';
 import { OAuthAccounts } from './oauth/accounts.ts';
+import { ConnectorConnections } from './oauth/connections.ts';
 import { type AgentLoopDeps, runAgent, type RunInput } from './loop/agent-loop.ts';
 import { buildPromptVars } from './loop/prompt-vars.ts';
 import { WardrobeStore } from './wardrobe/wardrobe-store.ts';
@@ -63,6 +69,8 @@ import { KnowledgeStore } from './knowledge/store.ts';
 import { UserProfileStore } from './profile/user-profile.ts';
 import { NotificationCenter } from './notify/notifications.ts';
 import { loadOrCreateVapid, type VapidKeys } from './notify/web-push.ts';
+import { OVERSEER_NAME } from './overseer/overseer.ts';
+import { createOverseerTools } from './overseer/tools.ts';
 import { Approvals } from './workflows/approvals.ts';
 import { ParkedRuns } from './workflows/parked-runs.ts';
 import { allowedPath, documentText, htmlToText, kindOfFile } from './workflows/file-nodes.ts';
@@ -88,6 +96,12 @@ export interface CoreListeners {
   agentPosted?: (chatId: number, agent: string, text: string) => void;
   /** An agent created, changed or deleted one of its workflows. */
   workflowChanged?: (id?: string) => void;
+  /** An agent file was created or changed (by the Overseer or another tool). */
+  agentsChanged?: (name?: string) => void;
+  /** A custom tool or preset was added, changed or removed. */
+  toolsChanged?: () => void;
+  /** A skill file was added, changed or removed. */
+  skillsChanged?: () => void;
 }
 
 export interface CoreOptions {
@@ -129,6 +143,8 @@ export interface Core {
   skills(): Skill[];
   /** The tool pool: built-in tools, custom tools and their presets. */
   tools: ToolPool;
+  /** Native connector specs and calls (Slack in Phase 0). */
+  connectors: ConnectorRuntime;
   /** API keys entered in the app; machine-local. */
   secrets: SecretStore;
   /** Workflows and their schedules. */
@@ -183,6 +199,8 @@ export interface Core {
   microsoft: MicrosoftAuth;
   /** Every OAuth account: list, add, connect, remove, choose the default. */
   oauth: OAuthAccounts;
+  /** Native connector credentials (API key, bot token, PAT and OAuth2 refresh). */
+  connections: ConnectorConnections;
   compactor: Compactor;
   jobs: PostTurnJobs;
   mesh: MeshRouter;
@@ -309,10 +327,12 @@ export async function createCore(
   mirror(() => sessionFiles.sync(chats));
   mirror(() => historyFiles.sync(messages));
   const idleMs = settings.session.idle_minutes * 60_000;
-  /** The agent that answers when a client names none: the configured one, else the first that exists. */
+  /** The agent that answers when a client names none: the configured one, else the first normal agent. */
   const defaultAgentName = (): string | null => {
     const names = agents.names();
-    return names.includes(settings.default_agent) ? settings.default_agent : (names[0] ?? null);
+    const normal = names.filter((name) => name !== OVERSEER_NAME);
+    if (settings.default_agent !== OVERSEER_NAME && names.includes(settings.default_agent)) return settings.default_agent;
+    return normal[0] ?? (names.includes(OVERSEER_NAME) ? OVERSEER_NAME : null);
   };
   const secrets = new SecretStore(config.secretsPath);
   // Every OAuth account keeps its own client and refresh token; the old single-account
@@ -408,6 +428,22 @@ export async function createCore(
     }
   };
 
+  const connectorRegistry = new ConnectorRegistry(connectorSpecs);
+  const connections = new ConnectorConnections({ dir: config.oauthDir, registry: connectorRegistry, secrets });
+  // Google connectors reuse the OAuth accounts (and their refresh tokens); every other
+  // service reads a connector connection, with the old vault/env names as a fallback.
+  const connectorAuth: ConnectorAuthResolver = {
+    async resolve(connector, account) {
+      const spec = connectorRegistry.get(connector);
+      if (!spec) return undefined;
+      if (spec.auth.kind === 'oauth2' && spec.auth.extra?.provider === 'google') {
+        return { accessToken: await oauth.google(account).accessToken() };
+      }
+      return connections.resolve(connector, account);
+    },
+  };
+  const connectors = new ConnectorRuntimeImpl({ registry: connectorRegistry, auth: connectorAuth, retries: 1 });
+
   const tools = createToolRegistry({
     notifyUser: (agent, message, title) => {
       const { chatId } = postAs(agent, message, `notify:${randomUUID()}`);
@@ -444,7 +480,7 @@ export async function createCore(
     status,
     memos,
     timezone: config.timezone,
-  });
+  }).register(...connectorTools(connectorRegistry, connectors));
   const toolStore = new ToolStore(config.toolsDir);
   const pcRunner = makePcRunner(options.pc, config.localPcTools);
   const mcp = new McpHub({
@@ -552,12 +588,45 @@ export async function createCore(
     media: attachments,
     extraTools: (agent) => {
       const own = skillsOf(agent);
+      const overseer =
+        agent.name === OVERSEER_NAME
+          ? createOverseerTools({
+              agentsDir: config.agentsDir,
+              skillsDir: config.skillsDir,
+              agents,
+              tools: toolPool,
+              skills: currentSkills,
+              workflows,
+              models,
+              secrets,
+              defaultModel: () => options.app?.defaults.model ?? settings.model,
+              changed: {
+                agent: (name) => listeners.agentsChanged?.(name),
+                tools: () => listeners.toolsChanged?.(),
+                skills: () => listeners.skillsChanged?.(),
+              },
+            })
+          : [];
       // Workflows with an "agent tool" trigger this agent may call (its own, or ones that list it).
       const flows = workflowsOfKind('tool')
         .filter((workflow) => workflowToolCallers(workflow).includes(agent.name))
         .map((workflow) => createWorkflowTool(workflow, (items) => runWorkflowWithHandler(workflow, items, 'tool')));
+      const runOwnedWorkflow = async (owner: string, name: string, input?: JsonValue) => {
+        const workflow = workflows.get(owner, name);
+        if (!workflow) throw new Error(`No workflow "${name}" for agent "${owner}".`);
+        const items = await triggerItems(workflow, triggerPool, workflowRunner, { input });
+        return runWorkflowWithHandler(workflow, items, triggerPool.get(workflow.trigger.pool)?.kind ?? 'manual');
+      };
+      const workflowChanged = (id?: string) => {
+        const [who, name] = id?.split('/') ?? [];
+        const saved = who && name ? workflows.get(who, name) : undefined;
+        if (id && saved) syncWorkflowSchedule(saved);
+        else if (id) clearWorkflowSchedule(id);
+        listeners.workflowChanged?.(id);
+      };
       const authoring = createWorkflowAuthorTools({
         agent: agent.name,
+        ...(agent.name === OVERSEER_NAME ? { allowTarget: true, runFor: runOwnedWorkflow } : {}),
         workflows,
         triggerPool,
         hasAgent: (name) => agents.names().includes(name),
@@ -568,21 +637,10 @@ export async function createCore(
             const tool = toolPool.get(name);
             return { name, description: tool?.description ?? '', risk: tool?.risk ?? 'read' };
           }),
-        run: async (name, input) => {
-          const workflow = workflows.get(agent.name, name);
-          if (!workflow) throw new Error(`No workflow "${name}" for agent "${agent.name}".`);
-          const items = await triggerItems(workflow, triggerPool, workflowRunner, { input });
-          return runWorkflowWithHandler(workflow, items, triggerPool.get(workflow.trigger.pool)?.kind ?? 'manual');
-        },
-        changed: (id) => {
-          const [who, name] = id?.split('/') ?? [];
-          const saved = who && name ? workflows.get(who, name) : undefined;
-          if (id && saved) syncWorkflowSchedule(saved);
-          else if (id) clearWorkflowSchedule(id);
-          listeners.workflowChanged?.(id);
-        },
+        run: (name, input) => runOwnedWorkflow(agent.name, name, input),
+        changed: workflowChanged,
       });
-      return [...(own.length > 0 ? [createUseSkillTool(own, runSkill)] : []), ...flows, ...authoring];
+      return [...overseer, ...(own.length > 0 ? [createUseSkillTool(own, runSkill)] : []), ...flows, ...authoring];
     },
   };
   mesh.attach((input) => runAgent(deps, input));
@@ -617,6 +675,7 @@ export async function createCore(
   const workflowRunner: WorkflowRunnerDeps = {
     runAgent: runWorkflowAgent,
     tool: (name) => toolPool.get(name),
+    connector: connectors,
     speak: (agentName, text, files = []) => {
       const speaker = agentName ?? defaultAgentName() ?? 'system';
       // Resolved first: a missing file fails the node before anything is posted.
@@ -1230,6 +1289,7 @@ export async function createCore(
     attachments,
     skills: currentSkills,
     tools: toolPool,
+    connectors,
     secrets,
     workflows,
     triggerPool,
@@ -1280,6 +1340,7 @@ export async function createCore(
       return oauth.microsoft();
     },
     oauth,
+    connections,
     compactor,
     jobs,
     mesh,

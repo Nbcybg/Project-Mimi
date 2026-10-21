@@ -41,7 +41,7 @@ kbd { font: 11px var(--mono); padding: 1px 6px; border: 1px solid var(--line); b
 .chat .r { font-size: 11px; color: var(--faint); text-align: right; align-self: start; padding-top: 2px; }
 .chat .busy { color: var(--accent-text); }
 .empty { color: var(--muted); font-size: 12.5px; padding: 10px 10px; }
-.nav { border-top: 1px solid var(--line); padding: 8px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+.nav { border-top: 1px solid var(--line); padding: 8px; display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; }
 .nav button { text-align: center; font-size: 12px; color: var(--ink-2); padding: 7px 0; border-radius: 7px; }
 .nav button:hover { background: var(--hover); }
 .nav button.on { background: var(--raised); color: var(--accent); }
@@ -252,6 +252,69 @@ kbd { font: 11px var(--mono); padding: 1px 6px; border: 1px solid var(--line); b
 .check input { margin-top: 3px; accent-color: var(--accent); }
 .check small { grid-column: 2; color: var(--muted); font-size: 11.5px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .check .mono { font-size: 12.5px; }
+.toolgrid { margin: 8px 0 4px; }
+.toolgrid-bar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; margin-bottom: 10px; }
+.toolgrid-search { grid-column: 1 / -1; min-width: 0; border: 1px solid var(--line); background: var(--bg); border-radius: 8px; padding: 6px 10px; font-size: 12.5px; outline: 0; }
+.toolgrid-search:focus { border-color: rgba(224,138,91,.6); }
+.toolgrid-filters { display: flex; gap: 4px; flex-wrap: wrap; }
+.toolgrid-filters button { font-size: 11px; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+.toolgrid-filters button.on { background: var(--accent-soft); border-color: rgba(224,138,91,.5); color: var(--accent-text); }
+.toolgrid-count { justify-self: end; font-size: 11px; color: var(--faint); white-space: nowrap; }
+.tgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
+.qwbar { grid-template-columns: minmax(0, 1fr) auto; }
+.qw-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; max-height: 496px; overflow-y: auto; padding-right: 4px; align-content: start; }
+.qw-grid > .empty { grid-column: 1 / -1; margin: 0; }
+.qwcard { min-height: 118px; }
+.qwcard .tcard-name { padding-right: 0; }
+.qwadd { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; border-style: dashed; color: var(--muted); text-align: center; }
+.qwadd .qwplus { font: 500 24px/1 var(--ui); color: var(--accent-text); }
+.qwadd .tcard-name { padding: 0; font: 600 12px/1.4 var(--ui); }
+.qwadd .tcard-desc { min-height: 0; margin: 0; }
+.opchips { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 6px; }
+.opchip { font-size: 9.5px; padding: 1px 5px; border: 1px solid var(--line); border-radius: 999px; color: var(--faint); white-space: nowrap; }
+.opchip.on { color: var(--accent-text); border-color: rgba(224,138,91,.45); background: var(--accent-soft); }
+.opchip.warn { color: var(--warn); border-color: rgba(223,178,90,.45); }
+.oplist { display: flex; flex-direction: column; gap: 6px; max-height: 52vh; overflow: auto; }
+.oprow { display: flex; gap: 8px; align-items: center; justify-content: space-between; padding: 7px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+.oprow > div:first-child { min-width: 0; }
+.oprow small { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; line-height: 1.35; }
+.toolpickergrid { max-height: 52vh; overflow-y: auto; }
+.qwpick { min-height: 62px; grid-template-columns: 28px minmax(0, 1fr); padding: 8px; }
+.qwpick .tcard-ico { width: 28px; height: 28px; border-radius: 8px; font-size: 10px; }
+.qwpick .tcard-name { padding-right: 0; }
+.qwpick .tcard-state { margin-top: 2px; }
+@media (max-width: 980px) {
+  .qw-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 620px) {
+  .qw-grid { grid-template-columns: 1fr; max-height: none; }
+  .oprow { align-items: flex-start; flex-direction: column; }
+}
+.tcard { position: relative; display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: 9px; align-items: start; text-align: left; padding: 10px; border: 1px solid var(--line); border-radius: 11px; background: var(--bg); color: var(--ink); min-height: 104px; transition: border-color .12s, background .12s; }
+.tcard:hover { border-color: #3a3f46; background: var(--panel); }
+.tcard.on { border-color: rgba(224,138,91,.55); background: linear-gradient(145deg, rgba(224,138,91,.12), rgba(224,138,91,.02)); }
+.tcard.need { border-color: rgba(223,178,90,.55); background: linear-gradient(145deg, rgba(223,178,90,.1), rgba(223,178,90,.02)); }
+.tcard-ico { width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center; font: 600 12px var(--mono); border: 1px solid var(--line); color: var(--muted); background: var(--raised); }
+.tcard-ico[data-risk="read"] { color: var(--info); border-color: rgba(125,179,232,.35); background: rgba(125,179,232,.08); }
+.tcard-ico[data-risk="write"] { color: var(--warn); border-color: rgba(223,178,90,.35); background: rgba(223,178,90,.08); }
+.tcard-ico[data-risk="shell"], .tcard-ico[data-risk="delete"] { color: var(--bad); border-color: rgba(238,128,121,.35); background: rgba(238,128,121,.08); }
+.tcard-ico[data-risk="network"] { color: var(--violet); border-color: rgba(180,156,240,.35); background: rgba(180,156,240,.08); }
+.tcard.on .tcard-ico { color: var(--accent-text); border-color: rgba(224,138,91,.5); background: rgba(224,138,91,.13); }
+.tcard.need .tcard-ico { color: var(--warn); border-color: rgba(223,178,90,.5); background: rgba(223,178,90,.13); }
+.tcard-body { min-width: 0; }
+.tcard-name { display: block; padding-right: 42px; font: 600 12px/1.4 var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tcard-desc { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 32px; margin-top: 3px; font-size: 11.5px; line-height: 1.4; color: var(--muted); }
+.tcard-meta { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; margin-top: 7px; }
+.tcard-meta .badge { margin-left: 0; }
+.tcard-state { display: block; margin-top: 6px; font-size: 10.5px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tcard.on .tcard-state { color: var(--accent-text); }
+.tcard.need .tcard-state { color: var(--warn); }
+.tcard-gear { position: absolute; top: 9px; right: 9px; font-size: 10.5px; padding: 1px 6px; border-radius: 5px; border: 1px solid rgba(224,138,91,.4); color: var(--accent-text); background: var(--panel); }
+.tcard-gear:hover { background: var(--accent-soft); }
+.toolconfig { width: min(520px, 100%); max-height: 86vh; overflow-y: auto; }
+.toolconfig .fieldhint { margin: -4px 0 4px; font-size: 11.5px; }
+.toolconfig .tcheck { display: flex; gap: 8px; align-items: center; margin: 9px 0 2px; font-size: 12.5px; color: var(--ink-2); }
+.toolconfig .tcheck input { width: 15px; height: 15px; accent-color: var(--accent); }
 .foot { display: flex; gap: 8px; align-items: center; margin-top: 16px; flex-wrap: wrap; }
 .foot .msg { flex: 1; font-size: 12.5px; color: var(--ok); min-width: 80px; }
 .foot .msg.bad { color: var(--bad); }
@@ -559,11 +622,18 @@ kbd { font: 11px var(--mono); padding: 1px 6px; border: 1px solid var(--line); b
   .presets > * > :nth-child(n+5) { display: none; }
   .poolrows > * { grid-template-columns: minmax(0, 1fr) 54px auto; }
   .poolrows > * > :nth-child(3), .poolrows > * > :nth-child(4) { display: none; }
+  .toolgrid-count { grid-column: 1 / -1; justify-self: start; }
+  .tgrid { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
   .toolrows > * { grid-template-columns: 130px 60px minmax(0, 1fr); }
   .toolrows > * > :nth-child(4) { display: none; }
   .trigrows > * { grid-template-columns: minmax(0, 1fr) auto; }
   .trigrows > * > :nth-child(2), .trigrows > * > :nth-child(3), .trigrows > * > :nth-child(4) { display: none; }
   .ri { grid-template-columns: 1fr; gap: 2px; }
+}
+
+@media (max-width: 480px) {
+  .tgrid { grid-template-columns: 1fr; }
+  .tcard { min-height: 0; }
 }
 
 .wthumb { width: 56px; height: 56px; border: 1px dashed #4a505a; border-radius: 10px; overflow: hidden; background: var(--bg); display: grid; place-items: center; font-size: 22px; flex: none; }

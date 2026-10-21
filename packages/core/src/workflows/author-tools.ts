@@ -10,8 +10,10 @@ import { validateWorkflowView } from './validate.ts';
  * (code / tool / HTTP nodes can do real work) and enables it in the editor.
  */
 export interface WorkflowAuthorDeps {
-  /** The agent the tools are bound to; it can only see and change its own workflows. */
+  /** The agent the tools are bound to. Without `allowTarget` it only sees its own workflows. */
   agent: string;
+  /** The caller may name another agent in the optional `agent` input (the Overseer does this). */
+  allowTarget?: boolean;
   workflows: WorkflowStore;
   triggerPool: TriggerPool;
   hasAgent(name: string): boolean;
@@ -19,6 +21,8 @@ export interface WorkflowAuthorDeps {
   agentNames(): string[];
   tools(): Array<{ name: string; description: string; risk: string }>;
   run(name: string, input?: JsonValue): Promise<WorkflowRunResult>;
+  /** Runs another agent's workflow; required when `allowTarget` is set. */
+  runFor?: (agent: string, name: string, input?: JsonValue) => Promise<WorkflowRunResult>;
   changed(id?: string): void;
 }
 
@@ -37,6 +41,8 @@ const workflowInput = z.object({
 });
 
 type WorkflowInput = z.infer<typeof workflowInput>;
+
+const agentInput = z.string().min(1).optional().describe('The agent that owns the workflow. Omit for the calling agent; only the Overseer may name another agent.');
 
 const MAX_SCHEMA_CHARS = 48_000;
 const MAX_VIEW_CHARS = 30_000;
@@ -61,17 +67,25 @@ function asWorkflow(input: WorkflowInput | string): WorkflowInput {
   return workflowInput.parse(raw);
 }
 
-function ownWorkflow(deps: WorkflowAuthorDeps, name: string): WorkflowView {
-  const workflow = deps.workflows.get(deps.agent, name.trim());
-  if (!workflow) throw new Error(`No workflow "${name}" for agent "${deps.agent}".`);
+function ownerOf(deps: WorkflowAuthorDeps, requested?: string): string {
+  const name = requested?.trim() || deps.agent;
+  if (name === deps.agent) return name;
+  if (!deps.allowTarget) throw new Error('Workflow tools can only change workflows of the agent that called them.');
+  if (!deps.hasAgent(name)) throw new Error(`Unknown agent "${name}".`);
+  return name;
+}
+
+function ownWorkflow(deps: WorkflowAuthorDeps, name: string, agent = deps.agent): WorkflowView {
+  const workflow = deps.workflows.get(agent, name.trim());
+  if (!workflow) throw new Error(`No workflow "${name}" for agent "${agent}".`);
   return workflow;
 }
 
-function saveView(deps: WorkflowAuthorDeps, input: WorkflowInput | string): string {
+function saveView(deps: WorkflowAuthorDeps, input: WorkflowInput | string, agent: string): string {
   const draft = asWorkflow(input);
   const view = {
     ...draft,
-    agent: deps.agent,
+    agent,
     // Agent writes never enable a workflow. The user turns it on after reviewing it.
     enabled: false,
     trigger: { pool: draft.trigger.pool, config: draft.trigger.config ?? {} },
@@ -147,10 +161,11 @@ export function createWorkflowAuthorTools(deps: WorkflowAuthorDeps): ToolDefinit
     description: 'List your workflows with their trigger, enabled state and node count. Use workflow_get for the full graph.',
     risk: 'read',
     target: 'core',
-    inputSchema: z.object({}),
+    inputSchema: z.object({ agent: agentInput }),
     summarize: () => 'List workflows',
-    async execute() {
-      const workflows = deps.workflows.list(deps.agent).map((workflow) => ({
+    async execute(input) {
+      const agent = ownerOf(deps, input.agent);
+      const workflows = deps.workflows.list(agent).map((workflow) => ({
         name: workflow.name,
         title: workflow.title,
         description: workflow.description,
@@ -159,19 +174,19 @@ export function createWorkflowAuthorTools(deps: WorkflowAuthorDeps): ToolDefinit
         errorWorkflow: workflow.errorWorkflow ?? null,
         nodes: workflow.nodes.map((node) => ({ id: node.id, type: node.type, title: node.title ?? null })),
       }));
-      return workflows.length === 0 ? `No workflows for agent "${deps.agent}".` : pretty(workflows);
+      return workflows.length === 0 ? `No workflows for agent "${agent}".` : pretty(workflows);
     },
   });
 
   const get: ToolDefinition<any> = defineTool({
     name: 'workflow_get',
-    description: 'Read one of your workflows in full, including nodes, links and trigger settings.',
+    description: 'Read one workflow in full, including nodes, links and trigger settings.',
     risk: 'read',
     target: 'core',
-    inputSchema: z.object({ name: z.string().min(1) }),
+    inputSchema: z.object({ name: z.string().min(1), agent: agentInput }),
     summarize: (input) => `Read workflow ${input.name}`,
     async execute(input) {
-      return pretty(ownWorkflow(deps, input.name));
+      return pretty(ownWorkflow(deps, input.name, ownerOf(deps, input.agent)));
     },
   });
 
@@ -180,13 +195,13 @@ export function createWorkflowAuthorTools(deps: WorkflowAuthorDeps): ToolDefinit
     description: 'Check a workflow draft without saving it. Returns the validation error, or says it is valid.',
     risk: 'read',
     target: 'core',
-    inputSchema: z.object({ workflow: z.union([workflowInput, z.string()]) }),
+    inputSchema: z.object({ workflow: z.union([workflowInput, z.string()]), agent: agentInput }),
     summarize: () => 'Validate a workflow draft',
     async execute(input) {
       const draft = asWorkflow(input.workflow);
       const view = {
         ...draft,
-        agent: deps.agent,
+        agent: ownerOf(deps, input.agent),
         enabled: false,
         trigger: { pool: draft.trigger.pool, config: draft.trigger.config ?? {} },
         nodes: draft.nodes,
@@ -205,10 +220,10 @@ export function createWorkflowAuthorTools(deps: WorkflowAuthorDeps): ToolDefinit
   const save: ToolDefinition<any> = defineTool({
     name: 'workflow_save',
     description:
-      'Create or replace one of your workflows. Always saves disabled; the user enables it after reviewing. Include every node and link in the full workflow object.',
+      'Create or replace a workflow. Always saves disabled; the user enables it after reviewing. Include every node and link in the full workflow object.',
     risk: 'write',
     target: 'core',
-    inputSchema: z.object({ workflow: z.union([workflowInput, z.string()]) }),
+    inputSchema: z.object({ workflow: z.union([workflowInput, z.string()]), agent: agentInput }),
     summarize: (input) => {
       try {
         const draft = asWorkflow(input.workflow);
@@ -218,21 +233,22 @@ export function createWorkflowAuthorTools(deps: WorkflowAuthorDeps): ToolDefinit
       }
     },
     async execute(input) {
-      return saveView(deps, input.workflow);
+      return saveView(deps, input.workflow, ownerOf(deps, input.agent));
     },
   });
 
   const remove: ToolDefinition<any> = defineTool({
     name: 'workflow_delete',
-    description: 'Delete one of your workflows after the user approves the request.',
+    description: 'Delete a workflow after the user approves the request.',
     risk: 'write',
     target: 'core',
-    inputSchema: z.object({ name: z.string().min(1) }),
+    inputSchema: z.object({ name: z.string().min(1), agent: agentInput }),
     summarize: (input) => `Delete workflow ${input.name}`,
     async execute(input) {
-      ownWorkflow(deps, input.name);
-      if (!deps.workflows.delete(deps.agent, input.name.trim())) throw new Error(`No workflow "${input.name}".`);
-      deps.changed(`${deps.agent}/${input.name.trim()}`);
+      const agent = ownerOf(deps, input.agent);
+      ownWorkflow(deps, input.name, agent);
+      if (!deps.workflows.delete(agent, input.name.trim())) throw new Error(`No workflow "${input.name}".`);
+      deps.changed(`${agent}/${input.name.trim()}`);
       return `Deleted workflow "${input.name}".`;
     },
   });
@@ -244,11 +260,13 @@ export function createWorkflowAuthorTools(deps: WorkflowAuthorDeps): ToolDefinit
     target: 'core',
     inputSchema: z.object({
       name: z.string().min(1),
+      agent: agentInput,
       input: z.union([z.record(z.string(), z.unknown()), z.string()]).optional(),
     }),
     summarize: (input) => `Run workflow ${input.name}`,
     async execute(input) {
-      ownWorkflow(deps, input.name);
+      const agent = ownerOf(deps, input.agent);
+      ownWorkflow(deps, input.name, agent);
       let value: JsonValue | undefined;
       if (input.input !== undefined) {
         if (typeof input.input === 'string') {
@@ -259,7 +277,14 @@ export function createWorkflowAuthorTools(deps: WorkflowAuthorDeps): ToolDefinit
           }
         } else value = input.input as JsonValue;
       }
-      const outcome = await deps.run(input.name.trim(), value);
+      const outcome =
+        agent === deps.agent
+          ? await deps.run(input.name.trim(), value)
+          : deps.runFor
+            ? await deps.runFor(agent, input.name.trim(), value)
+            : (() => {
+                throw new Error(`These workflow tools cannot run agent "${agent}" workflows.`);
+              })();
       return pretty(
         {
           ok: outcome.ok,

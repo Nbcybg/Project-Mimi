@@ -11,6 +11,7 @@ import type {
   ClientMessage,
   JsonValue,
   MemoryView,
+  OverseerView,
   PcMessage,
   ProviderConnect,
   ServerMessage,
@@ -22,6 +23,9 @@ import type {
 import { NODE_TYPES } from '@mimi/shared';
 import { WebSocket, WebSocketServer } from 'ws';
 import { deleteAgent, saveAgent } from '../agents/loader.ts';
+import { ensureOverseer, OVERSEER_NAME, overseerView as toOverseerView } from '../overseer/overseer.ts';
+import { readSkillBody } from '../skills/skills.ts';
+import { checkModelNeeds } from '../providers/model-requirements.ts';
 import { importN8n } from '../workflows/n8n-import.ts';
 import { contextFor, resolveString } from '../workflows/expressions.ts';
 import { validateWorkflowNode, validateWorkflowView, type WorkflowValidationContext } from '../workflows/validate.ts';
@@ -83,8 +87,10 @@ const WEB_FILES: Record<string, [string, string]> = {
   '/i18n.js': ['i18n.js', 'text/javascript; charset=utf-8'],
   '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
   '/feature-tools.js': ['feature-tools.js', 'text/javascript; charset=utf-8'],
+  '/feature-agent-tools.js': ['feature-agent-tools.js', 'text/javascript; charset=utf-8'],
   '/feature-accounts.js': ['feature-accounts.js', 'text/javascript; charset=utf-8'],
   '/feature-providers.js': ['feature-providers.js', 'text/javascript; charset=utf-8'],
+  '/feature-overseer.js': ['feature-overseer.js', 'text/javascript; charset=utf-8'],
   '/feature-triggers.js': ['feature-triggers.js', 'text/javascript; charset=utf-8'],
   '/feature-workflows.js': ['feature-workflows.js', 'text/javascript; charset=utf-8'],
   '/feature-secrets.js': ['feature-secrets.js', 'text/javascript; charset=utf-8'],
@@ -200,19 +206,6 @@ export async function startServer(
     speech_model: appSettings.defaults.speech_model ?? core.settings.speech_model,
     video_model: appSettings.defaults.video_model ?? core.settings.video_model,
   });
-  /** What a model must be, take or make to be usable for a key (the catalog's type and modalities). */
-  const MODEL_NEEDS: Record<
-    (typeof MODEL_KEYS)[number],
-    { types?: string[]; inputs?: string[]; outputs: string[] }
-  > = {
-    model: { types: ['chat'], outputs: ['text'] },
-    small_model: { types: ['chat'], outputs: ['text'] },
-    vision_model: { types: ['chat'], inputs: ['image', 'pdf', 'video'], outputs: ['text'] },
-    transcript_model: { types: ['chat', 'transcription'], inputs: ['audio'], outputs: ['text'] },
-    image_model: { types: ['image'], outputs: ['image'] },
-    speech_model: { types: ['speech'], outputs: ['audio'] },
-    video_model: { types: ['video'], outputs: ['video'] },
-  };
   /** A model string is `provider/model` or the name of a preset from the model pool. */
   const modelRef = (name: string) => resolveModelName(name, appSettings.presets);
   /** Rejects a model choice that is unknown, or that the catalog says cannot do the job. */
@@ -220,18 +213,7 @@ export async function startServer(
     for (const key of MODEL_KEYS) {
       const value = choice[key];
       if (!value) continue;
-      const info = core.registry.info(modelRef(value));
-      const needs = MODEL_NEEDS[key];
-      // Without metadata the abilities are unknown, not empty: do not guess against the user.
-      if (info.type && needs.types && !needs.types.includes(info.type)) {
-        throw new Error(`Model "${value}" is not usable for "${key}" (type: ${info.type}).`);
-      }
-      if (info.inputs && needs.inputs && !needs.inputs.some((kind) => info.inputs!.includes(kind))) {
-        throw new Error(`Model "${value}" does not take ${needs.inputs.join(' / ')} input: pick another model for "${key}".`);
-      }
-      if (info.outputs && !needs.outputs.every((kind) => info.outputs!.includes(kind))) {
-        throw new Error(`Model "${value}" does not produce ${needs.outputs.join(' / ')}: pick another model for "${key}".`);
-      }
+      checkModelNeeds(key, value, core.registry.info(modelRef(value)));
     }
   };
 
@@ -274,6 +256,26 @@ export async function startServer(
     saved,
   });
 
+  /** The Overseer setup screen: its model and whether that provider can be called. */
+  const overseerState = (): OverseerView => {
+    const agent = ensureOverseer(config.agentsDir);
+    const model = agent.models.model?.trim() ?? '';
+    let providerConnected = false;
+    if (model) {
+      try {
+        providerConnected = hasKey(modelRef(model).provider);
+      } catch {
+        providerConnected = false;
+      }
+    }
+    return toOverseerView(agent, providerConnected);
+  };
+  const overseerMessage = (saved?: boolean): ServerMessage => ({
+    type: 'overseer',
+    overseer: overseerState(),
+    ...(saved ? { saved } : {}),
+  });
+
   /** The tool pool for the tools screen: definitions, presets and what agents cannot see. */
   const toolsMessage = (saved?: string): ServerMessage => ({
     type: 'tools',
@@ -282,7 +284,16 @@ export async function startServer(
     custom: core.tools.customSpecs(),
     secretKeys: core.tools.secretKeys(),
     mcp: core.tools.mcp?.views() ?? [],
+    connectors: core.connectors.list(),
+    connections: core.connections.views(),
     saved,
+  });
+
+  const connectionsMessage = (saved?: boolean): ServerMessage => ({
+    type: 'connector-connections',
+    connections: core.connections.views(),
+    connectors: core.connectors.list(),
+    ...(saved ? { saved } : {}),
   });
 
   const triggersMessage = (): ServerMessage => ({ type: 'triggers', triggers: core.triggers.list().map(toTriggerInfo) });
@@ -290,6 +301,9 @@ export async function startServer(
   /** Creates or replaces an agent file from the editor. Everything is validated before it is written. */
   const saveAgentView = (view: AgentView, renameFrom?: string) => {
     const name = String(view.name ?? '').trim().toLowerCase();
+    if (name === OVERSEER_NAME || renameFrom === OVERSEER_NAME) {
+      throw new Error('"overseer" is reserved for AI Overseer; change its model on the Overseer screen.');
+    }
     const models: ModelChoice = {};
     for (const key of MODEL_KEYS) {
       const value = view.models?.[key]?.trim();
@@ -422,7 +436,7 @@ export async function startServer(
       ),
       defaults: effectiveDefaults(),
       presets: chatApi.presetViews(),
-      agents: core.agents.names().length,
+      agents: core.agents.names().filter((name) => name !== OVERSEER_NAME).length,
       allowedDirs: [...config.allowedDirs],
       google: { hasClient: core.google.hasClient, connected: core.google.isConfigured },
       microsoft: { hasClient: core.microsoft.hasClient, connected: core.microsoft.isConfigured },
@@ -636,6 +650,30 @@ export async function startServer(
     broadcast({ type: 'workflows', workflows: core.workflows.list(), pool: core.triggerPool.list(), nodeTypes: NODE_TYPES });
     broadcast(triggersMessage());
   };
+  // The Overseer can change the setup while the user watches: refresh every open screen.
+  core.listeners.agentsChanged = (name) => {
+    broadcast(agentsMessage(name));
+    broadcast(chatApi.chatsMessage());
+    broadcast({ type: 'settings', settings: settingsView() });
+  };
+  core.listeners.toolsChanged = () => {
+    broadcast(toolsMessage());
+    broadcast(agentsMessage());
+  };
+  core.listeners.skillsChanged = () => {
+    broadcast({
+      type: 'skills',
+      skills: core.skills().map((skill) => ({
+        name: skill.name,
+        description: skill.description,
+        model: skill.model ?? '',
+        tools: skill.tools,
+        body: readSkillBody(skill),
+        ...(skill.builtin ? { builtin: true } : {}),
+      })),
+    });
+    broadcast(agentsMessage());
+  };
 
   /** Memory writer and compaction report back once they are done; nobody waits for them. */
   const reportJobs = () => {
@@ -839,6 +877,93 @@ export async function startServer(
       case 'oauth-account-connect':
         beginOAuthConnect(message.id);
         break;
+      case 'connector-connections':
+        reply(connectionsMessage());
+        break;
+      case 'connector-connection-save':
+        core.connections.save(message.connection, message.id);
+        broadcast(connectionsMessage(true));
+        broadcast(toolsMessage());
+        break;
+      case 'connector-connection-remove':
+        core.connections.remove(message.id);
+        broadcast(connectionsMessage(true));
+        broadcast(toolsMessage());
+        break;
+      case 'connector-connection-default':
+        core.connections.setDefault(message.id);
+        broadcast(connectionsMessage(true));
+        break;
+      case 'connector-connection-connect': {
+        const connectionId = message.id;
+        void core.connections.startConnect(connectionId).then(
+          (flow) => {
+            reply({ type: 'connector-auth-url', connectionId, url: flow.url });
+            void flow.done.then(
+              () => {
+                broadcast(connectionsMessage(true));
+                broadcast(toolsMessage());
+              },
+              (error: Error) => reply({ type: 'error', message: error.message }),
+            );
+          },
+          (error: Error) => reply({ type: 'error', message: error.message }),
+        );
+        break;
+      }
+      case 'connector-connection-test': {
+        void core.connectors
+          .test(message.connector, message.operation, message.input ?? {}, message.account)
+          .then(
+            (result) => reply({ type: 'connector-test-result', ok: true, message: result.text ?? `${result.items.length} items` }),
+            (error: Error) => reply({ type: 'connector-test-result', ok: false, message: error.message }),
+          );
+        break;
+      }
+      case 'connector-operation-options': {
+        const reqId = Number(message.reqId);
+        void core.connectors
+          .execute({
+            connector: message.connector,
+            operation: message.operation,
+            input: message.input ?? {},
+            account: message.account,
+            agent: 'ui',
+          })
+          .then(
+            (result) => {
+              const options = result.items
+                .map((item) => {
+                  const value = item.json[message.valueField];
+                  const label = item.json[message.labelField];
+                  return {
+                    value: value === undefined || value === null ? '' : String(value),
+                    label: label === undefined || label === null ? String(value ?? '') : String(label),
+                  };
+                })
+                .filter((entry) => entry.value !== '');
+              reply({ type: 'connector-options', reqId, ok: true, options });
+            },
+            (error: Error) => reply({ type: 'connector-options', reqId, ok: false, options: [], error: error.message }),
+          );
+        break;
+      }
+      case 'overseer-get':
+        reply(overseerMessage());
+        break;
+      case 'overseer-save': {
+        const model = String(message.model ?? '').trim();
+        if (!model) throw new Error('Choose a model for the AI Overseer.');
+        const agent = ensureOverseer(config.agentsDir);
+        const ref = core.models.resolve('chat', { model });
+        if (!hasKey(ref.provider)) throw new Error(`Provider "${ref.provider}" is not connected yet. Connect it first.`);
+        checkModels({ model });
+        saveAgent(config.agentsDir, { ...agent, models: { ...agent.models, model } });
+        broadcast(overseerMessage(true));
+        broadcast(agentsMessage());
+        broadcast({ type: 'settings', settings: settingsView() });
+        break;
+      }
       case 'agents-list':
         reply(agentsMessage());
         break;
@@ -1235,6 +1360,7 @@ export async function startServer(
         break;
       }
       case 'agent-delete':
+        if (String(message.name) === OVERSEER_NAME) throw new Error('AI Overseer cannot be deleted.');
         if (deleteAgent(config.agentsDir, String(message.name))) {
           const gone = String(message.name);
           core.chats.forgetAgent(gone);

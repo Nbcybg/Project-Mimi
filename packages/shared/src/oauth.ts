@@ -29,3 +29,28 @@ export interface OAuthAccountInput {
   clientSecret?: string;
   tenant?: string;
 }
+
+/** A credential for one native connector (API key, bot token, PAT or OAuth2 token). */
+export interface ConnectorConnectionView {
+  id: string;
+  /** `ConnectorSpec.key`, e.g. "notion". */
+  connector: string;
+  name: string;
+  authKind: 'oauth2' | 'oauth1' | 'apiKey' | 'basic' | 'bearer' | 'none';
+  /** Every required credential is stored. */
+  connected: boolean;
+  /** At least one secret is stored in this machine's vault. */
+  hasSecret: boolean;
+  /** The connection used when a tool or workflow does not name one. */
+  default: boolean;
+  createdAt: string;
+}
+
+/** What the connector connection screen sends. Empty fields keep the stored value. */
+export interface ConnectorConnectionInput {
+  connector: string;
+  name: string;
+  /** Credential field key -> value; values never travel back to clients. */
+  fields?: Record<string, string>;
+  default?: boolean;
+}

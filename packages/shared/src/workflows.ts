@@ -16,6 +16,7 @@ export type NodeTypeName =
   | 'code'
   | 'http'
   | 'tool'
+  | 'connector'
   | 'filter'
   | 'sort'
   | 'limit'
@@ -337,6 +338,19 @@ export const NODE_TYPES: NodeTypeView[] = [
       { key: 'agent', label: 'agent เจ้าของเครื่องมือ (เว้นว่าง = เจ้าของ workflow)', type: 'string', description: 'ใช้กับเครื่องมือที่อ่านค่าจาก agent เช่น ไฟล์ ความจำ โปรไฟล์ หรือการแจ้งเตือน' },
       { key: 'input', label: 'input (JSON + expression)', type: 'json', placeholder: '{"range": "A1", "values": [["{{ $json.Subject }}"]]}' },
       { key: 'allow', label: 'อนุญาตให้ทำงานนี้ (เครื่องมือที่ส่ง / แก้ / ลบข้อมูล ต้องติ๊ก เพราะ workflow รันเองโดยไม่มีใครกดยืนยัน)', type: 'boolean' },
+    ],
+    outputs: [{ key: 'main', label: 'main' }],
+  },
+  {
+    type: 'connector',
+    label: 'Connector',
+    description: 'เรียก operation ของ service ที่ติดตั้งไว้ (auth และ rate limit มาจาก connector runtime)',
+    fields: [
+      { key: 'connector', label: 'service', type: 'string', required: true, placeholder: 'slack' },
+      { key: 'operation', label: 'operation', type: 'string', required: true, placeholder: 'send_message' },
+      { key: 'account', label: 'บัญชี (เว้นว่าง = บัญชีเริ่มต้น)', type: 'string' },
+      { key: 'input', label: 'input (JSON + expression)', type: 'json', placeholder: '{"channel": "C123", "text": "{{ $json.text }}"}' },
+      { key: 'allow', label: 'อนุญาตให้ทำงานนี้ (write/delete)', type: 'boolean', description: 'ต้องเปิดสำหรับ operation ที่เปลี่ยนข้อมูล เว้นแต่ permission ของ tool เป็น allow' },
     ],
     outputs: [{ key: 'main', label: 'main' }],
   },

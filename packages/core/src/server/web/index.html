@@ -23,6 +23,7 @@
     <div class="chats" id="chat-list"></div>
     <nav class="nav" id="nav">
       <button type="button" data-view="chat" class="on">แชต</button>
+      <button type="button" data-view="overseer">Overseer</button>
       <button type="button" data-view="agents">Agent</button>
       <button type="button" data-view="hub">Hub</button>
       <button type="button" data-view="settings">ตั้งค่า</button>
@@ -75,6 +76,7 @@
     </div></div>
   </main>
 
+  <main class="main page" id="view-overseer" hidden></main>
   <main class="main page" id="view-agents" hidden></main>
   <main class="main page" id="view-hub" hidden></main>
   <main class="main page" id="view-settings" hidden></main>
@@ -105,8 +107,10 @@
 <script src="i18n.js"></script>
 <script src="app.js"></script>
 <script src="feature-tools.js"></script>
+<script src="feature-agent-tools.js"></script>
 <script src="feature-accounts.js"></script>
 <script src="feature-providers.js"></script>
+<script src="feature-overseer.js"></script>
 <script src="feature-triggers.js"></script>
 <script src="feature-canvas.js"></script>
 <script src="feature-workflows.js"></script>

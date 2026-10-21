@@ -6,6 +6,16 @@ import type { PcRunner } from './executor.ts';
 import { type ToolDefinition, ToolRegistry, type ToolSource } from './registry.ts';
 import { ToolStore } from './tool-store.ts';
 
+/** Connector tools carry grouping metadata that ToolSpec does not declare yet. */
+function connectorMeta(tool: ToolDefinition): Pick<ToolView, 'connector' | 'operation' | 'familyLabel'> {
+  const meta = tool as ToolDefinition & { connector?: unknown; operation?: unknown; familyLabel?: unknown };
+  return {
+    ...(typeof meta.connector === 'string' ? { connector: meta.connector } : {}),
+    ...(typeof meta.operation === 'string' ? { operation: meta.operation } : {}),
+    ...(typeof meta.familyLabel === 'string' ? { familyLabel: meta.familyLabel } : {}),
+  };
+}
+
 function describeSettings(base: ToolDefinition, preset: ToolPreset): string {
   const fields = base.settings ?? [];
   const shown = fields
@@ -98,6 +108,7 @@ export class ToolPool implements ToolSource {
         builtin: true,
         settings: tool.settings ?? [],
         presets: presetsByTool.get(name) ?? [],
+        ...connectorMeta(tool),
       };
     });
     const customs = this.store.listCustom().map((spec) => {

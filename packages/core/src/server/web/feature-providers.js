@@ -8,6 +8,12 @@
 
   let editingId = null;
 
+  /** The same form is embedded in Settings and in the Overseer setup screen. */
+  function rerender() {
+    if (M().state.view === 'overseer' && window.MimiHooks?.overseer?.render) window.MimiHooks.overseer.render();
+    else M().renderSettings();
+  }
+
   function row(provider, panel) {
     const line = el('div', 'prov');
     const info = el('div');
@@ -24,7 +30,7 @@
       button('btn', 'แก้ไข', () => {
         editingId = provider.id;
         M().ui.providerDirty = false;
-        M().renderSettings();
+        rerender();
       }),
       button('btn', 'ดึงโมเดลใหม่', () => {
         M().toast('กำลังดึงรายชื่อโมเดล…', provider.id);
@@ -94,7 +100,7 @@
         button('btn ghost', 'ยกเลิก', () => {
           editingId = null;
           M().ui.providerDirty = false;
-          M().renderSettings();
+          rerender();
         }),
       );
     }

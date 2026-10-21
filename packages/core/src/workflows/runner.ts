@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { isTriggerNodeType, type FlowItem, type JsonValue, type Operator, type WorkflowNode, type WorkflowNodeTestResult, type WorkflowResponse, type WorkflowRunNodeView, type WorkflowRunResult, type WorkflowView } from '@mimi/shared';
+import { isTriggerNodeType, type ConnectorRuntime, type FlowItem, type JsonValue, type Operator, type WorkflowNode, type WorkflowNodeTestResult, type WorkflowResponse, type WorkflowRunNodeView, type WorkflowRunResult, type WorkflowView } from '@mimi/shared';
 import type { ToolContext, ToolDefinition } from '../tools/registry.ts';
 import { type Ask, askJson, attributesOf, categoriesOf, classifyText, extractFields } from './ai-nodes.ts';
 import type { KnowledgeStore } from '../knowledge/store.ts';
@@ -49,6 +49,8 @@ export interface WorkflowRunnerDeps {
   runAgent(agentName: string, prompt: string, thread: string, signal?: AbortSignal): Promise<string>;
   /** A tool or preset from the pool, by name. */
   tool(name: string): ToolDefinition | undefined;
+  /** Native connector operations (the `connector` node); missing means the node is unavailable. */
+  connector?: Pick<ConnectorRuntime, 'get' | 'execute'>;
   /** Posts a message into an agent's chat with the user. */
   /**
    * Posts into an agent's chat. `files` are chat attachment ids (any text holding them, e.g.
@@ -569,6 +571,49 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
         };
         const text = await tool.execute(parsed.data, context, {});
         out.push({ json: { ...item.json, text } });
+      }
+      return { main: out };
+    }
+    case 'connector': {
+      if (!deps.connector) throw new Error('connector node: no connector runtime is configured');
+      const out: FlowItem[] = [];
+      for (const [index, item] of items.entries()) {
+        const config = resolveValue(node.config, contextAt(ctx, item, index, items)) as {
+          connector?: JsonValue;
+          operation?: JsonValue;
+          account?: JsonValue;
+          input?: JsonValue;
+        };
+        const connectorKey = asText(config.connector);
+        const operationKey = asText(config.operation);
+        if (!connectorKey) throw new Error('connector node: "connector" is required');
+        if (!operationKey) throw new Error('connector node: "operation" is required');
+        const connector = deps.connector.get(connectorKey);
+        if (!connector) throw new Error(`connector node: unknown connector "${connectorKey}"`);
+        const operation = connector.operations.find((entry) => entry.key === operationKey);
+        if (!operation) throw new Error(`connector node: unknown operation "${connectorKey}.${operationKey}"`);
+        // A workflow runs unattended: anything beyond reading needs the node's own
+        // consent (or an "allow" for the tool in the settings file). A "deny" always wins.
+        const toolName = `${connectorKey}_${operationKey}`;
+        const policy = deps.permissions?.[toolName];
+        if (policy === 'deny') throw new Error(`connector node: "${toolName}" is denied in the settings file`);
+        if (operation.risk !== 'read' && policy !== 'allow' && node.config.allow !== true) {
+          throw new Error(`connector node: "${toolName}" can change things (${operation.risk}); tick "อนุญาตให้ทำงานนี้" on the node to let the workflow run it`);
+        }
+        const rawInput = config.input;
+        if (rawInput !== undefined && rawInput !== null && (typeof rawInput !== 'object' || Array.isArray(rawInput))) {
+          throw new Error('connector node: "input" must be a JSON object');
+        }
+        const account = asText(config.account) || undefined;
+        const result = await deps.connector.execute({
+          connector: connectorKey,
+          operation: operationKey,
+          input: (rawInput ?? {}) as Record<string, unknown>,
+          agent: workflow.agent,
+          ...(account ? { account } : {}),
+          ...(ctx.signal ? { signal: ctx.signal } : {}),
+        });
+        out.push(...(result.items.length > 0 ? result.items : normalizeItems(result.text ?? {})));
       }
       return { main: out };
     }

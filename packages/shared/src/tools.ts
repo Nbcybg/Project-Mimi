@@ -4,17 +4,38 @@ export type RiskLevel = (typeof RISK_LEVELS)[number];
 /** Where a tool physically runs. `pc` tools are routed to the PC agent once it exists. */
 export type ToolTarget = 'core' | 'pc';
 
+/** One choice of a `select` setting. */
+export interface ToolSettingOption {
+  value: string;
+  label: string;
+}
+
+/** Fills a select from another connector operation, e.g. the channels of a workspace. */
+export interface ToolSettingOptionsFrom {
+  connector: string;
+  operation: string;
+  labelField: string;
+  valueField: string;
+  dependsOn?: string[];
+}
+
 /** One setting a tool accepts; the app renders a form field per entry. */
 export interface ToolSettingField {
   key: string;
   label: string;
-  type: 'string' | 'number' | 'boolean' | 'secret' | 'text' | 'account';
+  type: 'string' | 'number' | 'boolean' | 'secret' | 'text' | 'account' | 'connection' | 'select';
   /** For `account` settings: which OAuth accounts the dropdown offers. */
   service?: import('./oauth.ts').OAuthService;
+  /** For `connection` settings: which connector's stored connections the dropdown offers. */
+  connector?: string;
   description?: string;
   required?: boolean;
   placeholder?: string;
   default?: string | number | boolean;
+  /** Fixed choices for a `select` setting. */
+  options?: ToolSettingOption[];
+  /** Choices read from a connector operation when the form opens. */
+  optionsFrom?: ToolSettingOptionsFrom;
 }
 
 /** The values a preset fills in; secrets are read from the environment at call time. */

@@ -16,9 +16,19 @@
   let waiting = null; // account id with a sign-in in progress
   let pending = null; // account ids before a save, to find and select the new one
   let requested = false; // the list is fetched once; afterward the server broadcasts changes
+  let connectionsRequested = false;
+  let connectionEditing = null; // connection id being edited
+  let connectionAdding = false;
+  let connectionConnector = 'slack';
+  let connectionLink = null; // { connectionId, url } from the last connector-auth-url
+  let connectionWaiting = null; // connection id with a generic OAuth2 sign-in in progress
 
   const accounts = () => (M().state.settings && M().state.settings.accounts) || [];
   const find = (id) => accounts().find((entry) => entry.id === id) || null;
+  const connectors = () =>
+    (M().state.connectors || []).filter((entry) => entry.auth.kind !== 'none' && !entry.key.startsWith('google_'));
+  const connections = () => M().state.connections || [];
+  const findConnection = (id) => connections().find((entry) => entry.id === id) || null;
   function selectOf(options, value) {
     const node = el('select');
     for (const [key, label] of options) {
@@ -45,9 +55,154 @@
       requested = true;
       M().send({ type: 'oauth-accounts' });
     }
-    const wrap = el('div', 'split');
-    wrap.append(listPanel(), adding || selected ? editorPanel() : introPanel());
+    if (!connectionsRequested && !M().state.connections) {
+      connectionsRequested = true;
+      M().send({ type: 'connector-connections' });
+    }
+    const wrap = el('div');
+    const split = el('div', 'split');
+    split.append(listPanel(), adding || selected ? editorPanel() : introPanel());
+    wrap.append(split, connectionsPanel());
     return wrap;
+  }
+
+  function connectionsPanel() {
+    const panel = el('div', 'panel');
+    panel.append(el('h3', '', 'Connector connections (API key / bot / PAT / OAuth2)'));
+    panel.append(
+      el(
+        'p',
+        'hint',
+        'Service ที่ไม่ใช่ Google เก็บ credential แยกเป็น connection ได้หลายชุด · ชุดแรกเป็นค่าเริ่มต้น · Google ใช้บัญชีด้านบน',
+      ),
+    );
+    if (connectionAdding || connectionEditing) {
+      panel.append(connectionEditor());
+      return panel;
+    }
+    const list = el('div', 'list');
+    const nonGoogle = connections().filter((entry) => !entry.connector.startsWith('google_'));
+    if (nonGoogle.length === 0) list.append(el('p', 'hint', '— ยังไม่มี connection —'));
+    for (const entry of nonGoogle) {
+      const spec = (M().state.connectors || []).find((item) => item.key === entry.connector);
+      const item = el('div', 'item');
+      const text = el('div');
+      text.append(
+        el('b', '', `${spec?.label || entry.connector} · ${entry.name}${entry.default ? ' ★' : ''}`),
+        el('small', 'muted', ` · ${entry.connected ? '● พร้อมใช้' : '○ ยังไม่ครบ credential'} · ${entry.authKind}`),
+      );
+      item.append(text);
+      const actions = el('div');
+      actions.append(button('btn ghost', 'แก้ไข', () => {
+        connectionEditing = entry.id;
+        connectionAdding = false;
+        rerender();
+      }));
+      if (!entry.default) {
+        actions.append(button('btn ghost', 'ตั้งเป็นค่าเริ่มต้น', () => M().send({ type: 'connector-connection-default', id: entry.id })));
+      }
+      actions.append(button('btn ghost', 'ลบ', () => {
+        if (confirm(`ลบ connection “${entry.name}” ของ ${spec?.label || entry.connector}?`)) {
+          M().send({ type: 'connector-connection-remove', id: entry.id });
+          if (connectionEditing === entry.id) connectionEditing = null;
+        }
+      }));
+      item.append(actions);
+      list.append(item);
+    }
+    panel.append(list);
+    const add = el('div');
+    add.style.marginTop = '10px';
+    add.append(button('btn', '+ เพิ่ม connection', () => {
+      connectionAdding = true;
+      connectionEditing = null;
+      connectionConnector = (connectors()[0] && connectors()[0].key) || 'slack';
+      rerender();
+    }));
+    panel.append(add);
+    return panel;
+  }
+
+  function connectionEditor() {
+    const entry = connectionEditing ? findConnection(connectionEditing) : null;
+    const box = el('div');
+    const connector = selectOf(
+      connectors().map((spec) => [spec.key, `${spec.label} (${spec.auth.kind})`]),
+      entry ? entry.connector : connectionConnector,
+    );
+    connector.disabled = Boolean(entry);
+    connector.onchange = () => {
+      connectionConnector = connector.value;
+      rerender();
+    };
+    box.append(M().labelled('Service', connector));
+    const spec = (M().state.connectors || []).find((item) => item.key === (entry ? entry.connector : connectionConnector));
+    const name = M().textInput(entry ? entry.name : '', spec ? `ชื่อเล่น เช่น งาน (${spec.label})` : 'ชื่อ connection');
+    box.append(M().labelled('ชื่อ connection', name));
+    const inputs = {};
+    if (spec) {
+      for (const field of spec.auth.fields) {
+        const input = M().textInput('', field.placeholder || (entry ? 'ตั้งไว้แล้ว ◆ (เว้นว่าง = คงเดิม)' : ''), field.type === 'secret' ? 'password' : undefined);
+        inputs[field.key] = input;
+        box.append(M().labelled(`${field.label}${field.required !== false ? ' *' : ''}`, input));
+        if (field.description) box.append(el('p', 'hint', field.description));
+      }
+    }
+    const makeDefault = el('input');
+    makeDefault.type = 'checkbox';
+    makeDefault.checked = Boolean(entry && entry.default);
+    makeDefault.disabled = Boolean(entry && entry.default);
+    const defaultLabel = M().labelled('ใช้เป็นค่าเริ่มต้นของ service นี้', makeDefault);
+    box.append(defaultLabel);
+    const actions = el('div');
+    actions.style.marginTop = '10px';
+    actions.append(button('btn', entry ? 'บันทึก' : 'เพิ่ม connection', () => {
+      if (!name.value.trim()) return M().toast('กรอกไม่ครบ', 'ต้องมีชื่อ connection', true);
+      const fields = {};
+      for (const [key, input] of Object.entries(inputs)) {
+        if (input.value) fields[key] = input.value;
+      }
+      M().send({
+        type: 'connector-connection-save',
+        ...(entry ? { id: entry.id } : {}),
+        connection: {
+          connector: entry ? entry.connector : connectionConnector,
+          name: name.value.trim(),
+          fields,
+          default: makeDefault.checked,
+        },
+      });
+    }));
+    if (entry && spec?.auth.kind === 'oauth2' && spec.auth.authorizeUrl && spec.auth.tokenUrl) {
+      const oauth = el('div');
+      oauth.style.marginTop = '10px';
+      oauth.append(button('btn', connectionWaiting === entry.id ? 'รอการเชื่อมต่อ…' : 'เชื่อมต่อ OAuth2', () => {
+        connectionWaiting = entry.id;
+        connectionLink = null;
+        rerender();
+        M().send({ type: 'connector-connection-connect', id: entry.id });
+      }));
+      if (connectionWaiting === entry.id) {
+        oauth.append(el('p', 'hint', 'เปิดลิงก์ด้านล่างแล้วทำตามขั้นตอนในเบราว์เซอร์'));
+      }
+      if (connectionLink && connectionLink.connectionId === entry.id) {
+        const open = el('a', 'btn ghost', 'เปิดหน้าเชื่อมต่อ');
+        open.href = connectionLink.url;
+        open.target = '_blank';
+        open.rel = 'noopener';
+        open.style.textDecoration = 'none';
+        open.style.marginLeft = '6px';
+        oauth.append(open);
+      }
+      box.append(oauth);
+    }
+    actions.append(button('btn ghost', 'ยกเลิก', () => {
+      connectionAdding = false;
+      connectionEditing = null;
+      rerender();
+    }));
+    box.append(actions);
+    return box;
   }
 
   function listPanel() {
@@ -257,9 +412,25 @@
     if (message.type === 'oauth-auth-url') {
       link = message;
       rerender();
+      return;
+    }
+    if (message.type === 'connector-auth-url') {
+      connectionLink = message;
+      connectionWaiting = message.connectionId;
+      rerender();
     }
   }
 
+  function onConnections(message) {
+    if (message.saved) {
+      connectionAdding = false;
+      connectionEditing = null;
+      connectionLink = null;
+      connectionWaiting = null;
+    }
+    rerender();
+  }
+
   window.MimiHooks = window.MimiHooks || {};
-  window.MimiHooks.accounts = { render, onMessage };
+  window.MimiHooks.accounts = { render, onMessage, onConnections };
 })();

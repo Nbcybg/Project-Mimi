@@ -178,10 +178,14 @@
     view: 'chat',
     chats: [],
     agents: [],
+    overseer: null,
+    gotOverseer: false,
     tools: [],
     toolPresets: [],
     toolCustom: [],
     toolSecretKeys: {},
+    connectors: [],
+    connections: null,
     workflows: [],
     workflowPool: [],
     nodeTypes: [],
@@ -205,7 +209,7 @@
     lastSent: null,
     booted: false,
   };
-  const ui = { agent: null, agentDirty: false, hubTab: 'models', preset: null, presetDirty: false, skill: null, skillDirty: false, toolDirty: false, providerDirty: false, triggerDirty: false, workflowDirty: false, memory: null };
+  const ui = { agent: null, agentDirty: false, hubTab: 'models', preset: null, presetDirty: false, skill: null, skillDirty: false, toolDirty: false, providerDirty: false, triggerDirty: false, workflowDirty: false, memory: null, overseerDirty: false };
 
   let socket = null;
   let retryMs = 1000;
@@ -1491,8 +1495,12 @@
   function setView(view) {
     state.view = view;
     setTimeout(() => reportPresence(), 0);
-    for (const name of ['chat', 'agents', 'hub', 'settings']) $(`view-${name}`).hidden = name !== view;
+    for (const name of ['chat', 'overseer', 'agents', 'hub', 'settings']) $(`view-${name}`).hidden = name !== view;
     for (const item of $('nav').children) item.classList.toggle('on', item.dataset.view === view);
+    if (view === 'overseer') {
+      window.MimiHooks?.overseer?.render?.();
+      send({ type: 'overseer-get' });
+    }
     if (view === 'agents') renderAgents();
     if (view === 'hub') renderHub();
     if (view === 'settings') renderSettings();
@@ -1667,8 +1675,9 @@
     const agent = agentOf(ui.agent) || null;
     const list = el('div', 'panel');
     list.append(el('h3', '', 'Agent ทั้งหมด'));
+    const visible = state.agents.filter((entry) => entry.name !== 'overseer');
     const items = el('div', 'list');
-    for (const entry of state.agents) {
+    for (const entry of visible) {
       const row = button(`item${entry.name === ui.agent ? ' on' : ''}`, null, () => {
         ui.agent = entry.name;
         ui.agentDirty = false;
@@ -1680,7 +1689,7 @@
       row.append(avatar(entry.name), info);
       items.append(row);
     }
-    if (state.agents.length === 0) items.append(el('div', 'empty', 'ยังไม่มี agent — กรอกแบบฟอร์มแล้วกดบันทึก'));
+    if (visible.length === 0) items.append(el('div', 'empty', 'ยังไม่มี agent — กรอกแบบฟอร์มแล้วกดบันทึก หรือให้ Overseer สร้างให้'));
     list.append(items);
     const create = button('btn', '+ สร้าง agent ใหม่', () => {
       ui.agent = null;
@@ -1806,9 +1815,13 @@
     form.append(el('h4', '', 'Skill (จาก Skill hub)'));
     const skills = checkList(state.skills, agent ? agent.skills || [] : [], (skill) => `${skill.model ? `ใช้โมเดล ${skill.model} · ` : ''}${skill.description}`);
     form.append(skills);
-    form.append(el('h4', '', 'เครื่องมือ (จาก Tool hub)'));
-    const tools = checkList(toolItems(), agent ? agent.tools : [], describeTool);
-    form.append(tools);
+    form.append(el('h4', '', 'Node tool (Quick Work)'));
+    form.append(el('p', 'hint', 'การ์ดละหนึ่งงาน — agent เลือกเรียกเองเมื่อเหมาะ · ตั้งค่าประจำ node ได้โดยไม่ต้องสร้าง workflow · ส่วน Skill ยังใช้รายการเดิม'));
+    const toolBox = el('div');
+    const toolHook = window.MimiHooks && window.MimiHooks.agentTools;
+    const toolGrid = toolHook ? toolHook.render(toolBox, () => name.value.trim(), agent ? agent.tools : []) : null;
+    const tools = toolGrid ? null : checkList(toolItems(), agent ? agent.tools : [], describeTool);
+    form.append(toolGrid ? toolBox : tools);
     form.append(el('h4', '', 'ส่งงานต่อให้ agent ไหนได้บ้าง (นอกแชตกลุ่ม)'));
     const peers = checkList(state.agents.filter((entry) => entry.name !== ui.agent), agent ? agent.canMessage : [], (entry) => entry.description);
     form.append(peers);
@@ -1853,6 +1866,7 @@
         flash('กำลังบันทึก…');
         const charHook = window.MimiHooks && window.MimiHooks.character;
         const character = (charHook && charHook.form && charHook.form()) || {};
+        if (toolGrid) toolGrid.persist();
         send({
           type: 'agent-save',
           renameFrom: agent ? agent.name : undefined,
@@ -1864,7 +1878,7 @@
             effort: effort.value || undefined,
             systemPrompt: systemPrompt.value,
             models: chosen,
-            tools: picked(tools),
+            tools: toolGrid ? toolGrid.names() : picked(tools),
             skills: picked(skills),
             canMessage: picked(peers),
             budgets: { maxRounds: Number(rounds.value) || 12, maxTokens: Number(tokens.value) || 200000 },
@@ -2541,19 +2555,20 @@
   }
   /** After the first lists arrive: lead a new user through setup, else reopen the last chat. */
   function bootstrap() {
-    if (state.booted || !state.settings || !state.gotAgents || !state.gotChats) return;
+    if (state.booted || !state.settings || !state.gotAgents || !state.gotChats || !state.gotOverseer) return;
     state.booted = true;
-    if (!state.settings.providers.some((provider) => provider.connected)) {
-      setView('settings');
+    const normalAgents = state.agents.filter((agent) => agent.name !== 'overseer');
+    if (!state.settings.providers.some((provider) => provider.connected) || !state.overseer?.configured) {
+      setView('overseer');
       $('app').classList.remove('show-side');
-    } else if (state.agents.length === 0) {
-      setView('agents');
+    } else if (normalAgents.length === 0) {
+      setView('overseer');
       $('app').classList.remove('show-side');
     } else if (!state.chat) {
       const remembered = Number(localStorage.getItem(CHAT_KEY));
       // Mobile mode opens straight into a chat: the last one, else the main agent's. Desktop: the first in the list.
       const mobile = modeNow() === 'mobile';
-      const main = state.defaultAgent || state.agents[0].name;
+      const main = state.defaultAgent || normalAgents[0].name;
       const chat =
         state.chats.find((entry) => entry.id === remembered) ||
         (mobile ? state.chats.find((entry) => entry.kind === 'direct' && entry.agents[0] === main) : state.chats[0]);
@@ -2571,8 +2586,8 @@
         state.busyChat = message.busyChat === undefined ? null : message.busyChat;
         state.pendingPerms = new Map(message.pendingPermissions.map((request) => [request.id, request]));
         state.booted = false;
-        state.gotAgents = state.gotChats = false;
-        for (const type of ['agents-list', 'settings-get', 'chats-list', 'skills-list', 'tools-list', 'workflows-list']) send({ type });
+        state.gotAgents = state.gotChats = state.gotOverseer = false;
+        for (const type of ['overseer-get', 'agents-list', 'settings-get', 'chats-list', 'skills-list', 'tools-list', 'workflows-list']) send({ type });
         reportPresence(true);
         if (state.chat) send({ type: 'chat-open', chatId: state.chat.id, sessionId: state.latest ? undefined : state.session && state.session.id });
         break;
@@ -2602,6 +2617,7 @@
         renderRail();
         renderLog(message);
         window.MimiHooks?.chat?.renderPins?.();
+        window.MimiHooks?.overseer?.onHistory?.(message.chat);
         reportPresence();
         break;
       }
@@ -2722,6 +2738,11 @@
       case 'settings':
         state.settings = message.settings;
         if (window.MimiHooks && window.MimiHooks.providers) window.MimiHooks.providers.onMessage(message);
+        if (window.MimiHooks?.overseer) window.MimiHooks.overseer.onMessage?.(message);
+        if (state.view === 'overseer' && ((!ui.providerDirty && !ui.overseerDirty) || message.saved)) {
+          window.MimiHooks?.overseer?.render?.();
+          if (message.saved) saved();
+        }
         if (state.view === 'settings' && (!ui.providerDirty || message.saved)) {
           renderSettings();
           if (message.saved) saved();
@@ -2731,6 +2752,17 @@
           if (message.saved) saved();
         }
         if (state.view === 'agents' && !ui.agentDirty) renderAgents();
+        bootstrap();
+        break;
+      case 'overseer':
+        state.overseer = message.overseer;
+        state.gotOverseer = true;
+        window.MimiHooks?.overseer?.onMessage?.(message);
+        if (message.saved) {
+          ui.overseerDirty = false;
+          if (state.view === 'overseer') saved();
+        }
+        if (state.view === 'overseer') window.MimiHooks?.overseer?.render?.();
         bootstrap();
         break;
       case 'agents':
@@ -2772,12 +2804,21 @@
         state.toolCustom = message.custom || [];
         state.toolSecretKeys = message.secretKeys || {};
         state.toolMcp = message.mcp || [];
+        if (message.connectors) state.connectors = message.connectors;
+        if (message.connections) state.connections = message.connections;
         if (window.MimiHooks && window.MimiHooks.tools) window.MimiHooks.tools.onMessage(message);
         if (state.view === 'hub' && ui.hubTab === 'nodes' && (!ui.toolDirty || message.saved)) {
           renderHub();
           if (message.saved) saved();
         }
         if (state.view === 'agents' && !ui.agentDirty) renderAgents();
+        break;
+      case 'connector-connections':
+        state.connections = message.connections || [];
+        state.connectors = message.connectors || state.connectors;
+        if (window.MimiHooks?.agentWorkflows?.onConnections) window.MimiHooks.agentWorkflows.onConnections(message);
+        if (window.MimiHooks?.accounts?.onConnections) window.MimiHooks.accounts.onConnections(message);
+        if (message.saved) saved();
         break;
       case 'secrets':
         state.secrets = message.names || [];
@@ -2919,10 +2960,10 @@
         if ((message.type.startsWith('knowledge') || message.type === 'error') && window.MimiHooks && window.MimiHooks.knowledge) {
           window.MimiHooks.knowledge.onMessage(message);
         }
-        if ((message.type === 'oauth-accounts' || message.type === 'oauth-auth-url') && window.MimiHooks && window.MimiHooks.accounts) {
+        if ((message.type === 'oauth-accounts' || message.type === 'oauth-auth-url' || message.type === 'connector-auth-url') && window.MimiHooks && window.MimiHooks.accounts) {
           window.MimiHooks.accounts.onMessage(message);
         }
-        if (message.type === 'oauth-accounts' || message.type === 'oauth-auth-url') return;
+        if (message.type === 'oauth-accounts' || message.type === 'oauth-auth-url' || message.type === 'connector-auth-url') return;
         if (message.type.startsWith('knowledge')) return;
         if (message.type === 'gallery' || message.type === 'gallery-changed') {
           window.MimiHooks?.gallery?.onMessage(message);

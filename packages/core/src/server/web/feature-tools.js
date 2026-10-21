@@ -105,12 +105,16 @@
       el(
         'p',
         'hint',
-        'Node = ทุกชนิดที่เอาไปวางใน workflow ได้ รวม node ทริกเกอร์ · เครื่องมือ = ของที่ agent เรียกใช้ได้ (builtin / custom / MCP)',
+        'Node = ทุกชนิดที่เอาไปวางใน workflow ได้ รวม node ทริกเกอร์ · เครื่องมือ = ของที่ agent เรียกใช้ได้ (builtin / custom / MCP) · JavaScript ที่อยากใช้ซ้ำทั้งในแชตและ workflow ให้สร้างเป็นเครื่องมือ kind code แล้วเรียกจาก node "tool"',
       ),
     );
-    const add = button('btn', '+ เครื่องมือใหม่', () => go({ mode: 'custom-new' }));
-    add.style.margin = '0 0 10px';
-    panel.append(add);
+    const addRow = el('div', 'hstack');
+    addRow.style.margin = '0 0 10px';
+    addRow.append(
+      button('btn', '+ เครื่องมือใหม่', () => go({ mode: 'custom-new' })),
+      button('btn', '+ Node (JS)', () => go({ mode: 'custom-new-js' })),
+    );
+    panel.append(addRow);
 
     const groups = new Map();
     for (const spec of nodes) {
@@ -532,6 +536,19 @@
     }
     if (sel.mode === 'custom-new') {
       return customEditor({ name: '', description: '', kind: 'http', params: [], settings: [], config: {} }, true);
+    }
+    if (sel.mode === 'custom-new-js') {
+      return customEditor(
+        {
+          name: '',
+          description: '',
+          kind: 'code',
+          params: [],
+          settings: [],
+          config: { code: '// input.x = ค่าที่โมเดลส่งมา, settings.x = ค่าตั้งต้น\nreturn "ผลลัพธ์";' },
+        },
+        true,
+      );
     }
     const spec = (M().state.toolCustom || []).find((entry) => entry.name === sel.name);
     if (!spec) {

@@ -1,5 +1,59 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+
+- A base URL (`api`) set for a provider in the settings file now replaces
+  per-model endpoints the models.dev catalog pinned, so a gateway change takes
+  effect everywhere; a per-model `provider.api` in the settings file still wins
+  over the provider-level one.
+- Read tools (`read_file`, `list_dir`, `file_info`, `find_files`) reword ENOENT/
+  ENOTDIR errors to show the resolved path and the working folder, so agents
+  (especially sub-agents) no longer retry with doubled relative paths.
+- Startup now reports reminders/memory restored from the `triggers/` and
+  `memory/` mirrors into a database that did not have them, instead of silently
+  reviving state after a database loss or on a fresh install from a synced
+  folder.
+
+### Connector platform
+
+- 50 native connectors (214 operations) with Quick Work families, connection
+  and OAuth account resolution, poll/webhook triggers, pagination, rate limits,
+  retries and version pinning.
+- One generic `connector` workflow node; n8n, Make and Zapier imports become
+  disabled workflows with native connector nodes, unsupported-step
+  placeholders, redacted credentials and a report. OpenAPI import produces a
+  draft and report only (no persistence/registration yet).
+- Connector versioning: latest semver is used by default, workflow nodes can
+  pin a version, and deprecated versions are reported in the run trace.
+
+### Reliability and observability
+
+- Workflow run queue with global/per-agent/per-workflow limits, cancellation,
+  optional node/run timeouts, webhook deduplication and persisted idempotency.
+- Run history keeps the newest 50 runs per workflow with capped node input/
+  output, attempts, connector traces, error codes and redaction on write/read.
+
+### Security
+
+- Guarded outbound HTTP for connector runtime, workflow HTTP/poll, OAuth token
+  endpoints and custom tools: private/link-local/metadata destinations are
+  refused, redirects are re-checked, and credential headers are stripped on
+  cross-origin redirects.
+- Custom HTTP tools need an explicit local-network opt-in; concurrent OAuth
+  refreshes share one request. Residual risks are documented in
+  `docs/connectors/security-review.md`.
+
+### Tests and docs
+
+- E2E coverage for connector workflows, error workflows and imported workflows;
+  performance/stress coverage for 50 connectors, 1,000 items and queue/rate
+  limits. The runner caps executions at 1,000 nodes and now fails explicitly
+  instead of silently truncating a long or cyclic workflow.
+- Connector authoring, release checklist and performance docs added under
+  `docs/connectors/`; full suite 528 tests passing.
+
 ## 0.5.0 — 2026-10-20
 
 - **Native app.** The window is Electron (`packages/desktop`) instead of an Edge `--app` window: closing it hides it (nothing resets; the chat, scroll and recording state stay), it can be resized and maximized, remembers its size and place, has no browser menu, zoom or page context menu (right-click only on text), and lives in the tray (open chat / Agent / Hub / settings, hide when clicking elsewhere, always on top, quit). The core still runs as its own Node process (so better-sqlite3 needs no Electron rebuild, and Docker/VPS keeps working); the launcher and the window talk over node IPC. Without Electron installed the app opens in the default browser. `tray.ps1` and all the Edge code are gone.

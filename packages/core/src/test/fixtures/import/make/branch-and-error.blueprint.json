@@ -1,0 +1,105 @@
+{
+  "name": "Routed leads",
+  "flow": [
+    {
+      "id": 1,
+      "module": "gateway:CustomWebHook",
+      "version": 2,
+      "parameters": {},
+      "mapper": {},
+      "metadata": { "designer": { "x": 0, "y": 0, "name": "Lead webhook" } }
+    },
+    {
+      "id": 2,
+      "module": "builtin:BasicRouter",
+      "version": 1,
+      "parameters": {},
+      "mapper": null,
+      "metadata": { "designer": { "x": 300, "y": 0, "name": "Route by status" } },
+      "routes": [
+        {
+          "flow": [
+            {
+              "id": 3,
+              "module": "builtin:BasicFilter",
+              "version": 1,
+              "parameters": {},
+              "mapper": {},
+              "filter": {
+                "name": "New lead",
+                "conditions": [[{ "a": "{{1.status}}", "b": "new", "o": "text:equal" }]]
+              },
+              "metadata": { "designer": { "x": 600, "y": -100, "name": "Is new" } }
+            },
+            {
+              "id": 4,
+              "module": "slack:sendMessage",
+              "version": 1,
+              "parameters": { "__IMTCONN__": 12345 },
+              "mapper": {
+                "channel": "#sales",
+                "text": "New lead: {{1.email}}"
+              },
+              "metadata": { "designer": { "x": 900, "y": -100, "name": "Sales alert" } }
+            }
+          ]
+        },
+        {
+          "flow": [
+            {
+              "id": 5,
+              "module": "builtin:BasicFilter",
+              "version": 1,
+              "parameters": {},
+              "mapper": {},
+              "filter": {
+                "name": "VIP lead",
+                "conditions": [[{ "a": "{{1.status}}", "b": "vip", "o": "text:equal" }]]
+              },
+              "metadata": { "designer": { "x": 600, "y": 100, "name": "Is vip" } }
+            },
+            {
+              "id": 6,
+              "module": "airtable:createRecord",
+              "version": 1,
+              "parameters": { "__IMTCONN__": 67890 },
+              "mapper": {
+                "baseId": "app-demo",
+                "table": "Leads",
+                "fields": "{\"Email\":\"{{1.email}}\",\"Name\":\"{{1.name}}\"}"
+              },
+              "metadata": { "designer": { "x": 900, "y": 100, "name": "Save VIP" } },
+              "onerror": {
+                "flow": [
+                  {
+                    "id": 8,
+                    "module": "slack:sendMessage",
+                    "version": 1,
+                    "parameters": { "__IMTCONN__": 12345 },
+                    "mapper": {
+                      "channel": "#ops",
+                      "text": "Could not save lead: {{1.email}}"
+                    },
+                    "metadata": { "designer": { "x": 1200, "y": 200, "name": "Error alert" } }
+                  }
+                ]
+              }
+            },
+            {
+              "id": 7,
+              "module": "ftp:uploadFile",
+              "version": 1,
+              "parameters": {},
+              "mapper": { "path": "/leads.csv" },
+              "metadata": { "designer": { "x": 1200, "y": 100, "name": "Archive CSV" } }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "metadata": {
+    "version": 1,
+    "scenario": { "maxErrors": 3, "autoCommit": true }
+  }
+}

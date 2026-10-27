@@ -8,7 +8,7 @@ import { systemTools } from './tools/system.ts';
 import { writeFileTool } from './tools/write-file.ts';
 
 export { PcAgent, type PcAgentOptions } from './client.ts';
-export { PathNotAllowedError, resolveAllowedPath } from './tools/path-guard.ts';
+export { PathNotAllowedError, missingPathError, resolveAllowedPath } from './tools/path-guard.ts';
 export { type CdpClient, connectCdp } from './browser/cdp.ts';
 export {
   callResultText,

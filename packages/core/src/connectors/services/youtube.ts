@@ -1,0 +1,61 @@
+import type { ConnectorSpec } from '@mimi/shared';
+
+export const youtubeConnector: ConnectorSpec = {
+  key: 'youtube',
+  label: 'YouTube',
+  category: 'media',
+  description: 'Search videos, list a channel upload and upload raw video bytes through the YouTube Data API; uploads need the youtube.upload scope',
+  baseUrl: 'https://www.googleapis.com',
+  auth: {
+    kind: 'oauth2',
+    fields: [],
+    authorizeUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
+    tokenUrl: 'https://oauth2.googleapis.com/token',
+    scopes: ['https://www.googleapis.com/auth/youtube.readonly', 'https://www.googleapis.com/auth/youtube.upload'],
+    extra: { provider: 'google' },
+  },
+  operations: [
+    {
+      key: 'search_videos',
+      label: 'Search videos',
+      method: 'GET',
+      path: '/youtube/v3/search?part=snippet',
+      risk: 'read',
+      fields: [
+        { key: 'q', label: 'Query', type: 'string', required: true },
+        { key: 'maxResults', label: 'Max results', type: 'number', required: false, default: 10 },
+      ],
+      response: { itemsPath: 'items' },
+      untrustedInput: true,
+      paginated: true,
+    },
+    {
+      key: 'list_channel_videos',
+      label: 'List channel videos',
+      method: 'GET',
+      path: '/youtube/v3/search?part=snippet&type=video&order=date',
+      risk: 'read',
+      fields: [
+        { key: 'channelId', label: 'Channel ID', type: 'string', required: true },
+        { key: 'maxResults', label: 'Max results', type: 'number', required: false, default: 10 },
+      ],
+      response: { itemsPath: 'items' },
+      untrustedInput: true,
+      paginated: true,
+    },
+    {
+      key: 'upload_video',
+      label: 'Upload video',
+      description: 'Sends raw base64 bytes with uploadType=media; title and metadata must be set later or with a resumable upload',
+      method: 'POST',
+      path: 'https://www.googleapis.com/upload/youtube/v3/videos?part=snippet,status&uploadType=media',
+      risk: 'write',
+      bodyFormat: 'binary',
+      body: '{{content}}',
+      headers: { 'content-type': 'application/octet-stream' },
+      fields: [{ key: 'content', label: 'Video bytes (base64)', type: 'string', required: true }],
+    },
+  ],
+  pagination: { mode: 'nextPageToken', cursorParam: 'pageToken', itemsPath: 'items', nextPath: 'nextPageToken' },
+  rateLimit: { requests: 10, perMs: 1000, burst: 10 },
+};

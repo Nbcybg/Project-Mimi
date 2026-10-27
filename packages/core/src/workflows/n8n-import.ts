@@ -1,4 +1,5 @@
-import type { JsonValue, NodeTypeName, Operator, WorkflowNode, WorkflowTriggerRef, WorkflowView } from '@mimi/shared';
+import type { ConnectorField, ConnectorOperation, JsonValue, NodeTypeName, Operator, WorkflowNode, WorkflowTriggerRef, WorkflowView } from '@mimi/shared';
+import { connectorSpecs } from '../connectors/services/index.ts';
 
 /**
  * Turns an n8n workflow export into Mimi workflows: one per trigger, nodes mapped to
@@ -16,6 +17,10 @@ export interface N8nImportReport {
   unsupported: Array<{ node: string; type: string; reason: string }>;
   /** Fields whose value looked like a secret and was not imported. */
   redacted: Array<{ node: string; field: string }>;
+  /** App nodes mapped to native connector operations. */
+  mapped: Array<{ node: string; connector: string; operation: string; fields: string[]; confidence: 'high' | 'medium' }>;
+  /** n8n credentials are metadata only; each node still needs a Mimi connection. */
+  connections: Array<{ node: string; connector: string; credentialType?: string; credentialName?: string }>;
   /** Chat models the n8n flow used (per node), to pick matching models in Mimi. */
   models: Array<{ node: string; model: string }>;
   /** System prompts of n8n AI agents: worth copying into a Mimi agent. */
@@ -37,6 +42,7 @@ interface N8nNode {
   type: string;
   typeVersion?: number;
   parameters?: Record<string, unknown>;
+  credentials?: Record<string, unknown>;
   disabled?: boolean;
   onError?: string;
   retryOnFail?: boolean;
@@ -87,6 +93,10 @@ const TRIGGERS = new Set([
   'errorTrigger',
   'formTrigger',
   'rssFeedReadTrigger',
+  'slackTrigger',
+  'githubTrigger',
+  'linearTrigger',
+  'todoistTrigger',
 ]);
 
 /** LangChain nodes that only plug into an AI node (model, memory, tool, parser…). */
@@ -97,8 +107,740 @@ const SECRET_VALUE =
   /\b(sk-[A-Za-z0-9_-]{16,}|sk_live_[A-Za-z0-9]{16,}|AIza[0-9A-Za-z_-]{30,}|ghp_[A-Za-z0-9]{30,}|xox[abp]-[A-Za-z0-9-]{20,}|\d{8,10}:[A-Za-z0-9_-]{35}|eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}|Bearer\s+[A-Za-z0-9._~+/-]{20,})/;
 export const REDACTED = '<<ใส่ค่าเอง: ค่าลับไม่ถูกนำเข้า>>';
 
+interface AppMapping {
+  connector: string;
+  operations: Record<string, string>;
+}
+
+const APP_MAPPINGS: Record<string, AppMapping> = {
+  slack: {
+    connector: 'slack',
+    operations: {
+      'message.post': 'send_message',
+      'message.send': 'send_message',
+      'message.update': 'update_message',
+      'message.getall': 'list_messages',
+      'channel.getall': 'list_channels',
+      'user.getall': 'list_users',
+      'reaction.add': 'add_reaction',
+    },
+  },
+  discord: {
+    connector: 'discord',
+    operations: {
+      'message.post': 'send_message',
+      'message.send': 'send_message',
+      'message.getall': 'list_messages',
+      'message.delete': 'delete_message',
+      'channel.getall': 'list_channels',
+      'guild.getall': 'list_guilds',
+    },
+  },
+  notion: {
+    connector: 'notion',
+    operations: {
+      search: 'search',
+      'page.get': 'get_page',
+      'page.create': 'create_page',
+      'databasepage.create': 'create_page',
+      'block.append': 'append_blocks',
+      'database.query': 'query_database',
+      'database.getall': 'query_database',
+    },
+  },
+  airtable: {
+    connector: 'airtable',
+    operations: {
+      'record.create': 'create_record',
+      'record.update': 'update_record',
+      'record.upsert': 'update_record',
+      'record.delete': 'delete_record',
+      'record.get': 'get_record',
+      'record.getall': 'list_records',
+    },
+  },
+  googledocs: {
+    connector: 'google_docs',
+    operations: {
+      'document.create': 'create_document',
+      'document.get': 'get_document',
+      'text.append': 'append_text',
+      'text.replace': 'replace_text',
+    },
+  },
+  googletasks: {
+    connector: 'google_tasks',
+    operations: {
+      'tasklist.getall': 'list_tasklists',
+      'task.getall': 'list_tasks',
+      'task.create': 'create_task',
+      'task.complete': 'complete_task',
+      'task.close': 'complete_task',
+    },
+  },
+  googleforms: {
+    connector: 'google_forms',
+    operations: {
+      'form.get': 'get_form',
+      'form.create': 'create_form',
+      'response.getall': 'list_responses',
+      'response.get': 'get_response',
+    },
+  },
+  hubspot: {
+    connector: 'hubspot',
+    operations: {
+      'contact.search': 'search_contacts',
+      'contact.getall': 'search_contacts',
+      'contact.create': 'create_contact',
+      'contact.update': 'update_contact',
+      'deal.getall': 'list_deals',
+      'deal.create': 'create_deal',
+      'ticket.getall': 'list_tickets',
+    },
+  },
+  stripe: {
+    connector: 'stripe',
+    operations: {
+      'customer.getall': 'list_customers',
+      'customer.create': 'create_customer',
+      'charge.getall': 'list_payments',
+      'payment.getall': 'list_payments',
+      'paymentlink.create': 'create_payment_link',
+      'refund.create': 'refund_payment',
+    },
+  },
+  github: {
+    connector: 'github',
+    operations: {
+      'repository.getall': 'list_repos',
+      'file.get': 'get_file',
+      'issue.create': 'create_issue',
+      'issue.getall': 'list_issues',
+      'issue.update': 'update_issue',
+      'issuecomment.create': 'create_comment',
+    },
+  },
+  jira: {
+    connector: 'jira',
+    operations: {
+      'project.getall': 'list_projects',
+      'issue.search': 'search_issues',
+      'issue.create': 'create_issue',
+      'issue.update': 'update_issue',
+      'issuecomment.add': 'add_comment',
+      'issuecomment.create': 'add_comment',
+    },
+  },
+  trello: {
+    connector: 'trello',
+    operations: {
+      'board.getall': 'list_boards',
+      'list.getall': 'list_lists',
+      'card.getall': 'list_cards',
+      'card.create': 'create_card',
+      'card.update': 'move_card',
+      'card.move': 'move_card',
+    },
+  },
+  asana: {
+    connector: 'asana',
+    operations: {
+      'workspace.getall': 'list_workspaces',
+      'project.getall': 'list_projects',
+      'task.getall': 'list_tasks',
+      'task.create': 'create_task',
+      'task.complete': 'complete_task',
+      'task.update': 'complete_task',
+    },
+  },
+  clickup: {
+    connector: 'clickup',
+    operations: {
+      'space.getall': 'list_spaces',
+      'list.getall': 'list_lists',
+      'task.getall': 'list_tasks',
+      'task.create': 'create_task',
+      'task.update': 'update_task',
+    },
+  },
+  monday: {
+    connector: 'monday',
+    operations: {
+      'board.getall': 'list_boards',
+      'item.getall': 'list_items',
+      'item.create': 'create_item',
+      'item.update': 'update_item',
+      'update.create': 'create_update',
+    },
+  },
+  mondaycom: {
+    connector: 'monday',
+    operations: {
+      'board.getall': 'list_boards',
+      'item.getall': 'list_items',
+      'item.create': 'create_item',
+      'item.update': 'update_item',
+      'update.create': 'create_update',
+    },
+  },
+  linear: {
+    connector: 'linear',
+    operations: {
+      'team.getall': 'list_teams',
+      'issue.getall': 'list_issues',
+      'issue.create': 'create_issue',
+      'issue.update': 'update_issue',
+      'comment.create': 'add_comment',
+      'comment.add': 'add_comment',
+    },
+  },
+  todoist: {
+    connector: 'todoist',
+    operations: {
+      'project.getall': 'list_projects',
+      'task.getall': 'list_tasks',
+      'task.get': 'get_task',
+      'task.create': 'create_task',
+      'task.complete': 'complete_task',
+      'task.close': 'complete_task',
+    },
+  },
+  dropbox: {
+    connector: 'dropbox',
+    operations: {
+      'folder.getall': 'list_folder',
+      'folder.list': 'list_folder',
+      'file.search': 'search',
+      'file.download': 'download_file',
+      'file.upload': 'upload_file',
+      'file.get': 'get_metadata',
+    },
+  },
+  openai: {
+    connector: 'openai',
+    operations: {
+      'model.getall': 'list_models',
+      'response.create': 'create_response',
+      'embedding.create': 'create_embedding',
+      'chat.create': 'chat_completion',
+      'text.create': 'chat_completion',
+      'text.message': 'chat_completion',
+      'file.getall': 'list_files',
+    },
+  },
+  googledrive: {
+    connector: 'google_drive',
+    operations: {
+      'file.getall': 'list_files',
+      'file.get': 'get_file',
+      'folder.create': 'create_folder',
+      'file.move': 'move_file',
+      'file.delete': 'delete_file',
+    },
+  },
+  salesforce: {
+    connector: 'salesforce',
+    operations: {
+      search: 'search',
+      'contact.getall': 'list_contacts',
+      'contact.create': 'create_contact',
+      'opportunity.getall': 'list_opportunities',
+      'opportunity.update': 'update_opportunity',
+    },
+  },
+  pipedrive: {
+    connector: 'pipedrive',
+    operations: {
+      'person.getall': 'list_persons',
+      'person.create': 'create_person',
+      'deal.getall': 'list_deals',
+      'deal.create': 'create_deal',
+      'deal.update': 'update_deal',
+    },
+  },
+  shopify: {
+    connector: 'shopify',
+    operations: {
+      'product.getall': 'list_products',
+      'product.get': 'get_product',
+      'order.getall': 'list_orders',
+      'order.create': 'create_order',
+      'inventory.update': 'update_inventory',
+    },
+  },
+  woocommerce: {
+    connector: 'woocommerce',
+    operations: {
+      'product.getall': 'list_products',
+      'product.get': 'get_product',
+      'product.create': 'create_product',
+      'order.getall': 'list_orders',
+      'order.update': 'update_order',
+    },
+  },
+  wordpress: {
+    connector: 'wordpress',
+    operations: {
+      'post.getall': 'list_posts',
+      'post.get': 'get_post',
+      'post.create': 'create_post',
+      'post.update': 'update_post',
+      'media.upload': 'upload_media',
+    },
+  },
+  mailchimp: {
+    connector: 'mailchimp',
+    operations: {
+      'list.getall': 'list_lists',
+      'list.get': 'get_list',
+      'member.create': 'add_member',
+      'member.add': 'add_member',
+      'campaign.getall': 'list_campaigns',
+      'campaign.create': 'create_campaign',
+    },
+  },
+  sendgrid: {
+    connector: 'sendgrid',
+    operations: {
+      'mail.send': 'send_email',
+      'template.getall': 'list_templates',
+      'template.get': 'get_template',
+      'sender.getall': 'list_senders',
+      'stats.get': 'get_stats',
+    },
+  },
+  twilio: {
+    connector: 'twilio',
+    operations: {
+      'sms.send': 'send_sms',
+      'message.getall': 'list_messages',
+      'message.get': 'get_message',
+      'call.getall': 'list_calls',
+      'call.get': 'get_call',
+    },
+  },
+  whatsapp: {
+    connector: 'whatsapp',
+    operations: {
+      'message.send': 'send_text',
+      'message.sendtemplate': 'send_template',
+      'template.getall': 'list_templates',
+      'phonenumber.getall': 'list_phone_numbers',
+      'media.get': 'get_media',
+    },
+  },
+  supabase: {
+    connector: 'supabase',
+    operations: {
+      'row.getall': 'select_rows',
+      'row.create': 'insert_rows',
+      'row.update': 'update_rows',
+      'row.delete': 'delete_rows',
+      'row.upsert': 'upsert_rows',
+    },
+  },
+  microsoftteams: {
+    connector: 'microsoft_teams',
+    operations: {
+      'team.getall': 'list_teams',
+      'channel.getall': 'list_channels',
+      'message.create': 'send_message',
+      'message.send': 'send_message',
+      'message.getall': 'list_messages',
+    },
+  },
+  microsoftexcel: {
+    connector: 'excel',
+    operations: {
+      'worksheet.getall': 'list_worksheets',
+      'range.read': 'read_range',
+      'range.write': 'write_range',
+      'table.addrow': 'add_row',
+      'worksheet.addrow': 'add_row',
+    },
+  },
+  zoom: {
+    connector: 'zoom',
+    operations: {
+      'meeting.getall': 'list_meetings',
+      'meeting.create': 'create_meeting',
+      'meeting.get': 'get_meeting',
+      'meeting.delete': 'delete_meeting',
+    },
+  },
+  calendly: {
+    connector: 'calendly',
+    operations: {
+      'eventtype.getall': 'list_event_types',
+      'scheduledevent.getall': 'list_scheduled_events',
+      'invitee.create': 'create_invitee',
+    },
+  },
+  typeform: {
+    connector: 'typeform',
+    operations: {
+      'form.getall': 'list_forms',
+      'form.get': 'get_form',
+      'response.getall': 'list_responses',
+    },
+  },
+  box: {
+    connector: 'box',
+    operations: {
+      'folder.getall': 'list_folder',
+      'folder.list': 'list_folder',
+      'file.search': 'search',
+      'file.upload': 'upload_file',
+      'file.download': 'download_file',
+    },
+  },
+  googleanalytics: {
+    connector: 'google_analytics',
+    operations: {
+      'property.getall': 'list_properties',
+      'report.get': 'run_report',
+      'report.run': 'run_report',
+    },
+  },
+  googleads: {
+    connector: 'google_ads',
+    operations: {
+      'campaign.getall': 'list_campaigns',
+      'campaign.get': 'get_campaign',
+      'campaign.update': 'update_campaign_status',
+    },
+  },
+  line: {
+    connector: 'line',
+    operations: {
+      'message.send': 'send_text',
+      'message.sendflex': 'send_flex',
+      'follower.getall': 'list_followers',
+    },
+  },
+  zohocrm: {
+    connector: 'zoho_crm',
+    operations: {
+      'contact.getall': 'list_contacts',
+      'contact.create': 'create_contact',
+      'deal.getall': 'list_deals',
+      'deal.create': 'create_deal',
+    },
+  },
+  facebook: {
+    connector: 'facebook',
+    operations: {
+      'page.getall': 'list_pages',
+      'post.create': 'create_post',
+      'post.getall': 'list_posts',
+    },
+  },
+  facebookpages: {
+    connector: 'facebook',
+    operations: {
+      'page.getall': 'list_pages',
+      'post.create': 'create_post',
+      'post.getall': 'list_posts',
+    },
+  },
+  instagram: {
+    connector: 'instagram',
+    operations: {
+      'media.getall': 'list_media',
+      'post.create': 'create_post',
+      'insights.get': 'get_insights',
+    },
+  },
+  linkedin: {
+    connector: 'linkedin',
+    operations: {
+      'organization.getall': 'list_organizations',
+      'post.create': 'create_post',
+      'profile.get': 'get_profile',
+    },
+  },
+  x: {
+    connector: 'x',
+    operations: {
+      'tweet.create': 'create_post',
+      'post.create': 'create_post',
+      'tweet.getall': 'list_posts',
+      'post.getall': 'list_posts',
+      'tweet.delete': 'delete_post',
+      'post.delete': 'delete_post',
+    },
+  },
+  twitter: {
+    connector: 'x',
+    operations: {
+      'tweet.create': 'create_post',
+      'post.create': 'create_post',
+      'tweet.getall': 'list_posts',
+      'post.getall': 'list_posts',
+      'tweet.delete': 'delete_post',
+      'post.delete': 'delete_post',
+    },
+  },
+  youtube: {
+    connector: 'youtube',
+    operations: {
+      'video.search': 'search',
+      'video.getall': 'list_channel_videos',
+      'channel.getall': 'list_channel_videos',
+      'video.upload': 'upload_video',
+    },
+  },
+  reddit: {
+    connector: 'reddit',
+    operations: {
+      'post.search': 'search',
+      'post.getall': 'list_subreddit_posts',
+      'comment.create': 'create_comment',
+    },
+  },
+  googlesearchconsole: {
+    connector: 'google_search_console',
+    operations: {
+      'site.getall': 'list_sites',
+      'searchanalytics.query': 'query_search_analytics',
+    },
+  },
+  googlechat: {
+    connector: 'google_chat',
+    operations: {
+      'space.getall': 'list_spaces',
+      'message.create': 'send_message',
+      'message.send': 'send_message',
+      'message.getall': 'list_messages',
+    },
+  },
+  googleslides: {
+    connector: 'google_slides',
+    operations: {
+      'presentation.create': 'create_presentation',
+      'presentation.get': 'get_presentation',
+      'text.add': 'add_text',
+      'text.insert': 'add_text',
+    },
+  },
+  googleclassroom: {
+    connector: 'google_classroom',
+    operations: {
+      'course.getall': 'list_courses',
+      'coursework.getall': 'list_coursework',
+      'coursework.create': 'create_coursework',
+    },
+  },
+};
+
+const CONNECTOR_OPERATIONS = new Map(
+  connectorSpecs.map((spec) => [spec.key, new Map(spec.operations.map((operation) => [operation.key, operation]))]),
+);
+
+const FIELD_ALIASES: Record<string, string[]> = {
+  channel: ['channel', 'channelId', 'channelName'],
+  channelId: ['channelId', 'channel'],
+  guildId: ['guildId', 'guild', 'serverId'],
+  text: ['text', 'message', 'content', 'messageText'],
+  content: ['content', 'text', 'message', 'body'],
+  body: ['body', 'content', 'text', 'message'],
+  title: ['title', 'name', 'summary', 'subject'],
+  name: ['name', 'title', 'subject'],
+  description: ['description', 'notes', 'body'],
+  notes: ['notes', 'description'],
+  subject: ['subject', 'title'],
+  query: ['query', 'q', 'searchTerm', 'search'],
+  q: ['q', 'query', 'searchTerm'],
+  jql: ['jql', 'query'],
+  search: ['search', 'query', 'q'],
+  limit: ['limit', 'maxResults', 'count', 'per_page', 'pageSize', 'first'],
+  maxResults: ['maxResults', 'limit', 'count', 'per_page', 'pageSize'],
+  pageSize: ['pageSize', 'limit', 'maxResults', 'per_page', 'first'],
+  per_page: ['per_page', 'limit', 'maxResults', 'pageSize'],
+  first: ['first', 'limit', 'maxResults', 'pageSize'],
+  email: ['email', 'emailAddress'],
+  to: ['to', 'toNumber', 'toPhoneNumber', 'recipient'],
+  from: ['from', 'fromEmail', 'fromNumber', 'sender'],
+  baseId: ['baseId', 'base'],
+  table: ['table', 'tableName'],
+  recordId: ['recordId', 'record'],
+  fields: ['fields', 'fieldValues', 'fieldsUi'],
+  properties: ['properties', 'propertyValues', 'propertiesUi'],
+  documentId: ['documentId', 'document'],
+  fileId: ['fileId', 'file'],
+  folderId: ['folderId', 'folder', 'parentId'],
+  pageId: ['pageId', 'page'],
+  databaseId: ['databaseId', 'database'],
+  blockId: ['blockId', 'block'],
+  boardId: ['boardId', 'board'],
+  listId: ['listId', 'list'],
+  idList: ['idList', 'listId', 'list'],
+  cardId: ['cardId', 'card'],
+  taskId: ['taskId', 'task', 'task_id'],
+  itemId: ['itemId', 'item'],
+  spaceId: ['spaceId', 'space'],
+  teamId: ['teamId', 'team'],
+  projectId: ['projectId', 'project_id', 'project'],
+  projectKey: ['projectKey', 'project'],
+  issueKey: ['issueKey', 'issueId', 'issue'],
+  issueNumber: ['issueNumber', 'issueId', 'issue'],
+  issueId: ['issueId', 'issue'],
+  issueType: ['issueType', 'issuetype'],
+  owner: ['owner', 'repositoryOwner', 'ownerName'],
+  repo: ['repo', 'repository', 'repositoryName'],
+  path: ['path', 'filePath'],
+  state: ['state', 'status'],
+  status: ['status', 'state'],
+  amount: ['amount', 'value'],
+  due: ['due', 'dueDate', 'dueString'],
+  input: ['input', 'prompt', 'text'],
+  model: ['model', 'modelId', 'modelName'],
+  max: ['max', 'limit', 'maxItems'],
+};
+
+const N8N_META = new Set(['resource', 'operation', 'action', 'mode', 'authentication', 'credentials', 'options', 'additionalFields', 'updateFields', 'fieldsUi', 'propertiesUi', 'pollTimes', 'routing', 'position', 'notes', 'typeVersion', 'alwaysOutputData', 'executeOnce', 'retryOnFail', 'maxTries', 'waitBetweenTries', 'onError', 'continueOnFail', 'disabled', 'id', 'name', 'type']);
+
+const normalizeKey = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, '');
+
 const isRecord = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 const str = (value: unknown): string => (value === undefined || value === null ? '' : typeof value === 'object' ? JSON.stringify(value) : String(value));
+const hasOwn = (value: Record<string, unknown>, key: string): boolean => Object.prototype.hasOwnProperty.call(value, key);
+const isEmpty = (value: unknown): boolean => value === undefined || value === null || value === '';
+
+function pairsToRecord(list: unknown[], nameKeys: string[], valueKeys: string[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const entry of list.filter(isRecord)) {
+    const name = nameKeys.map((key) => str(entry[key])).find(Boolean);
+    if (!name) continue;
+    const value = valueKeys.map((key) => entry[key]).find((item) => item !== undefined);
+    out[name] = value ?? '';
+  }
+  return out;
+}
+
+function unwrapValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    const entries = value.filter(isRecord);
+    if (entries.length === value.length && entries.length > 0) {
+      const fieldPairs = entries.every((entry) => hasOwn(entry, 'fieldId') && hasOwn(entry, 'fieldValue'));
+      const propertyPairs = entries.every((entry) => (hasOwn(entry, 'name') || hasOwn(entry, 'key')) && hasOwn(entry, 'value'));
+      if (fieldPairs) return pairsToRecord(entries, ['fieldId', 'name', 'key'], ['fieldValue', 'value']);
+      if (propertyPairs) return pairsToRecord(entries, ['name', 'key', 'fieldId'], ['value', 'fieldValue']);
+    }
+    return value.map(unwrapValue);
+  }
+  if (!isRecord(value)) return value;
+  if (value.__rl === true || (hasOwn(value, 'value') && (hasOwn(value, 'cachedResultName') || hasOwn(value, 'mode')))) {
+    return unwrapValue(value.value ?? value.cachedResultName);
+  }
+  if (Array.isArray(value.fieldValues)) return pairsToRecord(value.fieldValues, ['fieldId', 'name', 'key'], ['fieldValue', 'value']);
+  if (Array.isArray(value.propertyValues)) return pairsToRecord(value.propertyValues, ['name', 'key', 'fieldId'], ['value', 'fieldValue']);
+  return value;
+}
+
+function parameterBag(connector: string, parameters: Record<string, unknown>): Record<string, unknown> {
+  const bag = { ...parameters };
+  for (const key of ['additionalFields', 'updateFields', 'options', 'fieldsUi', 'propertiesUi']) {
+    const nested = parameters[key];
+    if (!isRecord(nested)) continue;
+    for (const [name, value] of Object.entries(nested)) if (!hasOwn(bag, name) || isEmpty(bag[name])) bag[name] = value;
+  }
+  if (connector === 'github') {
+    const repository = unwrapValue(bag.repository ?? bag.repo);
+    if (typeof repository === 'string' && repository.includes('/')) {
+      const [owner, repo] = repository.split('/');
+      if (owner && (!hasOwn(bag, 'owner') || isEmpty(bag.owner))) bag.owner = owner;
+      if (repo && (!hasOwn(bag, 'repo') || isEmpty(bag.repo))) bag.repo = repo;
+    }
+  }
+  return bag;
+}
+
+function findFieldValue(bag: Record<string, unknown>, field: ConnectorField, mapping: AppMapping): { found: boolean; value?: unknown } {
+  const keys = [field.key, ...(FIELD_ALIASES[field.key] ?? []), ...((mapping as AppMapping & { fields?: Record<string, string[]> }).fields?.[field.key] ?? [])];
+  for (const key of keys) {
+    if (hasOwn(bag, key) && !isEmpty(bag[key])) return { found: true, value: bag[key] };
+  }
+  const normalized = new Map(Object.entries(bag).map(([key, value]) => [normalizeKey(key), value]));
+  for (const key of keys) {
+    const value = normalized.get(normalizeKey(key));
+    if (!isEmpty(value)) return { found: true, value };
+  }
+  return { found: false };
+}
+
+function connectorInputOf(
+  mapping: AppMapping,
+  operationKey: string,
+  parameters: Record<string, unknown>,
+  conv: (value: unknown) => JsonValue,
+  warn: (message: string) => void,
+  nodeName: string,
+): { input: Record<string, JsonValue>; fields: string[]; missing: string[]; knownOperation: boolean } {
+  const bag = parameterBag(mapping.connector, parameters);
+  const operation = CONNECTOR_OPERATIONS.get(mapping.connector)?.get(operationKey);
+  const input: Record<string, JsonValue> = {};
+  const fields: string[] = [];
+  const missing: string[] = [];
+  if (!operation) {
+    for (const [key, value] of Object.entries(bag)) {
+      if (N8N_META.has(key) || key.startsWith('_')) continue;
+      if (isEmpty(value)) continue;
+      input[key] = conv(unwrapValue(value));
+      fields.push(key);
+    }
+    warn(`"${nodeName}": connector "${mapping.connector}" is not installed here; input was copied as-is, so check it after adding the connector`);
+    return { input, fields, missing, knownOperation: false };
+  }
+  for (const field of operation.fields) {
+    const found = findFieldValue(bag, field, mapping);
+    if (!found.found) {
+      if (field.required !== false) missing.push(field.key);
+      continue;
+    }
+    const raw = unwrapValue(found.value);
+    input[field.key] = field.type === 'json' && typeof raw === 'string' ? parseJsonParam(raw, warn) : conv(raw);
+    fields.push(field.key);
+  }
+  if (missing.length > 0) warn(`"${nodeName}": ${mapping.connector}.${operationKey} is missing required field(s): ${missing.join(', ')}`);
+  return { input, fields, missing, knownOperation: true };
+}
+
+function reportConnection(node: N8nNode, connector: string, report: N8nImportReport, warn: (message: string) => void): void {
+  const credentials = isRecord(node.credentials) ? node.credentials : {};
+  const entries = Object.entries(credentials).filter((entry): entry is [string, Record<string, unknown>] => isRecord(entry[1]));
+  if (entries.length === 0) {
+    report.connections.push({ node: node.name, connector });
+    warn(`"${node.name}": choose a Mimi connection for "${connector}"`);
+    return;
+  }
+  for (const [credentialType, credential] of entries) {
+    const credentialName = str(credential.name);
+    report.connections.push({ node: node.name, connector, credentialType, ...(credentialName ? { credentialName } : {}) });
+    warn(`"${node.name}": n8n credential "${credentialName || credentialType}" (${credentialType}) is metadata only; choose a Mimi connection for "${connector}"`);
+  }
+}
+
+function appOperationOf(node: N8nNode, mapping: AppMapping): { resource: string; operation: string; target: string } | undefined {
+  const parameters = node.parameters ?? {};
+  const resource = normalizeKey(str(parameters.resource));
+  const operation = normalizeKey(str(parameters.operation ?? parameters.action ?? parameters.mode));
+  if (!resource && !operation) return undefined;
+  const candidates = [...new Set([resource && operation ? `${resource}.${operation}` : '', operation, resource].filter(Boolean).map(normalizeKey))];
+  for (const candidate of candidates) {
+    for (const [pattern, target] of Object.entries(mapping.operations)) {
+      if (normalizeKey(pattern) === candidate) {
+        let operationTarget = target;
+        const messageType = normalizeKey(str(parameters.messageType));
+        if (mapping.connector === 'whatsapp' && target === 'send_text' && messageType === 'template') operationTarget = 'send_template';
+        if (mapping.connector === 'line' && target === 'send_text' && messageType === 'flex') operationTarget = 'send_flex';
+        return { resource: str(parameters.resource), operation: str(parameters.operation ?? parameters.action ?? parameters.mode), target: operationTarget };
+      }
+    }
+  }
+  return undefined;
+}
 
 /** Drops values that look like keys, tokens or passwords; expressions stay. */
 function redact(value: unknown, node: string, path: string, report: N8nImportReport): unknown {
@@ -349,6 +1091,16 @@ function triggerOf(node: N8nNode, report: N8nImportReport, warn: (message: strin
     case 'lc.chatTrigger':
     case 'lc.manualChatTrigger':
       return { pool: 'chat', config: { match: 'any', pattern: '', reply: 'workflow_only' } };
+    case 'slackTrigger':
+      warn('Slack trigger became a connector webhook; add the signing secret and paste the webhook URL into Slack Events');
+      return { pool: 'connector:slack:events', config: { signingSecretName: 'SLACK_SIGNING_SECRET' } };
+    case 'githubTrigger':
+      warn('GitHub trigger became a connector webhook; add the webhook secret and paste the webhook URL into the repository settings');
+      return { pool: 'connector:github:events', config: { secretName: 'GITHUB_WEBHOOK_SECRET' } };
+    case 'linearTrigger':
+      return { pool: 'connector:linear:new_issues', config: { everyMinutes: minutesOfPoll(node) } };
+    case 'todoistTrigger':
+      return { pool: 'connector:todoist:new_tasks', config: { everyMinutes: minutesOfPoll(node) } };
     case 'errorTrigger':
       warn('an n8n Error Trigger becomes a manual workflow; pick it as another workflow\'s "error workflow"');
       return { pool: 'manual', config: {} };
@@ -677,7 +1429,29 @@ function convertNode(node: N8nNode, attached: N8nNode[], options: N8nImportOptio
       }
       return placeholder(node.name, type, `${type} "${str(p.resource)}/${operation}" (images/audio): use "ดึงข้อมูลจากไฟล์" to read files with the vision / transcript model`, report);
     }
-    default:
+    default: {
+      const mapping = APP_MAPPINGS[normalizeKey(type)];
+      if (mapping) {
+        const resolved = appOperationOf(node, mapping);
+        if (!resolved) {
+          const detail = str(p.resource) || str(p.operation) ? `resource "${str(p.resource)}" / operation "${str(p.operation)}"` : 'no resource/operation';
+          return placeholder(node.name, type, `no connector operation mapping for ${detail}`, report);
+        }
+        const converted = connectorInputOf(mapping, resolved.target, p, conv, warn, node.name);
+        report.mapped.push({
+          node: node.name,
+          connector: mapping.connector,
+          operation: resolved.target,
+          fields: converted.fields,
+          confidence: converted.knownOperation && converted.missing.length === 0 ? 'high' : 'medium',
+        });
+        reportConnection(node, mapping.connector, report, warn);
+        return {
+          type: 'connector',
+          config: { connector: mapping.connector, operation: resolved.target, input: converted.input, allow: false },
+          output: main,
+        };
+      }
       if (type.startsWith('lc.vectorStore')) {
         const mode = str(p.mode || 'retrieve');
         warn(`vector store "${node.name}" maps to the knowledge base "imported" — create it under Hub → คลังความรู้`);
@@ -685,6 +1459,7 @@ function convertNode(node: N8nNode, attached: N8nNode[], options: N8nImportOptio
         return { type: 'knowledge', config: { operation: 'search', collection: 'imported', query: '{{ $json.text }}', output: 'context' }, output: main };
       }
       return placeholder(node.name, type, 'no Mimi node does this yet', report);
+    }
   }
 }
 
@@ -711,7 +1486,7 @@ function flowsOf(raw: unknown): N8nFlow[] {
 
 /** Converts an n8n export. Nothing is saved here; imported workflows start disabled. */
 export function importN8n(raw: unknown, options: N8nImportOptions): { workflows: WorkflowView[]; report: N8nImportReport } {
-  const report: N8nImportReport = { source: [], workflows: [], warnings: [], unsupported: [], redacted: [], models: [], prompts: [] };
+  const report: N8nImportReport = { source: [], workflows: [], warnings: [], unsupported: [], redacted: [], mapped: [], connections: [], models: [], prompts: [] };
   const taken = new Set(options.existingNames);
   const workflows: WorkflowView[] = [];
   const warned = new Set<string>();

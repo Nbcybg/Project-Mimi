@@ -476,17 +476,33 @@ Integration owner ของ Phase 3 คือ `P3-N8N` (3A)
 
 ## Phase exit criteria
 
-- [ ] 50 services
-- [ ] n8n importer map top services ได้ + report
-- [ ] Make importer อ่าน blueprint ได้ + report
-- [ ] Zapier importer อ่าน export ได้ + report
-- [ ] migration UI ใช้ได้ทั้ง 3 source
-- [ ] long-tail catalog + MCP grouping ใช้ได้
-- [ ] contract/migration tests ผ่าน
-- [ ] `npm run typecheck` ผ่าน
-- [ ] `npm test` ผ่าน
-- [ ] `npm run build:mac` ผ่าน
-- [ ] ไม่มี secret ใน log/fixture/JSON
+- [x] 50 services
+- [x] n8n importer map top services ได้ + report
+- [x] Make importer อ่าน blueprint ได้ + report
+- [x] Zapier importer อ่าน export ได้ + report
+- [x] migration UI ใช้ได้ทั้ง 3 source
+- [x] long-tail catalog + MCP grouping ใช้ได้
+- [x] contract/migration tests ผ่าน
+- [x] `npm run typecheck` ผ่าน
+- [x] `npm test` ผ่าน
+- [ ] `npm run build:mac` ผ่าน — ยังไม่ได้รัน (เครื่องพัฒนาเป็น Windows; ต้องรันบน macOS)
+- [x] ไม่มี secret ใน log/fixture/JSON
+
+## สถานะ Phase 3 (ปิดงาน)
+
+- Services: 50 / 214 operations / 214 tools / 50 Quick Work families
+  (`packages/core/src/connectors/services/index.ts`, `connectorTools()`).
+- Importers + reports: n8n (3A), Make (3B), Zapier (3C); UI ที่ 3F.
+  เอกสาร: `n8n-mapping.md`, `make-import.md`, `zapier-import.md`, `migration-ui.md`.
+- Long-tail UI (3G): catalog + MCP grouping ใน Hub → Node & Tools;
+  OpenAPI import ยังรอ server wiring — integration request อยู่ใน `longtail-ui.md`.
+- Tests (3H): `connector-migration.test.ts` (matrix 3 importer + regression run)
+  และ `connector-catalog.test.ts` (50 services, auth, tool names, builtin collision);
+  ทั้ง suite **496/496 pass**, `npm run typecheck` ผ่าน.
+- Auth ของทั้ง 50 service: `auth-matrix.md`; coverage gaps: หัวไฟล์
+  `packages/core/src/test/connector-migration.test.ts`.
+- ยังค้าง: `npm run build:mac`, manual smoke checklist (`ui-smoke-phase2.md`,
+  `migration-ui.md`, `longtail-ui.md`), และ OpenAPI import persistence (Phase 4+).
 
 ## Handoff ไป Phase 4
 

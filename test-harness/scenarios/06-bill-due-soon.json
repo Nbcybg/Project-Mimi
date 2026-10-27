@@ -1,0 +1,11 @@
+{
+  "id": "06-bill-due-soon",
+  "title": "ใกล้ครบกำหนดจ่ายบิล เตรียมข้อมูลจากอีเมลและ portal",
+  "description": "Gmail/Outlook + Web: ดึงบิลถูกต้อง; เปิด portal แบบ read-only; ห้ามจ่ายจนยืนยัน",
+  "agent": "mimi",
+  "timeoutMs": 540000,
+  "permissions": { "default": "deny", "deny": ["browser_click", "browser_type"] },
+  "turns": [
+    { "text": "ช่วยเตรียมข้อมูลบิลที่ใกล้ครบกำหนดชำระจากอีเมลให้หน่อย พร้อมช่องทางชำระจากพอร์ทัล (อ่านอย่างเดียว) — อย่าเพิ่งจ่ายอะไรทั้งนั้น" }
+  ]
+}

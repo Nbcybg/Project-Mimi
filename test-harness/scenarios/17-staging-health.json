@@ -1,0 +1,15 @@
+{
+  "id": "17-staging-health",
+  "title": "ต่อ SSH ไปเซิร์ฟเวอร์ staging ตรวจ disk, memory และ service ที่ล่ม",
+  "description": "Remote Shell/SSH: เชื่อมต่อด้วยคีย์ที่กำหนด; รันคำสั่ง read-only; สรุปผลถูกต้อง",
+  "agent": "mimi",
+  "timeoutMs": 540000,
+  "permissions": {
+    "default": "deny",
+    "shellAllow": ["Get-Content", "Get-ChildItem", "Select-String", "Test-Path", "Get-PSDrive", "Get-Item"],
+    "shellDeny": ["remove-item", "set-content", "add-content", "stop-process", "restart-service", "copy-item", "move-item", "start-process", "del "]
+  },
+  "turns": [
+    { "text": "ช่วยต่อเข้าเซิร์ฟเวอร์ staging แล้วตรวจ disk, memory และดูว่ามี service ไหนล่มบ้าง ใช้คำสั่งอ่านอย่างเดียวเท่านั้น แล้วสรุปผลให้หน่อย" }
+  ]
+}

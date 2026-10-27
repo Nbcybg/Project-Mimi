@@ -1,0 +1,113 @@
+{
+  "metadata": {
+    "version": 2
+  },
+  "zaps": [
+    {
+      "id": 21,
+      "title": "Secure webhook",
+      "enabled": true,
+      "nodes": {
+        "1": {
+          "id": 1,
+          "type_of": "read",
+          "action": "catch_hook",
+          "selected_api": "WebHookAPI",
+          "authentication_id": null,
+          "parent_id": null,
+          "root_id": null,
+          "params": {},
+          "meta": { "title": "Lead webhook" }
+        },
+        "2": {
+          "id": 2,
+          "type_of": "write",
+          "action": "post",
+          "selected_api": "WebhooksAPI",
+          "authentication_id": null,
+          "parent_id": 1,
+          "root_id": 1,
+          "params": {
+            "url": "https://api.example.com/v1/leads",
+            "method": "post",
+            "headers": [
+              { "name": "Authorization", "value": "Bearer demo-placeholder-token-not-real" },
+              { "name": "Accept", "value": "application/json" }
+            ],
+            "data": { "email": "{{1__email}}" }
+          },
+          "meta": { "title": "Send to CRM" }
+        },
+        "3": {
+          "id": 3,
+          "type_of": "filter",
+          "action": "filter",
+          "selected_api": "FilterAPI",
+          "authentication_id": null,
+          "parent_id": 2,
+          "root_id": 1,
+          "params": {
+            "filter_criteria": [
+              { "key": "1__email", "value": "vip", "match": "text_contains", "action": "continue" }
+            ]
+          },
+          "meta": { "title": "Only VIP" }
+        },
+        "4": {
+          "id": 4,
+          "type_of": "write",
+          "action": "channel_message",
+          "selected_api": "SlackAPI",
+          "authentication_id": "-",
+          "parent_id": 3,
+          "root_id": 1,
+          "params": {
+            "channel": "#vip",
+            "text": "VIP lead: {{1__email}}"
+          },
+          "meta": { "title": "VIP alert" }
+        },
+        "5": {
+          "id": 5,
+          "type_of": "write",
+          "action": "create_ticket",
+          "selected_api": "ZendeskAPI",
+          "authentication_id": "555",
+          "parent_id": 4,
+          "root_id": 1,
+          "params": { "subject": "Lead" },
+          "meta": { "title": "Zendesk ticket" }
+        }
+      }
+    },
+    {
+      "id": 22,
+      "title": "Scheduled digest",
+      "enabled": false,
+      "nodes": {
+        "1": {
+          "id": 1,
+          "type_of": "read",
+          "action": "every_day",
+          "selected_api": "ScheduleAPI",
+          "authentication_id": null,
+          "parent_id": null,
+          "root_id": null,
+          "params": {},
+          "meta": { "title": "Daily schedule" }
+        },
+        "2": {
+          "id": 2,
+          "type_of": "write",
+          "action": "channel_message",
+          "selected_api": "SlackAPI",
+          "authentication_id": "-",
+          "parent_id": 1,
+          "root_id": 1,
+          "params": { "channel": "#digest", "text": "Daily digest" },
+          "meta": { "title": "Digest message" }
+        }
+      }
+    }
+  ]
+}

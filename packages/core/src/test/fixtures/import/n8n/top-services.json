@@ -1,0 +1,235 @@
+{
+  "name": "Top services",
+  "nodes": [
+    {
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "top-services"
+      }
+    },
+    {
+      "name": "Post update",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [240, 0],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": "#ops",
+        "text": "=New lead: {{ $json.name }}"
+      },
+      "credentials": {
+        "slackApi": {
+          "id": "cred-slack",
+          "name": "Slack Ops"
+        }
+      }
+    },
+    {
+      "name": "Create page",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2,
+      "position": [480, 0],
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "create",
+        "databaseId": {
+          "__rl": true,
+          "value": "db-demo",
+          "mode": "list"
+        },
+        "propertiesUi": {
+          "propertyValues": [
+            {
+              "name": "Name",
+              "value": "={{ $json.name }}"
+            },
+            {
+              "name": "Email",
+              "value": "={{ $json.email }}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "notionApi": {
+          "id": "cred-notion",
+          "name": "Notion Workspace"
+        }
+      }
+    },
+    {
+      "name": "Save lead",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [720, 0],
+      "parameters": {
+        "resource": "record",
+        "operation": "create",
+        "base": {
+          "__rl": true,
+          "value": "appDemo",
+          "mode": "list"
+        },
+        "table": {
+          "__rl": true,
+          "value": "Leads",
+          "mode": "list"
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "Email",
+              "fieldValue": "={{ $json.email }}"
+            },
+            {
+              "fieldId": "Name",
+              "fieldValue": "={{ $json.name }}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "cred-airtable",
+          "name": "Airtable Leads"
+        }
+      }
+    },
+    {
+      "name": "Open issue",
+      "type": "n8n-nodes-base.github",
+      "typeVersion": 1,
+      "position": [960, 0],
+      "parameters": {
+        "resource": "issue",
+        "operation": "create",
+        "repository": {
+          "__rl": true,
+          "value": "acme/widgets",
+          "mode": "list"
+        },
+        "title": "=Lead {{ $json.name }}",
+        "body": "=Email: {{ $json.email }}"
+      },
+      "credentials": {
+        "githubApi": {
+          "id": "cred-github",
+          "name": "GitHub Main"
+        }
+      }
+    },
+    {
+      "name": "Create contact",
+      "type": "n8n-nodes-base.hubspot",
+      "typeVersion": 2,
+      "position": [1200, 0],
+      "parameters": {
+        "resource": "contact",
+        "operation": "create",
+        "propertiesUi": {
+          "propertyValues": [
+            {
+              "name": "email",
+              "value": "={{ $json.email }}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "hubspotApi": {
+          "id": "cred-hubspot",
+          "name": "HubSpot Main"
+        }
+      }
+    },
+    {
+      "name": "Archive lead",
+      "type": "n8n-nodes-base.awsS3",
+      "typeVersion": 2,
+      "position": [1440, 0],
+      "parameters": {
+        "resource": "file",
+        "operation": "upload"
+      },
+      "credentials": {
+        "aws": {
+          "id": "cred-aws",
+          "name": "AWS"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Post update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post update": {
+      "main": [
+        [
+          {
+            "node": "Create page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create page": {
+      "main": [
+        [
+          {
+            "node": "Save lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save lead": {
+      "main": [
+        [
+          {
+            "node": "Open issue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Open issue": {
+      "main": [
+        [
+          {
+            "node": "Create contact",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create contact": {
+      "main": [
+        [
+          {
+            "node": "Archive lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

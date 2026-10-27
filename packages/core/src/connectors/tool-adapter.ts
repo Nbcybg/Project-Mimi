@@ -98,6 +98,7 @@ export interface ConnectorToolDefinition extends ToolDefinition<Record<string, u
   connector: string;
   operation: string;
   familyLabel: string;
+  connectorCategory: string;
 }
 
 function toolFor(spec: ConnectorSpec, operation: ConnectorOperation, runtime: ConnectorRuntime): ConnectorToolDefinition {
@@ -129,7 +130,12 @@ function toolFor(spec: ConnectorSpec, operation: ConnectorOperation, runtime: Co
       return render(result);
     },
   });
-  return Object.assign(tool, { connector: spec.key, operation: operation.key, familyLabel: spec.label });
+  return Object.assign(tool, {
+    connector: spec.key,
+    operation: operation.key,
+    familyLabel: spec.label,
+    connectorCategory: spec.category,
+  });
 }
 
 /** Every operation of every registered connector, as an agent tool. */

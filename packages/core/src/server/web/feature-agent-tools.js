@@ -11,6 +11,20 @@
     ['off', 'ยังไม่ติดตั้ง'],
     ['setup', 'ต้องตั้งค่า'],
   ];
+  const CONNECTOR_CATEGORIES = [
+    ['ai', 'AI'],
+    ['cms', 'CMS'],
+    ['commerce', 'Commerce'],
+    ['communication', 'Communication'],
+    ['crm', 'CRM'],
+    ['database', 'Database'],
+    ['developer', 'Developer'],
+    ['finance', 'Finance'],
+    ['marketing', 'Marketing'],
+    ['productivity', 'Productivity'],
+    ['project-management', 'Project management'],
+    ['storage', 'Storage'],
+  ];
 
   // One card per service, with its operations inside. Individual tools are still what
   // agents list; this only keeps the picker from growing one card per operation.
@@ -63,6 +77,7 @@
     const dirty = new Set();
     let query = '';
     let filter = 'all';
+    let category = 'all';
 
     const currentAgent = () => String((typeof agentName === 'function' ? agentName() : agentName) || 'agent');
     const tools = () => M().state.tools || [];
@@ -280,7 +295,12 @@
       if (id.startsWith('connector:')) {
         const connector = id.slice('connector:'.length);
         const tool = tools().find((entry) => entry.connector === connector);
-        return { id, label: (tool && tool.familyLabel) || connector, prefix: `${connector}_` };
+        return {
+          id,
+          label: (tool && tool.familyLabel) || connector,
+          prefix: `${connector}_`,
+          category: (tool && tool.connectorCategory) || 'other',
+        };
       }
       return { id, label: id.replace(/^tool:/, '') };
     };
@@ -430,6 +450,21 @@
         filters.append(chip);
         return chip;
       });
+      const categorySelect = el('select', 'toolgrid-category');
+      const allOption = el('option', '', 'All categories');
+      allOption.value = 'all';
+      categorySelect.append(allOption);
+      for (const [key, label] of CONNECTOR_CATEGORIES) {
+        const option = el('option', '', label);
+        option.value = key;
+        categorySelect.append(option);
+      }
+      categorySelect.value = category;
+      categorySelect.onchange = () => {
+        category = categorySelect.value;
+        paintPicker();
+      };
+      filters.append(categorySelect);
       const count = el('span', 'toolgrid-count');
       bar.append(search, filters, count);
       const grid = el('div', 'tgrid toolpickergrid');
@@ -438,6 +473,7 @@
         const visible = families()
           .filter((family) => {
             const installed = familyInstalled(family);
+            if (category !== 'all' && family.category !== category) return false;
             if (filter === 'on' && installed === 0) return false;
             if (filter === 'off' && installed > 0) return false;
             if (filter === 'setup' && !familyNeedsSetup(family)) return false;

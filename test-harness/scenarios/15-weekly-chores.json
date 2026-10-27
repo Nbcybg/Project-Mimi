@@ -1,0 +1,11 @@
+{
+  "id": "15-weekly-chores",
+  "title": "สร้าง checklist งานบ้านประจำสัปดาห์และเตือนตามเวลา",
+  "description": "Calendar/Reminder: checklist ครบ; เตือนตรงเวลา; ติดตามสถานะได้",
+  "agent": "mimi",
+  "timeoutMs": 540000,
+  "permissions": { "default": "deny", "allow": ["create_trigger", "write_file", "memo_save"] },
+  "turns": [
+    { "text": "สร้าง checklist งานบ้านประจำสัปดาห์ให้หน่อย: ซักผ้า (เสาร์ 09:00), ทำความสะอาดห้องน้ำ (อาทิตย์ 10:00), รดน้ำต้นไม้ (ทุกวัน 07:00), ทิ้งขยะ (จันทร์/พฤหัส 19:00) พร้อมตั้งเตือนตามเวลานั้น และให้ฉันติดตามสถานะได้ด้วย" }
+  ]
+}

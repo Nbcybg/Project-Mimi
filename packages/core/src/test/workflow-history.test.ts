@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
+import os from 'node:os';
+import path from 'node:path';
 import { test } from 'node:test';
-import type { WorkflowRunResult } from '@mimi/shared';
+import type { ConnectorSpec, WorkflowRunResult, WorkflowView } from '@mimi/shared';
 import { openDb } from '../db/db.ts';
+import { type WorkflowRunnerDeps, WorkflowState, runWorkflow } from '../workflows/runner.ts';
 import { WorkflowRunStore } from '../workflows/run-history.ts';
 import { makeTestCore } from './core-helpers.ts';
 
@@ -44,6 +47,96 @@ test('run history: only the last 50 runs of a workflow are kept', () => {
   const all = store.list('mimi/triage', 100);
   assert.equal(all.length, 50);
   assert.equal(all.at(-1)!.id, 6);
+});
+
+test('run history: agent/trigger are explicit and errors/items are redacted', () => {
+  const store = new WorkflowRunStore(openDb(':memory:'));
+  const run: WorkflowRunResult = {
+    name: 'triage',
+    ok: false,
+    result: 'failed Authorization: Bearer abcdefgh12345 api_key=secretvalue',
+    nodes: [{
+      id: 'n1',
+      title: 'send',
+      type: 'connector',
+      status: 'error',
+      error: 'connector failed: token=xoxb-1234567890-abcdef',
+      trace: { connector: 'slack', operation: 'send_message', requestId: 'run-1:n1', errorCode: 'invalid_auth' },
+      attempts: 2,
+      input: [{ json: { token: 'xoxb-1234567890-abcdef', ok: 'keep', headers: { authorization: 'Bearer abcdefgh12345' } } }],
+      output: [],
+    }],
+  };
+  const id = store.record('mimi/triage', 'webhook', new Date(), run);
+  const summary = store.list('mimi/triage')[0]!;
+  assert.equal(summary.agent, 'mimi');
+  assert.equal(summary.trigger, 'webhook');
+  assert.equal(summary.workflow, 'mimi/triage');
+  assert.doesNotMatch(summary.result, /abcdefgh|secretvalue/);
+
+  const stored = store.get(id)!;
+  const node = stored.nodes[0]!;
+  assert.match(node.error ?? '', /\[redacted\]/);
+  assert.doesNotMatch(node.error ?? '', /xoxb/);
+  assert.equal(node.input[0]!.json.token, '[redacted]');
+  assert.equal(node.input[0]!.json.ok, 'keep');
+  assert.equal((node.input[0]!.json.headers as Record<string, string>).authorization, '[redacted]');
+  assert.deepEqual(node.trace, run.nodes[0]!.trace);
+  assert.equal(node.attempts, 2);
+});
+
+test('runner: node errors carry connector trace, error code and attempts', async () => {
+  const spec = {
+    key: 'demo',
+    title: 'Demo',
+    description: '',
+    auth: { kind: 'none' },
+    fields: [],
+    operations: [{ key: 'send', title: 'Send', description: '', risk: 'write', fields: [] }],
+  } as unknown as ConnectorSpec;
+  const deps: WorkflowRunnerDeps = {
+    runAgent: async () => '',
+    tool: () => undefined,
+    connector: {
+      get: () => spec,
+      execute: async () => {
+        const error = new Error('provider failed code=invalid_auth token=supersecret12345') as Error & { code: string };
+        error.code = 'invalid_auth';
+        throw error;
+      },
+    },
+    speak: () => {},
+    mail: { list: async () => [], markRead: async () => {} },
+    state: new WorkflowState(path.join(os.tmpdir(), `mimi-trace-${process.pid}-${Math.random().toString(36).slice(2)}.json`)),
+    allowedDirs: [],
+  };
+  const flow: WorkflowView = {
+    name: 'obs',
+    agent: 'mimi',
+    title: 'Observability',
+    description: '',
+    enabled: true,
+    trigger: { pool: 'manual', config: {} },
+    webhook: null,
+    nodes: [{
+      id: 'n1',
+      type: 'connector',
+      title: 'send',
+      config: { connector: 'demo', operation: 'send', allow: true },
+      retries: 1,
+      links: { main: [] },
+    }],
+  };
+  const run = await runWorkflow(flow, [{ json: {} }], deps);
+  const node = run.nodes[0]!;
+  assert.equal(node.status, 'error');
+  assert.equal(node.attempts, 2);
+  assert.match(node.error ?? '', /\[redacted\]/);
+  assert.doesNotMatch(node.error ?? '', /supersecret/);
+  assert.equal(node.trace?.connector, 'demo');
+  assert.equal(node.trace?.operation, 'send');
+  assert.equal(node.trace?.errorCode, 'invalid_auth');
+  assert.match(node.trace?.requestId ?? '', /:n1$/);
 });
 
 test('core: every top-level run is stored and the result carries its id', async () => {

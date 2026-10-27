@@ -339,7 +339,20 @@ implementation ของ runtime
 5. ห้ามยิง API จริงใน test; ใช้ fake fetch/fixture
 6. ห้ามใช้ `any` เพื่อหลบ type
 
-## 15. Contract change
+## 15. Phase 2 contract + integration tests
+
+`packages/core/src/test/connector-phase2.test.ts` enforces the Phase 2 surface:
+
+1. Every installed spec has a valid key, category, HTTPS base URL, auth kind and credential fields (no secret defaults).
+2. Operation and tool names are unique; methods, risks, field types, `select` choices and `optionsFrom` targets resolve.
+3. Pagination and rate-limit settings are well formed when present.
+4. Connector triggers have a sample; webhooks declare a signature and secret field; poll triggers reference a read operation and valid input/field/cursor keys.
+5. A core poll workflow runs only unseen items across scheduler fires and records one run per new item.
+6. The HTTP webhook route rejects a bad Slack signature, accepts a valid HMAC and runs the workflow.
+
+Regression coverage for Gmail, Sheets, Outlook and tool presets remains in the existing integration and tool-pool tests.
+
+## 16. Contract change
 
 การเปลี่ยนแบบ breaking (rename, เปลี่ยนความหมาย, ทำให้ field required):
 

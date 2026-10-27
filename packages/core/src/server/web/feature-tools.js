@@ -6,8 +6,12 @@
   const el = (tag, cls, text) => M().el(tag, cls, text);
   const button = (cls, text, onClick, title) => M().button(cls, text, onClick, title);
 
-  /** { mode: 'node' | 'custom' | 'custom-new' | 'mcp' | 'mcp-new', name?, type? } */
+  /** { mode: 'node' | 'custom' | 'custom-new' | 'custom-new-js' | 'mcp' | 'mcp-new' | 'connector', name?, type? } */
   let sel = null;
+  let catalogQuery = '';
+  let catalogCategory = 'all';
+  let catalogSource = 'all';
+  let catalogOnlyUnset = false;
 
   function go(next) {
     sel = next;
@@ -47,6 +51,240 @@
     if (String(type).startsWith('trigger_')) return 'ทริกเกอร์';
     return NODE_GROUPS.find((group) => group.types.includes(type))?.label || 'อื่น ๆ';
   };
+
+  // ---------- connector catalog ----------
+  const RISK_LABEL = { read: 'อ่าน', write: 'เขียน', delete: 'ลบ', shell: 'shell', network: 'เน็ต' };
+  const connectors = () => M().state.connectors || [];
+  const connections = () => M().state.connections || [];
+  const sourceOf = (spec) => (spec.category === 'imported' ? 'openapi' : 'native');
+  const sourceLabel = (spec) => (sourceOf(spec) === 'openapi' ? 'OpenAPI import' : 'native');
+  const isGoogleConnector = (spec) =>
+    spec.auth.kind === 'oauth2' && String(spec.auth.authorizeUrl || '').includes('accounts.google.com');
+  const googleConnected = () =>
+    ((M().state.settings || {}).accounts || []).some((account) => account.service === 'google' && account.connected);
+  const authLabelOf = (spec) => (spec.auth.kind === 'none' ? 'ไม่ต้องใช้ credential' : spec.auth.kind);
+  const initialsOf = (label) =>
+    String(label || '?')
+      .split(/\s+/)
+      .slice(0, 2)
+      .map((word) => word[0] || '')
+      .join('')
+      .toUpperCase() || '?';
+  const openAccounts = () => {
+    M().ui.hubTab = 'accounts';
+    M().setView('hub');
+    M().renderHub();
+  };
+  /** Whether the connector can run now: no credential, a Google account, or a stored connection. */
+  const connectionState = (spec) => {
+    if (spec.auth.kind === 'none') return { text: 'ไม่ต้องตั้ง credential', ok: true };
+    if (isGoogleConnector(spec)) {
+      return googleConnected() ? { text: 'ใช้บัญชี Google', ok: true } : { text: 'ต้องเชื่อมบัญชี Google', ok: false };
+    }
+    const entries = connections().filter((entry) => entry.connector === spec.key);
+    if (entries.length === 0) return { text: 'ต้องสร้าง connection', ok: false };
+    const ready = entries.filter((entry) => entry.connected).length;
+    if (ready === 0) return { text: `${entries.length} connection · ยังไม่เชื่อมต่อ`, ok: false };
+    return { text: `${ready}/${entries.length} connection${entries.some((entry) => entry.default) ? ' · มีค่าเริ่มต้น' : ''}`, ok: true };
+  };
+
+  function connectorRow(spec) {
+    const state = connectionState(spec);
+    const row = el('div', 'item');
+    row.style.cursor = 'pointer';
+    row.onclick = () => go({ mode: 'connector', name: spec.key });
+    const info = el('div');
+    const top = el('div', 'hstack');
+    top.append(
+      el('b', '', spec.label),
+      el('span', 'mono faint', spec.key),
+      el('span', 'badge', sourceLabel(spec)),
+      el('span', 'badge', spec.category),
+    );
+    info.append(top);
+    const meta = el('div', 'hstack');
+    meta.append(el('small', 'muted', `${spec.operations.length} operations · auth ${authLabelOf(spec)}`));
+    meta.append(el('span', `pill ${state.ok ? 'ok' : 'todo'}`, state.text));
+    if (!state.ok && spec.auth.kind !== 'none') {
+      const setup = button('btn ghost', 'ตั้งค่า credential', openAccounts);
+      setup.addEventListener('click', (event) => event.stopPropagation());
+      meta.append(setup);
+    }
+    info.append(meta);
+    row.append(el('span', 'badge', initialsOf(spec.label)), info);
+    return row;
+  }
+
+  function connectorPanel(key) {
+    const spec = connectors().find((entry) => entry.key === key);
+    const panel = el('div', 'panel');
+    if (!spec) {
+      panel.append(el('h3', '', 'ไม่พบ connector'), el('p', 'hint', 'connector นี้อาจถูกถอดออกแล้ว'));
+      return panel;
+    }
+    const state = connectionState(spec);
+    panel.append(el('h3', '', spec.label));
+    panel.append(el('p', 'hint', `${spec.key} · ${spec.category} · ${sourceLabel(spec)}`));
+    panel.append(el('p', '', spec.description));
+    const meta = el('div', 'grid2');
+    meta.append(
+      M().labelled('Base URL', el('code', 'mono', spec.baseUrl || '—')),
+      M().labelled('Auth', el('span', '', authLabelOf(spec))),
+      M().labelled('Operations', el('span', '', String(spec.operations.length))),
+      M().labelled('สถานะ', el('span', `pill ${state.ok ? 'ok' : 'todo'}`, state.text)),
+    );
+    panel.append(meta);
+
+    if (spec.auth.kind !== 'none') {
+      panel.append(el('h4', '', 'Credential ที่ต้องมี (ค่าเก็บในเครื่อง ไม่แสดงที่นี่)'));
+      const fields = el('div', 'tbl');
+      for (const field of spec.auth.fields) {
+        const row = el('div');
+        row.style.gridTemplateColumns = 'minmax(0, 1.2fr) minmax(0, 1fr) 70px';
+        row.append(el('span', '', field.label), el('span', 'mono faint', field.key), el('span', 'muted', field.type));
+        fields.append(row);
+      }
+      if (spec.auth.fields.length === 0) {
+        fields.append(el('p', 'hint', isGoogleConnector(spec) ? 'ใช้บัญชี Google ที่เชื่อมไว้ (Hub → บัญชี)' : 'connector นี้รับ token ตอนเชื่อมต่อ'));
+      }
+      panel.append(fields);
+      if ((spec.auth.scopes || []).length > 0) {
+        panel.append(el('h4', '', 'Scopes'));
+        const scopes = el('div', 'hstack');
+        for (const scope of spec.auth.scopes) scopes.append(el('span', 'chip', scope));
+        panel.append(scopes);
+      }
+      const entries = connections().filter((entry) => entry.connector === spec.key);
+      if (entries.length > 0) {
+        panel.append(el('h4', '', `Connections (${entries.length})`));
+        for (const entry of entries) {
+          panel.append(el('p', 'hint', `${entry.name} · ${entry.connected ? 'เชื่อมต่อแล้ว' : 'ยังไม่เชื่อมต่อ'}${entry.default ? ' · ค่าเริ่มต้น' : ''}`));
+        }
+      }
+      panel.append(button('btn', isGoogleConnector(spec) ? 'ไปที่บัญชี Google' : 'ไปตั้งค่า connection', openAccounts));
+    }
+
+    panel.append(el('h4', '', `Operations (${spec.operations.length})`));
+    const ops = el('div', 'tbl');
+    for (const operation of spec.operations) {
+      const row = el('div');
+      row.style.gridTemplateColumns = 'minmax(0, 1.1fr) 56px minmax(0, 1.4fr) 62px auto';
+      const risk = el('span');
+      risk.append(el('span', `risk${operation.risk === 'read' ? '' : ' w'}`, RISK_LABEL[operation.risk] || operation.risk));
+      row.append(
+        el('span', '', `${operation.label} (${operation.key})`),
+        el('span', 'mono muted', operation.method),
+        el('span', 'mono faint', operation.path),
+        risk,
+        el('span', 'muted', `${operation.fields.length} ช่อง${operation.untrustedInput ? ' · untrusted' : ''}`),
+      );
+      ops.append(row);
+    }
+    panel.append(ops);
+
+    const triggers = spec.triggers || [];
+    if (triggers.length > 0) {
+      panel.append(el('h4', '', `Triggers (${triggers.length})`));
+      const chips = el('div', 'hstack');
+      for (const trigger of triggers) chips.append(el('span', 'chip', `${trigger.label} · ${trigger.kind}`));
+      panel.append(chips);
+    }
+    panel.append(el('p', 'hint', 'Quick Work แยก node ตาม service — long-tail (custom / MCP / OpenAPI) อยู่ในกองของตัวเอง ไม่ปนกับ family native'));
+    return panel;
+  }
+
+  function catalogPanel() {
+    const box = el('div');
+    const all = connectors();
+    const imported = all.filter((spec) => sourceOf(spec) === 'openapi').length;
+    const mcp = M().state.toolMcp || [];
+    const mcpTools = mcp.reduce((total, server) => total + server.tools.length, 0);
+    box.append(el('h3', '', `คลัง Connector (${all.length} service)`));
+    box.append(
+      el(
+        'p',
+        'hint',
+        `native ${all.length - imported} · OpenAPI import ${imported} · MCP ${mcp.length} server (${mcpTools} tools) · คลิกแถวเพื่อดู operations และ auth · credential เก็บในเครื่องเท่านั้น`,
+      ),
+    );
+    if (!M().state.connections) M().send({ type: 'connector-connections' });
+
+    const bar = el('div', 'toolgrid-bar');
+    const search = el('input', 'toolgrid-search');
+    search.type = 'search';
+    search.placeholder = 'ค้นหา service, operation, category…';
+    search.value = catalogQuery;
+    const count = el('span', 'toolgrid-count');
+    bar.append(search, count);
+    const filters = el('div', 'hstack');
+    filters.style.margin = '0 0 8px';
+    const chips = [];
+    const addChip = (key, label, read, write) => {
+      const node = button(`chip${read() === key ? ' on' : ''}`, label, () => {
+        write(key);
+        for (const entry of chips) entry.node.classList.toggle('on', entry.read() === entry.key);
+        paint();
+      });
+      chips.push({ key, read, node });
+      filters.append(node);
+    };
+    addChip('all', 'ทุกแหล่ง', () => catalogSource, (value) => { catalogSource = value; });
+    addChip('native', 'native', () => catalogSource, (value) => { catalogSource = value; });
+    addChip('openapi', 'OpenAPI import', () => catalogSource, (value) => { catalogSource = value; });
+    const categories = [...new Set(all.map((spec) => spec.category))].sort();
+    const categorySelect = el('select');
+    for (const [value, label] of [['all', 'ทุก category'], ...categories.map((entry) => [entry, entry])]) {
+      const option = el('option', '', label);
+      option.value = value;
+      categorySelect.append(option);
+    }
+    categorySelect.value = catalogCategory;
+    categorySelect.onchange = () => {
+      catalogCategory = categorySelect.value;
+      paint();
+    };
+    filters.append(categorySelect);
+    const unset = button(`chip${catalogOnlyUnset ? ' on' : ''}`, 'ต้องตั้ง credential', () => {
+      catalogOnlyUnset = !catalogOnlyUnset;
+      unset.classList.toggle('on', catalogOnlyUnset);
+      paint();
+    });
+    filters.append(unset);
+    box.append(bar, filters);
+
+    const listBox = el('div');
+    box.append(listBox);
+    const paint = () => {
+      const needle = catalogQuery.trim().toLowerCase();
+      const visible = all.filter((spec) => {
+        if (catalogSource !== 'all' && sourceOf(spec) !== catalogSource) return false;
+        if (catalogCategory !== 'all' && spec.category !== catalogCategory) return false;
+        if (catalogOnlyUnset && connectionState(spec).ok) return false;
+        if (!needle) return true;
+        const haystack = `${spec.label} ${spec.key} ${spec.category} ${spec.description} ${spec.operations.map((operation) => `${operation.key} ${operation.label}`).join(' ')}`;
+        return haystack.toLowerCase().includes(needle);
+      });
+      count.textContent = `${visible.length}/${all.length} service`;
+      listBox.replaceChildren();
+      for (const spec of visible) listBox.append(connectorRow(spec));
+      if (visible.length === 0) listBox.append(el('p', 'empty', 'ไม่พบ connector ที่ตรงกับคำค้น'));
+    };
+    search.oninput = () => {
+      catalogQuery = search.value;
+      paint();
+    };
+    paint();
+    if (imported === 0) {
+      box.append(
+        el(
+          'p',
+          'hint',
+          'OpenAPI import: ตัวแปลง spec พร้อมที่ packages/core/src/connectors/openapi.ts แต่ยังไม่มีทางนำเข้าจากเว็บ (ต้องมี server message + ที่เก็บ connector ที่นำเข้า) — ดู docs/connectors/longtail-ui.md',
+        ),
+      );
+    }
+    return box;
+  }
 
   // ---------- node reference ----------
   function nodePanel(type) {
@@ -115,6 +353,7 @@
       button('btn', '+ Node (JS)', () => go({ mode: 'custom-new-js' })),
     );
     panel.append(addRow);
+    panel.append(catalogPanel());
 
     const groups = new Map();
     for (const spec of nodes) {
@@ -183,6 +422,8 @@
     add.style.margin = '0 0 10px';
     box.append(add);
     for (const server of servers) {
+      const counts = new Map();
+      for (const tool of server.tools) counts.set(tool.risk, (counts.get(tool.risk) || 0) + 1);
       const row = el('div', 'hstack');
       row.style.margin = '4px 0';
       const state = !server.enabled ? 'ปิดอยู่' : server.error ? 'ต่อไม่ได้' : server.checkedAt ? `${server.tools.length} เครื่องมือ` : 'ยังไม่ได้ต่อ';
@@ -190,6 +431,10 @@
         button('chip', `${server.title || server.name} · ${server.transport}${server.runsOn === 'pc' ? ' · PC' : ''}`, () => go({ mode: 'mcp', name: server.name })),
         el('span', server.error ? 'badtxt' : 'muted', state),
       );
+      for (const [risk, total] of [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+        row.append(el('span', 'chip', `${RISK_LABEL[risk] || risk} ${total}`));
+      }
+      if (server.untrusted !== false) row.append(el('span', 'chip', 'untrusted'));
       box.append(row);
     }
     return box;
@@ -445,8 +690,14 @@
         const headers = kvEditor(config.headers);
         const query = kvEditor(config.query);
         const body = textarea(config.body || '', '{"date":"{{input.date}}"}');
+        const allowLocal = el('input');
+        allowLocal.type = 'checkbox';
+        allowLocal.checked = config.allowLocal === true;
+        const allowLocalRow = el('label', 'hstack');
+        allowLocalRow.title = 'Lets this HTTP tool reach localhost, the LAN and private addresses.';
+        allowLocalRow.append(allowLocal, el('span', '', 'Allow local network (LAN)'));
         configBox.append(methodRow, M().labelled('URL', url));
-        configBox.append(el('h4', '', 'Headers'), headers, el('h4', '', 'Query'), query, el('h4', '', 'Body'), body);
+        configBox.append(el('h4', '', 'Headers'), headers, el('h4', '', 'Query'), query, el('h4', '', 'Body'), body, allowLocalRow);
         readConfig = () => ({
           method: method.value,
           url: url.value.trim(),
@@ -454,6 +705,7 @@
           query: readKvs(query),
           bodyType: bodyType.value,
           ...(body.value.trim() ? { body: body.value } : {}),
+          ...(allowLocal.checked ? { allowLocal: true } : {}),
         });
       } else if (kind.value === 'code') {
         const code = textarea(config.code || '', '// input.x = ค่าที่โมเดลส่งมา, settings.x = ค่าตั้งต้น\nreturn "ผลลัพธ์"', 'tall');
@@ -514,7 +766,7 @@
   function editor() {
     if (!sel) {
       const panel = el('div', 'panel');
-      panel.append(el('h3', '', 'รายละเอียด'), el('p', 'hint', 'เลือก node หรือเครื่องมือทางซ้ายเพื่อดูรายละเอียด'));
+      panel.append(el('h3', '', 'รายละเอียด'), el('p', 'hint', 'เลือก node, connector หรือเครื่องมือทางซ้ายเพื่อดูรายละเอียด'));
       panel.append(
         el(
           'p',
@@ -525,6 +777,7 @@
       return panel;
     }
     if (sel.mode === 'node') return nodePanel(sel.type);
+    if (sel.mode === 'connector') return connectorPanel(sel.name);
     if (sel.mode === 'mcp-new') return mcpEditor({ name: '', enabled: true, transport: 'stdio', tools: [] }, true);
     if (sel.mode === 'mcp') {
       const server = (M().state.toolMcp || []).find((entry) => entry.name === sel.name);
@@ -573,6 +826,7 @@
     }
     if (sel && sel.mode === 'custom' && !(message.custom || []).some((entry) => entry.name === sel.name)) sel = null;
     if (sel && sel.mode === 'mcp' && !(message.mcp || []).some((entry) => entry.name === sel.name)) sel = null;
+    if (sel && sel.mode === 'connector' && !connectors().some((entry) => entry.key === sel.name)) sel = null;
   }
 
   window.MimiHooks = window.MimiHooks || {};

@@ -1,5 +1,6 @@
 import type { FlowItem, WorkflowRunNodeView, WorkflowRunRecord, WorkflowRunResult, WorkflowRunSummary } from '@mimi/shared';
 import type { Db } from '../db/db.ts';
+import { redactItems, redactText, redactValue } from './redact.ts';
 
 /** Runs kept per workflow; older ones are dropped as new ones come in. */
 const KEEP_PER_WORKFLOW = 50;
@@ -19,16 +20,32 @@ interface RunRow {
   nodes?: string;
 }
 
-const summaryOf = (row: RunRow): WorkflowRunSummary => ({
-  id: row.id,
-  workflow: row.workflow,
-  mode: row.mode,
-  ok: row.ok === 1,
-  result: row.result,
-  startedAt: row.started_at,
-  durationMs: row.duration_ms,
-  nodeCount: row.node_count,
-});
+const summaryOf = (row: RunRow): WorkflowRunSummary => {
+  const slash = row.workflow.indexOf('/');
+  return {
+    id: row.id,
+    workflow: row.workflow,
+    agent: slash > 0 ? row.workflow.slice(0, slash) : row.workflow,
+    trigger: row.mode,
+    mode: row.mode,
+    ok: row.ok === 1,
+    result: redactText(row.result),
+    startedAt: row.started_at,
+    durationMs: row.duration_ms,
+    nodeCount: row.node_count,
+  };
+};
+
+/** Strips credentials from anything a node stored, including errors from older rows. */
+function safeNodes(nodes: WorkflowRunNodeView[]): WorkflowRunNodeView[] {
+  return nodes.map((node) => ({
+    ...node,
+    input: redactItems(node.input),
+    output: redactItems(node.output),
+    ...(node.error ? { error: redactText(node.error) } : {}),
+    ...(node.trace ? { trace: redactValue(node.trace) as WorkflowRunNodeView['trace'] } : {}),
+  }));
+}
 
 /** Keeps the first `limit` items and says how many were left out. */
 function cut(items: FlowItem[], limit: number): FlowItem[] {
@@ -49,10 +66,11 @@ export class WorkflowRunStore {
   }
 
   record(workflow: string, mode: string, startedAt: Date, result: WorkflowRunResult): number {
-    let nodes = JSON.stringify(trimmed(result.nodes, ITEMS_PER_NODE));
+    const stored = safeNodes(result.nodes);
+    let nodes = JSON.stringify(trimmed(stored, ITEMS_PER_NODE));
     // A huge run keeps only a peek at each node rather than blowing up the database.
-    if (nodes.length > MAX_RUN_BYTES) nodes = JSON.stringify(trimmed(result.nodes, 2));
-    if (nodes.length > MAX_RUN_BYTES) nodes = JSON.stringify(trimmed(result.nodes, 0));
+    if (nodes.length > MAX_RUN_BYTES) nodes = JSON.stringify(trimmed(stored, 2));
+    if (nodes.length > MAX_RUN_BYTES) nodes = JSON.stringify(trimmed(stored, 0));
     const inserted = this.db
       .prepare(
         `INSERT INTO workflow_runs (workflow, mode, ok, result, started_at, duration_ms, node_count, nodes)
@@ -62,7 +80,7 @@ export class WorkflowRunStore {
         workflow,
         mode,
         result.ok ? 1 : 0,
-        result.result,
+        redactText(result.result),
         startedAt.toISOString(),
         Date.now() - startedAt.getTime(),
         result.nodes.length,
@@ -91,7 +109,7 @@ export class WorkflowRunStore {
   get(id: number): WorkflowRunRecord | undefined {
     const row = this.db.prepare('SELECT * FROM workflow_runs WHERE id = ?').get(id) as RunRow | undefined;
     if (!row) return undefined;
-    return { ...summaryOf(row), nodes: JSON.parse(row.nodes ?? '[]') as WorkflowRunNodeView[] };
+    return { ...summaryOf(row), nodes: safeNodes(JSON.parse(row.nodes ?? '[]') as WorkflowRunNodeView[]) };
   }
 
   /** Drops a workflow's history (the workflow was deleted). */

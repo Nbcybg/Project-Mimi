@@ -1,0 +1,76 @@
+import type { ConnectorSpec } from '@mimi/shared';
+
+export const dropboxConnector: ConnectorSpec = {
+  key: 'dropbox',
+  label: 'Dropbox',
+  category: 'storage',
+  description: 'อ่านรายการไฟล์ ค้นหา ดาวน์โหลด และอัปโหลดไฟล์ใน Dropbox',
+  baseUrl: 'https://api.dropboxapi.com/2',
+  auth: {
+    kind: 'bearer',
+    fields: [{ key: 'token', label: 'Access token', type: 'secret', required: true }],
+  },
+  operations: [
+    {
+      key: 'list_folder',
+      label: 'List folder',
+      method: 'POST',
+      path: '/files/list_folder',
+      risk: 'read',
+      body: { path: '{{path}}' },
+      fields: [{ key: 'path', label: 'Folder path', type: 'string', required: false, default: '' }],
+      response: { itemsPath: 'entries' },
+    },
+    {
+      key: 'search',
+      label: 'Search files',
+      method: 'POST',
+      path: '/files/search_v2',
+      risk: 'read',
+      body: { query: '{{query}}', options: { max_results: '{{maxResults}}' } },
+      fields: [
+        { key: 'query', label: 'Query', type: 'string', required: true },
+        { key: 'maxResults', label: 'Max results', type: 'number', required: false, default: 25 },
+      ],
+      response: { itemsPath: 'matches' },
+    },
+    {
+      key: 'download_file',
+      label: 'Download file',
+      method: 'POST',
+      path: 'https://content.dropboxapi.com/2/files/download',
+      risk: 'read',
+      bodyFormat: 'raw',
+      body: '',
+      headers: { 'Dropbox-API-Arg': '{"path":"{{path}}"}' },
+      fields: [{ key: 'path', label: 'File path', type: 'string', required: true }],
+      response: { binary: true },
+    },
+    {
+      key: 'upload_file',
+      label: 'Upload file',
+      method: 'POST',
+      path: 'https://content.dropboxapi.com/2/files/upload',
+      risk: 'write',
+      bodyFormat: 'binary',
+      body: '{{content}}',
+      headers: {
+        'Dropbox-API-Arg': '{"path":"{{path}}","mode":"add","autorename":true,"mute":false}',
+        'content-type': 'application/octet-stream',
+      },
+      fields: [
+        { key: 'path', label: 'File path', type: 'string', required: true, placeholder: '/notes/today.txt' },
+        { key: 'content', label: 'Content (base64)', type: 'string', required: true },
+      ],
+    },
+    {
+      key: 'get_metadata',
+      label: 'Get metadata',
+      method: 'POST',
+      path: '/files/get_metadata',
+      risk: 'read',
+      body: { path: '{{path}}' },
+      fields: [{ key: 'path', label: 'Path', type: 'string', required: true }],
+    },
+  ],
+};

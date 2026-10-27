@@ -1,0 +1,87 @@
+import type { ConnectorSpec } from '@mimi/shared';
+
+export const zoomConnector: ConnectorSpec = {
+  key: 'zoom',
+  label: 'Zoom',
+  category: 'communication',
+  description: 'List, create, read and delete meetings for a Zoom user',
+  baseUrl: 'https://api.zoom.us/v2',
+  auth: {
+    kind: 'oauth2',
+    fields: [
+      { key: 'clientId', label: 'Client ID', type: 'string', required: true },
+      { key: 'clientSecret', label: 'Client secret', type: 'secret', required: true },
+      { key: 'refreshToken', label: 'Refresh token', type: 'secret', required: true },
+      { key: 'accessToken', label: 'Access token', type: 'secret' },
+      { key: 'expiresAt', label: 'Expires at', type: 'string' },
+    ],
+    authorizeUrl: 'https://zoom.us/oauth/authorize',
+    tokenUrl: 'https://zoom.us/oauth/token',
+    scopes: ['meeting:read', 'meeting:write', 'user:read'],
+  },
+  operations: [
+    {
+      key: 'list_meetings',
+      label: 'List meetings',
+      method: 'GET',
+      path: '/users/{userId}/meetings',
+      risk: 'read',
+      fields: [
+        { key: 'userId', label: 'User ID', type: 'string', required: true, default: 'me' },
+        {
+          key: 'type',
+          label: 'Meeting type',
+          type: 'select',
+          required: false,
+          default: 'scheduled',
+          options: [
+            { value: 'scheduled', label: 'Scheduled' },
+            { value: 'upcoming', label: 'Upcoming' },
+            { value: 'live', label: 'Live' },
+          ],
+        },
+      ],
+      response: { itemsPath: 'meetings' },
+    },
+    {
+      key: 'create_meeting',
+      label: 'Create meeting',
+      method: 'POST',
+      path: '/users/{userId}/meetings',
+      risk: 'write',
+      body: {
+        topic: '{{topic}}',
+        type: '{{type}}',
+        start_time: '{{startTime}}',
+        duration: '{{duration}}',
+        timezone: '{{timezone}}',
+      },
+      fields: [
+        { key: 'userId', label: 'User ID', type: 'string', required: true, default: 'me' },
+        { key: 'topic', label: 'Topic', type: 'string', required: true },
+        { key: 'type', label: 'Meeting type (1/2/3/8)', type: 'number', required: false, default: 2 },
+        { key: 'startTime', label: 'Start time (ISO 8601)', type: 'string', required: false, placeholder: '2026-11-01T09:00:00Z' },
+        { key: 'duration', label: 'Duration (minutes)', type: 'number', required: false, default: 30 },
+        { key: 'timezone', label: 'Time zone', type: 'string', required: false },
+      ],
+    },
+    {
+      key: 'get_meeting',
+      label: 'Get meeting',
+      method: 'GET',
+      path: '/meetings/{meetingId}',
+      risk: 'read',
+      fields: [{ key: 'meetingId', label: 'Meeting ID', type: 'string', required: true }],
+    },
+    {
+      key: 'delete_meeting',
+      label: 'Delete meeting',
+      method: 'DELETE',
+      path: '/meetings/{meetingId}',
+      risk: 'delete',
+      fields: [{ key: 'meetingId', label: 'Meeting ID', type: 'string', required: true }],
+    },
+  ],
+  pagination: { mode: 'page', pageParam: 'page', sizeParam: 'page_size', itemsPath: 'meetings' },
+  rateLimit: { requests: 10, perMs: 1000, burst: 10 },
+};

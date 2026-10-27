@@ -161,5 +161,32 @@ export const githubConnector: ConnectorSpec = {
       ],
     },
   ],
+  triggers: [
+    {
+      key: 'events',
+      label: 'Repository events',
+      description: 'push และ pull request จาก GitHub webhook',
+      kind: 'webhook',
+      events: ['push', 'pull_request'],
+      fields: [
+        {
+          key: 'secretName',
+          label: 'ชื่อ secret ใน vault',
+          type: 'string',
+          required: true,
+          placeholder: 'github_webhook_secret',
+        },
+      ],
+      signature: {
+        header: 'x-hub-signature-256',
+        algorithm: 'sha256',
+        encoding: 'hex',
+        prefix: 'sha256=',
+        signedPayload: '{{body}}',
+        secretField: 'secretName',
+      },
+      sample: { action: 'opened', pull_request: { number: 1, title: 'Example' }, repository: { full_name: 'mimi/example' } },
+    },
+  ],
   pagination: { mode: 'page', cursorParam: 'page', sizeParam: 'per_page', itemsPath: '' },
 };

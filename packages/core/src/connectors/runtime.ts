@@ -10,6 +10,8 @@ import type {
   JsonValue,
 } from '@mimi/shared';
 import type { ConnectorRegistry } from './registry.ts';
+import { connectorVersion } from './registry.ts';
+import { safeFetch, type Lookup } from '../workflows/net-guard.ts';
 import {
   ConnectorError,
   type ConnectorAuthResolver,
@@ -18,7 +20,9 @@ import {
 } from './types.ts';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
-const RETRY_STATUS = new Set([429, 500, 502, 503, 504]);
+const DEFAULT_MAX_PAGES = 20;
+const DEFAULT_MAX_ITEMS = 1000;
+const RETRY_STATUS = new Set([408, 429, 500, 502, 503, 504]);
 const MAX_TEXT = 12_000;
 const TOKEN_KEYS = ['accessToken', 'access_token', 'token', 'botToken', 'apiKey', 'api_key'];
 
@@ -27,12 +31,36 @@ export interface ConnectorRuntimeOptions {
   /** Missing means every connector is disconnected; tests pass a fake. */
   auth?: ConnectorAuthResolver;
   fetchFn?: ConnectorFetch;
+  /** Tests can supply a resolver so URL guards stay deterministic. */
+  lookup?: Lookup;
+  /** Opt in to local/private connector hosts; off by default. */
+  allowLocal?: boolean;
   /** Per request; defaults to 30 seconds. */
   timeoutMs?: number;
   /** Extra attempts for network errors and 429/5xx responses; defaults to 0. */
   retries?: number;
-  /** Delay between retries; defaults to 250 ms. */
+  /** Base delay between retries; defaults to 250 ms. */
   retryDelayMs?: number;
+  /** Injectable clock and sleeper, for deterministic rate-limit tests. */
+  now?: () => number;
+  sleep?: (ms: number) => Promise<void>;
+}
+
+interface PreparedRequest {
+  spec: ConnectorSpec;
+  operation: ConnectorOperation;
+  input: Record<string, unknown>;
+  url: URL;
+  headers: Headers;
+  payload?: string | Uint8Array;
+  secrets: string[];
+}
+
+interface PageResult {
+  items: FlowItem[];
+  raw: unknown;
+  url: URL;
+  link?: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -76,6 +104,12 @@ function itemOf(value: unknown): FlowItem {
 function getPath(value: unknown, path: string): unknown {
   let current = value;
   for (const part of path.split('.')) {
+    if (Array.isArray(current)) {
+      const index = Number(part);
+      if (!Number.isInteger(index)) return undefined;
+      current = current[index];
+      continue;
+    }
     if (!isRecord(current)) return undefined;
     current = current[part];
   }
@@ -214,52 +248,101 @@ export class ConnectorRuntimeImpl implements ConnectorRuntime {
   private readonly registry: ConnectorRegistry;
   private readonly auth?: ConnectorAuthResolver;
   private readonly fetchFn: ConnectorFetch;
+  private readonly customFetch: boolean;
+  private readonly lookup?: Lookup;
+  private readonly allowLocal: boolean;
   private readonly timeoutMs: number;
   private readonly retries: number;
   private readonly retryDelayMs: number;
+  private readonly now: () => number;
+  private readonly sleepFn: (ms: number) => Promise<void>;
+  private readonly buckets = new Map<string, { tokens: number; at: number }>();
 
   constructor(options: ConnectorRuntimeOptions) {
     this.registry = options.registry;
     this.auth = options.auth;
+    this.customFetch = options.fetchFn !== undefined;
     this.fetchFn = options.fetchFn ?? ((input, init) => globalThis.fetch(input, init));
+    this.lookup = options.lookup;
+    this.allowLocal = options.allowLocal === true;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.retries = Math.max(0, options.retries ?? 0);
     this.retryDelayMs = Math.max(0, options.retryDelayMs ?? 250);
+    this.now = options.now ?? Date.now;
+    this.sleepFn = options.sleep ?? sleep;
   }
 
   list(): ConnectorView[] {
     return this.registry.views();
   }
 
-  get(connector: string): ConnectorSpec | undefined {
-    return this.registry.get(connector);
+  get(connector: string, version?: string): ConnectorSpec | undefined {
+    return this.registry.get(connector, version);
   }
 
   test(connector: string, operation: string, input: Record<string, unknown>, account?: string): Promise<ConnectorResult> {
     return this.execute({ connector, operation, input, account, agent: 'test' });
   }
 
+  /** Version metadata for a result: the version that ran, plus a deprecation hint. */
+  private resultMeta(spec: ConnectorSpec): Pick<ConnectorResult, 'version' | 'deprecated' | 'latestVersion'> {
+    const version = connectorVersion(spec);
+    const latest = this.registry.versions(spec.key)[0];
+    if (!latest || latest === version) return { version };
+    return { version, deprecated: true, latestVersion: latest };
+  }
+
   async execute(request: ConnectorRequest): Promise<ConnectorResult> {
-    const spec = this.registry.get(request.connector);
+    const spec = this.registry.get(request.connector, request.version);
     if (!spec) {
-      throw new ConnectorError(
-        `Unknown connector "${request.connector}". Available: ${this.registry.list().map((entry) => entry.key).join(', ') || 'none'}`,
-        request.connector,
-        request.operation,
-      );
+      const installed = this.registry.versions(request.connector);
+      const message = installed.length > 0
+        ? `Connector "${request.connector}" version "${request.version}" is not installed. Installed versions: ${installed.join(', ')}`
+        : `Unknown connector "${request.connector}". Available: ${this.registry.list().map((entry) => entry.key).join(', ') || 'none'}`;
+      throw new ConnectorError(message, request.connector, request.operation);
     }
     const operation = spec.operations.find((entry) => entry.key === request.operation);
     if (!operation) {
       throw new ConnectorError(
-        `Connector "${spec.key}" has no operation "${request.operation}". Available: ${spec.operations.map((entry) => entry.key).join(', ')}`,
+        `Connector "${spec.key}" v${connectorVersion(spec)} has no operation "${request.operation}". Available: ${spec.operations.map((entry) => entry.key).join(', ')}`,
         spec.key,
         request.operation,
       );
     }
 
+    const prepared = await this.prepare(spec, operation, request);
+    if (operation.paginated && spec.pagination) return this.executePages(prepared, request.signal);
+    const response = await this.fetchWithRetry(prepared, request.signal);
+    const contentType = response.headers.get('content-type') ?? '';
+    if (operation.response?.binary) {
+      const buffer = Buffer.from(await response.arrayBuffer());
+      const item: FlowItem = {
+        json: {
+          mime: contentType || 'application/octet-stream',
+          bytes: buffer.byteLength,
+          base64: buffer.toString('base64'),
+        },
+      };
+      return {
+        items: [item],
+        text: `${spec.label} ${operation.label}: ${buffer.byteLength} bytes`,
+        ...this.resultMeta(spec),
+      };
+    }
+    const { items, raw } = await this.readPage(prepared, response);
+    return {
+      items,
+      text: renderItems(spec, operation, items),
+      raw,
+      ...this.resultMeta(spec),
+    };
+  }
+
+  private async prepare(spec: ConnectorSpec, operation: ConnectorOperation, request: ConnectorRequest): Promise<PreparedRequest> {
     const input = this.resolveInput(spec, operation, request.input);
-    const { headers, values } = await this.authFor(spec, operation, request.account);
-    const secrets = Object.values(values ?? {}).filter((value) => value.length >= 4);
+    const auth = await this.authFor(spec, operation, request.account);
+    const headers = auth.headers;
+    const secrets = Object.values(auth.values ?? {}).filter((value) => value.length >= 4);
 
     const pathParams = new Set<string>();
     const path = operation.path.replace(/\{([^}]+)\}/g, (_match, key: string) => {
@@ -277,9 +360,10 @@ export class ConnectorRuntimeImpl implements ConnectorRuntime {
 
     const query: Array<[string, unknown]> = [];
     const body: Record<string, unknown> = {};
+    const queryFields = new Set(operation.query ?? []);
     for (const [key, value] of Object.entries(input)) {
       if (pathParams.has(key)) continue;
-      if (operation.method === 'GET' || operation.method === 'DELETE') query.push([key, value]);
+      if (queryFields.has(key) || operation.method === 'GET' || operation.method === 'DELETE') query.push([key, value]);
       else body[key] = value;
     }
 
@@ -296,33 +380,127 @@ export class ConnectorRuntimeImpl implements ConnectorRuntime {
       );
     }
     for (const [key, value] of query) appendQuery(url, key, value);
+    for (const [key, value] of Object.entries(auth.query ?? {})) appendQuery(url, key, value);
 
-    let payload: string | undefined;
+    let payload: string | Uint8Array | undefined;
     if (operation.method !== 'GET' && operation.method !== 'DELETE') {
       const bodyValue = operation.body === undefined ? (Object.keys(body).length > 0 ? body : undefined) : renderTemplate(operation.body, input);
       if (bodyValue !== undefined) {
         if (operation.bodyFormat === 'form') {
           payload = encodeForm(bodyValue);
           headers.set('content-type', 'application/x-www-form-urlencoded');
+        } else if (operation.bodyFormat === 'raw') {
+          payload = String(bodyValue);
+        } else if (operation.bodyFormat === 'binary') {
+          payload = Buffer.from(String(bodyValue), 'base64');
+          headers.set('content-type', 'application/octet-stream');
         } else {
           payload = JSON.stringify(bodyValue);
           headers.set('content-type', 'application/json');
         }
       }
     }
+    for (const [key, value] of Object.entries(operation.headers ?? {})) {
+      headers.set(key, String(renderTemplate(value, input)));
+    }
+    if (request.idempotencyKey && !headers.has('idempotency-key')) headers.set('idempotency-key', request.idempotencyKey);
 
-    let response: Response | undefined;
+    return { spec, operation, input, url, headers, ...(payload === undefined ? {} : { payload }), secrets };
+  }
+
+  private async executePages(prepared: PreparedRequest, signal?: AbortSignal): Promise<ConnectorResult> {
+    const { spec, operation } = prepared;
+    const pagination = spec.pagination!;
+    const maxPages = Math.max(1, pagination.maxPages ?? DEFAULT_MAX_PAGES);
+    const maxItems = Math.max(1, pagination.maxItems ?? DEFAULT_MAX_ITEMS);
+    const items: FlowItem[] = [];
+    const pages: unknown[] = [];
+    const visited = new Set<string>();
+    let url = prepared.url;
+    let page = Number(prepared.input[pagination.pageParam ?? 'page'] ?? 1);
+    if (!Number.isFinite(page) || page < 1) page = 1;
+    if (pagination.mode === 'page') url.searchParams.set(pagination.pageParam ?? 'page', String(page));
+
+    for (let index = 0; index < maxPages; index++) {
+      if (visited.has(url.toString())) break;
+      visited.add(url.toString());
+      const response = await this.fetchWithRetry({ ...prepared, url }, signal);
+      const pageResult = await this.readPage({ ...prepared, url }, response);
+      pages.push(pageResult.raw);
+      items.push(...pageResult.items);
+      if (items.length >= maxItems) {
+        items.length = maxItems;
+        break;
+      }
+      if (pageResult.items.length === 0) break;
+
+      if (pagination.mode === 'link') {
+        if (!pageResult.link) break;
+        try {
+          url = new URL(pageResult.link, url);
+        } catch {
+          break;
+        }
+        continue;
+      }
+
+      if (pagination.mode === 'cursor' || pagination.mode === 'nextPageToken') {
+        const next = pagination.nextPath ? getPath(pageResult.raw, pagination.nextPath) : undefined;
+        if (next === undefined || next === null || next === '') break;
+        url = new URL(url);
+        url.searchParams.set(pagination.cursorParam ?? 'cursor', String(next));
+        continue;
+      }
+
+      if (pagination.nextPath) {
+        const next = getPath(pageResult.raw, pagination.nextPath);
+        if (next === undefined || next === null || next === '' || next === false) break;
+      } else {
+        const size = pagination.sizeParam ? Number(prepared.input[pagination.sizeParam]) : NaN;
+        if (Number.isFinite(size) && size > 0 && pageResult.items.length < size) break;
+      }
+      page += 1;
+      url = new URL(url);
+      url.searchParams.set(pagination.pageParam ?? 'page', String(page));
+    }
+
+    return {
+      items,
+      text: renderItems(spec, operation, items),
+      raw: pages.length === 1 ? pages[0] : pages,
+      ...this.resultMeta(spec),
+    };
+  }
+
+  private async fetchWithRetry(prepared: PreparedRequest, signal?: AbortSignal): Promise<Response> {
+    const { spec, operation, url, headers, payload, secrets } = prepared;
+    let lastError: unknown;
     for (let attempt = 0; attempt <= this.retries; attempt++) {
+      await this.acquire(spec);
       const timeout = AbortSignal.timeout(this.timeoutMs);
-      const signal = request.signal ? AbortSignal.any([request.signal, timeout]) : timeout;
+      const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
       try {
-        response = await this.fetchFn(url, {
-          method: operation.method,
-          headers,
-          ...(payload === undefined ? {} : { body: payload }),
-          signal,
-        });
+        const response = await safeFetch(
+          url.toString(),
+          {
+            method: operation.method,
+            headers,
+            ...(payload === undefined ? {} : { body: payload }),
+            signal: combined,
+          },
+          {
+            ...(this.customFetch ? { fetchFn: this.fetchFn } : {}),
+            ...(this.lookup ? { lookup: this.lookup } : {}),
+            ...(this.allowLocal ? { allowLocal: true } : {}),
+          },
+        );
+        if (response.ok || !RETRY_STATUS.has(response.status) || attempt >= this.retries) return response;
+        const safe = response.status === 429 || operation.idempotent === true || operation.method === 'GET' || operation.method === 'DELETE';
+        if (!safe) return response;
+        await response.body?.cancel();
+        await this.sleepFn(this.retryDelay(response, attempt));
       } catch (error) {
+        lastError = error;
         if (timeout.aborted) {
           throw new ConnectorError(
             `Connector "${spec.key}" operation "${operation.key}" timed out after ${this.timeoutMs}ms`,
@@ -330,36 +508,63 @@ export class ConnectorRuntimeImpl implements ConnectorRuntime {
             operation.key,
           );
         }
-        if (request.signal?.aborted) {
+        if (signal?.aborted) {
           throw new ConnectorError(
             `Connector "${spec.key}" operation "${operation.key}" was aborted`,
             spec.key,
             operation.key,
           );
         }
-        if (attempt < this.retries && (operation.method === 'GET' || operation.method === 'DELETE')) {
-          await sleep(this.retryDelayMs * (attempt + 1));
-          continue;
+        const safe = operation.idempotent === true || operation.method === 'GET' || operation.method === 'DELETE';
+        if (attempt >= this.retries || !safe) {
+          const message = error instanceof Error ? error.message : String(error);
+          throw new ConnectorError(
+            `Connector "${spec.key}" operation "${operation.key}" failed: ${redactString(message, secrets)}`,
+            spec.key,
+            operation.key,
+          );
         }
-        const message = error instanceof Error ? error.message : String(error);
-        throw new ConnectorError(
-          `Connector "${spec.key}" operation "${operation.key}" failed: ${redactString(message, secrets)}`,
-          spec.key,
-          operation.key,
-        );
+        await this.sleepFn(this.retryDelay(undefined, attempt));
       }
-      if (!response.ok && RETRY_STATUS.has(response.status) && attempt < this.retries) {
-        const safe = response.status === 429 || operation.method === 'GET' || operation.method === 'DELETE';
-        if (safe) {
-          await response.body?.cancel();
-          await sleep(this.retryDelayMs * (attempt + 1));
-          continue;
-        }
-      }
-      break;
     }
-    if (!response) throw new ConnectorError(`Connector "${spec.key}" operation "${operation.key}" failed`, spec.key, operation.key);
+    const message = lastError instanceof Error ? lastError.message : 'request failed';
+    throw new ConnectorError(`Connector "${spec.key}" operation "${operation.key}" failed: ${message}`, spec.key, operation.key);
+  }
 
+  private retryDelay(response: Response | undefined, attempt: number): number {
+    const header = response?.headers.get('retry-after');
+    if (header) {
+      const seconds = Number(header);
+      if (Number.isFinite(seconds) && seconds >= 0) return Math.min(seconds * 1000, 60_000);
+      const at = Date.parse(header);
+      if (Number.isFinite(at)) return Math.max(0, Math.min(at - this.now(), 60_000));
+    }
+    const base = this.retryDelayMs * 2 ** attempt;
+    return Math.round(base + Math.random() * base * 0.25);
+  }
+
+  private async acquire(spec: ConnectorSpec): Promise<void> {
+    const limit = spec.rateLimit;
+    if (!limit || limit.requests <= 0 || limit.perMs <= 0) return;
+    const capacity = Math.max(1, limit.burst ?? limit.requests);
+    const rate = limit.requests / limit.perMs;
+    const now = this.now();
+    const bucket = this.buckets.get(spec.key) ?? { tokens: capacity, at: now };
+    bucket.tokens = Math.min(capacity, bucket.tokens + Math.max(0, now - bucket.at) * rate);
+    bucket.at = now;
+    if (bucket.tokens < 1) {
+      const wait = Math.ceil((1 - bucket.tokens) / rate);
+      await this.sleepFn(wait);
+      const after = this.now();
+      bucket.tokens = Math.min(capacity, bucket.tokens + Math.max(0, after - bucket.at) * rate);
+      bucket.at = after;
+    }
+    bucket.tokens = Math.max(0, bucket.tokens - 1);
+    this.buckets.set(spec.key, bucket);
+  }
+
+  private async readPage(prepared: PreparedRequest, response: Response): Promise<PageResult> {
+    const { spec, operation, url, secrets } = prepared;
     if (!response.ok) {
       const text = await response.text();
       const parsed = parseJson(text, response.headers.get('content-type') ?? '');
@@ -370,23 +575,7 @@ export class ConnectorRuntimeImpl implements ConnectorRuntime {
         operation.key,
       );
     }
-
     const contentType = response.headers.get('content-type') ?? '';
-    if (operation.response?.binary) {
-      const buffer = Buffer.from(await response.arrayBuffer());
-      const item: FlowItem = {
-        json: {
-          mime: contentType || 'application/octet-stream',
-          bytes: buffer.byteLength,
-          base64: buffer.toString('base64'),
-        },
-      };
-      return {
-        items: [item],
-        text: `${spec.label} ${operation.label}: ${buffer.byteLength} bytes`,
-      };
-    }
-
     const text = await response.text();
     const parsed = parseJson(text, contentType);
     if (isRecord(parsed) && parsed.ok === false) {
@@ -397,21 +586,17 @@ export class ConnectorRuntimeImpl implements ConnectorRuntime {
         operation.key,
       );
     }
-
     const safe = redactValue(parsed ?? text, secrets);
-    const selected = operation.response?.itemsPath ? getPath(safe, operation.response.itemsPath) : safe;
+    const itemsPath = operation.response?.itemsPath ?? spec.pagination?.itemsPath;
+    const selected = itemsPath ? getPath(safe, itemsPath) : safe;
     const items =
       selected === undefined || selected === null
         ? []
         : Array.isArray(selected)
           ? selected.map((entry) => itemOf(entry))
           : [itemOf(selected)];
-
-    return {
-      items,
-      text: renderItems(spec, operation, items),
-      raw: safe,
-    };
+    const link = response.headers.get('link') ?? undefined;
+    return { items, raw: safe, url, ...(link === undefined ? {} : { link }) };
   }
 
   /** Only declared fields reach the request; typos and required gaps become readable errors. */
@@ -487,7 +672,7 @@ export class ConnectorRuntimeImpl implements ConnectorRuntime {
     spec: ConnectorSpec,
     operation: ConnectorOperation,
     account?: string,
-  ): Promise<{ headers: Headers; values?: ConnectorAuthValues }> {
+  ): Promise<{ headers: Headers; values?: ConnectorAuthValues; query?: Record<string, string> }> {
     const headers = new Headers();
     headers.set('accept', 'application/json');
     const extra = spec.auth.extra ?? {};
@@ -538,6 +723,18 @@ export class ConnectorRuntimeImpl implements ConnectorRuntime {
       spec.auth.fields.map((field) => values[field.key]).find((value) => typeof value === 'string' && value);
     if (!token) {
       throw new ConnectorError(`Connector "${spec.key}" is not connected: no token was found`, spec.key, operation.key);
+    }
+
+    if (extra.location === 'query') {
+      const names = isRecord(extra.queryNames) ? extra.queryNames : {};
+      const query: Record<string, string> = {};
+      for (const field of spec.auth.fields) {
+        const value = values[field.key];
+        if (typeof value !== 'string' || !value) continue;
+        const name = typeof names[field.key] === 'string' ? String(names[field.key]) : field.key;
+        query[name] = value;
+      }
+      return { headers, values, query };
     }
 
     const configuredHeader = typeof extra.header === 'string' && extra.header.trim() ? extra.header.trim() : undefined;

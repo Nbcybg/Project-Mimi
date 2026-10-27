@@ -320,6 +320,8 @@ export interface ToolView {
   operation?: string;
   /** Grouping label for Quick Work, e.g. "Slack". */
   familyLabel?: string;
+  /** Connector category for Quick Work filtering, e.g. "communication". */
+  connectorCategory?: string;
 }
 
 /** What the tools screen shows: the whole pool, the presets and the custom definitions. */
@@ -339,16 +341,38 @@ export interface ToolPoolView {
 
 import type { KnowledgeCollectionView, KnowledgeDocumentView, KnowledgeHit, UserProfileView, WardrobeOutfitView, BackgroundView, BackgroundSettingsView, GalleryItemView } from './knowledge.ts';
 
-/** The importer's account of an n8n conversion. */
-export interface N8nImportReportView {
-  source: string[];
+/** The importer's account of a migration (n8n, Make or Zapier). */
+export interface ImportReportView {
+  source: string | string[];
   workflows: Array<{ name: string; title: string; trigger: string; nodes: number }>;
   warnings: string[];
-  unsupported: Array<{ node: string; type: string; reason: string }>;
-  redacted: Array<{ node: string; field: string }>;
-  models: Array<{ node: string; model: string }>;
-  prompts: Array<{ node: string; text: string }>;
+  unsupported: Array<{ node?: string; module?: string; step?: string; type?: string; api?: string; action?: string; reason: string }>;
+  redacted: Array<{ node?: string; module?: string; step?: string; field: string }>;
+  mapped?: Array<{
+    node?: string;
+    module?: string;
+    step?: string;
+    connector: string;
+    operation: string;
+    fields: string[];
+    confidence: 'high' | 'medium';
+  }>;
+  connections?: Array<{
+    node?: string;
+    module?: string;
+    step?: string;
+    connector: string;
+    credentialType?: string;
+    credentialName?: string;
+    connectionId?: string;
+    authenticationId?: string;
+  }>;
+  models?: Array<{ node: string; model: string }>;
+  prompts?: Array<{ node: string; text: string }>;
 }
+
+/** Kept for compatibility: the n8n report is a migration report. */
+export type N8nImportReportView = ImportReportView;
 
 /** Workflow types live in ./workflows.ts; re-exported so clients import them from here. */
 import type {
@@ -558,8 +582,14 @@ export type ClientMessage =
     }
   /** Runs one node alone with sample items, to see what it produces (draft config is fine). */
   | { type: 'workflow-test-node'; workflow: WorkflowView; node: WorkflowNode; input: FlowItem[] }
-  /** Converts an n8n export (JSON text); `save` writes the result as disabled workflows of `agent`. */
-  | { type: 'workflow-import-n8n'; agent: string; json: string; save: boolean }
+  /** Converts an n8n, Make or Zapier export (JSON text); `save` writes the result as disabled workflows of `agent`. */
+  | {
+      type: 'workflow-import-n8n' | 'workflow-import-make' | 'workflow-import-zapier';
+      agent: string;
+      json: string;
+      save: boolean;
+      reqId?: number;
+    }
   /** The notification inbox; `notifications-read` without ids marks everything read. */
   | { type: 'notifications-list' }
   | { type: 'notifications-read'; ids?: number[] }
@@ -718,8 +748,17 @@ export type ServerMessage =
   | { type: 'backups'; backups: Array<{ name: string; bytes: number; createdAt: string }>; dir: string; created?: string }
   | { type: 'push-key'; publicKey: string }
   | { type: 'push-devices'; devices: PushDeviceView[]; tested?: number }
-  /** What an n8n import produced (a preview, or what was saved and what failed). */
-  | { type: 'workflow-import'; agent: string; saved: boolean; workflows: WorkflowView[]; report: N8nImportReportView; errors: string[] }
+  /** What a migration import produced (a preview, or what was saved and what failed). */
+  | {
+      type: 'workflow-import';
+      agent: string;
+      source: 'n8n' | 'make' | 'zapier';
+      reqId?: number;
+      saved: boolean;
+      workflows: WorkflowView[];
+      report: ImportReportView;
+      errors: string[];
+    }
   | { type: 'knowledge-documents'; collection: string; documents: KnowledgeDocumentView[] }
   | { type: 'knowledge-added'; collection: string; documentId: number; chunks: number; warning?: string }
   | { type: 'knowledge-results'; query: string; hits: KnowledgeHit[] }

@@ -49,6 +49,7 @@ const NODE_TYPES = [
   'trigger_chat',
   'trigger_telegram',
   'trigger_tool',
+  'trigger_connector',
   'trigger_custom',
 ] as const;
 

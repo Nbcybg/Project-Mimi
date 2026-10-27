@@ -220,6 +220,41 @@ test('catalog: fresh cache is used as is; stale cache is refreshed; failures fal
   assert.equal(fetches, 0, 'offline mode never downloads');
 });
 
+test('registry: a settings-file api beats per-model endpoints the catalog pinned', () => {
+  const catalog = new ModelCatalog({
+    gw: {
+      name: 'Gateway',
+      npm: '@ai-sdk/openai-compatible',
+      api: 'https://old.example/v1',
+      env: ['GW_KEY'],
+      models: {
+        pinned: { provider: { api: 'https://pinned.example/v1' }, limit: { context: 8192 } },
+        plain: { limit: { context: 8192 } },
+      },
+    },
+  });
+  const env = { GW_KEY: 'k' };
+
+  // No override: the catalog's endpoint wins, including a per-model pin.
+  const untouched = new ProviderRegistry(catalog, {}, env);
+  assert.equal(untouched.info(parseModelRef('gw/pinned')).baseURL, 'https://pinned.example/v1');
+  assert.equal(untouched.info(parseModelRef('gw/plain')).baseURL, 'https://old.example/v1');
+
+  // Settings-file api: the user's URL replaces both, even where the catalog pinned one.
+  const overridden = new ProviderRegistry(catalog, parseSettings({ model: 'gw/plain', provider: { gw: { api: 'https://new.example/v1' } } }).provider, env);
+  assert.equal(overridden.info(parseModelRef('gw/pinned')).baseURL, 'https://new.example/v1');
+  assert.equal(overridden.info(parseModelRef('gw/plain')).baseURL, 'https://new.example/v1');
+
+  // A per-model api set in the settings file still wins over the provider-level one.
+  const perModel = new ProviderRegistry(
+    catalog,
+    parseSettings({ model: 'gw/plain', provider: { gw: { api: 'https://new.example/v1', models: { pinned: { provider: { api: 'https://special.example/v1' } } } } } }).provider,
+    env,
+  );
+  assert.equal(perModel.info(parseModelRef('gw/pinned')).baseURL, 'https://special.example/v1');
+  assert.equal(perModel.info(parseModelRef('gw/plain')).baseURL, 'https://new.example/v1');
+});
+
 test('provider files: save, read, list, remove and one-time migration from app settings', () => {
   const dir = path.join(tmp, 'providers');
   const store = new ProviderStore(dir);

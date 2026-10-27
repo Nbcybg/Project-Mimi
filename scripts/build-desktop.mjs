@@ -33,6 +33,7 @@ fs.mkdirSync(APP, { recursive: true });
 
 // 2. The app sources; personal data, secrets and leftovers stay behind.
 const SKIP_TOP = new Set(['node_modules', '.git', '.claude', '_old', 'dist', 'user', 'data', 'workspace', 'agents', 'skills', 'tools', 'workflows', 'providers', 'design']);
+const SKIP_SOURCE = new Set(['node_modules', 'test', 'tests', '__tests__', 'fixtures']);
 fs.mkdirSync(APP, { recursive: true });
 for (const entry of fs.readdirSync(ROOT)) {
   if (SKIP_TOP.has(entry) || entry === '.env' || entry === 'Mimi.lnk' || entry.startsWith('._')) continue;
@@ -40,7 +41,7 @@ for (const entry of fs.readdirSync(ROOT)) {
     recursive: true,
     filter: (src) => {
       const base = path.basename(src);
-      return base !== 'node_modules' && !base.startsWith('._');
+      return !SKIP_SOURCE.has(base) && !base.startsWith('._') && !/\.(test|spec)\.[cm]?[jt]s$/.test(base);
     },
   });
 }

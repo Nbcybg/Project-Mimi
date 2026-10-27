@@ -1,12 +1,13 @@
-# Connector Auth Matrix — Phase 1
+# Connector Auth Matrix — Phase 3
 
-สถานะ: ใช้กับ connector 10 service / 50 operation ใน `packages/core/src/connectors/services/`
-เจ้าของ: Agent `P1-SERVICES` / `P1-CONNECTIONS`
+สถานะ: ใช้กับ connector **50 service / 214 operation** ใน `packages/core/src/connectors/services/`
+เจ้าของ: Agent `P1-SERVICES` / `P1-CONNECTIONS` (10) + `P3-CONN-E` / `P3-CONN-F` (40)
+อัปเดตล่าสุด: Phase 3 (50 services)
 
 ## 1. หลักการ
 
 - Credential ทุกตัวเก็บใน vault ผ่าน `SecretStore` ไม่เคยอยู่ใน spec, workflow JSON, log หรือ error
-- static connector (API key / bot / PAT) ใช้ `ConnectorConnections`:
+- static connector (API key / bot / PAT / basic / bearer) ใช้ `ConnectorConnections`:
   - metadata อยู่ที่ `oauthDir/connections.json`
   - ค่าจริงอยู่ใต้ key `connector.<connectionId>.<field>`
   - connection แรกของแต่ละ service เป็น default; ตั้ง default ใหม่ได้
@@ -16,31 +17,81 @@
   ใน field ที่ประกาศ; runtime ต่ออายุ token ให้ก่อนเรียก API
 - ก่อนใช้ operation ที่ risk ไม่ใช่ `read` ต้องเปิด `allow` ที่ node หรือตั้ง permission ของ tool เป็น `allow`
 
-## 2. Matrix
+## 2. Matrix (50 services)
 
-| Service | Auth kind | Credential field | Scopes / header | Account model | Ops |
+Account model:
+
+- **connection** = Hub → บัญชี → Connections (หลายชื่อ + default, `account` เลือกได้)
+- **OAuth2** = ปุ่มเชื่อมต่อ OAuth2 ใน Hub → บัญชี (generic flow, ต่ออายุ token เอง)
+- **Google** = บัญชี Google เดิมที่เชื่อมไว้ใน Hub → บัญชี (scope เพิ่มตาม service)
+
+| Service | Auth kind | Credential field | Account model | Ops | หมายเหตุ |
 |---|---|---|---|---|---|
-| `slack` | `apiKey` | `botToken` (`xoxb-…`) | `chat:write`, `channels:read`, `channels:history` | connection หลายชื่อ + default | 6 |
-| `discord` | `apiKey` | `botToken` | `bot`; ส่ง `Authorization: Bot …` | connection หลายชื่อ + default | 5 |
-| `notion` | `apiKey` | `token` (`ntn_…`) | header `Notion-Version: 2022-06-28` | connection หลายชื่อ + default | 5 |
-| `airtable` | `apiKey` | `token` (`pat…`) | `data.records:read`, `data.records:write` | connection หลายชื่อ + default | 5 |
-| `google_docs` | `oauth2` | Google OAuth account | `documents`, `drive.file` | Google account เดิม | 4 |
-| `google_tasks` | `oauth2` | Google OAuth account | `tasks` | Google account เดิม | 4 |
-| `google_forms` | `oauth2` | Google OAuth account | `forms.body`, `forms.responses.readonly` | Google account เดิม | 4 |
-| `hubspot` | `apiKey` | `token` (`pat-…`) | contacts read/write, deals read/write, tickets read | connection หลายชื่อ + default | 6 |
-| `stripe` | `apiKey` | `secretKey` (`sk_test_…` / `sk_live_…`) | customers read/write, charges read, payment links write, refunds write | connection หลายชื่อ + default | 5 |
-| `github` | `apiKey` | `token` (`github_pat_…`) | `repo`; headers `Accept`, `X-GitHub-Api-Version` | connection หลายชื่อ + default | 6 |
+| `slack` | `apiKey` | `botToken` (`xoxb-…`) | connection | 6 | |
+| `discord` | `apiKey` | `botToken` | connection | 5 | runtime เติม prefix `Bot ` ให้ |
+| `notion` | `apiKey` | `token` (`ntn_…`) | connection | 5 | ส่ง header `Notion-Version: 2022-06-28` |
+| `airtable` | `apiKey` | `token` (`pat…`) | connection | 5 | |
+| `google_docs` | `oauth2` | Google account | Google | 4 | provider `google` |
+| `google_tasks` | `oauth2` | Google account | Google | 4 | provider `google` |
+| `google_forms` | `oauth2` | Google account | Google | 4 | provider `google` |
+| `hubspot` | `apiKey` | `token` (`pat-…`) | connection | 6 | |
+| `stripe` | `apiKey` | `secretKey` (`sk_test_…` / `sk_live_…`) | connection | 5 | |
+| `github` | `apiKey` | `token` (`github_pat_…`) | connection | 6 | ส่ง `Accept` + `X-GitHub-Api-Version` |
+| `jira` | `basic` | `username`, `password` | connection | 5 | |
+| `trello` | `apiKey` | `key`, `token` | connection | 5 | `key`/`token` ไปทาง query |
+| `asana` | `bearer` | `token` | connection | 5 | |
+| `clickup` | `bearer` | `token` | connection | 5 | |
+| `monday` | `apiKey` | `token` | connection | 5 | ส่ง token เป็น `Authorization` โดยตรง |
+| `linear` | `bearer` | `token` | connection | 5 | |
+| `todoist` | `bearer` | `token` | connection | 5 | |
+| `dropbox` | `bearer` | `token` | connection | 5 | |
+| `openai` | `bearer` | `token` | connection | 5 | |
+| `google_drive` | `oauth2` | Google account | Google | 5 | provider `google` |
+| `salesforce` | `bearer` | `token` | connection | 5 | |
+| `pipedrive` | `apiKey` | `token` | connection | 5 | token ไปทาง query `api_token` |
+| `shopify` | `apiKey` | `token` | connection | 5 | ส่ง header `X-Shopify-Access-Token` |
+| `woocommerce` | `basic` | `username` (consumer key), `password` (consumer secret) | connection | 5 | |
+| `wordpress` | `basic` | `username`, `password` | connection | 5 | |
+| `mailchimp` | `basic` | `username`, `password` | connection | 5 | |
+| `sendgrid` | `bearer` | `token` | connection | 5 | |
+| `twilio` | `basic` | `username`, `password` | connection | 5 | |
+| `whatsapp` | `bearer` | `token` | connection | 5 | |
+| `supabase` | `apiKey` | `apiKey` | connection | 5 | ส่ง header `apikey` |
+| `microsoft_teams` | `oauth2` | `clientId`, `clientSecret`, `refreshToken` (+ optional `accessToken`, `expiresAt`) | OAuth2 | 4 | Microsoft identity platform |
+| `excel` | `oauth2` | `clientId`, `clientSecret`, `refreshToken` (+ optional `accessToken`, `expiresAt`) | OAuth2 | 4 | Microsoft identity platform |
+| `zoom` | `oauth2` | `clientId`, `clientSecret`, `refreshToken` (+ optional `accessToken`, `expiresAt`) | OAuth2 | 4 | |
+| `calendly` | `oauth2` | `clientId`, `clientSecret`, `refreshToken` (+ optional `accessToken`, `expiresAt`) | OAuth2 | 3 | |
+| `typeform` | `oauth2` | `clientId`, `clientSecret`, `refreshToken` (+ optional `accessToken`, `expiresAt`) | OAuth2 | 3 | |
+| `box` | `oauth2` | `clientId`, `clientSecret`, `refreshToken` (+ optional `accessToken`, `expiresAt`) | OAuth2 | 4 | `upload_file` ยังเป็น multipart gap ของ runtime |
+| `google_analytics` | `oauth2` | Google account | Google | 2 | provider `google` |
+| `google_ads` | `oauth2` | Google account | Google | 3 | provider `google`; ต้องส่ง `developerToken` ต่อ operation |
+| `line` | `apiKey` | `channelAccessToken` | connection | 3 | ส่งเป็น `Authorization: Bearer …` |
+| `zoho_crm` | `oauth2` | `clientId`, `clientSecret`, `refreshToken` (+ optional `accessToken`, `expiresAt`) | OAuth2 | 4 | runtime เติม prefix `Zoho-oauthtoken ` |
+| `facebook` | `oauth2` | `clientId`, `clientSecret`, `refreshToken` (+ optional `accessToken`, `expiresAt`) | OAuth2 | 3 | |
+| `instagram` | `oauth2` | `clientId`, `clientSecret`, `refreshToken` (+ optional `accessToken`, `expiresAt`) | OAuth2 | 4 | |
+| `linkedin` | `oauth2` | `clientId`, `clientSecret`, `refreshToken` (+ optional `accessToken`, `expiresAt`) | OAuth2 | 3 | |
+| `x` | `oauth2` | `clientId`, `clientSecret`, `refreshToken` (+ optional `accessToken`, `expiresAt`) | OAuth2 | 3 | ใช้ PKCE (`extra.pkce`) |
+| `youtube` | `oauth2` | Google account | Google | 3 | provider `google` |
+| `reddit` | `oauth2` | `clientId`, `clientSecret`, `refreshToken` (+ optional `accessToken`, `expiresAt`) | OAuth2 | 3 | ส่ง `User-Agent: mimi-connector/1.0` |
+| `google_search_console` | `oauth2` | Google account | Google | 2 | provider `google` |
+| `google_chat` | `oauth2` | Google account | Google | 3 | provider `google` |
+| `google_slides` | `oauth2` | Google account | Google | 3 | provider `google` |
+| `google_classroom` | `oauth2` | Google account | Google | 3 | provider `google` |
 
 ## 3. การขอ credential
 
-- Slack: สร้าง app ที่ Slack → OAuth & Permissions แล้วคัดลอก Bot User OAuth Token
-- Discord: Developer Portal → Bot → Reset Token; เปิด intent ที่ operation ต้องใช้
-- Notion: Settings → Connections → Develop or manage integrations; แชร์หน้าที่ต้องการให้ integration เห็น
-- Airtable: Developer hub → Personal access tokens; ต้องมี scope ของ base ที่ใช้
-- Google: ใช้หน้า Hub → บัญชี เชื่อมต่อ Google; ต้องยินยอม scope ใหม่หลังเพิ่ม Docs/Tasks/Forms
-- HubSpot: Settings → Integrations → Private apps
-- Stripe: Dashboard → Developers → API keys (เริ่มด้วย test key)
-- GitHub: Settings → Developer settings → Personal access tokens (fine-grained หรือ classic ที่มี `repo`)
+- **apiKey / bearer**: สร้าง token ในหน้าตั้งค่าของ service แล้วเพิ่มใน Hub → บัญชี → Connections
+  (ชื่ออะไรก็ได้; ตั้งตัวแรกเป็น default). `account` ของ operation เว้นว่าง = default
+- **basic**: ใส่ username/password (WooCommerce ใช้ consumer key/secret) ใน Connections
+- **OAuth2 (ไม่ใช่ Google)**: สร้าง OAuth app ที่ service นั้น, ใส่ redirect URI ที่ Hub แสดง,
+  แล้วกดเชื่อมต่อ OAuth2 ใน Hub → บัญชี; Mimi เก็บ refresh token และต่ออายุให้
+  - X ใช้ PKCE; Zoho เติม prefix `Zoho-oauthtoken `; Microsoft ใช้ tenant `common` หรือ tenant id
+- **Google**: เชื่อมบัญชี Google ครั้งเดียวที่ Hub → บัญชี; service ใหม่จะขอ scope เพิ่ม
+  (YouTube, Search Console, Chat, Slides, Classroom ใช้บัญชีเดียวกัน)
+- **Google Ads**: นอกจากบัญชี Google ต้องมี developer token ของ Google Ads ใน operation ที่เรียก
+- **LINE**: channel access token ส่งเป็น Bearer ให้อัตโนมัติ
+- **Reddit**: runtime ส่ง User-Agent คงที่ `mimi-connector/1.0`
+- **Discord**: bot token ถูกส่งเป็น `Authorization: Bot …`
 
 ## 4. ที่เก็บและการ resolve
 
@@ -62,8 +113,11 @@ legacy vault/env           fallback สำหรับการติดตั�
 
 - Workflow node มีปุ่ม “ทดสอบ” สำหรับรัน node เดียวด้วย input ตัวอย่าง
 - Hub แสดง `connected` / `hasSecret` จาก field ที่บันทึก; ไม่มีปุ่มทดสอบใน Hub
+- Catalog UI (Hub → Node & Tools) แสดง auth kind, credential fields และสถานะ connection
+  โดยไม่แสดงค่า secret (`docs/connectors/longtail-ui.md`)
 - การทดสอบอัตโนมัติใช้ fake fetch; ห้ามยิง API จริงระหว่าง `npm test`
 - connection ที่ยังไม่ครบ field จะแสดง `connected: false` และใช้เรียก operation ไม่ได้
 - write/delete operation ต้องมี consent ทุกครั้งที่รัน workflow เว้นแต่ permission ตั้งเป็น `allow`
 - OAuth2 generic ทดสอบ authorization-code + refresh ด้วย token ปลอม และตรวจว่าไม่รั่ว client secret / refresh token ใน error
-- OAuth2 connection ที่ไม่ใช่ Google มีปุ่ม “เชื่อมต่อ OAuth2” ใน Hub → บัญชี
+- test ที่ครอบ auth: `connector-auth.test.ts`, `connector-runtime.test.ts`, `connector-runtime-hardening.test.ts`,
+  `connector-batch-a`…`f.test.ts`, `connector-catalog.test.ts`; ทั้ง suite 528 tests ผ่านใน Phase 3

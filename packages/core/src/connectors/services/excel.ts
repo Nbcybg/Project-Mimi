@@ -1,0 +1,75 @@
+import type { ConnectorSpec } from '@mimi/shared';
+
+export const excelConnector: ConnectorSpec = {
+  key: 'excel',
+  label: 'Excel',
+  category: 'productivity',
+  description: 'Read and write workbook ranges and table rows through the Microsoft Graph Excel API',
+  baseUrl: 'https://graph.microsoft.com/v1.0',
+  auth: {
+    kind: 'oauth2',
+    fields: [
+      { key: 'clientId', label: 'Client ID', type: 'string', required: true },
+      { key: 'clientSecret', label: 'Client secret', type: 'secret', required: true },
+      { key: 'refreshToken', label: 'Refresh token', type: 'secret', required: true },
+      { key: 'accessToken', label: 'Access token', type: 'secret' },
+      { key: 'expiresAt', label: 'Expires at', type: 'string' },
+    ],
+    authorizeUrl: 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize',
+    tokenUrl: 'https://login.microsoftonline.com/common/oauth2/v2.0/token',
+    scopes: ['offline_access', 'User.Read', 'Files.ReadWrite'],
+  },
+  operations: [
+    {
+      key: 'list_worksheets',
+      label: 'List worksheets',
+      method: 'GET',
+      path: '/me/drive/items/{itemId}/workbook/worksheets',
+      risk: 'read',
+      fields: [{ key: 'itemId', label: 'Drive item ID', type: 'string', required: true }],
+      response: { itemsPath: 'value' },
+    },
+    {
+      key: 'read_range',
+      label: 'Read range',
+      method: 'GET',
+      path: "/me/drive/items/{itemId}/workbook/worksheets/{worksheet}/range(address='{range}')",
+      risk: 'read',
+      fields: [
+        { key: 'itemId', label: 'Drive item ID', type: 'string', required: true },
+        { key: 'worksheet', label: 'Worksheet name or ID', type: 'string', required: true },
+        { key: 'range', label: 'Range (A1 notation)', type: 'string', required: true, default: 'A1:Z100' },
+      ],
+      response: { itemsPath: 'values' },
+    },
+    {
+      key: 'write_range',
+      label: 'Write range',
+      method: 'PATCH',
+      path: "/me/drive/items/{itemId}/workbook/worksheets/{worksheet}/range(address='{range}')",
+      risk: 'write',
+      body: { values: '{{values}}' },
+      fields: [
+        { key: 'itemId', label: 'Drive item ID', type: 'string', required: true },
+        { key: 'worksheet', label: 'Worksheet name or ID', type: 'string', required: true },
+        { key: 'range', label: 'Range (A1 notation)', type: 'string', required: true, default: 'A1:Z100' },
+        { key: 'values', label: 'Rows (array of arrays)', type: 'json', required: true },
+      ],
+    },
+    {
+      key: 'add_row',
+      label: 'Add table row',
+      method: 'POST',
+      path: '/me/drive/items/{itemId}/workbook/worksheets/{worksheet}/tables/{table}/rows',
+      risk: 'write',
+      body: { values: '{{values}}' },
+      fields: [
+        { key: 'itemId', label: 'Drive item ID', type: 'string', required: true },
+        { key: 'worksheet', label: 'Worksheet name or ID', type: 'string', required: true },
+        { key: 'table', label: 'Table name or ID', type: 'string', required: true },
+        { key: 'values', label: 'Row (array)', type: 'json', required: true },
+      ],
+    },
+  ],
+  rateLimit: { requests: 10, perMs: 1000, burst: 10 },
+};

@@ -2,6 +2,7 @@ export interface RecordedCall {
   url: string;
   method: string;
   body: string | undefined;
+  bodyBytes: Uint8Array | undefined;
   headers: Headers;
 }
 
@@ -15,6 +16,7 @@ export function fakeFetch(handler: FakeHandler = () => Response.json({ ok: true 
       url: String(input),
       method: init?.method ?? 'GET',
       body: typeof init?.body === 'string' ? init.body : undefined,
+      bodyBytes: init?.body instanceof Uint8Array ? init.body : undefined,
       headers: new Headers(init?.headers),
     };
     calls.push(call);

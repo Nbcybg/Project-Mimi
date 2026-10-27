@@ -1,0 +1,66 @@
+import type { ConnectorSpec } from '@mimi/shared';
+
+export const asanaConnector: ConnectorSpec = {
+  key: 'asana',
+  label: 'Asana',
+  category: 'project-management',
+  description: 'อ่าน workspace/project/task และสร้างงานใน Asana',
+  baseUrl: 'https://app.asana.com/api/1.0',
+  auth: {
+    kind: 'bearer',
+    fields: [{ key: 'token', label: 'Personal access token', type: 'secret', required: true }],
+  },
+  operations: [
+    {
+      key: 'list_workspaces',
+      label: 'List workspaces',
+      method: 'GET',
+      path: '/workspaces',
+      risk: 'read',
+      fields: [],
+      response: { itemsPath: 'data' },
+    },
+    {
+      key: 'list_projects',
+      label: 'List projects',
+      method: 'GET',
+      path: '/projects',
+      risk: 'read',
+      fields: [{ key: 'workspace', label: 'Workspace', type: 'string', required: true }],
+      response: { itemsPath: 'data' },
+    },
+    {
+      key: 'list_tasks',
+      label: 'List tasks',
+      method: 'GET',
+      path: '/tasks',
+      risk: 'read',
+      fields: [{ key: 'project', label: 'Project', type: 'string', required: true }],
+      response: { itemsPath: 'data' },
+    },
+    {
+      key: 'create_task',
+      label: 'Create task',
+      method: 'POST',
+      path: '/tasks',
+      risk: 'write',
+      body: { data: { name: '{{name}}', notes: '{{notes}}', projects: ['{{project}}'] } },
+      fields: [
+        { key: 'project', label: 'Project', type: 'string', required: true },
+        { key: 'name', label: 'Name', type: 'string', required: true },
+        { key: 'notes', label: 'Notes', type: 'string', required: false, default: '' },
+      ],
+      response: { itemsPath: 'data' },
+    },
+    {
+      key: 'complete_task',
+      label: 'Complete task',
+      method: 'PUT',
+      path: '/tasks/{taskId}',
+      risk: 'write',
+      body: { data: { completed: true } },
+      fields: [{ key: 'taskId', label: 'Task ID', type: 'string', required: true }],
+      response: { itemsPath: 'data' },
+    },
+  ],
+};

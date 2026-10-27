@@ -30,15 +30,19 @@
 `core.ts` สร้าง:
 
 1. `ConnectorRegistry(connectorSpecs)` จาก `packages/core/src/connectors/services/index.ts`
-2. `ConnectorRuntimeImpl`
+2. `ConnectorRuntimeImpl` (auth resolver + generic OAuth2 + rate limit/pagination)
 3. tool ทุก operation ผ่าน `connectorTools()` แล้ว register เข้า `ToolRegistry`
 4. ส่ง runtime เป็น `WorkflowRunnerDeps.connector`
 
-Auth ของ Phase 0 เป็น bridge จนกว่าจะมี connection store:
+Auth (Phase 3):
 
-- vault key: `connector.<connector>.<field>` เช่น `connector.slack.botToken`
-- environment fallback: `<CONNECTOR>_<FIELD>` เช่น `SLACK_BOT_TOKEN`
-- ถ้าระบุ `account` จะยังไม่ resolve (OAuth accounts เป็น Phase 1)
+- static token (`apiKey` / `bearer` / `basic`) → `ConnectorConnections`
+  (`account` → connection default → legacy vault key/env)
+- Google → `OAuthAccounts` ผ่าน `oauth.google(account)`; YouTube และ Google service
+  ใหม่ใช้บัญชีเดียวกัน
+- OAuth2 อื่น ๆ → generic flow ต่ออายุ token ให้ (X ใช้ PKCE, Zoho เติม prefix)
+- `risk !== 'read'` ต้องมี `allow` ที่ node หรือ permission `allow`; `deny` ชนะเสมอ
+- รายละเอียดทุก service: `docs/connectors/auth-matrix.md`
 
 ## Quick Work
 
@@ -48,7 +52,9 @@ Auth ของ Phase 0 เป็น bridge จนกว่าจะมี connec
 - `operation` = operation key
 - `familyLabel` = ชื่อ service
 
-`feature-agent-tools.js` จัดกลุ่มด้วย `tool.connector` และใช้ `tool.familyLabel` / `tool.operation` โดยไม่ hardcode ชื่อ operation. Slack จึงเป็นการ์ดเดียวที่มี 3 operations.
+`feature-agent-tools.js` จัดกลุ่มด้วย `tool.connector` และใช้ `tool.familyLabel` / `tool.operation`
+โดยไม่ hardcode ชื่อ operation; แต่ละ service จึงเป็นการ์ดเดียวที่มีทุก operation ของ spec
+(Slack 6, HubSpot 6, GitHub 6, …). long-tail (custom/MCP) แยกเป็น `tool:<name>` ไม่ปน family native.
 
 ## Tests
 
@@ -58,9 +64,23 @@ node --test --test-timeout=60000 packages/core/src/test/connector-node.test.ts
 
 ครอบ expression, consent, onError/retries, workflow store และ metadata ของ Quick Work.
 
-## ยังค้าง (Phase 1+)
+## ยังค้าง (Phase 4+)
 
-- ส่ง `ConnectorView[]` เต็มไป web ต้องเพิ่ม field ใน `ServerMessage`/`ToolPoolView` (shared protocol ของ 0A) — Phase 0 ส่งเฉพาะ metadata บน `ToolView`
-- เพิ่ม field `allow` ใน `NODE_TYPES.connector` เพื่อให้ติ๊กใน editor ได้ (contract 0A ยังไม่มี)
-- connection store / OAuth account picker
-- pagination, rate limit เต็มรูปแบบ และ trigger ของ connector
+- concurrency/queue/idempotency/timeout ของ workflow execution
+- connector versioning + catalog update โดยไม่ทำ workflow เก่าพัง
+- OpenAPI import จากเว็บ (server message + persistence; ดู `longtail-ui.md`)
+- multipart streaming สำหรับ `bodyFormat: 'form'` (เช่น Box `upload_file`)
+
+## Phase 4 implementation update (2026-10-23)
+
+The first three Phase 4 items are now implemented:
+
+- queue, cancellation, idempotency and timeouts: `reliability.md`
+- run history, redaction, traces and attempts: `observability.md`
+- connector versions and pinned workflow nodes: `versioning.md`
+- guarded outbound HTTP and credential handling: `security-review.md`
+- E2E and performance measurements: `performance.md`
+
+Still open: OpenAPI persistence/runtime registration and multipart streaming.
+The 60-node execution cap (`PERF-4E-01`) was raised to 1000 with an explicit
+failure when the cap is reached; see `performance.md`.

@@ -80,10 +80,23 @@ import { WorkflowRunStore } from './workflows/run-history.ts';
 import { DEFAULT_TOKEN_SECRET, TelegramHub, type TelegramListener } from './workflows/telegram.ts';
 import { matchText } from './workflows/text-match.ts';
 import { TriggerPool } from './workflows/trigger-pool.ts';
+import {
+  connectorPollResumeKey,
+  connectorTriggerId,
+  parseConnectorTriggerPool,
+  pollConnectorTrigger,
+} from './workflows/connector-triggers.ts';
 import { type StoredWorkflow, WorkflowStore } from './workflows/workflow-store.ts';
+import { IdempotencyStore, webhookIdempotencyKey } from './workflows/idempotency.ts';
+import { RunQueue } from './workflows/run-queue.ts';
 import type { FlowItem, JsonValue, WorkflowNode, WorkflowNodeTestResult, WorkflowView } from '@mimi/shared';
 
 type RunFinish = Extract<AgentEvent, { type: 'run-finish' }>;
+
+function envNumber(name: string, fallback: number): number {
+  const value = Math.floor(Number(process.env[name]));
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
 
 export interface CoreListeners {
   /** Reminders and results of unattended work, for whoever can show them to the user. */
@@ -153,6 +166,10 @@ export interface Core {
   triggerPool: TriggerPool;
   /** Past runs of every workflow, with node input/output. */
   workflowRuns: WorkflowRunStore;
+  /** FIFO workflow runs with per-agent and per-workflow limits. */
+  workflowQueue: RunQueue;
+  /** Bounded webhook dedupe that survives a restart. */
+  idempotency: IdempotencyStore;
   /** Workflow runs paused at an approval or a long wait. */
   parkedRuns: ParkedRuns;
   /** Finishes a paused run now (tests; normally the answer or the timer does it). */
@@ -187,7 +204,7 @@ export interface Core {
   /** Stores a user message in a chat without an agent turn (a chat trigger took it). */
   postUserMessage(chatId: number, text: string, attachmentIds?: string[]): { sessionId: number; id: number; createdAt: string };
   /** Runs a workflow by hand with optional input; returns every node's input and output. */
-  runWorkflow(agent: string, name: string, input?: JsonValue, options?: { pins?: boolean }): Promise<WorkflowRunResult>;
+  runWorkflow(agent: string, name: string, input?: JsonValue, options?: { pins?: boolean; eventId?: string }): Promise<WorkflowRunResult>;
   /** Runs again from one node with the input it got in a stored run; earlier nodes keep that run's outputs. */
   runWorkflowFrom(agent: string, name: string, nodeId: string, runId: number): Promise<WorkflowRunResult>;
   /** Runs one node alone with sample items (the editor's per-node test). */
@@ -313,12 +330,14 @@ export async function createCore(
   messages.onAppend = (message) => mirror(() => historyFiles.append(message));
   // Files dropped into `user/memory` by hand are imported once, then kept in step.
   const knownMemory = new Set(memory.list().map((entry) => entry.path));
+  let memoryImported = 0;
   for (const path of memoryFiles.paths()) {
     if (knownMemory.has(path)) continue;
     const imported = memoryFiles.read(path);
     if (!imported?.content) continue;
     try {
       memory.write({ path, description: imported.description, content: imported.content });
+      memoryImported++;
     } catch {
       // an invalid path or oversized content: leave the file as it is
     }
@@ -351,7 +370,7 @@ export async function createCore(
   const triggerFiles = new TriggerFiles(config.triggersDir);
   triggers.onChange = (trigger) => triggerFiles.write(trigger);
   triggers.onDelete = (id) => triggerFiles.remove(id);
-  triggerFiles.reconcile(triggers);
+  const triggerSync = triggerFiles.reconcile(triggers);
   const mesh = new MeshRouter({ db, agents, messages, settings: settings.mesh });
   const listeners: CoreListeners = {};
 
@@ -491,9 +510,19 @@ export async function createCore(
   });
   const toolPool = new ToolPool(tools, toolStore, secrets, mcp, pcRunner);
   const workflows = new WorkflowStore(config.workflowsDir);
-  const triggerPool = new TriggerPool(path.join(config.triggersDir, 'pool'));
+  const triggerPool = new TriggerPool(path.join(config.triggersDir, 'pool'), () => connectorRegistry.list());
   const workflowState = new WorkflowState(config.workflowStatePath);
   const workflowRuns = new WorkflowRunStore(db);
+  const workflowQueue = new RunQueue({
+    globalConcurrency: envNumber('MIMI_WORKFLOW_CONCURRENCY', 8),
+    perAgent: envNumber('MIMI_WORKFLOW_AGENT_CONCURRENCY', 4),
+    perWorkflow: envNumber('MIMI_WORKFLOW_RUN_CONCURRENCY', 1),
+  });
+  const idempotency = new IdempotencyStore({
+    file: path.join(path.dirname(config.workflowStatePath), 'workflow-idempotency.json'),
+  });
+  const workflowNodeTimeoutMs = envNumber('MIMI_WORKFLOW_NODE_TIMEOUT_MS', 0) || undefined;
+  const workflowRunTimeoutMs = envNumber('MIMI_WORKFLOW_RUN_TIMEOUT_MS', 0) || undefined;
   let vapid: VapidKeys | undefined;
   const notifications = new NotificationCenter(db, {
     vapid: () => (vapid ??= loadOrCreateVapid(config.pushKeysPath)),
@@ -534,6 +563,15 @@ export async function createCore(
     timezone: config.timezone,
   });
   const jobs = new PostTurnJobs(writer, compactor, settings.memory.auto_write);
+  // Mirrors that carried state the database did not know (a synced folder on a fresh
+  // install, or a database deleted by hand) are imported on start; say so, so nobody
+  // mistakes restored state for something newly created.
+  if (triggerSync.imported > 0) {
+    jobs.note(`triggers: restored ${triggerSync.imported} reminder(s) from the ${config.triggersDir} mirror`);
+  }
+  if (memoryImported > 0) {
+    jobs.note(`memory: restored ${memoryImported} file(s) from the ${config.memoryDir} mirror`);
+  }
 
   const fileSnapshots = new FileSnapshots(db);
   const deps: AgentLoopDeps = {
@@ -751,6 +789,8 @@ export async function createCore(
     state: workflowState,
     allowedDirs: config.allowedDirs,
     timezone: config.timezone,
+    ...(workflowNodeTimeoutMs ? { nodeTimeoutMs: workflowNodeTimeoutMs } : {}),
+    ...(workflowRunTimeoutMs ? { runTimeoutMs: workflowRunTimeoutMs } : {}),
     runSubWorkflow: async (agent, name, subItems, depth) => {
       const sub = workflows.get(agent, name);
       if (!sub) throw new Error(`workflow node: no workflow "${name}" for agent "${agent}"`);
@@ -798,8 +838,17 @@ export async function createCore(
    * the failure info. The handler's own failure never masks the original one.
    */
   async function runWorkflowWithHandler(workflow: StoredWorkflow, items: FlowItem[], mode: string, options: RunOptions = {}): Promise<WorkflowRunResult> {
+    const queued = workflowQueue.enqueue({
+      agent: workflow.agent,
+      workflow: workflow.name,
+      task: (signal) => runWorkflowNow(workflow, items, mode, options, signal),
+    });
+    return queued.promise;
+  }
+
+  async function runWorkflowNow(workflow: StoredWorkflow, items: FlowItem[], mode: string, options: RunOptions, signal: AbortSignal): Promise<WorkflowRunResult> {
     const startedAt = new Date();
-    const outcome = await runWorkflowNodes(workflow, items, workflowRunner, undefined, mode, 0, options);
+    const outcome = await runWorkflowNodes(workflow, items, workflowRunner, signal, mode, 0, options);
     // Every top-level run lands in the history, whatever started it.
     outcome.runId = workflowRuns.record(`${workflow.agent}/${workflow.name}`, mode, startedAt, outcome);
     if (!outcome.ok) await runErrorWorkflow(workflow, outcome);
@@ -946,7 +995,12 @@ export async function createCore(
     if (!workflow) return undefined;
     const startedAt = new Date();
     try {
-      const outcomeRun = await resumeWorkflow(workflow, parked, outcome, workflowRunner);
+      const queued = workflowQueue.enqueue({
+        agent: parked.workflow.agent,
+        workflow: parked.workflow.name,
+        task: (signal) => resumeWorkflow(workflow, parked, outcome, workflowRunner, signal),
+      });
+      const outcomeRun = await queued.promise;
       outcomeRun.runId = workflowRuns.record(`${workflow.agent}/${workflow.name}`, `${parked.state.execution.mode} (ต่อ)`, startedAt, outcomeRun);
       if (!outcomeRun.ok) await runErrorWorkflow(workflow, outcomeRun);
       return outcomeRun;
@@ -1194,6 +1248,32 @@ export async function createCore(
   async function fireWorkflow(workflow: StoredWorkflow): Promise<string> {
     const entry = triggerPool.get(workflow.trigger.pool);
     const id = `${workflow.agent}/${workflow.name}`;
+    if (workflow.trigger.pool.startsWith('connector:') && entry?.kind === 'poll') {
+      const found = parseConnectorTriggerPool(workflow.trigger.pool);
+      if (!found) return 'invalid connector trigger';
+      const spec = connectorRegistry.get(found.connector);
+      const trigger = spec?.triggers?.find((item) => item.key === found.trigger);
+      if (!spec || !trigger) return 'connector trigger is missing';
+      const resumeKey = connectorPollResumeKey(id);
+      const result = await pollConnectorTrigger(
+        connectors,
+        spec,
+        trigger,
+        workflow.trigger.config,
+        workflowState.cursor(resumeKey),
+      );
+      const seen = workflowState.seen(id);
+      const fresh = result.items.filter((item) => !seen.has(connectorTriggerId(trigger, item)));
+      if (result.cursor) workflowState.setCursor(resumeKey, result.cursor);
+      if (fresh.length === 0) return 'no new connector items';
+      let last = '';
+      for (const item of fresh) {
+        const outcome = await runWorkflowWithHandler(workflow, [item], 'poll');
+        last = outcome.result;
+        workflowState.mark(id, [connectorTriggerId(trigger, item)]);
+      }
+      return `${fresh.length} connector items: ${last.slice(0, 200)}`;
+    }
     if (entry?.kind === 'mail') {
       const items = await triggerItems(workflow, triggerPool, workflowRunner);
       const seen = workflowState.seen(id);
@@ -1294,6 +1374,8 @@ export async function createCore(
     workflows,
     triggerPool,
     workflowRuns,
+    workflowQueue,
+    idempotency,
     knowledge,
     addKnowledge,
     profile,
@@ -1307,11 +1389,20 @@ export async function createCore(
     telegram,
     chatTriggers,
     postUserMessage,
-    async runWorkflow(agent: string, name: string, input?: JsonValue, options?: { pins?: boolean }): Promise<WorkflowRunResult> {
+    async runWorkflow(agent: string, name: string, input?: JsonValue, options?: { pins?: boolean; eventId?: string }): Promise<WorkflowRunResult> {
       const workflow = workflows.get(agent, name);
       if (!workflow) throw new Error(`No workflow "${name}" for agent "${agent}".`);
-      const items = await triggerItems(workflow, triggerPool, workflowRunner, { input });
-      return runWorkflowWithHandler(workflow, items, triggerPool.get(workflow.trigger.pool)?.kind ?? 'manual', options?.pins ? { usePins: true } : {});
+      const eventKey = options?.eventId ? webhookIdempotencyKey(`${agent}/${name}`, options.eventId) : undefined;
+      if (eventKey && !idempotency.claim(eventKey)) {
+        return { name: workflow.name, ok: true, result: 'duplicate webhook event (skipped)', nodes: [] };
+      }
+      try {
+        const items = await triggerItems(workflow, triggerPool, workflowRunner, { input });
+        return await runWorkflowWithHandler(workflow, items, triggerPool.get(workflow.trigger.pool)?.kind ?? 'manual', options?.pins ? { usePins: true } : {});
+      } catch (error) {
+        if (eventKey) idempotency.release(eventKey);
+        throw error;
+      }
     },
     async runWorkflowFrom(agent: string, name: string, nodeId: string, runId: number): Promise<WorkflowRunResult> {
       const workflow = workflows.get(agent, name);
@@ -1369,6 +1460,7 @@ export async function createCore(
       })),
     async close() {
       scheduler.stop();
+      workflowQueue.close();
       await mcp.close();
       closed = true;
       clearInterval(wakeTimer);

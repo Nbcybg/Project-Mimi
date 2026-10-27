@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { defineTool } from '@mimi/shared';
 import { z } from 'zod';
-import { PathNotAllowedError, resolveAllowedPath } from './path-guard.ts';
+import { PathNotAllowedError, missingPathError, resolveAllowedPath } from './path-guard.ts';
 
 const SKIPPED_FOLDERS = new Set(['node_modules', '.git', '.mimi-trash']);
 const MAX_SEARCH_FILE = 1024 * 1024;
@@ -36,7 +36,13 @@ export const listDirTool = defineTool({
   summarize: (input) => `List ${input.path ?? '.'}`,
   async execute(input, context) {
     const root = resolveAllowedPath(input.path ?? '.', context.allowedDirs);
-    if (!(await fs.stat(root)).isDirectory()) throw new Error(`"${input.path}" is not a folder.`);
+    let rootStat;
+    try {
+      rootStat = await fs.stat(root);
+    } catch (error) {
+      throw missingPathError(error, root, context.allowedDirs);
+    }
+    if (!rootStat.isDirectory()) throw new Error(`"${input.path}" is not a folder.`);
     const limit = input.limit ?? 200;
     const lines: string[] = [];
     let more = 0;
@@ -78,7 +84,12 @@ export const fileInfoTool = defineTool({
   summarize: (input) => `Info ${input.path}`,
   async execute(input, context) {
     const file = resolveAllowedPath(input.path, context.allowedDirs);
-    const stat = await fs.stat(file);
+    let stat;
+    try {
+      stat = await fs.stat(file);
+    } catch (error) {
+      throw missingPathError(error, file, context.allowedDirs);
+    }
     const lines = [`path: ${file}`, `type: ${stat.isDirectory() ? 'folder' : 'file'}`];
     if (stat.isDirectory()) lines.push(`entries: ${(await fs.readdir(file)).length}`);
     else lines.push(`size: ${size(stat.size)} (${stat.size} bytes)`);
@@ -103,6 +114,11 @@ export const findFilesTool = defineTool({
   summarize: (input) => `Find ${input.name ?? '*'}${input.contains ? ` containing "${input.contains}"` : ''} in ${input.path ?? '.'}`,
   async execute(input, context) {
     const root = resolveAllowedPath(input.path ?? '.', context.allowedDirs);
+    try {
+      await fs.stat(root);
+    } catch (error) {
+      throw missingPathError(error, root, context.allowedDirs);
+    }
     const pattern = wildcardToRegExp(input.name?.trim() || '*');
     const needle = input.contains?.toLowerCase();
     const maxDepth = input.max_depth ?? 6;

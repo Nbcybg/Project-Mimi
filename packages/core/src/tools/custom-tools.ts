@@ -4,6 +4,7 @@ import vm from 'node:vm';
 import type { CustomToolSpec, ToolSettingField, ToolSettingValues } from '@mimi/shared';
 import { z } from 'zod';
 import type { PcRunner } from './executor.ts';
+import { safeFetch } from '../workflows/net-guard.ts';
 import { defineTool, type ToolContext, type ToolDefinition } from './registry.ts';
 
 export const MAX_TOOL_OUTPUT = 20_000;
@@ -73,6 +74,8 @@ interface HttpConfig {
   body?: string;
   bodyType?: 'json' | 'text' | 'form';
   timeoutMs?: number;
+  /** The user explicitly wants this tool to reach the LAN/loopback. */
+  allowLocal?: boolean;
 }
 
 function scopeFor(
@@ -126,12 +129,16 @@ async function runHttp(
   }
 
   const timeout = AbortSignal.timeout(config.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-  const response = await fetch(url, {
-    method,
-    headers,
-    body,
-    signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
-  });
+  const response = await safeFetch(
+    url,
+    {
+      method,
+      headers,
+      body,
+      signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+    },
+    { ...(config.allowLocal === true ? { allowLocal: true } : {}) },
+  );
   const text = await response.text();
   if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}: ${truncateOutput(text, 500)}`);
   return truncateOutput(text);

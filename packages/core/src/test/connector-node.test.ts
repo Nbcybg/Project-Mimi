@@ -215,9 +215,11 @@ test('core: Slack operations reach the tool pool with Quick Work metadata', asyn
       'update_message',
     ]);
     assert.ok(views.every((tool) => tool.familyLabel === 'Slack'));
+    assert.ok(views.every((tool) => tool.connectorCategory === 'communication'));
     const connectors = target.core.connectors.list().map((connector) => connector.key);
-    assert.equal(connectors.length, 10);
+    assert.equal(connectors.length, 50);
     assert.ok(connectors.includes('slack'));
+    assert.ok(connectors.includes('linear'));
     assert.ok(target.core.tools.names().includes('slack_send_message'));
   } finally {
     await target.cleanup();

@@ -1,0 +1,12 @@
+{
+  "id": "05-calendar-conflict",
+  "title": "ตรวจประชุมเวลาชนกันและร่างตอบรับเฉพาะเมื่อยืนยัน",
+  "description": "Outlook/Gmail Calendar: ตรวจนัดซ้อนได้; ขอ confirmation ก่อนตอบรับ",
+  "agent": "mimi",
+  "timeoutMs": 540000,
+  "permissions": { "default": "deny", "deny": ["calendar_create", "outlook_calendar_create", "outlook_calendar_update", "outlook_reply", "gmail_send", "outlook_send"] },
+  "turns": [
+    { "text": "ตรวจตารางนัดวันนี้ (24 ต.ค.) ให้หน่อยว่ามีรายการไหนเวลาชนกันบ้าง และเสนอทางแก้ให้ด้วย" },
+    { "text": "ดี ร่างอีเมลตอบรับ/ขอเลื่อนสำหรับรายการที่ชนกันให้หน่อย แต่อย่าเพิ่งส่งหรือแก้ปฏิทินจริงจนกว่าฉันจะยืนยัน" }
+  ]
+}

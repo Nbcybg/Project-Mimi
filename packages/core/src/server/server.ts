@@ -27,6 +27,11 @@ import { ensureOverseer, OVERSEER_NAME, overseerView as toOverseerView } from '.
 import { readSkillBody } from '../skills/skills.ts';
 import { checkModelNeeds } from '../providers/model-requirements.ts';
 import { importN8n } from '../workflows/n8n-import.ts';
+import { importMake } from '../workflows/make-import.ts';
+import { importZapier } from '../workflows/zapier-import.ts';
+import { parseConnectorTriggerPool } from '../connectors/trigger-adapter.ts';
+import { verifyConnectorWebhook } from '../workflows/connector-triggers.ts';
+import { webhookEventId, webhookIdempotencyKey } from '../workflows/idempotency.ts';
 import { contextFor, resolveString } from '../workflows/expressions.ts';
 import { validateWorkflowNode, validateWorkflowView, type WorkflowValidationContext } from '../workflows/validate.ts';
 import { REASONING_EFFORTS, type ReasoningEffort } from '@mimi/shared';
@@ -1115,7 +1120,9 @@ export async function startServer(
         }
         break;
       }
-      case 'workflow-import-n8n': {
+      case 'workflow-import-n8n':
+      case 'workflow-import-make':
+      case 'workflow-import-zapier': {
         const agent = String(message.agent);
         if (!core.agents.names().includes(agent)) throw new Error(`Agent "${agent}" does not exist.`);
         let raw: unknown;
@@ -1124,11 +1131,14 @@ export async function startServer(
         } catch {
           throw new Error('The file is not valid JSON.');
         }
-        const { workflows, report } = importN8n(raw, {
+        const source = message.type === 'workflow-import-n8n' ? 'n8n' : message.type === 'workflow-import-make' ? 'make' : 'zapier';
+        const options = {
           agent,
           existingNames: core.workflows.names(agent),
-          hasTool: (name) => Boolean(core.tools.get(name)),
-        });
+          hasTool: (name: string) => Boolean(core.tools.get(name)),
+        };
+        const { workflows, report } =
+          source === 'n8n' ? importN8n(raw, options) : source === 'make' ? importMake(raw, options) : importZapier(raw, options);
         const errors: string[] = [];
         if (message.save) {
           for (const workflow of workflows) {
@@ -1141,7 +1151,7 @@ export async function startServer(
           }
           broadcast({ type: 'workflows', workflows: core.workflows.list(), pool: core.triggerPool.list(), nodeTypes: NODE_TYPES });
         }
-        reply({ type: 'workflow-import', agent, saved: Boolean(message.save), workflows, report, errors });
+        reply({ type: 'workflow-import', agent, source, reqId: Number(message.reqId) || 0, saved: Boolean(message.save), workflows, report, errors });
         break;
       }
       case 'preferences-save': {
@@ -1421,16 +1431,45 @@ export async function startServer(
     agentExists: (name: string) => core.agents.names().includes(name),
     imagesChanged: () => broadcast(agentsMessage()),
     backupsDir: config.backupsDir,
-    webhook: async (key: string, payload: string, secret?: string): Promise<WebhookReply | null> => {
+    webhook: async (
+      key: string,
+      payload: string,
+      secret?: string,
+      headers: Record<string, string | string[] | undefined> = {},
+    ): Promise<WebhookReply | null> => {
+      const eventId = webhookEventId(headers, payload);
       const trigger = core.triggers.byWebhookKey(key);
       if (trigger && trigger.status === 'active') {
-        const result = await core.fire(trigger.id, payload.slice(0, 8000));
-        broadcast(triggersMessage());
-        return { status: 200, body: { ok: true, result: result.slice(0, 500) } };
+        const idempotencyKey = eventId ? webhookIdempotencyKey(`trigger:${trigger.id}`, eventId) : undefined;
+        if (idempotencyKey && !core.idempotency.claim(idempotencyKey)) {
+          return { status: 200, body: { ok: true, duplicate: true } };
+        }
+        try {
+          const result = await core.fire(trigger.id, payload.slice(0, 8000));
+          broadcast(triggersMessage());
+          return { status: 200, body: { ok: true, result: result.slice(0, 500) } };
+        } catch (error) {
+          if (idempotencyKey) core.idempotency.release(idempotencyKey);
+          throw error;
+        }
       }
       const workflow = core.workflows.byWebhookKey(key);
       if (!workflow || !workflow.enabled) return null;
       if (core.triggerPool.get(workflow.trigger.pool)?.kind !== 'webhook') return null;
+      const connectorRef = parseConnectorTriggerPool(workflow.trigger.pool);
+      if (connectorRef) {
+        const spec = core.connectors.get(connectorRef.connector);
+        const connectorTrigger = spec?.triggers?.find((entry) => entry.key === connectorRef.trigger);
+        if (!connectorTrigger) return { status: 404, body: { ok: false, error: 'trigger is missing' } };
+        const verdict = verifyConnectorWebhook(
+          connectorTrigger,
+          workflow.trigger.config,
+          headers,
+          payload,
+          (name) => core.secrets.get(name),
+        );
+        if (!verdict.ok) return { status: 401, body: { ok: false, error: verdict.error } };
+      }
       // An optional shared secret on top of the unguessable URL.
       const expected = String(workflow.trigger.config.secret ?? '').trim();
       if (expected && !sameToken(secret, expected)) return { status: 401, body: { ok: false, error: 'wrong or missing x-mimi-secret' } };
@@ -1440,7 +1479,7 @@ export async function startServer(
       } catch {
         // not JSON: the text becomes { value }
       }
-      const result = await core.runWorkflow(workflow.agent, workflow.name, body);
+      const result = await core.runWorkflow(workflow.agent, workflow.name, body, eventId ? { eventId } : {});
       if (result.response) {
         return { status: result.response.status ?? 200, headers: result.response.headers, body: result.response.body };
       }

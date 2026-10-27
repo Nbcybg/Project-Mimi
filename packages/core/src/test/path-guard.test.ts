@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { after, test } from 'node:test';
 import {
+  missingPathError,
   PathNotAllowedError,
   readFileTool,
   resolveAllowedPath,
@@ -72,6 +73,17 @@ test('file tools enforce the allowlist', async () => {
     PathNotAllowedError,
   );
   assert.equal(fs.existsSync(path.join(outside, 'new.txt')), false);
+});
+
+test('missing read targets tell the agent where relative paths start', async () => {
+  const error = await readFileTool.execute({ path: 'workspace/nope.txt' }, context).catch((e: Error) => e);
+  assert.ok(error instanceof Error);
+  assert.match(error.message, /ENOENT/);
+  assert.match(error.message, new RegExp(allowed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(error.message, /working folder/);
+
+  const unrelated = missingPathError(Object.assign(new Error('boom'), { code: 'EACCES' }), '/x', [allowed]);
+  assert.equal(unrelated.message, 'boom', 'non-ENOENT errors are passed through unchanged');
 });
 
 test('run_shell runs in the working folder and refuses a cwd outside the allowlist', async () => {

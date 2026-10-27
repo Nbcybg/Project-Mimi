@@ -1,16 +1,52 @@
 {
-  "model": "opencode-go/deepseek-v4-flash",
-  "small_model": "opencode-go/deepseek-flash",
-  "vision_model": "opencode-go/deepseek-v4-flash-vision-exp",
-  "transcript_model": "google/gemini-flash-latest",
+  "model": "opencode/deepseek-v4.1-flash",
+  "small_model": "opencode/deepseek-v4.1-flash",
+  "vision_model": "opencode/glm-5.3-flash",
+  "transcript_model": "opencode/mimo-v2.6-flash",
   "default_agent": "mimi",
-  "provider": {},
+  "provider": {
+    "opencode": {
+      "name": "OpenCode Zen Gateway",
+      "npm": "@ai-sdk/openai-compatible",
+      "api": "https://opencode.ai/zen/go/v1",
+      "env": ["OPENCODE_API_KEY"],
+      "models": {
+        "deepseek-v4.1-flash": {
+          "name": "DeepSeek V4.1 Flash",
+          "type": "chat",
+          "attachment": true,
+          "tool_call": true,
+          "modalities": { "input": ["text", "image"], "output": ["text"] },
+          "limit": { "context": 128000, "output": 16384 },
+          "cost": { "input": 0.28, "output": 0.42, "cache_read": 0.028, "cache_write": 0.28 }
+        },
+        "glm-5.3-flash": {
+          "name": "GLM 5.3 Flash",
+          "type": "chat",
+          "attachment": true,
+          "tool_call": true,
+          "modalities": { "input": ["text", "image", "video", "pdf"], "output": ["text"] },
+          "limit": { "context": 200000, "output": 32768 },
+          "cost": { "input": 0.5, "output": 2.0, "cache_read": 0.05, "cache_write": 0.5 }
+        },
+        "mimo-v2.6-flash": {
+          "name": "MiMo v2.6 Flash",
+          "type": "chat",
+          "attachment": true,
+          "tool_call": true,
+          "modalities": { "input": ["text", "image", "video", "audio"], "output": ["text"] },
+          "limit": { "context": 200000, "output": 32768 },
+          "cost": { "input": 0.5, "output": 2.0, "cache_read": 0.05, "cache_write": 0.5 }
+        }
+      }
+    }
+  },
   "permission": {},
   "compaction": {
     "auto": true,
     "threshold": 0.65,
     "keep_recent": 0.25,
-    "context_cap": 200000
+    "context_cap": 128000
   },
   "memory": {
     "auto_write": true,

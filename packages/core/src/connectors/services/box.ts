@@ -1,0 +1,85 @@
+import type { ConnectorSpec } from '@mimi/shared';
+
+export const boxConnector: ConnectorSpec = {
+  key: 'box',
+  label: 'Box',
+  category: 'storage',
+  description: 'List folder items, search files, upload a file and download a file through the Box API',
+  baseUrl: 'https://api.box.com/2.0',
+  auth: {
+    kind: 'oauth2',
+    fields: [
+      { key: 'clientId', label: 'Client ID', type: 'string', required: true },
+      { key: 'clientSecret', label: 'Client secret', type: 'secret', required: true },
+      { key: 'refreshToken', label: 'Refresh token', type: 'secret', required: true },
+      { key: 'accessToken', label: 'Access token', type: 'secret' },
+      { key: 'expiresAt', label: 'Expires at', type: 'string' },
+    ],
+    authorizeUrl: 'https://account.box.com/api/oauth2/authorize',
+    tokenUrl: 'https://api.box.com/oauth2/token',
+    scopes: ['root_readwrite'],
+  },
+  operations: [
+    {
+      key: 'list_folder',
+      label: 'List folder',
+      method: 'GET',
+      path: '/folders/{folderId}/items',
+      risk: 'read',
+      fields: [
+        { key: 'folderId', label: 'Folder ID', type: 'string', required: true, default: '0' },
+        { key: 'limit', label: 'Limit', type: 'number', required: false, default: 100 },
+      ],
+      response: { itemsPath: 'entries' },
+    },
+    {
+      key: 'search',
+      label: 'Search files',
+      method: 'GET',
+      path: '/search',
+      risk: 'read',
+      fields: [
+        { key: 'query', label: 'Query', type: 'string', required: true },
+        {
+          key: 'type',
+          label: 'Item type',
+          type: 'select',
+          required: false,
+          options: [
+            { value: 'file', label: 'Files' },
+            { value: 'folder', label: 'Folders' },
+            { value: 'web_link', label: 'Web links' },
+          ],
+        },
+        { key: 'limit', label: 'Limit', type: 'number', required: false, default: 30 },
+      ],
+      response: { itemsPath: 'entries' },
+    },
+    {
+      key: 'upload_file',
+      label: 'Upload file',
+      method: 'POST',
+      path: '/files/content',
+      risk: 'write',
+      bodyFormat: 'form',
+      body: { attributes: { name: '{{name}}', parent: { id: '{{folderId}}' } }, file: '{{contentBase64}}' },
+      fields: [
+        { key: 'name', label: 'File name', type: 'string', required: true },
+        { key: 'folderId', label: 'Folder ID', type: 'string', required: true, default: '0' },
+        { key: 'contentBase64', label: 'File content (base64)', type: 'string', required: true },
+      ],
+      description: 'Box expects a multipart upload: the attributes are sent as form fields and the file as base64. Use the version-upload API if the file must stream.',
+    },
+    {
+      key: 'download_file',
+      label: 'Download file',
+      method: 'GET',
+      path: '/files/{fileId}/content',
+      risk: 'read',
+      fields: [{ key: 'fileId', label: 'File ID', type: 'string', required: true }],
+      response: { binary: true },
+    },
+  ],
+  pagination: { mode: 'cursor', cursorParam: 'offset', sizeParam: 'limit', itemsPath: 'entries' },
+  rateLimit: { requests: 10, perMs: 1000, burst: 10 },
+};

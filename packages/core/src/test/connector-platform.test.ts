@@ -8,13 +8,64 @@ import { fakeFetch } from './helpers/fake-fetch.ts';
 
 const registry = new ConnectorRegistry(connectorSpecs);
 
-test('platform: ten services and fifty operations are installed', () => {
-  assert.equal(connectorSpecs.length, 10);
-  assert.equal(connectorSpecs.reduce((total, spec) => total + spec.operations.length, 0), 50);
-  assert.equal(registry.toolNames().length, 50);
+test('platform: fifty services and two hundred fourteen operations are installed', () => {
+  assert.equal(connectorSpecs.length, 50);
+  assert.equal(connectorSpecs.reduce((total, spec) => total + spec.operations.length, 0), 214);
+  assert.equal(registry.toolNames().length, 214);
   assert.deepEqual(
     connectorSpecs.map((spec) => spec.key),
-    ['slack', 'discord', 'notion', 'airtable', 'google_docs', 'google_tasks', 'google_forms', 'hubspot', 'stripe', 'github'],
+    [
+      'slack',
+      'discord',
+      'notion',
+      'airtable',
+      'google_docs',
+      'google_tasks',
+      'google_forms',
+      'hubspot',
+      'stripe',
+      'github',
+      'jira',
+      'trello',
+      'asana',
+      'clickup',
+      'monday',
+      'linear',
+      'todoist',
+      'dropbox',
+      'openai',
+      'google_drive',
+      'salesforce',
+      'pipedrive',
+      'shopify',
+      'woocommerce',
+      'wordpress',
+      'mailchimp',
+      'sendgrid',
+      'twilio',
+      'whatsapp',
+      'supabase',
+      'microsoft_teams',
+      'excel',
+      'zoom',
+      'calendly',
+      'typeform',
+      'box',
+      'google_analytics',
+      'google_ads',
+      'line',
+      'zoho_crm',
+      'facebook',
+      'instagram',
+      'linkedin',
+      'x',
+      'youtube',
+      'reddit',
+      'google_search_console',
+      'google_chat',
+      'google_slides',
+      'google_classroom',
+    ],
   );
 });
 
@@ -40,39 +91,91 @@ test('platform: every operation has a complete, credential-free view', () => {
 
 test('platform: OAuth2 specs name their endpoints and scopes', () => {
   const oauth = connectorSpecs.filter((spec) => spec.auth.kind === 'oauth2');
-  assert.deepEqual(oauth.map((spec) => spec.key), ['google_docs', 'google_tasks', 'google_forms']);
+  assert.deepEqual(
+    oauth.map((spec) => spec.key),
+    [
+      'google_docs',
+      'google_tasks',
+      'google_forms',
+      'google_drive',
+      'microsoft_teams',
+      'excel',
+      'zoom',
+      'calendly',
+      'typeform',
+      'box',
+      'google_analytics',
+      'google_ads',
+      'zoho_crm',
+      'facebook',
+      'instagram',
+      'linkedin',
+      'x',
+      'youtube',
+      'reddit',
+      'google_search_console',
+      'google_chat',
+      'google_slides',
+      'google_classroom',
+    ],
+  );
+  const google = oauth.filter((spec) => spec.auth.extra?.provider === 'google');
+  assert.deepEqual(
+    google.map((spec) => spec.key),
+    [
+      'google_docs',
+      'google_tasks',
+      'google_forms',
+      'google_drive',
+      'google_analytics',
+      'google_ads',
+      'youtube',
+      'google_search_console',
+      'google_chat',
+      'google_slides',
+      'google_classroom',
+    ],
+  );
   for (const spec of oauth) {
     assert.match(spec.auth.authorizeUrl ?? '', /^https:\/\//);
     assert.match(spec.auth.tokenUrl ?? '', /^https:\/\//);
     assert.ok((spec.auth.scopes?.length ?? 0) > 0, `${spec.key} scopes`);
-    assert.equal(spec.auth.extra?.provider, 'google');
+    if (spec.auth.extra?.provider !== 'google') {
+      for (const key of ['clientId', 'clientSecret', 'refreshToken']) {
+        assert.ok(spec.auth.fields.some((field) => field.key === key), `${spec.key} has ${key}`);
+      }
+    }
   }
 });
 
 test('platform: every operation becomes one tool without name collisions', () => {
   const tools = connectorTools(registry, new ConnectorRuntimeImpl({ registry, auth: { resolve: () => undefined } }));
-  assert.equal(tools.length, 50);
-  assert.equal(new Set(tools.map((tool) => tool.name)).size, 50);
+  assert.equal(tools.length, 214);
+  assert.equal(new Set(tools.map((tool) => tool.name)).size, 214);
   for (const tool of tools) {
     assert.ok(tool.connector && tool.operation && tool.familyLabel, `${tool.name} metadata`);
+    assert.ok(tool.connectorCategory, `${tool.name} category`);
     assert.equal(tool.name, `${tool.connector}_${tool.operation}`);
   }
 });
 
-test('platform: connector tools form ten Quick Work families', () => {
+test('platform: connector tools form fifty Quick Work families', () => {
   const tools = connectorTools(registry, new ConnectorRuntimeImpl({ registry, auth: { resolve: () => undefined } }));
   const families = new Set(tools.map((tool) => tool.familyLabel));
-  assert.equal(families.size, 10);
+  assert.equal(families.size, 50);
   assert.deepEqual([...families].sort(), connectorSpecs.map((spec) => spec.label).sort());
 });
 
 test('platform: Quick Work offers the right connection picker per service', () => {
   const tools = connectorTools(registry, new ConnectorRuntimeImpl({ registry, auth: { resolve: () => undefined } }));
+  const google = new Set(
+    connectorSpecs.filter((spec) => spec.auth.kind === 'oauth2' && spec.auth.extra?.provider === 'google').map((spec) => spec.key),
+  );
   for (const tool of tools) {
     const field = tool.settings?.[0];
     assert.ok(field, `${tool.name} settings`);
     assert.equal(field.key, 'account');
-    if (tool.connector.startsWith('google_')) {
+    if (google.has(tool.connector)) {
       assert.equal(field.type, 'account');
       assert.equal(field.service, 'google');
     } else {

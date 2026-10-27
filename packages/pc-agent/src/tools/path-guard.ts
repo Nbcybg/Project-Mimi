@@ -47,3 +47,18 @@ export function resolveAllowedPath(
   if (!allowed) throw new PathNotAllowedError(requested, allowedDirs);
   return target;
 }
+
+/**
+ * Rewords the file-system errors of the read tools (ENOENT / ENOTDIR) so the agent sees
+ * where the path was resolved: relative paths start from the working folder, which is
+ * not obvious to sub-agents that name folders after the user's mental layout.
+ */
+export function missingPathError(error: unknown, resolved: string, allowedDirs: string[]): Error {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  if (code !== 'ENOENT' && code !== 'ENOTDIR') return error as Error;
+  const root = allowedDirs[0];
+  const hint = root
+    ? ` Relative paths resolve against the working folder (${root}); "${resolved}" does not exist.`
+    : ` "${resolved}" does not exist.`;
+  return new Error(`${code}: no such file or directory, stat '${resolved}'.${hint}`);
+}

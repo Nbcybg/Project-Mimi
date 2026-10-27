@@ -1,7 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { BUILTIN_TRIGGERS, type NodeTypeField, type TriggerPoolView } from '@mimi/shared';
+import { BUILTIN_TRIGGERS, type ConnectorSpec, type NodeTypeField, type TriggerPoolView } from '@mimi/shared';
 import { z } from 'zod';
+import {
+  CONNECTOR_TRIGGER_PREFIX,
+  connectorTriggerViews,
+  findConnectorTrigger,
+} from '../connectors/trigger-adapter.ts';
 
 export const TRIGGER_NAME = /^[a-z][a-z0-9_-]*$/;
 
@@ -32,9 +37,11 @@ const poolSchema = z.strictObject({
  */
 export class TriggerPool {
   private readonly dir: string;
+  private readonly connectorSpecs: () => readonly ConnectorSpec[];
 
-  constructor(dir: string) {
+  constructor(dir: string, connectorSpecs: () => readonly ConnectorSpec[] = () => []) {
     this.dir = dir;
+    this.connectorSpecs = connectorSpecs;
   }
 
   list(): TriggerPoolView[] {
@@ -43,10 +50,19 @@ export class TriggerPool {
       .filter((entry): entry is TriggerPoolView => entry !== undefined)
       .sort((a, b) => a.name.localeCompare(b.name));
     const names = new Set(custom.map((entry) => entry.name));
-    return [...BUILTIN_TRIGGERS.filter((entry) => !names.has(entry.name)), ...custom];
+    return [
+      ...BUILTIN_TRIGGERS.filter((entry) => !names.has(entry.name)),
+      ...custom,
+      ...connectorTriggerViews(this.connectorSpecs()).filter((entry) => !names.has(entry.name)),
+    ];
   }
 
   get(name: string): TriggerPoolView | undefined {
+    if (name.startsWith(CONNECTOR_TRIGGER_PREFIX)) {
+      const found = findConnectorTrigger(this.connectorSpecs(), name);
+      if (!found) return undefined;
+      return connectorTriggerViews([found.spec]).find((entry) => entry.name === name);
+    }
     const builtin = BUILTIN_TRIGGERS.find((entry) => entry.name === name);
     if (builtin) return builtin;
     if (!TRIGGER_NAME.test(name)) return undefined;
@@ -64,6 +80,9 @@ export class TriggerPool {
   }
 
   save(entry: TriggerPoolView): TriggerPoolView {
+    if (entry.name.startsWith(CONNECTOR_TRIGGER_PREFIX)) {
+      throw new Error(`"${CONNECTOR_TRIGGER_PREFIX}" names are reserved for connector triggers.`);
+    }
     if (BUILTIN_TRIGGERS.some((builtin) => builtin.name === entry.name)) {
       throw new Error(`"${entry.name}" is a built-in trigger; pick another name.`);
     }
@@ -77,6 +96,7 @@ export class TriggerPool {
   }
 
   remove(name: string): boolean {
+    if (name.startsWith(CONNECTOR_TRIGGER_PREFIX)) return false;
     const file = path.join(this.dir, `${name}.json`);
     if (!TRIGGER_NAME.test(name) || !fs.existsSync(file)) return false;
     fs.rmSync(file);

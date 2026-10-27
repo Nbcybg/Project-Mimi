@@ -1,0 +1,71 @@
+import type { ConnectorSpec } from '@mimi/shared';
+
+export const redditConnector: ConnectorSpec = {
+  key: 'reddit',
+  label: 'Reddit',
+  category: 'communication',
+  description: 'Search posts, read a subreddit listing and comment through the Reddit OAuth API; Reddit rate limits apply per client',
+  baseUrl: 'https://oauth.reddit.com',
+  auth: {
+    kind: 'oauth2',
+    fields: [
+      { key: 'clientId', label: 'Client ID', type: 'string', required: true },
+      { key: 'clientSecret', label: 'Client secret', type: 'secret', required: true },
+      { key: 'refreshToken', label: 'Refresh token', type: 'secret', required: true },
+      { key: 'accessToken', label: 'Access token', type: 'secret' },
+      { key: 'expiresAt', label: 'Expires at', type: 'string' },
+    ],
+    authorizeUrl: 'https://www.reddit.com/api/v1/authorize',
+    tokenUrl: 'https://www.reddit.com/api/v1/access_token',
+    scopes: ['read', 'submit'],
+  },
+  operations: [
+    {
+      key: 'search',
+      label: 'Search posts',
+      method: 'GET',
+      path: '/search',
+      risk: 'read',
+      headers: { 'User-Agent': 'mimi-connector/1.0' },
+      fields: [
+        { key: 'q', label: 'Query', type: 'string', required: true },
+        { key: 'subreddit', label: 'Subreddit (optional)', type: 'string', required: false },
+        { key: 'sort', label: 'Sort', type: 'string', required: false, default: 'relevance' },
+        { key: 'limit', label: 'Limit', type: 'number', required: false, default: 25 },
+      ],
+      response: { itemsPath: 'data.children' },
+      untrustedInput: true,
+      paginated: true,
+    },
+    {
+      key: 'list_subreddit_posts',
+      label: 'List subreddit posts',
+      method: 'GET',
+      path: '/r/{subreddit}/new',
+      risk: 'read',
+      headers: { 'User-Agent': 'mimi-connector/1.0' },
+      fields: [
+        { key: 'subreddit', label: 'Subreddit', type: 'string', required: true },
+        { key: 'limit', label: 'Limit', type: 'number', required: false, default: 25 },
+      ],
+      response: { itemsPath: 'data.children' },
+      untrustedInput: true,
+      paginated: true,
+    },
+    {
+      key: 'create_comment',
+      label: 'Create comment',
+      method: 'POST',
+      path: '/api/comment',
+      risk: 'write',
+      headers: { 'User-Agent': 'mimi-connector/1.0' },
+      body: { api_type: 'json', thing_id: '{{thingId}}', text: '{{text}}' },
+      fields: [
+        { key: 'thingId', label: 'Post or comment fullname', type: 'string', required: true, placeholder: 't3_abc123' },
+        { key: 'text', label: 'Comment text', type: 'string', required: true },
+      ],
+    },
+  ],
+  pagination: { mode: 'cursor', cursorParam: 'after', itemsPath: 'data.children', nextPath: 'data.after' },
+  rateLimit: { requests: 10, perMs: 1000, burst: 10 },
+};

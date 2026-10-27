@@ -8,6 +8,7 @@ import type {
 } from '@mimi/shared';
 import type { ConnectorRegistry } from '../connectors/registry.ts';
 import type { ConnectorAuthValues } from '../connectors/types.ts';
+import { safeFetch, type Lookup } from '../workflows/net-guard.ts';
 import { startGenericOAuth } from './generic-flow.ts';
 import type { SecretStore } from '../app/secrets.ts';
 
@@ -28,6 +29,8 @@ export interface ConnectorConnectionsOptions {
   registry: ConnectorRegistry;
   secrets: SecretStore;
   fetchFn?: typeof fetch;
+  lookup?: Lookup;
+  allowLocal?: boolean;
   now?: () => number;
 }
 
@@ -56,16 +59,34 @@ export class ConnectorConnections {
   private readonly registry: ConnectorRegistry;
   private readonly secrets: SecretStore;
   private readonly fetchFn: typeof fetch;
+  private readonly customFetch: boolean;
+  private readonly lookup?: Lookup;
+  private readonly allowLocal: boolean;
   private readonly now: () => number;
   private connections: StoredConnection[];
+  /** One refresh per connection at a time: providers rotate refresh tokens and reject replays. */
+  private readonly refreshing = new Map<string, Promise<ConnectorAuthValues>>();
 
   constructor(options: ConnectorConnectionsOptions) {
     this.dir = options.dir;
     this.registry = options.registry;
     this.secrets = options.secrets;
+    this.customFetch = options.fetchFn !== undefined;
     this.fetchFn = options.fetchFn ?? ((input, init) => globalThis.fetch(input, init));
+    this.lookup = options.lookup;
+    this.allowLocal = options.allowLocal === true;
     this.now = options.now ?? Date.now;
     this.connections = this.load();
+  }
+
+  /** Token endpoints come from connector specs, but a bad/imported spec must not reach the LAN. */
+  private request(input: string | URL | Request, init?: RequestInit): Promise<Response> {
+    const url = input instanceof Request ? input.url : String(input);
+    return safeFetch(url, init ?? {}, {
+      ...(this.customFetch ? { fetchFn: this.fetchFn } : {}),
+      ...(this.lookup ? { lookup: this.lookup } : {}),
+      ...(this.allowLocal ? { allowLocal: true } : {}),
+    });
   }
 
   private file(): string {
@@ -230,7 +251,7 @@ export class ConnectorConnections {
       clientSecret: values.clientSecret,
       scopes: spec.auth.scopes ?? [],
       extra: spec.auth.extra,
-      fetchFn: this.fetchFn,
+      fetchFn: (input, init) => this.request(input, init),
       now: this.now,
     });
     const done = flow.done.then((tokens) => {
@@ -285,36 +306,47 @@ export class ConnectorConnections {
     const clientSecret = values.clientSecret;
     if (!tokenUrl || !clientId) return values;
 
-    const form = new URLSearchParams({
-      grant_type: 'refresh_token',
-      refresh_token: refreshToken,
-      client_id: clientId,
-    });
-    if (clientSecret) form.set('client_secret', clientSecret);
-    const response = await this.fetchFn(tokenUrl, {
-      method: 'POST',
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      body: form,
-    });
-    const body = (await response.json()) as {
-      access_token?: string;
-      refresh_token?: string;
-      expires_in?: number;
-      error?: string;
-      error_description?: string;
-    };
-    if (!response.ok || !body.access_token) {
-      throw new Error(
-        `Connector "${id}" token refresh failed: ${body.error_description ?? body.error ?? response.status}`,
-      );
+    const pending = this.refreshing.get(id);
+    if (pending) return pending;
+
+    const refresh = (async () => {
+      const form = new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: refreshToken,
+        client_id: clientId,
+      });
+      if (clientSecret) form.set('client_secret', clientSecret);
+      const response = await this.request(tokenUrl, {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: form,
+      });
+      const body = (await response.json()) as {
+        access_token?: string;
+        refresh_token?: string;
+        expires_in?: number;
+        error?: string;
+        error_description?: string;
+      };
+      if (!response.ok || !body.access_token) {
+        throw new Error(
+          `Connector "${id}" token refresh failed: ${body.error_description ?? body.error ?? response.status}`,
+        );
+      }
+      const fresh: ConnectorAuthValues = { ...values, accessToken: body.access_token };
+      if (body.refresh_token) fresh.refreshToken = body.refresh_token;
+      if (body.expires_in) fresh.expiresAt = String(this.now() + body.expires_in * 1000);
+      for (const [key, value] of Object.entries(fresh)) {
+        if (fields.some((field) => field.key === key)) this.secrets.set(secretOf(id, key), value);
+      }
+      return fresh;
+    })();
+    this.refreshing.set(id, refresh);
+    try {
+      return await refresh;
+    } finally {
+      this.refreshing.delete(id);
     }
-    const fresh: ConnectorAuthValues = { ...values, accessToken: body.access_token };
-    if (body.refresh_token) fresh.refreshToken = body.refresh_token;
-    if (body.expires_in) fresh.expiresAt = String(this.now() + body.expires_in * 1000);
-    for (const [key, value] of Object.entries(fresh)) {
-      if (fields.some((field) => field.key === key)) this.secrets.set(secretOf(id, key), value);
-    }
-    return fresh;
   }
 
   private newId(connector: string): string {

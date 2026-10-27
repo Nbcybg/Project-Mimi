@@ -7,12 +7,13 @@ import { type ToolDefinition, ToolRegistry, type ToolSource } from './registry.t
 import { ToolStore } from './tool-store.ts';
 
 /** Connector tools carry grouping metadata that ToolSpec does not declare yet. */
-function connectorMeta(tool: ToolDefinition): Pick<ToolView, 'connector' | 'operation' | 'familyLabel'> {
-  const meta = tool as ToolDefinition & { connector?: unknown; operation?: unknown; familyLabel?: unknown };
+function connectorMeta(tool: ToolDefinition): Pick<ToolView, 'connector' | 'operation' | 'familyLabel' | 'connectorCategory'> {
+  const meta = tool as ToolDefinition & { connector?: unknown; operation?: unknown; familyLabel?: unknown; connectorCategory?: unknown };
   return {
     ...(typeof meta.connector === 'string' ? { connector: meta.connector } : {}),
     ...(typeof meta.operation === 'string' ? { operation: meta.operation } : {}),
     ...(typeof meta.familyLabel === 'string' ? { familyLabel: meta.familyLabel } : {}),
+    ...(typeof meta.connectorCategory === 'string' ? { connectorCategory: meta.connectorCategory } : {}),
   };
 }
 

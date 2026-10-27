@@ -1,10 +1,10 @@
 # Import feasibility — n8n / Make / Zapier
 
-สถานะ: **Phase 0 (feasibility only)** · เจ้าของ: `P0-IMPORT`
+สถานะ: **Phase 3 (importer ทั้ง 3 ตัวใช้งานได้แล้ว)** · เจ้าของ: `P0-IMPORT` (feasibility), `P3-N8N` / `P3-MAKE` / `P3-ZAPIER` (importer)
 
-Phase 0 ยังไม่เพิ่ม importer สำหรับ Make/Zapier. เอกสารนี้ตอบว่าแต่ละแพลตฟอร์ม
-export อะไรได้, map เข้า Mimi ได้แค่ไหน, auth ทำอย่างไร และควรลงทุนลำดับใดใน Phase 3.
-n8n มี importer อยู่แล้วที่ `packages/core/src/workflows/n8n-import.ts`.
+importer อยู่ที่ `packages/core/src/workflows/n8n-import.ts`, `make-import.ts` และ `zapier-import.ts`.
+รายละเอียด mapping ต่อแพลตฟอร์ม: `n8n-mapping.md`, `make-import.md`, `zapier-import.md`;
+UI/flow: `migration-ui.md`; test matrix: `packages/core/src/test/connector-migration.test.ts`.
 
 ## 1. แหล่งข้อมูลและข้อจำกัดของเอกสาร
 
@@ -36,8 +36,11 @@ n8n มี importer อยู่แล้วที่ `packages/core/src/workflo
 | ไฟล์ | เนื้อหา | ใช้ทดสอบ |
 |---|---|---|
 | `n8n-lead-intake.json` | Webhook → HTTP → Gmail → Google Sheets → Slack → NoOp | importer จริง, redaction, unsupported report |
+| `n8n/top-services.json` | mapping ของ service ทั้ง 50 | `n8n-import-connectors.test.ts` |
 | `make-lead-intake.blueprint.json` | Webhook → HTTP → Filter → Sheets → Slack → Router → Code | blueprint walker, `__IMTCONN__`, refs, unsupported modules |
+| `make/branch-and-error.blueprint.json` | router หลาย route + error branch + module ที่ยังไม่รองรับ | branch/error mapping, placeholder |
 | `zapier-lead-intake.zapfile.json` | Webhook → Sheets → Filter → Slack → Code → Airtable | `parent_id` graph, `{{step__field}}`, auth refs, unsupported apps |
+| `zapier/secure-webhook.zapfile.json` | 2 Zaps, HTTP header ที่เป็นความลับ, schedule | redaction, multi-Zap, schedule→manual |
 
 fixture ทั้งหมดเป็นข้อมูลสมมติ: ไม่มี credential จริง, ไม่มี token จริง และไม่มี private key.
 test `connector-import-fixtures.test.ts` ตรวจว่า JSON parse ได้และไม่มี prefix ของ token จริง.
@@ -86,22 +89,23 @@ test `connector-import-fixtures.test.ts` ตรวจว่า JSON parse ได
 | n8n IF / Filter / Switch | `if` | ตรงบางเงื่อนไข; operator ที่ซับซ้อนต้องแปลง |
 | n8n Code / Set / Merge / Wait / Sort / Limit | `code`, `set`, `merge`, `wait`, `sort`, `limit` | ตรงบางส่วน; JS runtime ต่างกัน |
 | n8n Gmail / Outlook / Calendar / Sheets | tool เดิม (`gmail_send`, `sheets_append`, …) | ตรงเมื่อ tool มีใน pool |
-| n8n Slack / Notion / HTTP auth | connector node (Phase 1+) | ยังไม่มี importer สำหรับ connector |
+| n8n Slack / Notion / HTTP auth | connector node | map แล้วเมื่อ service อยู่ใน 50 catalog (`n8n-mapping.md`) |
 | Make `gateway:CustomWebHook` | webhook trigger | ตรง |
 | Make `http:ActionSendData` | `http` | ตรงบาง field; ต้องแปลง mapper |
 | Make `google-sheets:addRow` | `sheets_append` / connector | ตรงเมื่อมี tool |
 | Make `builtin:BasicFilter` | `if` | ตรงบางเงื่อนไข |
 | Make `builtin:BasicRouter` | `if` / branch | ต้องสร้าง branch หลายทาง |
-| Make `slack:sendMessage` | connector `slack/send_message` | ต้องรอ connector importer |
+| Make `slack:sendMessage` | connector `slack/send_message` | map แล้ว (high confidence) |
 | Make `code:ExecuteCode` | `code` | syntax/limit ต่างกัน |
 | Make iterator/aggregator | `loop`/aggregate | ไม่ตรงโดยตรง |
 | Zapier `WebHookAPI` / `ScheduleAPI` | webhook / schedule trigger | ตรง |
 | Zapier `FilterAPI` / Paths | `if` / branch | ตรงบางเงื่อนไข |
 | Zapier `FormatterAPI` | `set` / `code` | ต้องแปลง operation |
 | Zapier `GoogleSheetsV2API` | `sheets_append` / connector | ตรงเมื่อมี tool |
-| Zapier `SlackAPI` | connector `slack/send_message` | ต้องรอ connector importer |
+| Zapier `SlackAPI` | connector `slack/send_message` | map แล้ว (high confidence) |
 | Zapier `CodeAPI` | `code` | Python/JS runtime ต่างกัน |
-| Zapier `AirtableAPI`, app อื่น ๆ | connector ในอนาคต | ยังไม่รองรับ |
+| Zapier `AirtableAPI` | connector `airtable/create_record` | map แล้ว (medium confidence; ต้องเติม field) |
+| Zapier app อื่น ๆ | connector ถ้าอยู่ใน 50 catalog | นอกนั้นเป็น code placeholder |
 
 Expression ที่ต้องแปลง:
 
@@ -120,9 +124,10 @@ Expression ที่ต้องแปลง:
 | Make | `__IMTCONN__` / connection id; ไม่มี token | สร้าง connection ใหม่และ map เข้า connector auth |
 | Zapier | `authentication_id` (opaque), `"-"` = ไม่มี | reconnect ด้วย OAuth/API key; ห้ามคาดเดา id |
 
-Phase 0 bridge ของ Mimi ใช้ vault key `connector.<connector>.<field>` หรือ
-environment `<CONNECTOR>_<FIELD>`; import รายงานเฉพาะ "ต้อง reconnect" ไม่พยายาม
-ถอดหรือเดา credential.
+Phase 3 ใช้ connection store ของ Mimi (`ConnectorConnections` + Google accounts,
+ดู `auth-matrix.md`); legacy vault key `connector.<connector>.<field>` / environment
+`<CONNECTOR>_<FIELD>` ยังเป็น fallback. import รายงานเฉพาะ "ต้อง reconnect"
+ไม่พยายามถอดหรือเดา credential.
 
 ## 6. ข้อจำกัดทางกฎและแพลตฟอร์ม
 
@@ -138,28 +143,22 @@ environment `<CONNECTOR>_<FIELD>`; import รายงานเฉพาะ "ต
 - ทุกแพลตฟอร์ม: อย่าเก็บ export ลับไว้ใน repo, log, fixture หรือ error message.
   ถ้าจำเป็นต้องเก็บตัวอย่าง ให้ scrub ค่าและใช้ placeholder.
 
-## 7. Recommendation สำหรับ Phase 3
+## 7. ผลลัพธ์ Phase 3
 
-ลำดับที่แนะนำ: **n8n → Make → Zapier**
+ทั้ง 3 importer merge แล้ว (3A n8n, 3B Make, 3C Zapier) พร้อม migration UI (3F)
+และ test matrix (3H):
 
-1. **n8n (ทำแล้ว):** คง importer ปัจจุบันเป็น baseline. เพิ่ม golden fixtures,
-   regression test และรายงาน unsupported/redacted ให้ครบทุก trigger.
-   งานต่อไปคือ map node ที่ยังเป็น placeholder ให้เป็น connector node.
-2. **Make (ถัดไป):** คุ้มที่สุดในแง่ schema ที่อ่านได้และ blueprint มีโครงชัด.
-   สร้าง `make-module-catalog` (module → Mimi node/tool/connector), walker ที่รองรับ
-   `routes`/`onerror`, expression translator และรายงาน connection ที่ต้อง reconnect.
-   เริ่มจาก linear flow + filter + HTTP + Sheets/Slack ก่อน.
-3. **Zapier (สุดท้าย):** format ภายในไม่ stable และมีข้อจำกัดสิทธิ์/plan.
-   รับทั้ง `Zapfile.json` และ per-Zap export, เดิน graph ตาม `parent_id`,
-   ใช้ action catalog สำหรับ `selected_api`, สแกน secret และรายงาน app ที่ต้อง reconnect.
-   อย่าสัญญา round-trip กลับ Zapier.
+1. **n8n:** baseline เดิม + mapping service 50 ตัว (`n8n-mapping.md`) และ golden fixture
+   `top-services.json`; รายงาน mapped/unsupported/redacted/connections ครบ.
+2. **Make:** module catalog, walker ที่รองรับ `routes`/`onerror`, expression translator
+   และ connection report (`make-import.md`); blueprint fixture 2 แบบ (linear + branch/error).
+3. **Zapier:** อ่าน `Zapfile.json` และ per-Zap, เดิน graph ตาม `parent_id`, secret scan
+   และ redaction (`zapier-import.md`); fixture 2 แบบ (lead intake + secure webhook 2 Zaps).
 
-สิ่งที่ยังไม่ควรทำใน Phase 3 แรก:
-
-- trigger semantics ที่ต้อง polling/webhook subscription เฉพาะแพลตฟอร์ม
-- loop/aggregator/digest/storage/paths ที่ซับซ้อน
-- dynamic field/choices ที่ต้องเรียก API ของ app ระหว่าง import
-- auto-migrate credential หรือ auto-run หลัง import
+ข้อจำกัดที่ยังอยู่ (Phase 4+): trigger semantics ที่ต้อง polling/webhook subscription
+เฉพาะแพลตฟอร์ม, loop/aggregator/digest/storage/paths ที่ซับซ้อน, dynamic field/choices
+ที่ต้องเรียก API ระหว่าง import, auto-migrate credential หรือ auto-run หลัง import —
+importer สร้าง workflow disabled และไม่เขียน credential เสมอ.
 
 ## 8. Acceptance ของ 0D
 

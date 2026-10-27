@@ -24,6 +24,7 @@
         'trigger_chat',
         'trigger_telegram',
         'trigger_tool',
+        'trigger_connector',
         'trigger_custom',
       ],
     },
@@ -62,6 +63,8 @@
   let nodeTest = null;
   /** How many stored runs the history list shows. */
   let historyShown = 12;
+  /** Status filter of the history list: all / ok / error. */
+  let historyFilter = 'all';
   /** Options loaded for connector select fields, keyed by service/operation/input. */
   const connectorOptionCache = new Map();
   const connectorOptionCallbacks = new Map();
@@ -183,16 +186,41 @@
     trigger_telegram: 'telegram',
     trigger_tool: 'agent_tool',
   };
-  const isTrigger = (type) => type === 'trigger_custom' || Object.hasOwn(TRIGGER_POOLS, type);
-  const triggerPoolOfNode = (node) =>
-    !node ? undefined : node.type === 'trigger_custom' ? String(node.config?.pool || '').trim() || undefined : TRIGGER_POOLS[node.type];
+  const CONNECTOR_TRIGGER_PREFIX = 'connector:';
+  const connectorOf = (key) => (M().state.connectors || []).find((entry) => entry.key === key);
+  const connectorTriggerOf = (connectorKey, triggerKey) =>
+    connectorOf(connectorKey)?.triggers?.find((entry) => entry.key === triggerKey);
+  const connectorRefOf = (config) => {
+    const connector = String(config?.connector || '').trim();
+    const trigger = String(config?.trigger || '').trim();
+    return connector && trigger ? `${CONNECTOR_TRIGGER_PREFIX}${connector}:${trigger}` : undefined;
+  };
+  const connectorPartsOf = (poolName) => {
+    if (!String(poolName || '').startsWith(CONNECTOR_TRIGGER_PREFIX)) return undefined;
+    const [connector, trigger, ...extra] = String(poolName).slice(CONNECTOR_TRIGGER_PREFIX.length).split(':');
+    return connector && trigger && extra.length === 0 ? { connector, trigger } : undefined;
+  };
+  const isTrigger = (type) =>
+    type === 'trigger_custom' || type === 'trigger_connector' || Object.hasOwn(TRIGGER_POOLS, type);
+  const triggerPoolOfNode = (node) => {
+    if (!node) return undefined;
+    if (node.type === 'trigger_custom') return String(node.config?.pool || '').trim() || undefined;
+    if (node.type === 'trigger_connector') return connectorRefOf(node.config);
+    return TRIGGER_POOLS[node.type];
+  };
   const triggerNode = () => (draft ? draft.nodes.find((node) => isTrigger(node.type)) : null);
   const triggerEntryOf = (node) => poolOf(triggerPoolOfNode(node) || draft?.trigger?.pool || 'manual');
   const triggerSample = (node) => triggerEntryOf(node)?.sample || {};
   const triggerLabelOf = (type, config) => {
+    if (type === 'trigger_connector') {
+      const connector = connectorOf(config?.connector);
+      const trigger = connectorTriggerOf(config?.connector, config?.trigger);
+      if (connector && trigger) return `${'เริ่มเมื่อ'}: ${connector.label}: ${trigger.label}`;
+      return specOf(type)?.label || type;
+    }
     const poolName = type === 'trigger_custom' ? String(config?.pool || '').trim() : TRIGGER_POOLS[type];
     const entry = poolOf(poolName);
-    return entry ? `ทริกเกอร์: ${entry.label}` : specOf(type)?.label || type;
+    return entry ? `${'เริ่มเมื่อ'}: ${entry.label}` : specOf(type)?.label || type;
   };
   const triggerTitleOf = (node) => triggerLabelOf(node.type, node.config);
 
@@ -242,7 +270,7 @@
     if (list.length === 0) rows.append(el('div', 'empty', 'ยังไม่มี workflow ของ agent นี้'));
     container.append(rows);
     const add = button('btn', '+ Workflow ใหม่', () => openEditor(agent, null));
-    const importButton = button('btn ghost', 'นำเข้าจาก n8n', () => openImport(agent), 'แปลงไฟล์ JSON ที่ export จาก n8n เป็น workflow ของ agent นี้');
+    const importButton = button('btn ghost', 'Import workflow (n8n / Make / Zapier)', () => openImport(agent), 'Import a workflow from n8n, Make or Zapier JSON; credentials are redacted and workflows start disabled.');
     const row = el('div', 'hstack');
     row.style.marginTop = '8px';
     row.append(add, importButton);
@@ -273,7 +301,9 @@
   function migrateDraft(view) {
     const ref = view.trigger || { pool: 'manual', config: {} };
     const builtinType = Object.entries(TRIGGER_POOLS).find(([, poolName]) => poolName === ref.pool)?.[0];
-    const type = builtinType || 'trigger_custom';
+    const type = ref.pool.startsWith(CONNECTOR_TRIGGER_PREFIX)
+      ? 'trigger_connector'
+      : builtinType || 'trigger_custom';
     const existing = view.nodes.some((node) => isTrigger(node.type));
     if (!existing) {
       const fed = new Set(view.nodes.flatMap((node) => Object.values(node.links || {}).flat()));
@@ -285,7 +315,11 @@
       let id = 'trigger';
       let n = 1;
       while (view.nodes.some((node) => node.id === id)) id = `trigger${n++}`;
-      const config = type === 'trigger_custom' ? { ...(ref.config || {}), pool: ref.pool } : { ...(ref.config || {}) };
+      const parts = type === 'trigger_connector' ? connectorPartsOf(ref.pool) : undefined;
+      const config =
+        type === 'trigger_custom'
+          ? { ...(ref.config || {}), pool: ref.pool }
+          : { ...(ref.config || {}), ...(parts || {}) };
       view.nodes.unshift({
         id,
         type,
@@ -312,6 +346,7 @@
     selectedNode = null;
     sideTab = 'node';
     historyShown = 12;
+    historyFilter = 'all';
     libraryQuery = '';
     resetHistory();
     showEditor();
@@ -1172,6 +1207,14 @@
     ];
     if (!connector) return fields;
     const operationKey = config.operation || connector.operations[0]?.key || '';
+    const versions = connector.versions || (connector.version ? [connector.version] : []);
+    fields.push({
+      key: 'version',
+      label: 'Connector version',
+      type: 'string',
+      options: [['', `latest${connector.version ? ` (v${connector.version})` : ''}`], ...versions.map((entry) => [entry, entry === connector.version ? `${entry} (latest)` : entry])],
+      description: 'เว้นว่าง = ใช้ version ล่าสุด · workflow ที่ pin version เก่าไว้จะยังรัน version เดิม',
+    });
     fields.push({
       key: 'operation',
       label: 'Operation',
@@ -1224,9 +1267,61 @@
     return connector?.operations.find((entry) => entry.key === node.config?.operation);
   }
 
+  /** Connector trigger nodes pick a service + trigger; the trigger's own fields sit on the card. */
+  function connectorTriggerFieldsOf(node) {
+    const config = node.config || {};
+    const connectors = (M().state.connectors || []).filter((entry) => (entry.triggers || []).length > 0);
+    const connector = connectors.find((entry) => entry.key === config.connector) || connectors[0];
+    const triggers = connector?.triggers || [];
+    const trigger = triggers.find((entry) => entry.key === config.trigger) || triggers[0];
+    const fields = [
+      {
+        key: 'connector',
+        label: 'Service',
+        type: 'string',
+        required: true,
+        options: connectors.map((entry) => [entry.key, entry.label || entry.key]),
+        description: connector ? connector.description : 'Add a connector with triggers first.',
+      },
+      {
+        key: 'trigger',
+        label: 'Trigger',
+        type: 'string',
+        required: true,
+        options: triggers.map((entry) => [entry.key, entry.label || entry.key]),
+        description: trigger ? trigger.description : undefined,
+      },
+    ];
+    if (!connector || !trigger) return fields;
+    if (connector.auth?.kind !== 'none') {
+      const connections = (M().state.connections || []).filter((entry) => entry.connector === connector.key);
+      fields.push({
+        key: 'account',
+        label: 'Connection',
+        type: 'string',
+        options: [['', 'Default connection'], ...connections.map((entry) => [entry.id, `${entry.name}${entry.default ? ' *' : ''}${entry.connected ? '' : ' (not connected)'}`])],
+        description: connections.length === 0 ? 'Add a connection in Hub > Connections.' : undefined,
+      });
+    }
+    const entry = triggerEntryOf(node);
+    for (const field of entry ? entry.fields : []) {
+      if (field.key !== 'input') fields.push({ ...field });
+    }
+    if (!fields.some((field) => field.key === 'input')) {
+      fields.push({
+        key: 'input',
+        label: 'Input (JSON)',
+        type: 'json',
+        description: 'Extra operation input or fixed fields passed with every trigger event.',
+      });
+    }
+    return fields;
+  }
+
   /** A custom trigger node edits the chosen pool's fields, plus the pool name itself. */
   function fieldsOfNode(node) {
     if (node.type === 'connector') return connectorFieldsOf(node);
+    if (node.type === 'trigger_connector') return connectorTriggerFieldsOf(node);
     const spec = specOf(node.type);
     if (node.type !== 'trigger_custom') return spec ? spec.fields : [];
     const custom = pool().filter((entry) => !entry.builtin);
@@ -1302,8 +1397,11 @@
         delete input.dataset.field;
         input.addEventListener('change', () => {
           const operation = connectorOperationOf(node);
-          if (operation?.fields.some((entry) => entry.optionsFrom?.dependsOn?.includes(field.key))) {
+          const dependent = (operation?.fields || []).filter((entry) => entry.optionsFrom?.dependsOn?.includes(field.key));
+          if (dependent.length > 0) {
             sync();
+            for (const entry of dependent) delete node.config.input[entry.key];
+            connectorOptionCache.clear();
             showEditor();
           }
         });
@@ -1327,11 +1425,13 @@
       file: ['operation', 'source'],
       extract_file: ['type'],
       connector: ['connector', 'operation'],
+      trigger_connector: ['connector', 'trigger'],
     };
     for (const key of controllingFields[node.type] || []) {
       const control = card.querySelector(`[data-field="${key}"]`);
       if (control) {
         control.onchange = () => {
+          const previousTrigger = connectorTriggerOf(node.config?.connector, node.config?.trigger);
           sync();
           // Switch cases are plain values in "value" mode and conditions in "rules" mode.
           if (node.type === 'connector') {
@@ -1342,6 +1442,21 @@
             } else if (key === 'operation') {
               node.config.input = {};
             }
+          }
+          if (node.type === 'trigger_connector' && (key === 'connector' || key === 'trigger')) {
+            // Fields belong to the selected trigger; never carry them to another service.
+            for (const field of previousTrigger?.fields || []) delete node.config[field.key];
+            delete node.config.everyMinutes;
+            node.config.input = {};
+            if (key === 'connector') {
+              const selected = connectorOf(control.value);
+              node.config.trigger = selected?.triggers?.[0]?.key || '';
+              delete node.config.account;
+            }
+            if (connectorTriggerOf(node.config.connector, node.config.trigger)?.kind === 'poll') {
+              node.config.everyMinutes = 15;
+            }
+            node.title = triggerTitleOf(node);
           }
           if (node.type === 'switch' && key === 'mode') {
             const cases = Array.isArray(node.config.cases) ? node.config.cases : [];
@@ -1576,6 +1691,13 @@
     const box = el('div', 'wresult');
     const when = runResult.startedAt ? ` #${runResult.id} · ${runResult.mode} · ${M().fmtDate(runResult.startedAt)}` : runResult.runId ? ` #${runResult.runId}` : '';
     box.append(el('h4', '', `ผลการรัน${when}${running ? ' (กำลังรัน…)' : ''}`));
+    const meta = [
+      runResult.workflow || (draft ? `${draft.agent}/${runResult.name}` : ''),
+      runResult.trigger || runResult.mode ? `trigger: ${runResult.trigger || runResult.mode}` : '',
+      runResult.durationMs !== undefined ? `${(runResult.durationMs / 1000).toFixed(1)} วิ` : '',
+      runResult.agent ? `agent: ${runResult.agent}` : '',
+    ].filter(Boolean);
+    if (meta.length > 0) box.append(el('p', 'hint', meta.join(' · ')));
     if (runResult.startedAt) box.append(el('p', runResult.ok ? 'hint' : 'hint badtxt', runResult.result));
     if (runResult.suspended) {
       box.append(el('p', 'hint', runResult.suspended.kind === 'approval' ? '⏸ run นี้พักรอคำตอบในแชต — ตอบแล้วจะทำต่อเอง (ปิดแอประหว่างนั้นได้)' : `⏸ run นี้พักไว้ จะทำต่อเองตอน ${M().fmtDate(runResult.suspended.resumeAt)}`));
@@ -1585,9 +1707,26 @@
       const head = el('div', 'whead');
       const label = node.status === 'ok' ? 'ok' : node.status === 'waiting' ? '⏸ รอ' : 'error';
       head.append(el('span', `pill ${node.status === 'ok' ? 'ok' : node.status === 'waiting' ? 'warn' : 'todo'}`, label), el('b', '', node.title), el('span', 'faint', node.type));
+      if (node.attempts > 1) head.append(el('span', 'pill', `${node.attempts} attempts`));
       if (node.note) head.append(el('span', 'pill', node.note === 'pinned' ? '📌 ใช้ pin' : 'ปิดอยู่ (ส่งผ่าน)'));
       row.append(head);
-      if (node.error) row.append(el('p', 'hint badtxt', node.error));
+      if (node.error) {
+        const errorLine = el('div', 'hstack');
+        errorLine.append(
+          el('p', 'hint badtxt', node.error),
+          button('btn ghost', 'คัดลอก error', () => navigator.clipboard?.writeText(node.error).then(() => M().toast('คัดลอกแล้ว'), () => M().toast('คัดลอกไม่ได้', 'เบราว์เซอร์ไม่อนุญาต', true))),
+        );
+        row.append(errorLine);
+      }
+      const trace = node.trace || {};
+      if (trace.connector || trace.operation || trace.errorCode) {
+        const bits = [];
+        if (trace.connector) bits.push(`${trace.connector}${trace.operation ? `.${trace.operation}` : ''}${trace.connectorVersion ? ` v${trace.connectorVersion}` : ''}`);
+        if (trace.deprecated) bits.push(`⚠ version เก่า — latest v${trace.latestVersion}`);
+        if (trace.errorCode) bits.push(`code: ${trace.errorCode}`);
+        if (trace.requestId) bits.push(`request: ${trace.requestId}`);
+        row.append(el('p', 'hint faint', bits.join(' · ')));
+      }
       row.append(jsonBlock(`input (${node.input.length})`, node.input.map((item) => item.json)), jsonBlock(`output (${node.output.length})`, node.output.map((item) => item.json)));
       box.append(row);
     }
@@ -1603,27 +1742,36 @@
       el('h4', '', `ประวัติการรัน (${runs.length})`),
       button('btn ghost', 'โหลดใหม่', () => M().send({ type: 'workflow-runs', agent: draft.agent, name: draft.name })),
     );
-    box.append(head);
-    if (runs.length === 0) {
-      box.append(el('p', 'hint', 'ยังไม่มีการรัน — กด "รันทดสอบ" หรือรอ trigger'));
+    const filters = el('div', 'hstack');
+    for (const [key, label] of [['all', 'ทั้งหมด'], ['ok', 'ok'], ['error', 'error']]) {
+      filters.append(button(`btn ghost${historyFilter === key ? ' on' : ''}`, label, () => {
+        historyFilter = key;
+        historyShown = 12;
+        document.querySelector('#wfEditor .whistory')?.replaceWith(historyPanel());
+      }));
+    }
+    box.append(head, filters);
+    const visible = runs.filter((run) => historyFilter === 'all' || (historyFilter === 'ok' ? run.ok : !run.ok));
+    if (visible.length === 0) {
+      box.append(el('p', 'hint', runs.length === 0 ? 'ยังไม่มีการรัน — กด "รันทดสอบ" หรือรอ trigger' : 'ไม่มี run ที่ตรงกับตัวกรองนี้'));
       return box;
     }
     const list = el('div', 'wrunlist');
     const current = runResult?.id ?? runResult?.runId;
-    for (const run of runs.slice(0, historyShown)) {
+    for (const run of visible.slice(0, historyShown)) {
       const row = button(`wrunrow${run.id === current ? ' on' : ''}`, '', () => M().send({ type: 'workflow-run-get', id: run.id }));
       row.append(
         el('span', `pill ${run.ok ? 'ok' : 'todo'}`, run.ok ? 'ok' : 'error'),
         el('span', '', M().fmtDate(run.startedAt)),
-        el('span', 'chip', run.mode),
+        el('span', 'chip', run.trigger || run.mode),
         el('span', 'faint', `${(run.durationMs / 1000).toFixed(1)} วิ · ${run.nodeCount} node`),
         el('span', 'faint wrunres', run.result),
       );
       list.append(row);
     }
     box.append(list);
-    if (runs.length > historyShown) {
-      box.append(button('btn ghost', `ดูเพิ่ม (${runs.length - historyShown})`, () => {
+    if (visible.length > historyShown) {
+      box.append(button('btn ghost', `ดูเพิ่ม (${visible.length - historyShown})`, () => {
         historyShown += 30;
         document.querySelector('#wfEditor .whistory')?.replaceWith(historyPanel());
       }));
@@ -1657,6 +1805,26 @@
       if (draft.webhook) box.append(el('p', 'hint', `POST มาที่: ${location.origin}${draft.webhook} (ไม่ต้องใช้ token)`));
       else box.append(el('p', 'hint', 'บันทึกแล้วระบบจะสร้าง URL ให้'));
     }
+    if (node?.type === 'trigger_connector') {
+      const connectorTrigger = connectorTriggerOf(node.config?.connector, node.config?.trigger);
+      if (connectorTrigger?.kind === 'webhook' && connectorTrigger.signature) {
+        const secretName = String(node.config?.[connectorTrigger.signature.secretField] || '').trim();
+        const has = secretName && (M().state.secrets || []).includes(secretName);
+        box.append(
+          el(
+            'p',
+            has ? 'hint' : 'hint badtxt',
+            has
+              ? `Signature ${connectorTrigger.signature.header} reads secret "${secretName}" from the vault.`
+              : `Add secret "${secretName || connectorTrigger.signature.secretField}" to the vault, then paste the webhook URL in ${connectorOf(node.config?.connector)?.label || 'the service'}.`,
+          ),
+        );
+      }
+      if (connectorTrigger?.kind === 'poll') {
+        const minutes = Number(node.config?.everyMinutes) || 15;
+        box.append(el('p', 'hint', `Polls ${connectorTrigger.operation} every ${minutes} minutes; new items are deduplicated by ${connectorTrigger.idField || 'id'}.`));
+      }
+    }
     box.append(el('p', 'hint', `trigger นี้ให้ข้อมูลแบบนี้ (ใช้ {{ $json.x }}): ${JSON.stringify(entry.sample).slice(0, 220)}`));
     if (entry.kind === 'manual') box.append(el('p', 'hint', 'กด "รัน" แล้วจะให้ใส่ input JSON เองได้'));
     return box;
@@ -1671,6 +1839,18 @@
       Object.assign(config, { connector: first?.key || '', operation: first?.operations[0]?.key || '', input: {} });
     }
     if (type === 'trigger_custom') config.pool = pool().find((entry) => !entry.builtin)?.name || '';
+    if (type === 'trigger_connector') {
+      const connector = (M().state.connectors || []).find((entry) => (entry.triggers || []).length > 0);
+      const trigger = connector?.triggers?.[0];
+      if (connector && trigger) {
+        Object.assign(config, {
+          connector: connector.key,
+          trigger: trigger.key,
+          ...(trigger.kind === 'poll' ? { everyMinutes: 15 } : {}),
+          input: {},
+        });
+      }
+    }
     if (type === 'llm') Object.assign(config, { format: 'text', name: 'text', prompt: '{{ $json.text }}' });
     if (type === 'classify') Object.assign(config, { input: '{{ $json.text }}', categories: [] });
     if (type === 'extract') Object.assign(config, { input: '{{ $json.text }}', attributes: [] });
@@ -2263,106 +2443,171 @@
     }
   }
 
-  // ---------- n8n import ----------
-  /** { agent, json, preview } while the import dialog is open. */
+  // ---------- workflow import (n8n / Make / Zapier) ----------
+  /** { agent, source, json, preview, busy, reqId } while the import dialog is open. */
   let importing = null;
 
+  const IMPORT_SOURCES = [
+    { key: 'n8n', label: 'n8n', accept: '.json,application/json', hint: 'In n8n open the workflow, then use Download to save it as JSON.' },
+    { key: 'make', label: 'Make', accept: '.json,application/json', hint: 'In Make open the scenario menu, then Export Blueprint to save it as JSON.' },
+    { key: 'zapier', label: 'Zapier', accept: '.json,.zap,application/json', hint: 'Download the Zap export (.zap) or paste its JSON.' },
+  ];
+
+  function sourceOf(key) {
+    return IMPORT_SOURCES.find((entry) => entry.key === key) || IMPORT_SOURCES[0];
+  }
+
   function openImport(agent) {
-    importing = { agent, json: '', preview: null, busy: false };
+    importing = { agent, source: 'n8n', json: '', preview: null, busy: false, reqId: 0 };
     showImport();
+  }
+
+  function sendImport(save) {
+    if (!importing || importing.busy) return;
+    if (!importing.json.trim()) return;
+    importing.busy = true;
+    importing.reqId += 1;
+    showImport();
+    M().send({ type: `workflow-import-${importing.source}`, agent: importing.agent, json: importing.json, save, reqId: importing.reqId });
   }
 
   function showImport() {
     if (!importing) return;
     const dialog = el('div', 'dialog wfedit form');
     dialog.append(
-      el('h3', '', 'นำเข้า workflow จาก n8n'),
-      el('p', 'hint', 'ใน n8n: เปิด workflow → เมนู ⋯ → Download แล้วเลือกไฟล์ .json ที่นี่ · ค่าลับ (API key, token, credential) จะไม่ถูกนำเข้า · workflow ที่นำเข้าจะ "ปิด" ไว้ก่อน ตรวจแล้วค่อยเปิด'),
+      el('h3', '', 'Import workflow'),
+      el('p', 'hint', 'Upload an export from n8n, Make or Zapier. Credentials are redacted and never imported; every imported workflow starts disabled.'),
     );
+    const source = el('select');
+    for (const entry of IMPORT_SOURCES) {
+      const option = el('option', '', entry.label);
+      option.value = entry.key;
+      if (entry.key === importing.source) option.selected = true;
+      source.append(option);
+    }
+    source.onchange = () => {
+      importing.source = source.value;
+      importing.preview = null;
+      importing.busy = false;
+      showImport();
+    };
+    dialog.append(M().labelled('Source', source));
+    const chosen = sourceOf(importing.source);
+    dialog.append(el('p', 'hint', chosen.hint));
     const file = el('input');
     file.type = 'file';
-    file.accept = '.json,application/json';
+    file.accept = chosen.accept;
     file.onchange = async () => {
       const picked = file.files && file.files[0];
       if (!picked) return;
       importing.json = await picked.text();
       importing.preview = null;
-      importing.busy = true;
-      showImport();
-      M().send({ type: 'workflow-import-n8n', agent: importing.agent, json: importing.json, save: false });
+      sendImport(false);
     };
-    dialog.append(M().labelled('ไฟล์ n8n (.json)', file));
+    dialog.append(M().labelled(`Export file (${chosen.accept})`, file));
     const paste = el('textarea');
-    paste.placeholder = '…หรือวาง JSON ที่นี่';
+    paste.placeholder = 'Paste the exported JSON here';
     paste.value = importing.json && importing.json.length < 20000 ? importing.json : '';
-    dialog.append(paste, button('btn ghost', 'แปลงข้อความที่วาง', () => {
+    dialog.append(paste, button('btn ghost', 'Preview pasted JSON', () => {
       importing.json = paste.value;
       importing.preview = null;
-      importing.busy = true;
-      showImport();
-      M().send({ type: 'workflow-import-n8n', agent: importing.agent, json: importing.json, save: false });
+      sendImport(false);
     }));
-    if (importing.busy) dialog.append(el('p', 'hint', 'กำลังแปลง…'));
+    if (importing.busy) dialog.append(el('p', 'hint', 'Importing...'));
     const preview = importing.preview;
     if (preview) dialog.append(importReport(preview));
     const foot = el('div', 'foot');
     foot.append(
       el('span', 'msg'),
-      button('btn ghost', 'ปิด', () => {
+      button('btn ghost', 'Close', () => {
         importing = null;
         M().closeOverlay();
       }),
     );
-    if (preview && !preview.saved) {
-      foot.append(button('btn pri', `นำเข้า ${preview.workflows.length} workflow`, () => {
-        importing.busy = true;
-        showImport();
-        M().send({ type: 'workflow-import-n8n', agent: importing.agent, json: importing.json, save: true });
-      }));
+    if (preview && !preview.saved && !importing.busy) {
+      foot.append(button('btn pri', `Import ${preview.workflows.length} workflow(s)`, () => sendImport(true)));
     }
     dialog.append(foot);
     M().overlay(dialog);
   }
 
+  function nodeSummary(workflow) {
+    const details = el('details');
+    details.append(el('summary', '', `${(workflow.nodes || []).length} nodes`));
+    const pre = el('pre', 'wjson');
+    pre.textContent = (workflow.nodes || []).map((node) => `${node.type} - ${node.title}`).join('\n');
+    details.append(pre);
+    return details;
+  }
+
+  function importSubject(item) {
+    return item.node || item.module || item.step || item.title || 'workflow';
+  }
+
+  function importDetail(item) {
+    const detail = item.type || item.api || item.action || '';
+    return detail ? ` (${detail})` : '';
+  }
+
   function importReport(preview) {
     const { report } = preview;
+    const source = sourceOf(preview.source || 'n8n').label;
     const box = el('div', 'wresult');
-    box.append(el('h4', '', preview.saved ? 'นำเข้าแล้ว' : `จะได้ ${preview.workflows.length} workflow (จาก "${report.source.join(', ')}")`));
+    box.append(el('h4', '', preview.saved ? 'Import finished' : `Preview: ${preview.workflows.length} workflow(s) from ${source}`));
     const rows = el('div', 'tbl');
-    for (const entry of report.workflows) {
+    for (const [index, entry] of report.workflows.entries()) {
       const row = el('div', 'hstack');
-      row.append(el('b', '', entry.title), el('span', 'chip', entry.trigger), el('span', 'faint', `${entry.nodes} node · ${entry.name}`));
+      row.append(el('b', '', entry.title), el('span', 'chip', entry.trigger), el('span', 'faint', `${entry.nodes} node - ${entry.name}`));
+      const workflow = preview.workflows[index];
+      if (workflow) row.append(nodeSummary(workflow));
       rows.append(row);
     }
     box.append(rows);
-    for (const error of preview.errors || []) box.append(el('p', 'hint badtxt', error));
     const section = (title, items, render, open) => {
-      if (items.length === 0) return;
+      if (!items || items.length === 0) return;
       const details = el('details');
       if (open) details.open = true;
       details.append(el('summary', '', `${title} (${items.length})`));
       for (const item of items) details.append(render(item));
       box.append(details);
     };
-    section('node ที่ต้องทำเอง (จะหยุดพร้อมบอกเหตุผลถ้ารันถึง)', report.unsupported, (item) => el('p', 'hint badtxt', `${item.node} — ${item.type}: ${item.reason}`), true);
-    section('ข้อควรตรวจ', report.warnings, (item) => el('p', 'hint', item), true);
-    section('ค่าลับที่ไม่ได้นำเข้า (ใส่เองในตู้ secret)', report.redacted, (item) => el('p', 'hint', `${item.node} · ${item.field}`), false);
-    section('model ที่ n8n ใช้ (เลือก model ที่ตรงกันให้ agent)', report.models, (item) => el('p', 'hint', `${item.node}: ${item.model}`), false);
-    section('system prompt ของ AI agent ใน n8n (คัดลอกไปใส่ agent ได้)', report.prompts, (item) => {
+    section('Mapped to Mimi nodes', report.mapped || [], (item) => el('p', 'hint', `${importSubject(item)} -> ${item.connector}/${item.operation} (${item.confidence})`), false);
+    section('Unsupported nodes (imported as placeholders)', report.unsupported, (item) => el('p', 'hint badtxt', `${importSubject(item)}${importDetail(item)}: ${item.reason}`), true);
+    section('Warnings', report.warnings, (item) => el('p', 'hint', item), true);
+    section('Redacted secrets (never imported)', report.redacted, (item) => el('p', 'hint', `${importSubject(item)} - ${item.field}`), false);
+    const connections = report.connections || [];
+    section('Connections to pick', connections, (item) => {
+      const parts = [item.connector, item.credentialType, item.credentialName, item.connectionId, item.authenticationId].filter(Boolean);
+      return el('p', 'hint', `${importSubject(item)}: ${parts.join(' - ')}. Pick a Mimi connection in the editor.`);
+    }, connections.length > 0);
+    if (connections.length > 0) {
+      box.append(button('btn ghost', 'Open Hub > Connections', () => {
+        importing = null;
+        M().closeOverlay();
+        M().ui.hubTab = 'accounts';
+        M().setView('hub');
+        M().renderHub();
+      }));
+    }
+    section('Models referenced by n8n (pick a model in the editor)', report.models || [], (item) => el('p', 'hint', `${importSubject(item)}: ${item.model}`), false);
+    section('System prompts from n8n (review before enabling)', report.prompts || [], (item) => {
       const wrap = el('div');
       const pre = el('pre', 'wjson');
       pre.textContent = item.text;
-      wrap.append(el('b', '', item.node), pre, button('btn ghost', 'คัดลอก', () => navigator.clipboard?.writeText(item.text).then(() => M().toast('คัดลอกแล้ว ✓'))));
+      wrap.append(el('b', '', importSubject(item)), pre, button('btn ghost', 'Copy', () => navigator.clipboard?.writeText(item.text).then(() => M().toast('Copied'))));
       return wrap;
     }, false);
+    for (const error of preview.errors || []) box.append(el('p', 'hint badtxt', error));
     return box;
   }
 
   function onImport(message) {
     if (!importing || message.agent !== importing.agent) return;
+    if (message.source !== importing.source) return;
+    if (message.reqId !== undefined && message.reqId !== importing.reqId) return;
     importing.busy = false;
     importing.preview = message;
-    if (message.saved) M().toast(`นำเข้าแล้ว ${message.workflows.length - (message.errors || []).length} workflow`, 'ปิดไว้ก่อน: เปิดเมื่อตรวจแล้ว');
+    if (message.saved) M().toast(`Imported ${message.workflows.length - (message.errors || []).length} workflow(s)`, 'Saved as disabled; review the report before enabling.');
     showImport();
   }
 

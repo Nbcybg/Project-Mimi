@@ -81,6 +81,16 @@ test('net guard: private, loopback, link-local and metadata addresses are refuse
   assert.match(refused.error!, /local network/);
   const allowed = await runWorkflowNode(workflow(), { id: 'n1', type: 'http', config: { url: 'http://router.lan/admin', allowLocal: true }, links: { main: [] } }, [], guarded);
   assert.equal(allowed.ok, true, allowed.error);
+
+  // A public URL that redirects to the LAN is still refused on the next hop.
+  const redirecting = (async () => new Response(null, { status: 302, headers: { location: 'http://router.lan/admin' } })) as typeof fetch;
+  const hop = await runWorkflowNode(
+    workflow(),
+    { id: 'n1', type: 'http', config: { url: 'https://api.example.com/start' }, links: { main: [] } },
+    [],
+    deps({ fetchFn: redirecting, lookup }),
+  );
+  assert.match(hop.error!, /local network/);
 });
 
 test('tool node: tools that change things need the node to allow them; settings can allow or deny', async () => {

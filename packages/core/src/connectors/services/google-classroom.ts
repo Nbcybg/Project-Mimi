@@ -1,0 +1,67 @@
+import type { ConnectorSpec } from '@mimi/shared';
+
+export const googleClassroomConnector: ConnectorSpec = {
+  key: 'google_classroom',
+  label: 'Google Classroom',
+  category: 'productivity',
+  description: 'List courses and coursework, and create an assignment as a draft through the Google Classroom API',
+  baseUrl: 'https://classroom.googleapis.com',
+  auth: {
+    kind: 'oauth2',
+    fields: [],
+    authorizeUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
+    tokenUrl: 'https://oauth2.googleapis.com/token',
+    scopes: [
+      'https://www.googleapis.com/auth/classroom.courses.readonly',
+      'https://www.googleapis.com/auth/classroom.coursework.students',
+    ],
+    extra: { provider: 'google' },
+  },
+  operations: [
+    {
+      key: 'list_courses',
+      label: 'List courses',
+      method: 'GET',
+      path: '/v1/courses',
+      risk: 'read',
+      fields: [{ key: 'pageSize', label: 'Page size', type: 'number', required: false, default: 30 }],
+      response: { itemsPath: 'courses' },
+      untrustedInput: true,
+      paginated: true,
+    },
+    {
+      key: 'list_coursework',
+      label: 'List coursework',
+      method: 'GET',
+      path: '/v1/courses/{courseId}/courseWork',
+      risk: 'read',
+      fields: [{ key: 'courseId', label: 'Course ID', type: 'string', required: true }],
+      response: { itemsPath: 'courseWork' },
+      untrustedInput: true,
+      paginated: true,
+    },
+    {
+      key: 'create_coursework',
+      label: 'Create coursework',
+      description: 'Creates an assignment in DRAFT so a teacher can review it before assigning',
+      method: 'POST',
+      path: '/v1/courses/{courseId}/courseWork',
+      risk: 'write',
+      body: {
+        title: '{{title}}',
+        description: '{{description}}',
+        workType: 'ASSIGNMENT',
+        state: 'DRAFT',
+        maxPoints: '{{maxPoints}}',
+      },
+      fields: [
+        { key: 'courseId', label: 'Course ID', type: 'string', required: true },
+        { key: 'title', label: 'Title', type: 'string', required: true },
+        { key: 'description', label: 'Description', type: 'string', required: false },
+        { key: 'maxPoints', label: 'Max points', type: 'number', required: true, default: 100 },
+      ],
+    },
+  ],
+  pagination: { mode: 'nextPageToken', cursorParam: 'pageToken', itemsPath: 'courses', nextPath: 'nextPageToken' },
+  rateLimit: { requests: 10, perMs: 1000, burst: 10 },
+};

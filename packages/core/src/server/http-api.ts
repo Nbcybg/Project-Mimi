@@ -39,7 +39,12 @@ export interface HttpApiDeps {
   imagesChanged(): void;
   /** Fires a webhook trigger; null when the key matches no active trigger. */
   /** `secret` is the caller's `x-mimi-secret` header (or `?secret=`), for workflows that ask for one. */
-  webhook(key: string, payload: string, secret?: string): Promise<WebhookReply | null>;
+  webhook(
+    key: string,
+    payload: string,
+    secret?: string,
+    headers?: Record<string, string | string[] | undefined>,
+  ): Promise<WebhookReply | null>;
   /** Folder of backup files offered for download. */
   backupsDir?: string;
 }
@@ -141,7 +146,7 @@ export async function handleHttpApi(
       }
       const header = request.headers['x-mimi-secret'];
       const secret = (Array.isArray(header) ? header[0] : header) ?? url.searchParams.get('secret') ?? undefined;
-      const reply = await deps.webhook(rest[0]!, payload, secret);
+      const reply = await deps.webhook(rest[0]!, payload, secret, request.headers);
       if (reply === null) throw new HttpError(404, 'No such webhook.');
       // content-length, transfer-encoding and connection belong to the server, not the workflow.
       const headers: Record<string, string> = { 'cache-control': 'no-store' };

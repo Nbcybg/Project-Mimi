@@ -1,6 +1,9 @@
 import type { ToolSettingOption, ToolSettingOptionsFrom } from './tools.ts';
 import type { RiskLevel } from './tools.ts';
-import type { FlowItem } from './workflows.ts';
+import type { FlowItem, JsonValue } from './workflows.ts';
+
+/** Semver assigned when a spec does not name one; existing connectors stay on 1.0.0. */
+export const DEFAULT_CONNECTOR_VERSION = '1.0.0';
 
 /**
  * Version of the connector contract. Bump it when an existing field changes meaning
@@ -58,13 +61,21 @@ export interface ConnectorOperation {
    * every non-path input field as a flat body.
    */
   body?: unknown;
-  /** How the request body is encoded. Defaults to JSON. */
-  bodyFormat?: 'json' | 'form';
+  /** How the request body is encoded. Defaults to JSON; `binary` decodes a base64 field. */
+  bodyFormat?: 'json' | 'form' | 'raw' | 'binary';
+  /** Extra request headers; string values may contain `{{field}}` placeholders. */
+  headers?: Record<string, string>;
+  /** Input fields sent as query parameters even for POST/PATCH/PUT. */
+  query?: string[];
   fields: ConnectorField[];
   risk: RiskLevel;
   /** The response carries text written by third parties (messages, documents). */
   untrustedInput?: boolean;
   response?: ConnectorResponse;
+  /** Follow `ConnectorSpec.pagination` and return every page as items. */
+  paginated?: boolean;
+  /** Safe to repeat after a network error or 5xx, even for a write. */
+  idempotent?: boolean;
 }
 
 export interface ConnectorAuth {
@@ -77,12 +88,43 @@ export interface ConnectorAuth {
   extra?: Record<string, unknown>;
 }
 
+/** How a provider signs a webhook body. The secret itself lives in the vault. */
+export interface ConnectorWebhookSignature {
+  /** Request header carrying the signature. */
+  header: string;
+  algorithm?: 'sha256' | 'sha1';
+  encoding?: 'hex' | 'base64';
+  /** Prefix expected before the digest, e.g. `sha256=` or `v0=`. */
+  prefix?: string;
+  /** Template for the signed bytes, e.g. `v0:{{timestamp}}:{{body}}`. */
+  signedPayload?: string;
+  /** Header carrying the Unix timestamp used in `signedPayload`. */
+  timestampHeader?: string;
+  /** Config key naming the vault secret; defaults to `secretName`. */
+  secretField?: string;
+  /** Reject timestamps older than this; defaults to 300 seconds. */
+  toleranceSeconds?: number;
+}
+
 export interface ConnectorTrigger {
   key: string;
   label: string;
+  description?: string;
   kind: 'webhook' | 'poll';
   events?: string[];
   fields?: ConnectorField[];
+  /** Poll: the operation called on every tick. */
+  operation?: string;
+  /** Poll: fixed operation input. */
+  input?: Record<string, JsonValue>;
+  /** Poll: item field used to drop duplicates; defaults to `id`. */
+  idField?: string;
+  /** Poll: where the next cursor comes from and which input parameter takes it back. */
+  cursor?: { responsePath: string; param: string };
+  /** Webhook: provider signature verification. */
+  signature?: ConnectorWebhookSignature;
+  /** What this trigger produces; shown in the editor and used for manual runs. */
+  sample?: Record<string, JsonValue>;
 }
 
 export type ConnectorPaginationMode = 'page' | 'cursor' | 'nextPageToken' | 'link';
@@ -94,6 +136,9 @@ export interface ConnectorPagination {
   cursorParam?: string;
   itemsPath?: string;
   nextPath?: string;
+  /** Safety bounds; defaults to 20 pages and 1000 items. */
+  maxPages?: number;
+  maxItems?: number;
 }
 
 export interface ConnectorRateLimit {
@@ -110,6 +155,12 @@ export interface ConnectorRateLimit {
 export interface ConnectorSpec {
   /** Lower snake case; the prefix of every tool name. */
   key: string;
+  /**
+   * Semver of this connector definition, e.g. `1.2.0`. Several versions of one key
+   * may be registered; workflows pin one, new workflows get the latest. Missing
+   * means `DEFAULT_CONNECTOR_VERSION`.
+   */
+  version?: string;
   label: string;
   category: string;
   description: string;
@@ -148,6 +199,10 @@ export interface ConnectorOperationView {
 /** What the settings and Quick Work screens receive for one service. */
 export interface ConnectorView {
   key: string;
+  /** Latest installed version (always set by the registry). */
+  version?: string;
+  /** All installed versions, newest first. */
+  versions?: string[];
   label: string;
   category: string;
   description: string;
@@ -168,6 +223,10 @@ export interface ConnectorRequest {
   signal?: AbortSignal;
   /** The agent that asked; used for policy and logs. */
   agent?: string;
+  /** Sent as `Idempotency-Key` so a retried write can be deduplicated by providers that support it. */
+  idempotencyKey?: string;
+  /** Pin a connector spec version; missing means the latest installed version. */
+  version?: string;
 }
 
 export interface ConnectorResult {
@@ -176,12 +235,19 @@ export interface ConnectorResult {
   text?: string;
   /** Raw response for debugging; the runtime strips secrets before filling this. */
   raw?: unknown;
+  /** Spec version that actually ran. */
+  version?: string;
+  /** True when the run used an older version than the installed latest. */
+  deprecated?: boolean;
+  /** Latest installed version, set together with `deprecated`. */
+  latestVersion?: string;
 }
 
+/** What a connector call asks for; `version` pins a spec, missing means latest. */
 /** The runtime surface the tool and workflow adapters use. */
 export interface ConnectorRuntime {
   list(): ConnectorView[];
-  get(connector: string): ConnectorSpec | undefined;
+  get(connector: string, version?: string): ConnectorSpec | undefined;
   execute(request: ConnectorRequest): Promise<ConnectorResult>;
   test(connector: string, operation: string, input: Record<string, unknown>, account?: string): Promise<ConnectorResult>;
 }

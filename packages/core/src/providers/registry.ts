@@ -215,6 +215,7 @@ export class ProviderRegistry {
     const last = <K extends keyof ProviderDef>(key: K) => layers.findLast((layer) => layer[key] !== undefined)?.[key];
 
     const npm = last('npm') ?? PREFERRED_NPM[id] ?? base?.npm ?? CUSTOM_PROVIDER_NPM;
+    const apiOverride = last('api');
     const models: Record<string, ModelDef> = { ...base?.models };
     for (const layer of layers) {
       for (const [modelId, def] of Object.entries(layer.models ?? {})) {
@@ -223,12 +224,21 @@ export class ProviderRegistry {
     }
     // Ids the provider listed (or the user typed in) are real models even without metadata.
     for (const modelId of this.sources.listed?.()[id] ?? []) models[modelId] ??= {} as ModelDef;
+    // A base URL chosen in the settings file (or the app) is the user's intent: it replaces
+    // per-model endpoints the catalog pinned, unless a layer pinned that model explicitly.
+    if (apiOverride) {
+      for (const [modelId, def] of Object.entries(models)) {
+        if (!def.provider?.api) continue;
+        const pinnedInLayer = layers.some((layer) => layer.models?.[modelId]?.provider?.api !== undefined);
+        if (!pinnedInLayer) models[modelId] = { ...def, provider: { ...def.provider, api: apiOverride } };
+      }
+    }
     return {
       id,
       name: last('name') ?? base?.name ?? id,
       npm,
       // The catalog's base URL belongs to the catalog's package; a swapped-in SDK has its own default.
-      api: last('api') ?? (npm === base?.npm ? base.api : undefined),
+      api: apiOverride ?? (npm === base?.npm ? base.api : undefined),
       env: last('env') ?? base?.env ?? [],
       options: Object.assign({}, base?.options, ...layers.map((layer) => layer.options)),
       models,

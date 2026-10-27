@@ -155,7 +155,7 @@ function inspectZapier(raw: unknown) {
   });
 }
 
-test('n8n fixture: importer maps the supported path, redacts auth and reports Slack', () => {
+test('n8n fixture: importer maps the supported path, redacts auth and maps Slack to a connector', () => {
   const { workflows, report } = importN8n(readFixture(fixtures.n8n), {
     agent: 'mimi',
     existingNames: [],
@@ -167,13 +167,19 @@ test('n8n fixture: importer maps the supported path, redacts auth and reports Sl
   const [workflow] = workflows;
   assert.ok(workflow);
   assert.equal(workflow.trigger.pool, 'webhook');
-  assert.deepEqual(workflow.nodes.map((node) => node.type), ['http', 'tool', 'tool', 'code', 'set']);
+  assert.deepEqual(workflow.nodes.map((node) => node.type), ['http', 'tool', 'tool', 'connector', 'set']);
   assert.deepEqual(
     workflow.nodes.filter((node) => node.type === 'tool').map((node) => node.config.tool),
     ['gmail_send', 'sheets_append'],
   );
-  assert.deepEqual(report.unsupported.map((entry) => entry.node), ['Notify Slack']);
-  assert.match(report.unsupported[0]!.reason, /no Mimi node/);
+  assert.deepEqual(workflow.nodes.find((node) => node.title === 'Notify Slack')!.config, {
+    connector: 'slack',
+    operation: 'send_message',
+    input: { channel: '#leads', text: 'New lead from {{ $json.name }}' },
+    allow: false,
+  });
+  assert.deepEqual(report.mapped.map((entry) => [entry.node, entry.connector, entry.operation]), [['Notify Slack', 'slack', 'send_message']]);
+  assert.deepEqual(report.unsupported, []);
   assert.deepEqual(report.redacted.map((entry) => entry.field), ['headerParameters.parameters[0].Authorization']);
   assert.ok(!JSON.stringify(workflows).includes('demo-placeholder-token-not-real'), 'the placeholder header never reaches a workflow');
 });

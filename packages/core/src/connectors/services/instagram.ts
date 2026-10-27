@@ -1,0 +1,76 @@
+import type { ConnectorSpec } from '@mimi/shared';
+
+export const instagramConnector: ConnectorSpec = {
+  key: 'instagram',
+  label: 'Instagram',
+  category: 'marketing',
+  description: 'List media, publish a photo post as a two-step container plus media_publish, and read insights through the Instagram Graph API',
+  baseUrl: 'https://graph.facebook.com/v19.0',
+  auth: {
+    kind: 'oauth2',
+    fields: [
+      { key: 'clientId', label: 'Client ID', type: 'string', required: true },
+      { key: 'clientSecret', label: 'Client secret', type: 'secret', required: true },
+      { key: 'refreshToken', label: 'Refresh token', type: 'secret', required: true },
+      { key: 'accessToken', label: 'Access token', type: 'secret' },
+      { key: 'expiresAt', label: 'Expires at', type: 'string' },
+    ],
+    authorizeUrl: 'https://www.facebook.com/v19.0/dialog/oauth',
+    tokenUrl: 'https://graph.facebook.com/v19.0/oauth/access_token',
+    scopes: ['instagram_basic', 'instagram_content_publish', 'pages_show_list'],
+  },
+  operations: [
+    {
+      key: 'list_media',
+      label: 'List media',
+      method: 'GET',
+      path: '/{igUserId}/media',
+      risk: 'read',
+      fields: [{ key: 'igUserId', label: 'Instagram user ID', type: 'string', required: true }],
+      response: { itemsPath: 'data' },
+      paginated: true,
+    },
+    {
+      key: 'create_post',
+      label: 'Create media container',
+      description: 'Step 1 of publishing: returns a creation id that publish_media sends live',
+      method: 'POST',
+      path: '/{igUserId}/media',
+      risk: 'write',
+      body: { image_url: '{{imageUrl}}', caption: '{{caption}}' },
+      fields: [
+        { key: 'igUserId', label: 'Instagram user ID', type: 'string', required: true },
+        { key: 'imageUrl', label: 'Public image URL', type: 'string', required: true },
+        { key: 'caption', label: 'Caption', type: 'string', required: false },
+      ],
+    },
+    {
+      key: 'publish_media',
+      label: 'Publish media container',
+      description: 'Step 2 of publishing: publishes the creation id returned by create_post',
+      method: 'POST',
+      path: '/{igUserId}/media_publish',
+      risk: 'write',
+      body: { creation_id: '{{creationId}}' },
+      fields: [
+        { key: 'igUserId', label: 'Instagram user ID', type: 'string', required: true },
+        { key: 'creationId', label: 'Creation ID', type: 'string', required: true },
+      ],
+    },
+    {
+      key: 'get_insights',
+      label: 'Get insights',
+      method: 'GET',
+      path: '/{igUserId}/insights',
+      risk: 'read',
+      fields: [
+        { key: 'igUserId', label: 'Instagram user ID', type: 'string', required: true },
+        { key: 'metric', label: 'Metric', type: 'string', required: true, default: 'impressions' },
+        { key: 'period', label: 'Period', type: 'string', required: true, default: 'day' },
+      ],
+      response: { itemsPath: 'data' },
+    },
+  ],
+  pagination: { mode: 'cursor', cursorParam: 'after', itemsPath: 'data', nextPath: 'paging.cursors.after' },
+  rateLimit: { requests: 10, perMs: 1000, burst: 10 },
+};

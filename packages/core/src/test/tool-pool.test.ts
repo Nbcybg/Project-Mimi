@@ -116,7 +116,7 @@ test('an HTTP custom tool renders its request and reports failures', async () =>
     kind: 'http',
     params: [{ key: 'date', type: 'string' }],
     settings: [{ key: 'base', label: 'Base URL', type: 'string', required: true }],
-    config: { method: 'GET', url: '{{settings.base}}/rates/{{input.date}}', headers: { 'x-static': 'on' } },
+    config: { method: 'GET', url: '{{settings.base}}/rates/{{input.date}}', headers: { 'x-static': 'on' }, allowLocal: true },
   });
   const original = globalThis.fetch;
   const seen: Array<{ url: string; init: RequestInit | undefined }> = [];

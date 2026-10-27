@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { isTriggerNodeType, type ConnectorRuntime, type FlowItem, type JsonValue, type Operator, type WorkflowNode, type WorkflowNodeTestResult, type WorkflowResponse, type WorkflowRunNodeView, type WorkflowRunResult, type WorkflowView } from '@mimi/shared';
+import { isTriggerNodeType, type ConnectorRuntime, type FlowItem, type JsonValue, type Operator, type WorkflowNode, type WorkflowNodeTestResult, type WorkflowNodeTrace, type WorkflowResponse, type WorkflowRunNodeView, type WorkflowRunResult, type WorkflowView } from '@mimi/shared';
 import type { ToolContext, ToolDefinition } from '../tools/registry.ts';
 import { type Ask, askJson, attributesOf, categoriesOf, classifyText, extractFields } from './ai-nodes.ts';
 import type { KnowledgeStore } from '../knowledge/store.ts';
@@ -9,7 +9,8 @@ import { renderHits } from '../knowledge/store.ts';
 import type { ApprovalDecision } from './approvals.ts';
 import { DEFAULT_TOKEN_SECRET, sendTelegram } from './telegram.ts';
 import { runCodeIsolated } from './code-sandbox.ts';
-import { assertPublicUrl, type Lookup } from './net-guard.ts';
+import { safeFetch, type Lookup } from './net-guard.ts';
+import { redactText } from './redact.ts';
 import { readXlsx, sheetItems } from './xlsx.ts';
 import fsp from 'node:fs/promises';
 import { addTo, type DateUnit, diffIn, formatDate, parseDate, startOf } from './datetime.ts';
@@ -34,6 +35,7 @@ import {
   resolveValue,
 } from './expressions.ts';
 import type { TriggerPool } from './trigger-pool.ts';
+import { parseConnectorTriggerPool, pollConnectorTrigger } from './connector-triggers.ts';
 
 export interface WorkflowMailItem {
   id: string;
@@ -88,6 +90,10 @@ export interface WorkflowRunnerDeps {
   /** A file sent in a chat, by attachment id. */
   attachmentFile?(id: string): { data: Buffer; mime: string; name: string } | undefined;
   fetchFn?: typeof fetch;
+  /** Default per-node deadline in milliseconds; unset means no deadline. */
+  nodeTimeoutMs?: number;
+  /** Default per-run deadline in milliseconds; unset means no deadline. */
+  runTimeoutMs?: number;
 }
 
 export interface ModelRequest {
@@ -179,6 +185,8 @@ interface NodeContext {
   outputs: Record<string, NodeOutput>;
   /** The items the run started with, exposed as `$trigger`. */
   trigger: NodeOutput;
+  /** Non-secret connector call context for the run detail. */
+  trace?: WorkflowNodeTrace;
   /** Items routed to each node, per source node — what the merge node joins. */
   incoming: Record<string, Record<string, FlowItem[]>>;
   vars: Record<string, JsonValue>;
@@ -208,6 +216,62 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
     }, ms);
     signal?.addEventListener('abort', onAbort, { once: true });
   });
+}
+
+class NodeTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'NodeTimeoutError';
+  }
+}
+
+class RunTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'RunTimeoutError';
+  }
+}
+
+function positiveMs(value: unknown): number | undefined {
+  const ms = Math.floor(Number(value));
+  return Number.isFinite(ms) && ms > 0 ? ms : undefined;
+}
+
+function abortReason(signal?: AbortSignal): Error {
+  const reason = signal?.reason;
+  return reason instanceof Error ? reason : new Error('aborted');
+}
+
+function errorCodeOf(error: unknown): string | undefined {
+  const code = (error as { code?: unknown } | undefined)?.code;
+  if (typeof code === 'string' || typeof code === 'number') return String(code);
+  const message = error instanceof Error ? error.message : '';
+  return /\b(?:error[_-]?code|code)\s*[:=]\s*["']?([A-Za-z0-9_.-]+)/i.exec(message)?.[1];
+}
+
+async function withDeadline<T>(
+  ms: number,
+  message: string,
+  context: NodeContext,
+  run: (context: NodeContext) => Promise<T>,
+): Promise<T> {
+  const controller = new AbortController();
+  const parent = context.signal;
+  const aborted = new Promise<never>((_, reject) => {
+    controller.signal.addEventListener('abort', () => reject(abortReason(controller.signal)), { once: true });
+  });
+  const forward = () => controller.abort(parent?.reason);
+  if (parent?.aborted) forward();
+  else parent?.addEventListener('abort', forward, { once: true });
+  const timer = setTimeout(() => controller.abort(new NodeTimeoutError(message)), ms);
+  const attempt: NodeContext = { ...context, signal: controller.signal };
+  try {
+    return await Promise.race([run(attempt), aborted]);
+  } finally {
+    clearTimeout(timer);
+    parent?.removeEventListener('abort', forward);
+    if (attempt.response) context.response = attempt.response;
+  }
 }
 
 function todayIn(timezone: string | undefined): string {
@@ -328,7 +392,6 @@ async function runHttp(config: Record<string, JsonValue>, item: FlowItem, index:
   };
   const url = asText(resolved.url);
   if (!url) throw new Error('HTTP node: no URL');
-  await guardUrl(url, config.allowLocal === true, ctx.deps);
   let target = url;
   const query = resolved.query;
   if (query && typeof query === 'object' && !Array.isArray(query)) {
@@ -348,12 +411,20 @@ async function runHttp(config: Record<string, JsonValue>, item: FlowItem, index:
   }
   const timeoutMs = Math.min(120_000, Math.max(1_000, Number(resolved.timeoutMs) || 60_000));
   const timeout = AbortSignal.timeout(timeoutMs);
-  const response = await (ctx.deps.fetchFn ?? fetch)(target, {
-    method,
-    headers,
-    body,
-    signal: ctx.signal ? AbortSignal.any([ctx.signal, timeout]) : timeout,
-  });
+  const response = await safeFetch(
+    target,
+    {
+      method,
+      headers,
+      body,
+      signal: ctx.signal ? AbortSignal.any([ctx.signal, timeout]) : timeout,
+    },
+    {
+      ...(ctx.deps.fetchFn ? { fetchFn: ctx.deps.fetchFn } : {}),
+      ...(ctx.deps.lookup ? { lookup: ctx.deps.lookup } : {}),
+      ...(config.allowLocal === true ? { allowLocal: true } : {}),
+    },
+  );
   const text = await response.text();
   if (!response.ok) throw new Error(`HTTP ${response.status} from ${target}: ${text.slice(0, 300)}`);
   try {
@@ -581,17 +652,25 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
         const config = resolveValue(node.config, contextAt(ctx, item, index, items)) as {
           connector?: JsonValue;
           operation?: JsonValue;
+          version?: JsonValue;
           account?: JsonValue;
           input?: JsonValue;
         };
         const connectorKey = asText(config.connector);
         const operationKey = asText(config.operation);
+        const version = asText(config.version) || undefined;
         if (!connectorKey) throw new Error('connector node: "connector" is required');
         if (!operationKey) throw new Error('connector node: "operation" is required');
-        const connector = deps.connector.get(connectorKey);
-        if (!connector) throw new Error(`connector node: unknown connector "${connectorKey}"`);
+        const connector = deps.connector.get(connectorKey, version);
+        if (!connector) {
+          throw new Error(version
+            ? `connector node: connector "${connectorKey}" version "${version}" is not installed`
+            : `connector node: unknown connector "${connectorKey}"`);
+        }
         const operation = connector.operations.find((entry) => entry.key === operationKey);
-        if (!operation) throw new Error(`connector node: unknown operation "${connectorKey}.${operationKey}"`);
+        if (!operation) {
+          throw new Error(`connector node: connector "${connectorKey}" v${connector.version ?? '?'} has no operation "${operationKey}"`);
+        }
         // A workflow runs unattended: anything beyond reading needs the node's own
         // consent (or an "allow" for the tool in the settings file). A "deny" always wins.
         const toolName = `${connectorKey}_${operationKey}`;
@@ -605,14 +684,31 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
           throw new Error('connector node: "input" must be a JSON object');
         }
         const account = asText(config.account) || undefined;
+        const idempotencyKey = Number(node.retries ?? 0) > 0
+          ? `mimi-${`${ctx.execution.id}-${node.id}-${index}`.replace(/[^a-zA-Z0-9_-]/g, '-')}`.slice(0, 180)
+          : undefined;
+        ctx.trace = {
+          connector: connectorKey,
+          operation: operationKey,
+          ...(version || connector.version ? { connectorVersion: version ?? connector.version } : {}),
+          requestId: `${ctx.execution.id}:${node.id}`,
+        };
         const result = await deps.connector.execute({
           connector: connectorKey,
           operation: operationKey,
           input: (rawInput ?? {}) as Record<string, unknown>,
           agent: workflow.agent,
           ...(account ? { account } : {}),
+          ...(version ? { version } : {}),
+          ...(idempotencyKey ? { idempotencyKey } : {}),
           ...(ctx.signal ? { signal: ctx.signal } : {}),
         });
+        ctx.trace = {
+          ...ctx.trace,
+          ...(result.version ? { connectorVersion: result.version } : {}),
+          ...(result.deprecated ? { deprecated: true } : {}),
+          ...(result.latestVersion ? { latestVersion: result.latestVersion } : {}),
+        };
         out.push(...(result.items.length > 0 ? result.items : normalizeItems(result.text ?? {})));
       }
       return { main: out };
@@ -1124,7 +1220,7 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
   }
 }
 
-const MAX_NODES = 60;
+const MAX_NODES = 1000;
 
 /**
  * Everything a run needs to go on: plain JSON, so a run that pauses (an approval, a
@@ -1149,6 +1245,8 @@ export interface RunState {
   response?: WorkflowResponse;
   /** Pinned node outputs stand in for running those nodes (runs from the editor). */
   usePins?: boolean;
+  /** Why the whole run ended (a run timeout, an abort), beyond node errors. */
+  runError?: string;
 }
 
 /** Extra ways to start a run from the editor. */
@@ -1156,6 +1254,10 @@ export interface RunOptions {
   usePins?: boolean;
   /** Start at this node with these items; only it and what follows it run. */
   startAt?: { nodeId: string; input: FlowItem[]; outputs?: Record<string, NodeOutput> };
+  /** Deadline for each node in this run; overrides the runner's default. */
+  nodeTimeoutMs?: number;
+  /** Deadline for the whole run; overrides the runner's default. */
+  runTimeoutMs?: number;
 }
 
 /** Where a node that does not run sends its items: "main" when linked, else its first linked output. */
@@ -1256,8 +1358,8 @@ function resultOf(workflow: WorkflowView, state: RunState, suspended?: WorkflowR
   }
   const last = views.findLast((view) => view.status === 'ok' && view.output.length > 0) ?? views.at(-1);
   const finalItem = last?.output[0]?.json ?? {};
-  const result = finalItem.text !== undefined ? asText(finalItem.text) : asText(finalItem);
-  const error = views.find((view) => view.status === 'error')?.error;
+  const result = redactText(finalItem.text !== undefined ? asText(finalItem.text) : asText(finalItem));
+  const error = state.runError ?? views.find((view) => view.status === 'error')?.error;
   return {
     name: workflow.name,
     ok: !state.failed,
@@ -1268,12 +1370,28 @@ function resultOf(workflow: WorkflowView, state: RunState, suspended?: WorkflowR
 }
 
 /** Runs queued nodes until the run ends or a node pauses it. */
-async function drive(workflow: WorkflowView, state: RunState, deps: WorkflowRunnerDeps, signal?: AbortSignal): Promise<WorkflowRunResult> {
+async function drive(
+  workflow: WorkflowView,
+  state: RunState,
+  deps: WorkflowRunnerDeps,
+  signal?: AbortSignal,
+  limits: { nodeTimeoutMs?: number; timedOut?: () => string | undefined } = {},
+): Promise<WorkflowRunResult> {
   const context = contextFrom(workflow, state, deps, signal);
   const nodes = workflow.nodes;
   const startIds = new Set(state.startIds);
   while (state.queue.length > 0 && state.views.length < MAX_NODES) {
     if (state.failed) break;
+    if (limits.timedOut?.()) {
+      state.failed = true;
+      state.runError ??= limits.timedOut();
+      break;
+    }
+    if (signal?.aborted) {
+      state.failed = true;
+      state.runError ??= abortReason(signal).message;
+      break;
+    }
     const id = state.queue.shift()!;
     const node = nodes.find((entry) => entry.id === id);
     if (!node) continue; // the workflow changed while the run was paused
@@ -1296,14 +1414,33 @@ async function drive(workflow: WorkflowView, state: RunState, deps: WorkflowRunn
       settle(state, node, passed);
       continue;
     }
+    context.trace = { requestId: `${context.execution.id}:${id}` };
     // A failing node retries first; what happens after that is its onError policy.
     let outputs: Record<string, FlowItem[]> = {};
     let error: string | undefined;
     let stop: WorkflowStop | undefined;
+    let usedAttempts = 0;
     const attempts = 1 + Math.max(0, Math.floor(Number(node.retries ?? 0)));
+    const nodeTimeoutMs = limits.nodeTimeoutMs;
+    const deadline = nodeTimeoutMs ? Date.now() + nodeTimeoutMs : undefined;
     for (let attempt = 0; attempt < attempts; attempt++) {
+      usedAttempts = attempt + 1;
       try {
-        outputs = await executeNode(node, input, context);
+        if (deadline) {
+          const remaining = deadline - Date.now();
+          if (remaining <= 0) {
+            error = `node "${view.title}" timed out after ${nodeTimeoutMs}ms`;
+            break;
+          }
+          outputs = await withDeadline(
+            remaining,
+            `node "${view.title}" timed out after ${nodeTimeoutMs}ms`,
+            context,
+            (attemptContext) => executeNode(node, input, attemptContext),
+          );
+        } else {
+          outputs = await executeNode(node, input, context);
+        }
         error = undefined;
         break;
       } catch (caught) {
@@ -1320,17 +1457,41 @@ async function drive(workflow: WorkflowView, state: RunState, deps: WorkflowRunn
           const parkedId = deps.park(parked);
           return resultOf(workflow, state, { id: parkedId, nodeId: id, kind: caught.wait.kind, ...(caught.wait.kind === 'wait' ? { resumeAt: caught.wait.resumeAt } : {}) });
         }
-        error = (caught as Error).message;
+        if (caught instanceof NodeTimeoutError) {
+          error = caught.message;
+          break;
+        }
+        if (context.signal?.aborted) {
+          error = abortReason(context.signal).message;
+          state.failed = true;
+          break;
+        }
+        error = redactText((caught as Error).message);
+        const code = errorCodeOf(caught);
+        if (code) context.trace = { ...context.trace, errorCode: code };
         if (attempt < attempts - 1 && Number(node.retryWaitMs ?? 0) > 0) {
-          await sleep(Number(node.retryWaitMs), context.signal);
+          const wait = Number(node.retryWaitMs);
+          if (deadline && Date.now() + wait >= deadline) {
+            error = `node "${view.title}" timed out after ${nodeTimeoutMs}ms`;
+            break;
+          }
+          try {
+            await sleep(wait, context.signal);
+          } catch {
+            error = abortReason(context.signal).message;
+            state.failed = true;
+            break;
+          }
         }
       }
     }
+    if (context.trace) view.trace = { ...context.trace };
+    if (usedAttempts > 1) view.attempts = usedAttempts;
     if (stop) {
       // Stop ends the run here: no other branch may continue.
       view.status = stop.failed ? 'error' : 'ok';
       if (stop.failed) {
-        view.error = stop.message;
+        view.error = redactText(stop.message);
         state.failed = true;
       }
       view.output = input;
@@ -1341,7 +1502,7 @@ async function drive(workflow: WorkflowView, state: RunState, deps: WorkflowRunn
     }
     if (error !== undefined) {
       view.status = 'error';
-      view.error = attempts > 1 ? `${error} (${attempts} attempts)` : error;
+      view.error = usedAttempts > 1 ? `${error} (${usedAttempts} attempts)` : error;
       const onError = node.onError ?? 'stop';
       if (onError === 'continue') outputs = { main: input };
       else if (onError === 'branch') outputs = { error: input };
@@ -1352,8 +1513,63 @@ async function drive(workflow: WorkflowView, state: RunState, deps: WorkflowRunn
     recordOutput(state, node, view);
     settle(state, node, outputs);
   }
+  if (!state.failed && state.queue.length > 0 && state.views.length >= MAX_NODES) {
+    state.failed = true;
+    state.runError ??= `workflow stopped after ${MAX_NODES} node executions (possible loop)`;
+  }
+  if (limits.timedOut?.()) {
+    state.failed = true;
+    state.runError ??= limits.timedOut();
+  }
   state.response = context.response ?? state.response;
   return resultOf(workflow, state);
+}
+
+interface RunLimits {
+  nodeTimeoutMs?: number;
+  runTimeoutMs?: number;
+}
+
+function runLimits(deps: WorkflowRunnerDeps, options?: RunOptions): RunLimits {
+  const nodeTimeoutMs = positiveMs(options?.nodeTimeoutMs ?? deps.nodeTimeoutMs);
+  const runTimeoutMs = positiveMs(options?.runTimeoutMs ?? deps.runTimeoutMs);
+  return {
+    ...(nodeTimeoutMs ? { nodeTimeoutMs } : {}),
+    ...(runTimeoutMs ? { runTimeoutMs } : {}),
+  };
+}
+
+async function driveWithLimits(
+  workflow: WorkflowView,
+  state: RunState,
+  deps: WorkflowRunnerDeps,
+  signal: AbortSignal | undefined,
+  limits: RunLimits,
+): Promise<WorkflowRunResult> {
+  const runTimeoutMs = limits.runTimeoutMs;
+  let controller: AbortController | undefined;
+  let forward: (() => void) | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timedOut: string | undefined;
+  if (runTimeoutMs) {
+    controller = new AbortController();
+    forward = () => controller!.abort(signal?.reason);
+    if (signal?.aborted) forward();
+    else signal?.addEventListener('abort', forward, { once: true });
+    timer = setTimeout(() => {
+      timedOut = `workflow run timed out after ${runTimeoutMs}ms`;
+      controller!.abort(new RunTimeoutError(timedOut));
+    }, runTimeoutMs);
+  }
+  try {
+    return await drive(workflow, state, deps, controller?.signal ?? signal, {
+      ...(limits.nodeTimeoutMs ? { nodeTimeoutMs: limits.nodeTimeoutMs } : {}),
+      ...(runTimeoutMs ? { timedOut: () => timedOut } : {}),
+    });
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (forward) signal?.removeEventListener('abort', forward);
+  }
 }
 
 /**
@@ -1412,7 +1628,7 @@ export async function runWorkflow(
     state.collected[start.id] = (startAt ? startAt.input : initialItems).map((item) => ({ json: { ...item.json } }));
     state.queue.push(start.id);
   }
-  return drive(workflow, state, deps, signal);
+  return driveWithLimits(workflow, state, deps, signal, runLimits(deps, options));
 }
 
 /** Finishes a paused run: the waiting node ends with `outcome`, then the rest runs. */
@@ -1450,14 +1666,7 @@ export async function resumeWorkflow(
   else state.views.push(view);
   recordOutput(state, node, view);
   settle(state, node, outputs);
-  return drive(workflow, state, deps, signal);
-}
-
-/** The local-network guard; a custom fetch (tests) brings its own network and skips it. */
-async function guardUrl(url: string, allowLocal: boolean, deps: WorkflowRunnerDeps): Promise<void> {
-  if (allowLocal) return;
-  if (deps.fetchFn && !deps.lookup) return;
-  await assertPublicUrl(url, deps.lookup);
+  return driveWithLimits(workflow, state, deps, signal, runLimits(deps));
 }
 
 /** The items a trigger starts a run with; `payload` carries a webhook body or manual input. */export async function triggerItems(
@@ -1478,6 +1687,18 @@ async function guardUrl(url: string, allowLocal: boolean, deps: WorkflowRunnerDe
   // What the caller hands over (a webhook body, the manual run dialog) always wins.
   if (payload.body !== undefined) return normalizeItems(payload.body);
   if (payload.input !== undefined) return normalizeItems(payload.input);
+  if (workflow.trigger.pool.startsWith('connector:')) {
+    const found = parseConnectorTriggerPool(workflow.trigger.pool);
+    if (!found) throw new Error(`Invalid connector trigger "${workflow.trigger.pool}".`);
+    const spec = deps.connector?.get(found.connector);
+    if (!spec) throw new Error(`Unknown connector "${found.connector}".`);
+    const trigger = spec.triggers?.find((item) => item.key === found.trigger);
+    if (!trigger) throw new Error(`Unknown connector trigger "${found.connector}.${found.trigger}".`);
+    if (trigger.kind === 'webhook') return normalizeItems(config.input ?? entry.sample ?? {});
+    if (!deps.connector) throw new Error('connector poll trigger: no connector runtime is configured');
+    const result = await pollConnectorTrigger(deps.connector, spec, trigger, config);
+    return result.items;
+  }
   switch (entry.kind) {
     case 'manual':
       return normalizeItems((config.input as JsonValue) ?? entry.sample ?? {});
@@ -1502,16 +1723,23 @@ async function guardUrl(url: string, allowLocal: boolean, deps: WorkflowRunnerDe
       const resolved = resolveValue(config, empty) as { url?: JsonValue; method?: JsonValue; headers?: JsonValue };
       const url = asText(resolved.url);
       if (!url) throw new Error('poll trigger: no URL');
-      await guardUrl(url, config.allowLocal === true, deps);
       const headers: Record<string, string> = {};
       if (resolved.headers && typeof resolved.headers === 'object' && !Array.isArray(resolved.headers)) {
         for (const [key, value] of Object.entries(resolved.headers)) headers[key] = asText(value);
       }
-      const response = await (deps.fetchFn ?? fetch)(url, {
-        method: asText(resolved.method || 'GET').toUpperCase(),
-        headers,
-        signal: AbortSignal.timeout(60_000),
-      });
+      const response = await safeFetch(
+        url,
+        {
+          method: asText(resolved.method || 'GET').toUpperCase(),
+          headers,
+          signal: AbortSignal.timeout(60_000),
+        },
+        {
+          ...(deps.fetchFn ? { fetchFn: deps.fetchFn } : {}),
+          ...(deps.lookup ? { lookup: deps.lookup } : {}),
+          ...(config.allowLocal === true ? { allowLocal: true } : {}),
+        },
+      );
       const text = await response.text();
       if (!response.ok) throw new Error(`poll ${url}: HTTP ${response.status} ${text.slice(0, 200)}`);
       try {
@@ -1550,7 +1778,12 @@ export async function runWorkflowNode(
   // Testing with no input still gives per-item nodes one empty item to chew on.
   const items = input.length > 0 ? input : [{ json: {} }];
   try {
-    const outputs = await executeNode(node, items, context);
+    const timeoutMs = positiveMs(deps.nodeTimeoutMs);
+    const outputs = timeoutMs
+      ? await withDeadline(timeoutMs, `node "${node.title?.trim() || node.id}" timed out after ${timeoutMs}ms`, context, (attemptContext) =>
+          executeNode(node, items, attemptContext),
+        )
+      : await executeNode(node, items, context);
     return { ok: true, input: items, outputs };
   } catch (error) {
     if (error instanceof WorkflowStop && !error.failed) return { ok: true, input: items, outputs: {} };

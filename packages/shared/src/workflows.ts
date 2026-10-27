@@ -48,6 +48,7 @@ export type NodeTypeName =
   | 'trigger_chat'
   | 'trigger_telegram'
   | 'trigger_tool'
+  | 'trigger_connector'
   | 'trigger_custom';
 
 export type NodeFieldType = 'string' | 'number' | 'boolean' | 'text' | 'json' | 'expression' | 'account';
@@ -135,8 +136,28 @@ export interface WorkflowRunNodeView {
   input: FlowItem[];
   output: FlowItem[];
   error?: string;
+  /** How many tries the node needed (set when it retried at least once). */
+  attempts?: number;
+  /** Where the work went, for the run detail: connector + operation and a correlation id. */
+  trace?: WorkflowNodeTrace;
   /** Why the node did not really run: switched off, or its pinned output was used. */
   note?: 'disabled' | 'pinned';
+}
+
+/** Non-secret debugging context of a node, safe to store and show. */
+export interface WorkflowNodeTrace {
+  connector?: string;
+  operation?: string;
+  /** Connector spec version that actually ran. */
+  connectorVersion?: string;
+  /** True when the pinned spec is older than the installed latest. */
+  deprecated?: boolean;
+  /** Latest installed version, when `deprecated` is true. */
+  latestVersion?: string;
+  /** Correlation id (run id + node id); not a provider credential. */
+  requestId?: string;
+  /** Provider/application error code when one was reported. */
+  errorCode?: string;
 }
 
 /** The HTTP answer a webhook-triggered run sends back (set by a `respond` node). */
@@ -152,6 +173,10 @@ export interface WorkflowRunSummary {
   id: number;
   /** `<agent>/<name>`. */
   workflow: string;
+  /** Agent that owns the workflow (the part before `/`). */
+  agent: string;
+  /** What started it: manual / schedule / webhook / mail / poll. */
+  trigger: string;
   /** What started it: manual / schedule / webhook / mail / poll. */
   mode: string;
   ok: boolean;
@@ -351,6 +376,18 @@ export const NODE_TYPES: NodeTypeView[] = [
       { key: 'account', label: 'บัญชี (เว้นว่าง = บัญชีเริ่มต้น)', type: 'string' },
       { key: 'input', label: 'input (JSON + expression)', type: 'json', placeholder: '{"channel": "C123", "text": "{{ $json.text }}"}' },
       { key: 'allow', label: 'อนุญาตให้ทำงานนี้ (write/delete)', type: 'boolean', description: 'ต้องเปิดสำหรับ operation ที่เปลี่ยนข้อมูล เว้นแต่ permission ของ tool เป็น allow' },
+    ],
+    outputs: [{ key: 'main', label: 'main' }],
+  },
+  {
+    type: 'trigger_connector',
+    label: 'ทริกเกอร์: Connector',
+    description: 'เริ่ม workflow จาก webhook หรือ poll ของ connector ที่ติดตั้งไว้',
+    fields: [
+      { key: 'connector', label: 'service', type: 'string', required: true, placeholder: 'slack' },
+      { key: 'trigger', label: 'trigger', type: 'string', required: true, placeholder: 'events' },
+      { key: 'account', label: 'connection (ไม่ระบุ = connection เริ่มต้น)', type: 'string' },
+      { key: 'input', label: 'input (JSON + expression)', type: 'json', placeholder: '{"channel": "C123"}' },
     ],
     outputs: [{ key: 'main', label: 'main' }],
   },
@@ -678,7 +715,7 @@ export const TRIGGER_NODE_POOLS: Partial<Record<NodeTypeName, string>> = {
 };
 
 export function isTriggerNodeType(type: string): boolean {
-  return type === 'trigger_custom' || Object.hasOwn(TRIGGER_NODE_POOLS, type);
+  return type === 'trigger_custom' || type === 'trigger_connector' || Object.hasOwn(TRIGGER_NODE_POOLS, type);
 }
 
 export function triggerPoolOfNode(type: string): string | undefined {
@@ -687,9 +724,18 @@ export function triggerPoolOfNode(type: string): string | undefined {
 
 /** The pool a trigger node points at; `trigger_custom` keeps the name in its config. */
 export function triggerPoolOfNodeConfig(node: { type: string; config: WorkflowNode['config'] }): string | undefined {
-  if (node.type !== 'trigger_custom') return triggerPoolOfNode(node.type);
-  const name = node.config.pool;
-  return typeof name === 'string' && name.trim() ? name.trim() : undefined;
+  if (node.type === 'trigger_custom') {
+    const name = node.config.pool;
+    return typeof name === 'string' && name.trim() ? name.trim() : undefined;
+  }
+  if (node.type === 'trigger_connector') {
+    const connector = node.config.connector;
+    const trigger = node.config.trigger;
+    if (typeof connector !== 'string' || !connector.trim()) return undefined;
+    if (typeof trigger !== 'string' || !trigger.trim()) return undefined;
+    return `connector:${connector.trim()}:${trigger.trim()}`;
+  }
+  return triggerPoolOfNode(node.type);
 }
 
 /** The one trigger node of a workflow (the editor keeps exactly one). */

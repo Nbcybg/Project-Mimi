@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import { z } from 'zod';
-import { resolveAllowedPath } from './path-guard.ts';
+import { missingPathError, resolveAllowedPath } from './path-guard.ts';
 import { defineTool } from '@mimi/shared';
 
 const MAX_BYTES = 100_000;
@@ -17,7 +17,12 @@ export const readFileTool = defineTool({
   summarize: (input) => `Read ${input.path}`,
   async execute(input, context) {
     const file = resolveAllowedPath(input.path, context.allowedDirs);
-    const buffer = await fs.readFile(file);
+    let buffer: Buffer;
+    try {
+      buffer = await fs.readFile(file);
+    } catch (error) {
+      throw missingPathError(error, file, context.allowedDirs);
+    }
     if (buffer.byteLength <= MAX_BYTES) return buffer.toString('utf8');
     return `${buffer.subarray(0, MAX_BYTES).toString('utf8')}\n\n[truncated: showing first ${MAX_BYTES} of ${buffer.byteLength} bytes]`;
   },

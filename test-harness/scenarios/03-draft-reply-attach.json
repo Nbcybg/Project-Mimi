@@ -1,0 +1,11 @@
+{
+  "id": "03-draft-reply-attach",
+  "title": "ร่างตอบอีเมลลูกค้าจากเธรดเดิมและแนบ proposal",
+  "description": "Gmail/Outlook: ร่างสอดคล้องเธรด แนบไฟล์ถูก; ต้องรอผู้ใช้กดส่ง",
+  "agent": "mimi",
+  "timeoutMs": 540000,
+  "permissions": { "default": "deny", "deny": ["gmail_send", "outlook_send", "outlook_reply"] },
+  "turns": [
+    { "text": "ร่างอีเมลตอบวิภาดาเรื่อง Project X จากเธรดเดิมให้หน่อย (เขาอ้างถึงการปรับงบ Phase 2 และขอ proposal ภายในจันทร์เช้า) และแนบไฟล์ proposal ฉบับล่าสุดจาก attachments/proposal-q4-2026.pdf ด้วย — อย่าเพิ่งส่งนะ แค่ร่างให้ดู" }
+  ]
+}

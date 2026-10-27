@@ -1,0 +1,70 @@
+import type { ConnectorSpec } from '@mimi/shared';
+
+export const microsoftTeamsConnector: ConnectorSpec = {
+  key: 'microsoft_teams',
+  label: 'Microsoft Teams',
+  category: 'communication',
+  description: 'Read joined teams and channels, and send or read channel messages through Microsoft Graph',
+  baseUrl: 'https://graph.microsoft.com/v1.0',
+  auth: {
+    kind: 'oauth2',
+    fields: [
+      { key: 'clientId', label: 'Client ID', type: 'string', required: true },
+      { key: 'clientSecret', label: 'Client secret', type: 'secret', required: true },
+      { key: 'refreshToken', label: 'Refresh token', type: 'secret', required: true },
+      { key: 'accessToken', label: 'Access token', type: 'secret' },
+      { key: 'expiresAt', label: 'Expires at', type: 'string' },
+    ],
+    authorizeUrl: 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize',
+    tokenUrl: 'https://login.microsoftonline.com/common/oauth2/v2.0/token',
+    scopes: ['offline_access', 'User.Read', 'Team.ReadBasic.All', 'Channel.ReadBasic.All', 'ChannelMessage.Send', 'ChannelMessage.Read.All'],
+  },
+  operations: [
+    {
+      key: 'list_teams',
+      label: 'List teams',
+      method: 'GET',
+      path: '/me/joinedTeams',
+      risk: 'read',
+      fields: [],
+      response: { itemsPath: 'value' },
+    },
+    {
+      key: 'list_channels',
+      label: 'List channels',
+      method: 'GET',
+      path: '/teams/{teamId}/channels',
+      risk: 'read',
+      fields: [{ key: 'teamId', label: 'Team ID', type: 'string', required: true }],
+      response: { itemsPath: 'value' },
+    },
+    {
+      key: 'send_message',
+      label: 'Send channel message',
+      method: 'POST',
+      path: '/teams/{teamId}/channels/{channelId}/messages',
+      risk: 'write',
+      body: { body: { content: '{{message}}' } },
+      fields: [
+        { key: 'teamId', label: 'Team ID', type: 'string', required: true },
+        { key: 'channelId', label: 'Channel ID', type: 'string', required: true },
+        { key: 'message', label: 'Message (HTML allowed)', type: 'string', required: true },
+      ],
+    },
+    {
+      key: 'list_messages',
+      label: 'List channel messages',
+      method: 'GET',
+      path: '/teams/{teamId}/channels/{channelId}/messages',
+      risk: 'read',
+      fields: [
+        { key: 'teamId', label: 'Team ID', type: 'string', required: true },
+        { key: 'channelId', label: 'Channel ID', type: 'string', required: true },
+      ],
+      response: { itemsPath: 'value' },
+      untrustedInput: true,
+    },
+  ],
+  pagination: { mode: 'cursor', cursorParam: '$skiptoken', itemsPath: 'value' },
+  rateLimit: { requests: 10, perMs: 1000, burst: 10 },
+};

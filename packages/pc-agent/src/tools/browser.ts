@@ -1,14 +1,9 @@
-import fs from 'node:fs';
-import path from 'node:path';
-import { defineTool } from '@mimi/shared';
+import { defineTool, toolFileOutput } from '@mimi/shared';
 import { z } from 'zod';
 import { connectCdp } from '../browser/cdp.ts';
 import { browserProfileDir, readDevToolsAddress, startBrowser } from '../browser/launcher.ts';
 import { BrowserSession, KEY_NAMES, type PageSnapshot, type TabInfo } from '../browser/session.ts';
-import { resolveAllowedPath } from './path-guard.ts';
 
-const SCREENSHOT_FOLDER = 'browser-screenshots';
-const KEEP_SCREENSHOTS = 40;
 
 let session: BrowserSession | null = null;
 
@@ -21,6 +16,11 @@ export function browserSession(): BrowserSession {
     allowLocal: process.env.MIMI_BROWSER_ALLOW_LOCAL === '1',
   });
   return session;
+}
+
+/** Closes the agents' browser if this process opened or attached to it (on sign-out its profile is deleted next). */
+export async function closeBrowserSession(): Promise<void> {
+  await session?.close().catch(() => {});
 }
 
 /** Replaces the shared browser (tests give it a fake one); null forgets it. */
@@ -215,23 +215,30 @@ const tabsTool = defineTool({
     }),
 });
 
+/** Kept under the core's socket frame limit (4 MB) once base64-encoded. */
+const MAX_SCREENSHOT_BYTES = 2_800_000;
+
 const screenshotTool = defineTool({
   name: 'browser_screenshot',
   description:
-    'Take a picture of the current page and save it as a file. Show it to the user with send_file (path), or look at it yourself with read_document (path). full_page captures the whole page, not only what is on screen.',
+    'Take a picture of the current page. It is stored with the chat files (nothing is kept on the computer) and you get its attachment id: show it to the user with send_file (attachment_id). full_page captures the whole page, not only what is on screen.',
   risk: 'read',
   target: 'pc',
   inputSchema: z.object({ full_page: z.boolean().optional() }),
   summarize: (input) => `Screenshot the browser${input.full_page ? ' (full page)' : ''}`,
-  execute: (input, context) =>
+  execute: (input) =>
     browserSession().run(async () => {
-      const folder = resolveAllowedPath(SCREENSHOT_FOLDER, context.allowedDirs);
-      fs.mkdirSync(folder, { recursive: true });
-      const file = path.join(folder, `page-${new Date().toISOString().replace(/[:.]/g, '-')}.png`);
-      fs.writeFileSync(file, await browserSession().screenshot(input.full_page));
-      const old = fs.readdirSync(folder).filter((name) => name.endsWith('.png')).sort();
-      for (const name of old.slice(0, Math.max(0, old.length - KEEP_SCREENSHOTS))) fs.rmSync(path.join(folder, name), { force: true });
-      return `Saved ${file}. Use send_file with this path to show it to the user, or read_document to look at it.`;
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      // The picture goes to the core in the answer itself; a large page is sent as JPEG.
+      let data = await browserSession().screenshot(input.full_page);
+      let file = { name: `page-${stamp}.png`, mime: 'image/png' };
+      for (const quality of [80, 50]) {
+        if (data.length <= MAX_SCREENSHOT_BYTES) break;
+        data = await browserSession().screenshot(input.full_page, { format: 'jpeg', quality });
+        file = { name: `page-${stamp}.jpg`, mime: 'image/jpeg' };
+      }
+      if (data.length > MAX_SCREENSHOT_BYTES) throw new Error('The page is too large for one picture; take it without full_page.');
+      return toolFileOutput({ ...file, data: data.toString('base64') });
     }),
 });
 

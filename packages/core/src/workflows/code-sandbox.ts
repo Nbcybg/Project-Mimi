@@ -4,7 +4,8 @@ import { spawn } from 'node:child_process';
  * Runs a code node in its own Node process under the permission model: no file
  * access, no child processes, no workers, and an empty environment (so no API keys).
  * `node:vm` alone is not a security boundary; a separate locked-down process is.
- * Network access is not blocked by Node 24's permission model.
+ * The permission model blocks network access too from Node 25 on (the Docker image runs
+ * Node 26); on Node 24 the code can still open connections.
  */
 
 const RUNNER = `

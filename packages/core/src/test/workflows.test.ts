@@ -33,13 +33,13 @@ test('secrets: names only, values stay local, preset keys are namespaced', () =>
   assert.throws(() => store.set('bad name!', 'x'), /Invalid secret name/);
 });
 
-test('expressions: $json lookups, interpolation and operators', () => {
+test('expressions: $json lookups, interpolation and operators', async () => {
   const context = { $json: { From: 'a@b.c', Subject: 'Invoice 42' }, $index: 0, $now: '2026-10-13T00:00:00Z', $items: [] };
-  assert.equal(resolveString('{{ $json.From }}', context), 'a@b.c');
-  assert.equal(resolveString('เมลจาก {{ $json.From }}: {{ $json.Subject }}', context), 'เมลจาก a@b.c: Invoice 42');
-  assert.equal(resolveString('{{ $json.Subject.includes("Invoice") }}', context), true);
-  assert.equal(resolveString('{{ $json.Missing }}', context), null);
-  assert.equal(resolveString('{{ $json.Missing }}', context) === null, true);
+  assert.equal((await resolveString('{{ $json.From }}', context)), 'a@b.c');
+  assert.equal((await resolveString('เมลจาก {{ $json.From }}: {{ $json.Subject }}', context)), 'เมลจาก a@b.c: Invoice 42');
+  assert.equal((await resolveString('{{ $json.Subject.includes("Invoice") }}', context)), true);
+  assert.equal((await resolveString('{{ $json.Missing }}', context)), null);
+  assert.equal((await resolveString('{{ $json.Missing }}', context)) === null, true);
 
   assert.equal(applyOperator(5, 'gt', 3), true);
   assert.equal(applyOperator('Invoice 42', 'contains', 'invoice'), true);
@@ -47,7 +47,7 @@ test('expressions: $json lookups, interpolation and operators', () => {
   assert.equal(applyOperator('x', 'regex', '(['), false);
 });
 
-test('expressions: $vars, $node, $execution, $today and the helpers', () => {
+test('expressions: $vars, $node, $execution, $today and the helpers', async () => {
   const context = contextFor({ json: { amount: 120 } }, 0, [{ json: { amount: 120 } }, { json: { amount: 80 } }], {
     $vars: { key: 'secret' },
     $node: { HTTP: { json: { id: 7 }, items: [{ id: 7 }] } },
@@ -55,18 +55,18 @@ test('expressions: $vars, $node, $execution, $today and the helpers', () => {
     $execution: { id: 'run-1', mode: 'webhook' },
     $today: '2026-10-15',
   });
-  assert.equal(resolveString('{{ $vars.key }}', context), 'secret');
-  assert.equal(resolveString('{{ $node.HTTP.json.id }}', context), 7);
-  assert.equal(resolveString('{{ $workflow.title }} / {{ $execution.mode }}', context), 'Triage / webhook');
-  assert.equal(resolveString('{{ $today }}', context), '2026-10-15');
-  assert.equal(resolveString('{{ $item(1).amount }}', context), 80);
-  assert.equal(resolveString('{{ $if($json.amount > 100, "big", "small") }}', context), 'big');
-  assert.equal(resolveString('{{ $ifEmpty($json.missing, "fallback") }}', context), 'fallback');
-  assert.equal(resolveString('{{ $max(1, 5, 3) }}', context), 5);
-  assert.equal(resolveString('{{ $min(4, 2) }}', context), 2);
-  assert.equal(resolveString('{{ $average(2, 4) }}', context), 3);
-  assert.equal(resolveString('{{ $number("42") + 1 }}', context), 43);
-  assert.equal(resolveString('{{ $string(7) }}', context), '7');
+  assert.equal((await resolveString('{{ $vars.key }}', context)), 'secret');
+  assert.equal((await resolveString('{{ $node.HTTP.json.id }}', context)), 7);
+  assert.equal((await resolveString('{{ $workflow.title }} / {{ $execution.mode }}', context)), 'Triage / webhook');
+  assert.equal((await resolveString('{{ $today }}', context)), '2026-10-15');
+  assert.equal((await resolveString('{{ $item(1).amount }}', context)), 80);
+  assert.equal((await resolveString('{{ $if($json.amount > 100, "big", "small") }}', context)), 'big');
+  assert.equal((await resolveString('{{ $ifEmpty($json.missing, "fallback") }}', context)), 'fallback');
+  assert.equal((await resolveString('{{ $max(1, 5, 3) }}', context)), 5);
+  assert.equal((await resolveString('{{ $min(4, 2) }}', context)), 2);
+  assert.equal((await resolveString('{{ $average(2, 4) }}', context)), 3);
+  assert.equal((await resolveString('{{ $number("42") + 1 }}', context)), 43);
+  assert.equal((await resolveString('{{ $string(7) }}', context)), '7');
 });
 
 test('trigger pool: built-ins always available, custom entries are files', () => {

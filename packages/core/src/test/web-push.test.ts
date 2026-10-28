@@ -57,8 +57,8 @@ test('web push: a browser key pair decrypts what we send; VAPID verifies', async
   assert.equal(b(vapid.publicKey).length, 65);
 
   const sent: Array<{ url: string; headers: Record<string, string>; body: Buffer }> = [];
-  const fetchFn = (async (url: string, init: RequestInit) => {
-    sent.push({ url, headers: init.headers as Record<string, string>, body: Buffer.from(init.body as Uint8Array) });
+  const fetchFn = (async (url: string | URL, init: RequestInit) => {
+    sent.push({ url: String(url), headers: init.headers as Record<string, string>, body: Buffer.from(init.body as Uint8Array) });
     return new Response(null, { status: sent.length === 1 ? 201 : 410 });
   }) as typeof fetch;
   const payload = { title: 'เตือน', body: 'โทรหาแม่', chatId: 3 };
@@ -83,4 +83,13 @@ test('web push: a browser key pair decrypts what we send; VAPID verifies', async
   // A subscription the browser dropped answers 410: it is gone.
   assert.deepEqual(await sendPush(subscription, payload, { vapid, subject: 'mailto:mimi@localhost', fetchFn }), { status: 410, gone: true });
   assert.throws(() => encryptPayload(Buffer.from('x'), { p256dh: 'AAAA', auth: subscription.auth }), /bad p256dh/);
+
+  // An endpoint inside the server's own network is never called (a device chose it).
+  const lookup = async (host: string) => (host === 'push.example.com' ? ['142.250.1.1'] : host.endsWith('.railway.internal') ? ['fd12::1'] : ['10.0.0.5']);
+  for (const endpoint of ['https://mimi-bob.railway.internal/ws', 'https://169.254.169.254/latest', 'https://intranet.example/x']) {
+    await assert.rejects(sendPush({ ...subscription, endpoint }, payload, { vapid, subject: 'mailto:mimi@localhost', fetchFn, lookup }), /local network/);
+  }
+  const before = sent.length;
+  assert.equal((await sendPush(subscription, payload, { vapid, subject: 'mailto:mimi@localhost', fetchFn, lookup })).status, 410);
+  assert.equal(sent.length, before + 1, 'a public push service is still reached');
 });

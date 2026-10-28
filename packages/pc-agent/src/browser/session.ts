@@ -364,8 +364,10 @@ export class BrowserSession {
     })()`);
   }
 
-  async screenshot(fullPage = false): Promise<Buffer> {
-    const { data } = (await this.call('Page.captureScreenshot', { format: 'png', captureBeyondViewport: fullPage })) as { data: string };
+  async screenshot(fullPage = false, options: { format?: 'png' | 'jpeg'; quality?: number } = {}): Promise<Buffer> {
+    const format = options.format ?? 'png';
+    const params = { format, captureBeyondViewport: fullPage, ...(format === 'jpeg' ? { quality: options.quality ?? 80 } : {}) };
+    const { data } = (await this.call('Page.captureScreenshot', params)) as { data: string };
     return Buffer.from(data, 'base64');
   }
 

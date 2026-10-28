@@ -79,6 +79,12 @@ export interface CoreConfig {
   port: number;
   /** Shared secret every client and the PC agent must present. */
   token: string | undefined;
+  /**
+   * Request header in which a reverse proxy passes the caller's address (Railway: x-real-ip),
+   * so wrong tokens are counted per caller rather than per proxy. Set it only behind a proxy
+   * that overwrites the header, or a caller could pick its own address.
+   */
+  clientIpHeader?: string;
   timezone: string;
   permissionTimeoutMs: number;
 }
@@ -168,6 +174,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
     host: env.MIMI_HOST ?? '127.0.0.1',
     port: positiveInt(env.PORT ?? env.MIMI_PORT, 8787),
     token: env.MIMI_TOKEN || undefined,
+    clientIpHeader: env.MIMI_CLIENT_IP_HEADER?.trim().toLowerCase() || undefined,
     timezone: env.MIMI_TIMEZONE ?? 'Asia/Bangkok',
     permissionTimeoutMs: positiveInt(env.PERMISSION_TIMEOUT_MS, 120_000),
   };

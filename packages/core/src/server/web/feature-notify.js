@@ -248,5 +248,14 @@
   }
 
   window.MimiHooks = window.MimiHooks || {};
-  window.MimiHooks.notify = { onConnect, onMessage, bell };
+  /** Signing out: this device stops getting this account's push notifications. */
+  async function forgetDevice() {
+    if (!pushSupported()) return;
+    const reg = await navigator.serviceWorker.getRegistration('/');
+    const subscription = await reg?.pushManager.getSubscription();
+    if (!subscription) return;
+    M().send({ type: 'push-unsubscribe', endpoint: subscription.endpoint });
+    await subscription.unsubscribe();
+  }
+  window.MimiHooks.notify = { onConnect, onMessage, bell, forgetDevice };
 })();

@@ -5,12 +5,22 @@
   const $ = (id) => document.getElementById(id);
   const TOKEN_KEY = 'mimi-token';
   const CHAT_KEY = 'mimi-chat';
+  // Behind the accounts gateway: the path its webhooks start with (`/h/<id>`) for this account.
+  const WEBHOOK_KEY = 'mimi-webhook-base';
+  // True when the server is the accounts gateway: sign in with username + password.
+  let accountsMode = false;
 
   // The token may arrive in the URL fragment; keep it out of the address bar and history.
-  const fromHash = new URLSearchParams(location.hash.slice(1)).get('token');
-  if (fromHash) {
-    localStorage.setItem(TOKEN_KEY, fromHash);
+  // Only the desktop app (which puts it there itself) or a one-person core may hand one over
+  // this way: on the accounts gateway, a link carrying someone else's session would sign this
+  // person into that account and send their chats to it. Which kind of server it is, /health says.
+  let linkToken = new URLSearchParams(location.hash.slice(1)).get('token');
+  if (linkToken) {
     history.replaceState(null, '', location.pathname + location.search);
+    if (window.MimiDesktop) {
+      localStorage.setItem(TOKEN_KEY, linkToken);
+      linkToken = null;
+    }
   }
   // The app is designed for mobile mode: a window up to 820px wide, one pane at a time (the
   // native window opens at phone size). Wider windows are desktop mode: the chat list sits beside the chat.
@@ -50,7 +60,16 @@
     // private window: the default
   }
   if (showPrompt) document.documentElement.classList.add('show-prompt');
-  const token = () => localStorage.getItem(TOKEN_KEY) || '';
+  // "Not my device" keeps the sign-in for this tab only (sessionStorage); otherwise it is remembered.
+  const token = () => sessionStorage.getItem(TOKEN_KEY) || localStorage.getItem(TOKEN_KEY) || '';
+  function keepSignIn(value, webhook = '', username = '') {
+    const store = $('gate-shared').checked ? sessionStorage : localStorage;
+    store.setItem(TOKEN_KEY, value);
+    store.setItem(WEBHOOK_KEY, webhook);
+    // Inside the desktop app: it keeps the token in the OS keychain (or nowhere, on a shared device).
+    window.MimiDesktop?.signedIn({ token: value, username, remember: !$('gate-shared').checked });
+  }
+  const webhookBase = () => sessionStorage.getItem(WEBHOOK_KEY) ?? localStorage.getItem(WEBHOOK_KEY) ?? '';
 
   function el(tag, className, text) {
     const node = document.createElement(tag);
@@ -2201,6 +2220,17 @@
       );
     }
     const stack = el('div', 'stackv');
+    {
+      const account = el('div', 'panel form');
+      account.append(
+        el('h3', '', 'บัญชี'),
+        el('p', 'hint', accountsMode
+          ? 'ออกจากระบบบนเครื่องนี้: ยกเลิกเซสชันที่เซิร์ฟเวอร์ เลิกส่งแจ้งเตือนมาเครื่องนี้ และลบข้อมูลของ Mimi ในเบราว์เซอร์นี้'
+          : 'ลืม token บนเครื่องนี้: เลิกส่งแจ้งเตือนมาเครื่องนี้ และลบข้อมูลของ Mimi ในเบราว์เซอร์นี้'),
+        button('btn', accountsMode ? 'ออกจากระบบ' : 'ลืม token บนเครื่องนี้', () => void signOut()),
+      );
+      stack.append(account);
+    }
 
     // The user's own profile, shared per agent (feature-profile.js).
     const profile = el('div', 'panel form');
@@ -2898,6 +2928,8 @@
   // this one stays readable; they reach back through this bridge.
   window.Mimi = {
     state,
+    /** Full URL of a core webhook path (`/api/...`); behind the accounts gateway it carries `/h/<id>`. */
+    webhookUrl: (path) => `${location.origin}${accountsMode ? webhookBase() : ''}${path}`,
     ui,
     send,
     api,
@@ -3000,8 +3032,12 @@
     socket.onclose = (event) => {
       setConn(false);
       if (event.code === 4003) {
-        localStorage.removeItem(TOKEN_KEY);
-        $('gate-error').textContent = 'token ไม่ถูกต้อง';
+        for (const store of [localStorage, sessionStorage]) {
+          store.removeItem(TOKEN_KEY);
+          store.removeItem(WEBHOOK_KEY);
+        }
+        window.MimiDesktop?.signedOut('expired');
+        $('gate-error').textContent = accountsMode ? 'ออกจากระบบแล้ว หรือเซสชันหมดอายุ — เข้าสู่ระบบใหม่' : 'token ไม่ถูกต้อง';
         $('gate').style.display = 'flex';
         return;
       }
@@ -3009,11 +3045,76 @@
       retryMs = Math.min(retryMs * 2, 15000);
     };
   }
+  function setGateMode(accounts) {
+    accountsMode = accounts;
+    $('gate-title').textContent = accounts ? 'เข้าสู่ระบบ Mimi' : 'เชื่อมต่อ Mimi';
+    $('gate-hint').textContent = accounts ? 'ใช้ชื่อผู้ใช้และรหัสผ่านที่ผู้ดูแลสร้างให้' : 'ใส่ token ของเครื่องนี้ (หรือเปิดลิงก์ที่แอปพิมพ์ไว้ตอนเริ่มทำงาน)';
+    $('gate-user').hidden = !accounts;
+    $('gate-pass').hidden = !accounts;
+    $('token').hidden = accounts;
+    $('gate-form').querySelector('button[type="submit"]').textContent = accounts ? 'เข้าสู่ระบบ' : 'เชื่อมต่อ';
+  }
+
+  async function signIn() {
+    const username = $('gate-user').value.trim();
+    const password = $('gate-pass').value;
+    if (!username || !password) return;
+    $('gate-error').textContent = '';
+    let response;
+    try {
+      response = await fetch('/auth/login', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      });
+    } catch {
+      $('gate-error').textContent = 'ติดต่อเซิร์ฟเวอร์ไม่ได้';
+      return;
+    }
+    $('gate-pass').value = '';
+    if (!response.ok) {
+      $('gate-error').textContent = response.status === 429 ? 'ลองผิดหลายครั้งเกินไป รอสักครู่แล้วลองใหม่' : 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง';
+      return;
+    }
+    const session = await response.json();
+    keepSignIn(session.token, session.webhookBase || '', session.username || username);
+    connect();
+  }
+
+  /**
+   * Ends this device's session on the server, then leaves nothing of Mimi in this browser:
+   * this device stops getting push notifications, and every key this app stored is removed.
+   */
+  async function signOut() {
+    try {
+      await window.MimiHooks?.notify?.forgetDevice?.();
+    } catch {
+      // no push on this device
+    }
+    if (accountsMode) {
+      try {
+        await api('/auth/logout', { method: 'POST' });
+      } catch {
+        // Offline: the token is still forgotten here; it lapses on the server by itself.
+      }
+    }
+    localStorage.clear();
+    sessionStorage.clear();
+    for (const url of blobs.values()) url.then((href) => URL.revokeObjectURL(href)).catch(() => {});
+    // The desktop app wipes its own storage and reopens at the sign-in page.
+    if (window.MimiDesktop) window.MimiDesktop.signedOut('logout');
+    else location.reload();
+  }
+
   $('gate-form').onsubmit = (event) => {
     event.preventDefault();
+    if (accountsMode) {
+      void signIn();
+      return;
+    }
     const value = $('token').value.trim();
     if (!value) return;
-    localStorage.setItem(TOKEN_KEY, value);
+    keepSignIn(value);
     $('gate-error').textContent = '';
     connect();
   };
@@ -3021,10 +3122,28 @@
   renderHeader();
   renderChatList();
   connect();
+  // Installs as an app (Android home screen) and opens a "no connection" page offline, from
+  // the sign-in page on; push notifications use the same worker once switched on.
+  if ('serviceWorker' in navigator && window.isSecureContext) navigator.serviceWorker.register('/sw.js').catch(() => {});
   fetch('/health')
     .then((response) => response.json())
     .then((health) => {
       state.version = health.version;
+      if (linkToken && !health.accounts) {
+        localStorage.setItem(TOKEN_KEY, linkToken);
+        connect();
+      }
+      linkToken = null;
+      if (health.accounts) {
+        setGateMode(true);
+        // Refreshes where this account's webhooks live (it may predate this device's sign-in).
+        if (token()) {
+          api('/auth/session')
+            .then((response) => (response.ok ? response.json() : null))
+            .then((session) => session && (sessionStorage.getItem(TOKEN_KEY) ? sessionStorage : localStorage).setItem(WEBHOOK_KEY, session.webhookBase || ''))
+            .catch(() => {});
+        }
+      }
       if (state.view === 'settings') renderSettings();
     })
     .catch(() => {});

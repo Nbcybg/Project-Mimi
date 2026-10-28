@@ -232,7 +232,7 @@
 
     const webhookBox = el('div');
     if (trigger && trigger.webhook) {
-      const url = `${location.origin}${trigger.webhook}`;
+      const url = M().webhookUrl(trigger.webhook);
       const row = el('div', 'hstack');
       row.append(el('span', 'mono', url), button('chip', 'คัดลอก', async () => {
         try {

@@ -19,10 +19,17 @@ interface Booted {
   stop(): Promise<void>;
 }
 
-async function boot(options: TestCoreOptions & { localPcTools?: boolean } = {}): Promise<Booted> {
+async function boot(options: TestCoreOptions & { localPcTools?: boolean; clientIpHeader?: string } = {}): Promise<Booted> {
   const parts = testCoreParts(options);
   const server = await startServer(
-    { ...parts.config, token: TOKEN, host: '127.0.0.1', port: 0, localPcTools: options.localPcTools ?? false },
+    {
+      ...parts.config,
+      token: TOKEN,
+      host: '127.0.0.1',
+      port: 0,
+      localPcTools: options.localPcTools ?? false,
+      clientIpHeader: options.clientIpHeader,
+    },
     parts.coreOptions,
   );
   return {
@@ -145,7 +152,8 @@ test('http: serves the web client and a health check; other origins cannot open 
   assert.equal(page.status, 200);
   assert.match(page.headers.get('content-type')!, /text\/html/);
   assert.match(await page.text(), /<title>Mimi<\/title>/);
-  assert.deepEqual(await (await fetch(`${booted.http}/health`)).json(), { ok: true, version: APP_VERSION, pcOnline: false, clients: 0 });
+  // Public: says it is up and nothing about who uses it or whether the PC is online.
+  assert.deepEqual(await (await fetch(`${booted.http}/health`)).json(), { ok: true, version: APP_VERSION });
   assert.equal((await fetch(`${booted.http}/etc/passwd`)).status, 404);
 
   // A page on another site trying to drive the agent through the user's browser.
@@ -267,6 +275,37 @@ test('PC agent: tools run on the PC through its outbound connection, and "PC off
   await client.waitFor((message): message is Extract<ServerMessage, { type: 'pc-status' }> => message.type === 'pc-status' && !message.online);
   assert.equal(booted.server.pc.online, false);
   client.close();
+  await booted.stop();
+});
+
+/** Says hello over a socket that arrives "from" `ip` as a reverse proxy would report it. */
+function helloVia(url: string, ip: string, token: string): Promise<number | 'welcome'> {
+  const socket = new WsClient(url, { headers: { 'x-real-ip': ip } });
+  return new Promise((resolve) => {
+    socket.on('open', () => socket.send(JSON.stringify({ type: 'hello', role: 'client', token, name: 'test' })));
+    socket.on('message', (data) => {
+      if ((JSON.parse(String(data)) as ServerMessage).type === 'welcome') {
+        resolve('welcome');
+        socket.close();
+      }
+    });
+    socket.on('close', (code) => resolve(code));
+  });
+}
+
+test('behind a proxy, wrong tokens block only the caller the proxy names', async () => {
+  const booted = await boot({ clientIpHeader: 'x-real-ip' });
+  for (let i = 0; i < 10; i++) assert.equal(await helloVia(booted.url, '203.0.113.7', 'wrong'), 4003);
+  assert.equal(await helloVia(booted.url, '203.0.113.7', TOKEN), 4029);
+  // Everyone else reaches the core through the same proxy and is not locked out.
+  assert.equal(await helloVia(booted.url, '198.51.100.2', TOKEN), 'welcome');
+  await booted.stop();
+});
+
+test('without a configured proxy header, a caller cannot pick its own address', async () => {
+  const booted = await boot();
+  for (let i = 0; i < 10; i++) assert.equal(await helloVia(booted.url, `203.0.113.${i}`, 'wrong'), 4003);
+  assert.equal(await helloVia(booted.url, '198.51.100.2', TOKEN), 4029);
   await booted.stop();
 });
 

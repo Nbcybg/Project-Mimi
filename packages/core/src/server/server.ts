@@ -3,7 +3,6 @@ import fs from 'node:fs';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import type {
   AgentEvent,
   AgentView,
@@ -35,8 +34,8 @@ import { webhookEventId, webhookIdempotencyKey } from '../workflows/idempotency.
 import { contextFor, resolveString } from '../workflows/expressions.ts';
 import { validateWorkflowNode, validateWorkflowView, type WorkflowValidationContext } from '../workflows/validate.ts';
 import { REASONING_EFFORTS, type ReasoningEffort } from '@mimi/shared';
-import { renderIconPng } from '../app/icon.ts';
-import { AuthLimiter } from './auth-limiter.ts';
+import { AuthLimiter, clientAddress } from './auth-limiter.ts';
+import { APP_VERSION, serveWebFile } from './web-files.ts';
 import { createBackup, listBackups } from '../backup/backup.ts';
 import { AppSettings, MODEL_KEYS } from '../app/app-settings.ts';
 import { presetSecretKey } from '../app/secrets.ts';
@@ -72,67 +71,11 @@ export interface MimiServer {
   close(): Promise<void>;
 }
 
+export { APP_VERSION, serveWebFile };
+
 const HELLO_TIMEOUT_MS = 10_000;
 const HEARTBEAT_MS = 30_000;
-const WEB_DIR = path.join(import.meta.dirname, 'web');
-/** The app's release number, from the root package.json (shown in Settings and by /health). */
-export const APP_VERSION: string = (() => {
-  try {
-    return JSON.parse(fs.readFileSync(path.join(import.meta.dirname, '../../../../package.json'), 'utf8')).version ?? '0.0.0';
-  } catch {
-    return '0.0.0';
-  }
-})();
-/** The built-in web client: path -> [file, content type]. */
-const WEB_FILES: Record<string, [string, string]> = {
-  '/': ['index.html', 'text/html; charset=utf-8'],
-  '/sw.js': ['sw.js', 'text/javascript; charset=utf-8'],
-  '/manifest.webmanifest': ['manifest.webmanifest', 'application/manifest+json; charset=utf-8'],
-  '/app.css': ['app.css', 'text/css; charset=utf-8'],
-  '/i18n.js': ['i18n.js', 'text/javascript; charset=utf-8'],
-  '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
-  '/feature-tools.js': ['feature-tools.js', 'text/javascript; charset=utf-8'],
-  '/feature-agent-tools.js': ['feature-agent-tools.js', 'text/javascript; charset=utf-8'],
-  '/feature-accounts.js': ['feature-accounts.js', 'text/javascript; charset=utf-8'],
-  '/feature-providers.js': ['feature-providers.js', 'text/javascript; charset=utf-8'],
-  '/feature-overseer.js': ['feature-overseer.js', 'text/javascript; charset=utf-8'],
-  '/feature-triggers.js': ['feature-triggers.js', 'text/javascript; charset=utf-8'],
-  '/feature-workflows.js': ['feature-workflows.js', 'text/javascript; charset=utf-8'],
-  '/feature-secrets.js': ['feature-secrets.js', 'text/javascript; charset=utf-8'],
-  '/feature-chat.js': ['feature-chat.js', 'text/javascript; charset=utf-8'],
-  '/feature-voice.js': ['feature-voice.js', 'text/javascript; charset=utf-8'],
-  '/feature-knowledge.js': ['feature-knowledge.js', 'text/javascript; charset=utf-8'],
-  '/feature-wardrobe.js': ['feature-wardrobe.js', 'text/javascript; charset=utf-8'],
-  '/feature-stage.js': ['feature-stage.js', 'text/javascript; charset=utf-8'],
-  '/feature-backgrounds.js': ['feature-backgrounds.js', 'text/javascript; charset=utf-8'],
-  '/feature-gallery.js': ['feature-gallery.js', 'text/javascript; charset=utf-8'],
-  '/feature-canvas.js': ['feature-canvas.js', 'text/javascript; charset=utf-8'],
-  '/feature-profile.js': ['feature-profile.js', 'text/javascript; charset=utf-8'],
-  '/feature-notify.js': ['feature-notify.js', 'text/javascript; charset=utf-8'],
-  '/feature-vrm.js': ['feature-vrm.js', 'text/javascript; charset=utf-8'],
-};
-
-/** The 3D libraries (three.js, three-vrm) served from node_modules, so the client works offline. */
-function vendorFile(request: string): string | undefined {
-  if (request === '/vendor/three.module.js') return fileURLToPath(import.meta.resolve('three'));
-  // three.module.js re-exports from './three.core.js' next to it in the build folder.
-  if (request === '/vendor/three.core.js') {
-    return path.join(path.dirname(fileURLToPath(import.meta.resolve('three'))), 'three.core.js');
-  }
-  if (request === '/vendor/three-vrm.module.js') return fileURLToPath(import.meta.resolve('@pixiv/three-vrm'));
-  if (request.startsWith('/vendor/addons/')) {
-    const rest = request.slice('/vendor/addons/'.length);
-    if (!/^[a-zA-Z0-9/_.-]+$/.test(rest) || rest.includes('..')) return undefined;
-    try {
-      return fileURLToPath(import.meta.resolve(`three/examples/jsm/${rest}`));
-    } catch {
-      return undefined;
-    }
-  }
-  return undefined;
-}
-
-function sameToken(given: unknown, expected: string): boolean {
+export function sameToken(given: unknown, expected: string): boolean {
   if (typeof given !== 'string') return false;
   const a = Buffer.from(given);
   const b = Buffer.from(expected);
@@ -1106,18 +1049,20 @@ export async function startServer(
         break;
       case 'workflow-expr-preview': {
         const json = message.json && typeof message.json === 'object' ? message.json : {};
-        try {
-          const value = resolveString(String(message.text ?? '').slice(0, 5000), contextFor({ json }, 0, [{ json }], {
-            $vars: message.vars ?? {},
-            $node: message.nodes ?? {},
-            $execution: { id: 'preview', mode: 'manual' },
-            $trigger: { json, items: [json] },
-          }));
-          const text = typeof value === 'string' ? value : JSON.stringify(value);
-          reply({ type: 'workflow-expr-preview', reqId: Number(message.reqId), ok: true, value: (text ?? '').slice(0, 500) });
-        } catch (error) {
-          reply({ type: 'workflow-expr-preview', reqId: Number(message.reqId), ok: false, error: (error as Error).message.slice(0, 300) });
-        }
+        const reqId = Number(message.reqId);
+        // Evaluated in the sandbox process; the answer comes back when it is ready.
+        resolveString(String(message.text ?? '').slice(0, 5000), contextFor({ json }, 0, [{ json }], {
+          $vars: message.vars ?? {},
+          $node: message.nodes ?? {},
+          $execution: { id: 'preview', mode: 'manual' },
+          $trigger: { json, items: [json] },
+        })).then(
+          (value) => {
+            const text = typeof value === 'string' ? value : JSON.stringify(value);
+            reply({ type: 'workflow-expr-preview', reqId, ok: true, value: (text ?? '').slice(0, 500) });
+          },
+          (error: Error) => reply({ type: 'workflow-expr-preview', reqId, ok: false, error: error.message.slice(0, 300) }),
+        );
         break;
       }
       case 'workflow-import-n8n':
@@ -1409,7 +1354,7 @@ export async function startServer(
 
   // Wrong tokens from one address are counted; too many and it is refused for a while.
   const limiter = new AuthLimiter();
-  const addressOf = (request: http.IncomingMessage) => request.socket.remoteAddress ?? 'unknown';
+  const addressOf = (request: http.IncomingMessage) => clientAddress(request, config.clientIpHeader);
   const httpApi = {
     attachments: core.attachments,
     images,
@@ -1504,26 +1449,12 @@ export async function startServer(
   backupTimer.unref();
   const firstBackup = setTimeout(() => void autoBackup(), 60_000);
   firstBackup.unref();
-  let appIcon: Buffer | undefined;
   const server = http.createServer(async (request, response) => {
     const url = new URL(request.url ?? '/', 'http://localhost');
-    const page = WEB_FILES[url.pathname];
-    if (request.method === 'GET' && page) {
-      response.writeHead(200, { 'content-type': page[1], 'cache-control': 'no-store' });
-      response.end(fs.readFileSync(path.join(WEB_DIR, page[0])));
-    } else if (request.method === 'GET' && url.pathname.startsWith('/vendor/')) {
-      const file = vendorFile(url.pathname);
-      if (file) {
-        response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'max-age=86400' });
-        response.end(fs.readFileSync(file));
-      } else {
-        response.writeHead(404).end();
-      }
+    if (request.method === 'GET' && serveWebFile(url.pathname, response)) {
+      // the web client
     } else if (await handleHttpApi(httpApi, request, response)) {
       // answered by the file API
-    } else if (request.method === 'GET' && url.pathname === '/icon.png') {
-      response.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'max-age=86400' });
-      response.end(appIcon ??= renderIconPng());
     } else if (request.method === 'POST' && /^\/app\/[a-z-]+$/.test(url.pathname)) {
       const authorized = sameToken(/^Bearer (.+)$/.exec(request.headers.authorization ?? '')?.[1], config.token);
       if (!authorized || !mimi.onAppAction) {
@@ -1533,8 +1464,9 @@ export async function startServer(
         response.writeHead(204).end();
       }
     } else if (request.method === 'GET' && url.pathname === '/health') {
-      response.writeHead(200, { 'content-type': 'application/json' });
-      response.end(JSON.stringify({ ok: true, version: APP_VERSION, pcOnline: pc.online, clients: clients.size }));
+      // Open to anyone (launcher, Docker/Railway health checks): nothing about use or the PC.
+      response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+      response.end(JSON.stringify({ ok: true, version: APP_VERSION }));
     } else {
       response.writeHead(404).end();
     }

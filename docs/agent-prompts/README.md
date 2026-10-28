@@ -12,6 +12,8 @@
 | `phase-2-top30-triggers.md` | Top 30 + trigger framework + pagination/rate limit + OpenAPI import |
 | `phase-3-top50-migration.md` | Top 50 + n8n/Make/Zapier import + migration report |
 | `phase-4-reliability.md` | Reliability, observability, versioning, security, performance |
+| `phase-5-cloud-accounts.md` | Cloud core บน Railway, บัญชีผู้ใช้, แอป thin client (prompt เดิมของ Phase 5) |
+| `phase-5-continue.md` | สถานะ Phase 5 ณ 2026-10-27 + prompt สำหรับทำต่อ (ใช้ไฟล์นี้เมื่อเริ่ม agent ใหม่) |
 
 ## วิธีใช้
 

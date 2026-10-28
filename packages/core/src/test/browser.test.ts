@@ -18,7 +18,7 @@ import {
   setBrowserSession,
   startBrowser,
 } from '@mimi/pc-agent';
-import type { ToolDefinition } from '@mimi/shared';
+import { parseToolFile, type ToolDefinition } from '@mimi/shared';
 import { makeTestCore } from './core-helpers.ts';
 
 // realpath: on macOS os.tmpdir() is /var/..., a symlink to /private/var/..., and the
@@ -269,10 +269,11 @@ test('tools: what the model sees, and the rules around them', async () => {
   assert.match(await run('browser_click', { ref: 'e1' }), /^Clicked a "More"\./);
   assert.match(await run('browser_scroll', { direction: 'down' }), /^Scrolled to/);
   assert.match(await run('browser_tabs', {}), /\* 1\. /);
-  const shot = await run('browser_screenshot', {});
-  const file = /Saved (.+?\.png)\./.exec(shot)![1]!;
-  assert.equal(path.dirname(file), path.join(folder, 'browser-screenshots'));
-  assert.equal(fs.readFileSync(file, 'utf8'), 'PNGDATA');
+  // The picture travels to the core in the answer; nothing is written on the PC.
+  const shot = parseToolFile(await run('browser_screenshot', {}));
+  assert.equal(shot?.mime, 'image/png');
+  assert.equal(Buffer.from(shot!.data, 'base64').toString(), 'PNGDATA');
+  assert.equal(fs.existsSync(path.join(folder, 'browser-screenshots')), false);
   assert.equal(await run('browser_close', {}), 'The browser is closed.');
   assert.ok(fake.calls.some((call) => call.method === 'Browser.close'));
 

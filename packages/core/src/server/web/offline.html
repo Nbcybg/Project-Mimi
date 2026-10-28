@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#141618">
+<title>Mimi</title>
+<style>
+  body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; box-sizing: border-box; background: #141618; color: #e9ecef; font: 15px/1.6 -apple-system, "Segoe UI", Roboto, "Noto Sans Thai", sans-serif; text-align: center; }
+  .logo { width: 56px; height: 56px; border-radius: 16px; margin: 0 auto 16px; background: linear-gradient(#ec8c62, #c4543e); display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 26px; color: #fff; }
+  p { margin: 0 0 18px; color: #a7adb4; }
+  button { padding: 10px 22px; border: 0; border-radius: 10px; background: #e08a5a; color: #1a1205; font: inherit; font-weight: 600; }
+</style>
+</head>
+<body>
+<div>
+  <div class="logo">M</div>
+  <strong>ยังต่อเซิร์ฟเวอร์ Mimi ไม่ได้</strong>
+  <p>ตรวจอินเทอร์เน็ตของเครื่องนี้ แล้วลองอีกครั้ง</p>
+  <button type="button" onclick="location.reload()">ลองอีกครั้ง</button>
+</div>
+<script>
+  // Back online: open the app again by itself.
+  addEventListener('online', () => location.reload());
+</script>
+</body>
+</html>

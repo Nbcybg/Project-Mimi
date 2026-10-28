@@ -1,11 +1,30 @@
 // Mimi's service worker: shows push messages while the app is closed and opens the
-// right chat when one is tapped. It caches nothing; the app always loads fresh.
+// right chat when one is tapped. The app always loads fresh from the server; the only thing
+// kept here is a short "no connection" page, which holds nothing of anyone's chats.
 'use strict';
 
 const ICONS = { reminder: '⏰', approval: '✋', 'task-result': '📋' };
+const OFFLINE_CACHE = 'mimi-offline-v1';
 
-self.addEventListener('install', () => self.skipWaiting());
-self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));
+self.addEventListener('install', (event) => {
+  self.skipWaiting();
+  event.waitUntil(caches.open(OFFLINE_CACHE).then((cache) => cache.add(new Request('/offline.html', { cache: 'reload' }))));
+});
+self.addEventListener('activate', (event) =>
+  event.waitUntil(
+    (async () => {
+      for (const key of await caches.keys()) if (key !== OFFLINE_CACHE) await caches.delete(key);
+      await self.clients.claim();
+    })(),
+  ),
+);
+
+// Opening the app (from the home screen) without a connection shows that page instead of the
+// browser's error. Everything else goes straight to the network.
+self.addEventListener('fetch', (event) => {
+  if (event.request.mode !== 'navigate') return;
+  event.respondWith(fetch(event.request).catch(async () => (await caches.match('/offline.html')) || Response.error()));
+});
 
 self.addEventListener('push', (event) => {
   let data = {};

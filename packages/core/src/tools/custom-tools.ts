@@ -1,6 +1,6 @@
 import { exec } from 'node:child_process';
 import path from 'node:path';
-import vm from 'node:vm';
+import { sandbox } from '../workflows/sandbox.ts';
 import type { CustomToolSpec, ToolSettingField, ToolSettingValues } from '@mimi/shared';
 import { z } from 'zod';
 import type { PcRunner } from './executor.ts';
@@ -144,37 +144,15 @@ async function runHttp(
   return truncateOutput(text);
 }
 
+/**
+ * Runs a code tool in the sandbox process (workflows/sandbox.ts), not in the core: the code is
+ * written by a person or arrives with an imported tool, and `vm` in this process would let it
+ * reach the core's keys and files. It sees `input`, `settings` and `console`, and may `return`.
+ */
 async function runCode(spec: CustomToolSpec, input: unknown, settings: ToolSettingValues): Promise<string> {
   const code = String(spec.config.code ?? '');
   const timeoutMs = Number(spec.config.timeoutMs) || 10_000;
-  const logs: string[] = [];
-  const log = (...parts: unknown[]) => logs.push(parts.map((part) => (typeof part === 'string' ? part : JSON.stringify(part))).join(' '));
-  const sandbox = {
-    input,
-    settings,
-    console: { log, info: log, warn: log, error: log },
-    JSON,
-    Math,
-    Date,
-    Number,
-    String,
-    Boolean,
-    Array,
-    Object,
-    RegExp,
-    Set,
-    Map,
-    URL,
-    URLSearchParams,
-    TextEncoder,
-    TextDecoder,
-    Intl,
-    isNaN,
-    parseInt,
-    parseFloat,
-  };
-  const wrapped = `(async () => {\n${code}\n})()`;
-  const result: unknown = await vm.runInNewContext(wrapped, sandbox, { timeout: timeoutMs, filename: `tool:${spec.name}` });
+  const { value: result, logs } = await sandbox().runCode(spec.name, code, { input, settings }, timeoutMs);
   const output =
     result === undefined ? '' : typeof result === 'string' ? result : JSON.stringify(result, null, 2);
   const joined = [output, logs.length > 0 ? `logs:\n${logs.join('\n')}` : ''].filter(Boolean).join('\n');

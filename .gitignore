@@ -22,3 +22,6 @@ backups/
 
 # local Claude Code project files
 .claude/
+
+# macOS Finder metadata
+.DS_Store

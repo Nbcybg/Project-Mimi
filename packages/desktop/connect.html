@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<title>Mimi</title>
+<style>
+  :root { color-scheme: dark; --bg: #0e1530; --panel: #16203f; --line: #2a3766; --text: #e8ecff; --muted: #9aa6d6; --accent: #e08a5a; --bad: #ff8a8a; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 16px; background: var(--bg); color: var(--text); font: 14px/1.5 -apple-system, "Segoe UI", "Noto Sans Thai", sans-serif; }
+  form { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 22px; width: min(420px, 100%); display: flex; flex-direction: column; gap: 10px; }
+  p { margin: 0; color: var(--muted); font-size: 13px; }
+  input { width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--text); font: inherit; }
+  button { padding: 10px; border: 0; border-radius: 10px; background: var(--accent); color: #1a1205; font: inherit; font-weight: 600; cursor: pointer; }
+  button:disabled { opacity: 0.6; cursor: default; }
+  #error { color: var(--bad); min-height: 1.5em; }
+</style>
+</head>
+<body>
+<form id="form">
+  <strong>เชื่อมต่อเซิร์ฟเวอร์ Mimi</strong>
+  <p>ใส่ที่อยู่ที่ผู้ดูแลให้มา เช่น https://mimi.example.com — ข้อมูลทั้งหมดอยู่บนเซิร์ฟเวอร์ ไม่เก็บในเครื่องนี้</p>
+  <input id="url" type="url" inputmode="url" autocomplete="url" spellcheck="false" placeholder="https://" required>
+  <p id="error"></p>
+  <button id="go" type="submit">เชื่อมต่อ</button>
+</form>
+<script>
+  'use strict';
+  const form = document.getElementById('form');
+  const input = document.getElementById('url');
+  const error = document.getElementById('error');
+  const go = document.getElementById('go');
+  window.MimiDesktop.server().then((current) => { if (current) input.value = current; });
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    error.textContent = '';
+    go.disabled = true;
+    go.textContent = 'กำลังตรวจ…';
+    const result = await window.MimiDesktop.setServer(input.value);
+    if (!result.ok) {
+      error.textContent = result.error;
+      go.disabled = false;
+      go.textContent = 'เชื่อมต่อ';
+    }
+  });
+</script>
+</body>
+</html>

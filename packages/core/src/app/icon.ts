@@ -19,30 +19,39 @@ function distanceToSegment(px: number, py: number, ax: number, ay: number, bx: n
   return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
 }
 
-/** The app icon as PNG: a rounded tile with a white "M". Drawn in code so no image file is needed. */
-export function renderIconPng(): Buffer {
-  const radius = 56;
-  const stroke = 15;
-  // The letter "M" as four strokes.
-  const strokes: Array<[number, number, number, number]> = [
-    [70, 186, 70, 74],
-    [70, 74, 128, 150],
-    [128, 150, 186, 74],
-    [186, 74, 186, 186],
-  ];
+/** The letter "M" as four strokes, on the 256-pixel design grid. */
+const STROKES: Array<[number, number, number, number]> = [
+  [70, 186, 70, 74],
+  [70, 74, 128, 150],
+  [128, 150, 186, 74],
+  [186, 74, 186, 186],
+];
+
+/**
+ * The app icon as PNG: a rounded tile with a white "M". Drawn in code so no image file is needed.
+ * `size` scales the 256-pixel design. A `maskable` icon (Android home screen, which cuts its own
+ * shape) fills the whole square and keeps the letter inside the middle 80% that is always shown.
+ */
+export function renderIconPng(size: number = SIZE, options: { maskable?: boolean } = {}): Buffer {
+  const scale = size / SIZE;
+  const glyph = options.maskable ? 0.72 : 1;
+  const radius = options.maskable ? 0 : 56 * scale;
+  const stroke = 15 * scale * glyph;
+  const place = (value: number) => (SIZE / 2 + (value - SIZE / 2) * glyph) * scale;
+  const strokes = STROKES.map(([ax, ay, bx, by]) => [place(ax), place(ay), place(bx), place(by)] as [number, number, number, number]);
   const mix = (from: number, to: number, amount: number) => Math.round(from + (to - from) * amount);
-  const raw = Buffer.alloc((SIZE * 4 + 1) * SIZE);
+  const raw = Buffer.alloc((size * 4 + 1) * size);
 
-  for (let y = 0; y < SIZE; y++) {
-    const row = y * (SIZE * 4 + 1);
+  for (let y = 0; y < size; y++) {
+    const row = y * (size * 4 + 1);
     raw[row] = 0; // filter: none
-    for (let x = 0; x < SIZE; x++) {
-      // Rounded-rectangle coverage, anti-aliased over one pixel.
-      const cx = Math.max(radius - x, x - (SIZE - 1 - radius), 0);
-      const cy = Math.max(radius - y, y - (SIZE - 1 - radius), 0);
-      const alpha = Math.max(0, Math.min(1, radius - Math.hypot(cx, cy) + 0.5));
+    for (let x = 0; x < size; x++) {
+      // Rounded-rectangle coverage, anti-aliased over one pixel (a maskable icon is square and opaque).
+      const cx = Math.max(radius - x, x - (size - 1 - radius), 0);
+      const cy = Math.max(radius - y, y - (size - 1 - radius), 0);
+      const alpha = radius === 0 ? 1 : Math.max(0, Math.min(1, radius - Math.hypot(cx, cy) + 0.5));
 
-      const shade = y / SIZE; // top-to-bottom gradient
+      const shade = y / size; // top-to-bottom gradient
       let red = mix(236, 196, shade);
       let green = mix(140, 84, shade);
       let blue = mix(98, 62, shade);
@@ -58,8 +67,8 @@ export function renderIconPng(): Buffer {
   }
 
   const header = Buffer.alloc(13);
-  header.writeUInt32BE(SIZE, 0);
-  header.writeUInt32BE(SIZE, 4);
+  header.writeUInt32BE(size, 0);
+  header.writeUInt32BE(size, 4);
   header.set([8, 6, 0, 0, 0], 8); // 8-bit RGBA
   return Buffer.concat([
     Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),

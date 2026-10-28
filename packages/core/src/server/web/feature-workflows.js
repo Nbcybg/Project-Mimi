@@ -1802,7 +1802,7 @@
       box.append(el('p', 'hint', 'ตอบกลับด้วย node "ส่ง Telegram" (chat id = {{ $json.chatId }}) · หา chat id ของตัวเอง: ทักบอทแล้วดู input ในประวัติการรัน'));
     }
     if (entry.kind === 'webhook') {
-      if (draft.webhook) box.append(el('p', 'hint', `POST มาที่: ${location.origin}${draft.webhook} (ไม่ต้องใช้ token)`));
+      if (draft.webhook) box.append(el('p', 'hint', `POST มาที่: ${M().webhookUrl(draft.webhook)} (ไม่ต้องใช้ token)`));
       else box.append(el('p', 'hint', 'บันทึกแล้วระบบจะสร้าง URL ให้'));
     }
     if (node?.type === 'trigger_connector') {

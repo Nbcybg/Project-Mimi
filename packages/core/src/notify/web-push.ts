@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { type Lookup, safeFetch } from '../workflows/net-guard.ts';
 
 /**
  * Web Push without a library: VAPID (RFC 8292) signs who is sending, and the payload is
@@ -93,10 +94,19 @@ export interface PushResult {
 export async function sendPush(
   subscription: PushSubscriptionKeys,
   payload: unknown,
-  options: { vapid: VapidKeys; subject: string; ttlSeconds?: number; urgency?: 'very-low' | 'low' | 'normal' | 'high'; fetchFn?: typeof fetch },
+  options: {
+    vapid: VapidKeys;
+    subject: string;
+    ttlSeconds?: number;
+    urgency?: 'very-low' | 'low' | 'normal' | 'high';
+    fetchFn?: typeof fetch;
+    lookup?: Lookup;
+  },
 ): Promise<PushResult> {
   const body = encryptPayload(Buffer.from(JSON.stringify(payload)), subscription);
-  const response = await (options.fetchFn ?? fetch)(subscription.endpoint, {
+  // The endpoint comes from a device; it must be a push service on the internet, never an
+  // address inside the server's own network (another person's core, a metadata service).
+  const response = await safeFetch(subscription.endpoint, {
     method: 'POST',
     headers: {
       authorization: vapidHeader(subscription.endpoint, options.vapid, options.subject),
@@ -107,7 +117,7 @@ export async function sendPush(
     },
     body,
     signal: AbortSignal.timeout(20_000),
-  });
+  }, { fetchFn: options.fetchFn, lookup: options.lookup, maxRedirects: 0 });
   await response.arrayBuffer().catch(() => undefined);
   return { status: response.status, gone: response.status === 404 || response.status === 410 };
 }

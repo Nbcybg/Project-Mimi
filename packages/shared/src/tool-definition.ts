@@ -42,3 +42,34 @@ export interface ToolDefinition<Input = unknown> extends ToolSpec {
 export function defineTool<Input>(tool: ToolDefinition<Input>): ToolDefinition<Input> {
   return tool;
 }
+
+/**
+ * A tool result that is a file instead of text, e.g. a browser screenshot taken on the
+ * user's PC: this mark, then JSON {@link ToolFile}. The core keeps the file as a chat
+ * attachment and the agent gets its id, so nothing has to stay on the PC.
+ */
+export const TOOL_FILE_MARK = '\u0000mimi-file\u0000';
+
+export interface ToolFile {
+  name: string;
+  mime: string;
+  /** base64 */
+  data: string;
+}
+
+export function toolFileOutput(file: ToolFile): string {
+  return `${TOOL_FILE_MARK}${JSON.stringify(file)}`;
+}
+
+/** The file inside a tool result, or null for an ordinary text result. */
+export function parseToolFile(output: string): ToolFile | null {
+  if (!output.startsWith(TOOL_FILE_MARK)) return null;
+  try {
+    const file = JSON.parse(output.slice(TOOL_FILE_MARK.length)) as Partial<ToolFile>;
+    return typeof file.name === 'string' && typeof file.mime === 'string' && typeof file.data === 'string'
+      ? { name: file.name, mime: file.mime, data: file.data }
+      : null;
+  } catch {
+    return null;
+  }
+}

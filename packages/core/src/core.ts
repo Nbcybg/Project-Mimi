@@ -7,6 +7,7 @@ import { AgentCatalog } from './agents/loader.ts';
 import type { AppSettings } from './app/app-settings.ts';
 import { SecretStore } from './app/secrets.ts';
 import { type AttachmentKind, AttachmentStore, ingestAttachments, MAX_ATTACHMENT_BYTES, PROMPTS } from './chat/attachments.ts';
+import { ToolFileExecutor } from './chat/tool-files.ts';
 import { ChatStore } from './chat/chat-store.ts';
 import { ChatEngine } from './chat/engine.ts';
 import { ConnectorRegistry } from './connectors/registry.ts';
@@ -582,7 +583,10 @@ export async function createCore(
     usage,
     models,
     tools: toolPool,
-    executor: new SnapshotExecutor(new RoutingExecutor({ pc: options.pc, localPcTools: config.localPcTools }), fileSnapshots, { pc: options.pc, localPcTools: config.localPcTools }),
+    executor: new ToolFileExecutor(
+      new SnapshotExecutor(new RoutingExecutor({ pc: options.pc, localPcTools: config.localPcTools }), fileSnapshots, { pc: options.pc, localPcTools: config.localPcTools }),
+      attachments,
+    ),
     gate: new PermissionGate(broker, {
       timeoutMs: config.permissionTimeoutMs,
       overrides: settings.permission,

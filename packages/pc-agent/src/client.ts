@@ -10,6 +10,11 @@ export interface PcAgentOptions {
   allowedDirs: string[];
   name?: string;
   tools?: ToolDefinition<any>[];
+  /**
+   * Offer the tools that act with the full rights of the OS account (run_shell, stop_process,
+   * power, MCP servers on this machine). The folder allowlist cannot fence those in. Default true.
+   */
+  shell?: boolean;
   /** Reconnect with backoff after the connection drops. Default true. */
   reconnect?: boolean;
   log?: (line: string) => void;
@@ -33,7 +38,14 @@ export class PcAgent {
   constructor(options: PcAgentOptions) {
     this.options = options;
     // Plus the tools only the core's own services use (MCP servers on this machine).
-    this.tools = new Map([...(options.tools ?? pcTools), ...pcInternalTools].map((tool) => [tool.name, tool]));
+    const shell = options.shell !== false;
+    const offered = [...(options.tools ?? pcTools), ...(shell ? pcInternalTools : [])].filter((tool) => shell || tool.risk !== 'shell');
+    this.tools = new Map(offered.map((tool) => [tool.name, tool]));
+  }
+
+  /** The tools this PC offers the core. */
+  offered(): string[] {
+    return [...this.tools.keys()];
   }
 
   private log(line: string): void {

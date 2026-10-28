@@ -382,7 +382,7 @@ async function runPooled<T>(count: number, limit: number, job: (index: number) =
 const MAX_LOOP_ROUNDS = 1000;
 
 async function runHttp(config: Record<string, JsonValue>, item: FlowItem, index: number, items: FlowItem[], ctx: NodeContext): Promise<FlowItem[]> {
-  const resolved = resolveValue(config, contextAt(ctx, item, index, items)) as {
+  const resolved = (await resolveValue(config, contextAt(ctx, item, index, items))) as {
     method?: JsonValue;
     url?: JsonValue;
     headers?: JsonValue;
@@ -441,7 +441,7 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
   switch (node.type) {
     case 'agent': {
       const first = firstOrEmpty(items);
-      const config = resolveValue(node.config, contextAt(ctx, first, 0, items)) as { agent?: JsonValue; instruction?: JsonValue };
+      const config = (await resolveValue(node.config, contextAt(ctx, first, 0, items))) as { agent?: JsonValue; instruction?: JsonValue };
       const agentName = asText(config.agent) || workflow.agent;
       const instruction = asText(config.instruction) || 'ประมวลผลข้อมูลที่ได้รับ';
       const prompt = [
@@ -457,7 +457,7 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
     case 'chat': {
       const out: FlowItem[] = [];
       for (const [index, item] of items.entries()) {
-        const config = resolveValue(node.config, contextAt(ctx, item, index, items)) as { agent?: JsonValue; text?: JsonValue; files?: JsonValue };
+        const config = (await resolveValue(node.config, contextAt(ctx, item, index, items))) as { agent?: JsonValue; text?: JsonValue; files?: JsonValue };
         const agent = asText(config.agent) || workflow.agent;
         const files = (Array.isArray(config.files) ? config.files.map(asText) : asText(config.files).split(/[\n,]+/))
           .map((entry) => entry.trim())
@@ -472,7 +472,7 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
       const pass: FlowItem[] = [];
       const fail: FlowItem[] = [];
       for (const [index, item] of items.entries()) {
-        const config = resolveValue(node.config, contextAt(ctx, item, index, items)) as Record<string, JsonValue>;
+        const config = (await resolveValue(node.config, contextAt(ctx, item, index, items))) as Record<string, JsonValue>;
         const passed = passesConditions(conditionsOf(config), asText(config.combinator || 'and'));
         (passed ? pass : fail).push(item);
       }
@@ -481,7 +481,7 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
     case 'filter': {
       const out: FlowItem[] = [];
       for (const [index, item] of items.entries()) {
-        const config = resolveValue(node.config, contextAt(ctx, item, index, items)) as Record<string, JsonValue>;
+        const config = (await resolveValue(node.config, contextAt(ctx, item, index, items))) as Record<string, JsonValue>;
         if (passesConditions(conditionsOf(config), asText(config.combinator || 'and'))) out.push(item);
       }
       return { main: out };
@@ -489,7 +489,7 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
     case 'switch': {
       const outputs: Record<string, FlowItem[]> = { fallback: [] };
       for (const [index, item] of items.entries()) {
-        const config = resolveValue(node.config, contextAt(ctx, item, index, items)) as Record<string, JsonValue>;
+        const config = (await resolveValue(node.config, contextAt(ctx, item, index, items))) as Record<string, JsonValue>;
         const rules = asText(config.mode || 'value') === 'rules';
         const value = asText(config.value);
         const cases = Array.isArray(config.cases) ? config.cases : [];
@@ -509,12 +509,11 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
       const direction = asText(node.config.direction || 'asc') === 'desc' ? -1 : 1;
       const type = asText(node.config.type || 'auto');
       const field = asText(node.config.field);
-      const keyed = items.map((item, index) => {
-        const raw = field.includes('{{')
-          ? resolveValue(field, contextAt(ctx, item, index, items))
-          : valueAt(item.json, field);
-        return { item, key: raw };
-      });
+      const keyed: Array<{ item: FlowItem; key: JsonValue }> = [];
+      for (const [index, item] of items.entries()) {
+        const key = field.includes('{{') ? await resolveValue(field, contextAt(ctx, item, index, items)) : valueAt(item.json, field);
+        keyed.push({ item, key });
+      }
       const compare = (a: JsonValue, b: JsonValue): number => {
         if (type === 'number') return toFinite(a) - toFinite(b);
         if (type === 'date') return Date.parse(asText(a) || '') - Date.parse(asText(b) || '') || 0;
@@ -537,8 +536,13 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
       const mode = asText(node.config.mode || 'collect');
       const name = asText(node.config.name) || 'value';
       const field = asText(node.config.field);
-      const valueOf = (item: FlowItem, index: number): JsonValue =>
-        field ? resolveValue(field, contextAt(ctx, item, index, items)) : (item.json.value ?? null);
+      const valueOf = async (item: FlowItem, index: number): Promise<JsonValue> =>
+        field ? await resolveValue(field, contextAt(ctx, item, index, items)) : (item.json.value ?? null);
+      const valuesOf = async (): Promise<JsonValue[]> => {
+        const values: JsonValue[] = [];
+        for (const [index, item] of items.entries()) values.push(await valueOf(item, index));
+        return values;
+      };
       if (mode === 'collect') {
         const configured = Array.isArray(node.config.fields)
           ? node.config.fields.map((entry) => asText(entry)).filter(Boolean)
@@ -551,9 +555,9 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
       if (mode === 'count') return { main: [{ json: { count: items.length } }] };
       if (mode === 'join') {
         const separator = node.config.separator === undefined ? '\n' : asText(node.config.separator);
-        return { main: [{ json: { [name]: items.map((item, index) => asText(valueOf(item, index))).join(separator) } }] };
+        return { main: [{ json: { [name]: (await valuesOf()).map((value) => asText(value)).join(separator) } }] };
       }
-      const numbers = items.map((item, index) => Number(valueOf(item, index))).filter((value) => Number.isFinite(value));
+      const numbers = (await valuesOf()).map((value) => Number(value)).filter((value) => Number.isFinite(value));
       const sum = numbers.reduce((total, value) => total + value, 0);
       const result =
         mode === 'sum'
@@ -604,7 +608,7 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
     case 'set': {
       const out: FlowItem[] = [];
       for (const [index, item] of items.entries()) {
-        const fields = resolveValue(node.config.fields ?? {}, contextAt(ctx, item, index, items));
+        const fields = (await resolveValue(node.config.fields ?? {}, contextAt(ctx, item, index, items)));
         out.push({ json: { ...item.json, ...((fields && typeof fields === 'object' && !Array.isArray(fields) ? fields : {}) as Record<string, JsonValue>) } });
       }
       return { main: out };
@@ -620,7 +624,7 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
     case 'tool': {
       const out: FlowItem[] = [];
       for (const [index, item] of items.entries()) {
-        const config = resolveValue(node.config, contextAt(ctx, item, index, items)) as { tool?: JsonValue; input?: JsonValue; agent?: JsonValue };
+        const config = (await resolveValue(node.config, contextAt(ctx, item, index, items))) as { tool?: JsonValue; input?: JsonValue; agent?: JsonValue };
         const toolName = asText(config.tool);
         const tool = deps.tool(toolName);
         if (!tool) throw new Error(`tool node: unknown tool "${toolName}"`);
@@ -649,7 +653,7 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
       if (!deps.connector) throw new Error('connector node: no connector runtime is configured');
       const out: FlowItem[] = [];
       for (const [index, item] of items.entries()) {
-        const config = resolveValue(node.config, contextAt(ctx, item, index, items)) as {
+        const config = (await resolveValue(node.config, contextAt(ctx, item, index, items))) as {
           connector?: JsonValue;
           operation?: JsonValue;
           version?: JsonValue;
@@ -752,7 +756,7 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
       throw new Error(`merge node: unknown mode "${mode}"`);
     }
     case 'wait': {
-      const config = resolveValue(node.config, contextAt(ctx, firstOrEmpty(items), 0, items)) as Record<string, JsonValue>;
+      const config = (await resolveValue(node.config, contextAt(ctx, firstOrEmpty(items), 0, items))) as Record<string, JsonValue>;
       const mode = asText(config.mode || 'duration');
       let wanted: number;
       if (mode === 'until') {
@@ -779,14 +783,14 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
       return { main: items };
     }
     case 'stop': {
-      const config = resolveValue(node.config, contextAt(ctx, firstOrEmpty(items), 0, items)) as Record<string, JsonValue>;
+      const config = (await resolveValue(node.config, contextAt(ctx, firstOrEmpty(items), 0, items))) as Record<string, JsonValue>;
       const mode = asText(config.mode || 'success');
       const message = asText(config.message).trim();
       if (mode !== 'success' && mode !== 'error') throw new Error(`stop node: unknown mode "${mode}"`);
       throw new WorkflowStop(mode === 'error', message);
     }
     case 'workflow': {
-      const config = resolveValue(node.config, contextAt(ctx, firstOrEmpty(items), 0, items)) as Record<string, JsonValue>;
+      const config = (await resolveValue(node.config, contextAt(ctx, firstOrEmpty(items), 0, items))) as Record<string, JsonValue>;
       const name = asText(config.workflow);
       if (!name) throw new Error('workflow node: pick a workflow');
       if (!deps.runSubWorkflow) throw new Error('workflow node: sub-workflows are not available here');
@@ -795,7 +799,7 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
       return { main: await deps.runSubWorkflow(ctx.workflow.agent, name, input, ctx.depth + 1) };
     }
     case 'respond': {
-      const config = resolveValue(node.config, contextAt(ctx, firstOrEmpty(items), 0, items)) as Record<string, JsonValue>;
+      const config = (await resolveValue(node.config, contextAt(ctx, firstOrEmpty(items), 0, items))) as Record<string, JsonValue>;
       const rawStatus = Number(config.status ?? 200);
       const status = Number.isFinite(rawStatus) ? Math.min(599, Math.max(100, Math.floor(rawStatus))) : 200;
       const headers: Record<string, string> = {};
@@ -814,7 +818,7 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
     case 'llm': {
       const out: FlowItem[] = [];
       for (const [index, item] of items.entries()) {
-        const config = resolveValue(node.config, contextAt(ctx, item, index, items)) as Record<string, JsonValue>;
+        const config = (await resolveValue(node.config, contextAt(ctx, item, index, items))) as Record<string, JsonValue>;
         const prompt = asText(config.prompt).trim();
         if (!prompt) throw new Error('llm node: the prompt is empty');
         const ask = askFor(ctx, 'llm', config.model);
@@ -827,7 +831,7 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
     case 'classify': {
       const outputs: Record<string, FlowItem[]> = { fallback: [] };
       for (const [index, item] of items.entries()) {
-        const config = resolveValue(node.config, contextAt(ctx, item, index, items)) as Record<string, JsonValue>;
+        const config = (await resolveValue(node.config, contextAt(ctx, item, index, items))) as Record<string, JsonValue>;
         const categories = categoriesOf(config.categories);
         if (categories.length === 0) throw new Error('classify node: add at least one category');
         const at = await classifyText(askFor(ctx, 'classify', config.model), asText(config.input), categories, asText(config.instruction));
@@ -839,7 +843,7 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
     case 'extract': {
       const out: FlowItem[] = [];
       for (const [index, item] of items.entries()) {
-        const config = resolveValue(node.config, contextAt(ctx, item, index, items)) as Record<string, JsonValue>;
+        const config = (await resolveValue(node.config, contextAt(ctx, item, index, items))) as Record<string, JsonValue>;
         const attributes = attributesOf(config.attributes);
         if (attributes.length === 0) throw new Error('extract node: add at least one field');
         const values = await extractFields(askFor(ctx, 'extract', config.model), asText(config.input), attributes, asText(config.instruction));
@@ -856,7 +860,7 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
       const name = asText(node.config.name).trim() || (dynamic ? 'value' : field.split('.').at(-1)!);
       const out: FlowItem[] = [];
       for (const [index, item] of items.entries()) {
-        const raw = dynamic ? resolveValue(field, contextAt(ctx, item, index, items)) : valueAt(item.json, field);
+        const raw = dynamic ? (await resolveValue(field, contextAt(ctx, item, index, items))) : valueAt(item.json, field);
         const list = Array.isArray(raw) ? raw : raw === null || raw === undefined ? [] : [raw];
         const base: Record<string, JsonValue> = keepOthers ? { ...item.json } : {};
         // The array itself is not carried along next to its own entries.
@@ -870,7 +874,7 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
       return { main: out };
     }
     case 'loop': {
-      const config = resolveValue(node.config, contextAt(ctx, firstOrEmpty(items), 0, items)) as Record<string, JsonValue>;
+      const config = (await resolveValue(node.config, contextAt(ctx, firstOrEmpty(items), 0, items))) as Record<string, JsonValue>;
       const name = asText(config.workflow);
       if (!name) throw new Error('loop node: pick a workflow to run');
       if (!deps.runSubWorkflow) throw new Error('loop node: sub-workflows are not available here');
@@ -895,7 +899,7 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
       return { main: results.flat() };
     }
     case 'approval': {
-      const config = resolveValue(node.config, contextAt(ctx, firstOrEmpty(items), 0, items)) as Record<string, JsonValue>;
+      const config = (await resolveValue(node.config, contextAt(ctx, firstOrEmpty(items), 0, items))) as Record<string, JsonValue>;
       if (!deps.requestApproval && !ctx.suspendable) throw new Error('approval node: approvals are not available here');
       const text = asText(config.message).trim();
       if (!text) throw new Error('approval node: write the question to ask');
@@ -917,7 +921,7 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
     case 'telegram': {
       const out: FlowItem[] = [];
       for (const [index, item] of items.entries()) {
-        const config = resolveValue(node.config, contextAt(ctx, item, index, items)) as Record<string, JsonValue>;
+        const config = (await resolveValue(node.config, contextAt(ctx, item, index, items))) as Record<string, JsonValue>;
         const secretName = asText(config.tokenSecret).trim() || DEFAULT_TOKEN_SECRET;
         const token = deps.secret?.(secretName);
         if (!token) throw new Error(`telegram node: no secret "${secretName}" — add the bot token under Settings → secrets`);
@@ -940,7 +944,7 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
       const timeZone = (zone: JsonValue | undefined) => asText(zone).trim() || deps.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
       const out: FlowItem[] = [];
       for (const [index, item] of items.entries()) {
-        const config = resolveValue(node.config, contextAt(ctx, item, index, items)) as Record<string, JsonValue>;
+        const config = (await resolveValue(node.config, contextAt(ctx, item, index, items))) as Record<string, JsonValue>;
         const zone = timeZone(config.timezone);
         const operation = asText(config.operation || 'format');
         const unit = (asText(config.unit) || 'days') as DateUnit;
@@ -968,10 +972,10 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
     }
     case 'file': {
       const operation = asText(node.config.operation || 'read');
-      const at = (item: FlowItem, index: number) => resolveValue(node.config, contextAt(ctx, item, index, items)) as Record<string, JsonValue>;
+      const at = async (item: FlowItem, index: number) => (await resolveValue(node.config, contextAt(ctx, item, index, items))) as Record<string, JsonValue>;
       if (operation === 'write' && asText(node.config.source || 'content') !== 'content') {
         // All items go into one file, as JSON or CSV.
-        const config = at(firstOrEmpty(items), 0);
+        const config = await at(firstOrEmpty(items), 0);
         const file = allowedPath(asText(config.path), deps.allowedDirs);
         const body = asText(config.source) === 'items_csv' ? toCsv(items) : `${JSON.stringify(items.map((item) => item.json), null, 2)}\n`;
         await fsp.mkdir(path.dirname(file), { recursive: true });
@@ -980,7 +984,7 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
       }
       const out: FlowItem[] = [];
       for (const [index, item] of items.entries()) {
-        const config = at(item, index);
+        const config = await at(item, index);
         const file = allowedPath(asText(config.path), deps.allowedDirs);
         if (operation === 'copy' || operation === 'move') {
           const destination = asText(config.destination).trim();
@@ -1066,7 +1070,7 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
     case 'extract_file': {
       const out: FlowItem[] = [];
       for (const [index, item] of items.entries()) {
-        const config = resolveValue(node.config, contextAt(ctx, item, index, items)) as Record<string, JsonValue>;
+        const config = (await resolveValue(node.config, contextAt(ctx, item, index, items))) as Record<string, JsonValue>;
         // A file in the allowed folders, or one sent in the chat (by attachment id).
         const attachmentId = asText(config.attachment).trim();
         let fileName: string;
@@ -1132,7 +1136,7 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
       if (!knowledge) throw new Error('knowledge node: knowledge bases are not available here');
       const out: FlowItem[] = [];
       for (const [index, item] of items.entries()) {
-        const config = resolveValue(node.config, contextAt(ctx, item, index, items)) as Record<string, JsonValue>;
+        const config = (await resolveValue(node.config, contextAt(ctx, item, index, items))) as Record<string, JsonValue>;
         const collection = asText(config.collection).trim();
         if (asText(config.operation || 'search') === 'add') {
           if (!collection) throw new Error('knowledge node: pick the knowledge base to add to');
@@ -1165,7 +1169,7 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
     case 'sheets': {
       const out: FlowItem[] = [];
       for (const [index, item] of items.entries()) {
-        const config = resolveValue(node.config, contextAt(ctx, item, index, items)) as {
+        const config = (await resolveValue(node.config, contextAt(ctx, item, index, items))) as {
           account?: JsonValue;
           spreadsheetId?: JsonValue;
           operation?: JsonValue;
@@ -1712,15 +1716,15 @@ export async function resumeWorkflow(
       return normalizeItems(entry.sample ?? {});
     case 'mail': {
       const source = asText(config.source) === 'microsoft' ? 'microsoft' : 'google';
-      const query = asText(resolveValue(config.query ?? '', empty));
-      const account = asText(resolveValue(config.account ?? '', empty)).trim() || undefined;
+      const query = asText((await resolveValue(config.query ?? '', empty)));
+      const account = asText((await resolveValue(config.account ?? '', empty))).trim() || undefined;
       const items = await deps.mail.list(source, query, 5, account);
       return items.map((mail) => ({
         json: { Id: mail.id, From: mail.from, To: mail.to, Date: mail.date ?? '', Subject: mail.subject, Content: mail.content },
       }));
     }
     case 'poll': {
-      const resolved = resolveValue(config, empty) as { url?: JsonValue; method?: JsonValue; headers?: JsonValue };
+      const resolved = (await resolveValue(config, empty)) as { url?: JsonValue; method?: JsonValue; headers?: JsonValue };
       const url = asText(resolved.url);
       if (!url) throw new Error('poll trigger: no URL');
       const headers: Record<string, string> = {};

@@ -589,6 +589,7 @@ kbd { font: 11px var(--mono); padding: 1px 6px; border: 1px solid var(--line); b
 #gate { position: fixed; inset: 0; background: var(--bg); display: none; align-items: center; justify-content: center; padding: 16px; z-index: 50; }
 #gate form { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 22px; width: min(420px, 100%); display: flex; flex-direction: column; gap: 10px; }
 #gate p { margin: 0; color: var(--muted); font-size: 13px; }
+#gate [hidden] { display: none; }
 .welcome { margin: auto; text-align: center; color: var(--muted); max-width: 420px; padding: 40px 20px; }
 .welcome b { display: block; color: var(--ink); font-size: 17px; margin-bottom: 6px; }
 

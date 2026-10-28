@@ -37,7 +37,9 @@ const lib = require('./remote-lib.cjs');
 
 const home = os.homedir();
 app.setName('Mimi');
-const where = lib.locations(app.getPath('appData'), app.getPath('cache'));
+// Windows: the agent's browser profile belongs in Local AppData, which does not roam with the account.
+const cacheDir = process.platform === 'win32' && process.env.LOCALAPPDATA ? process.env.LOCALAPPDATA : app.getPath('cache');
+const where = lib.locations(app.getPath('appData'), cacheDir);
 app.setPath('userData', where.chromium);
 app.setPath('sessionData', where.chromium);
 app.setPath('crashDumps', path.join(where.chromium, 'Crashpad'));
@@ -50,7 +52,7 @@ if (!app.isPackaged && process.env.MIMI_DESKTOP_DEBUG_PORT) app.commandLine.appe
 
 if (!app.requestSingleInstanceLock()) process.exit(0);
 // Leftovers of earlier runs in Chromium's folder (caches, crash dumps) go before it is used.
-lib.emptyFolder(where.chromium, (name) => name.startsWith('Singleton'));
+lib.emptyFolder(where.chromium, lib.isChromiumLock);
 
 app.setAppUserModelId('app.mimi');
 nativeTheme.themeSource = 'dark';

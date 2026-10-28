@@ -28,6 +28,7 @@ const lib = createRequire(import.meta.url)('../../../desktop/remote-lib.cjs') as
   agentBrowserDir(cache: string, server: string, username: string): string;
   wipeSession(where: Where): void;
   emptyFolder(dir: string, keep?: (name: string) => boolean): void;
+  isChromiumLock(name: string): boolean;
   wsUrl(server: string): string;
 };
 
@@ -83,6 +84,9 @@ test('config: defaults are off; bad values from the file are dropped', () => {
 
 test('sign-out wipe: the token file and the temporary cache go, the settings stay', () => {
   const where = lib.locations(path.join(home, 'AppSupport'), path.join(home, 'Caches'));
+  // Electron on Windows gives the same folder for "cache" and "appData": the wipe must not reach the settings.
+  const same = lib.locations(path.join(home, 'Roaming'), path.join(home, 'Roaming'));
+  assert.equal(same.cache, path.join(same.root, 'cache'));
   const browser = lib.agentBrowserDir(where.cache, 'https://mimi.example.com', 'alice');
   assert.ok(browser.startsWith(where.cache));
   assert.ok(!browser.includes('alice'), 'the folder name does not reveal the account');
@@ -97,9 +101,9 @@ test('sign-out wipe: the token file and the temporary cache go, the settings sta
   assert.equal(fs.existsSync(where.config), true);
 
   fs.mkdirSync(path.join(where.chromium, 'GPUCache'), { recursive: true });
-  for (const name of ['SingletonLock', 'Local State', 'Network Persistent State']) fs.writeFileSync(path.join(where.chromium, name), 'x');
-  lib.emptyFolder(where.chromium, (name: string) => name.startsWith('Singleton'));
-  assert.deepEqual(fs.readdirSync(where.chromium), ['SingletonLock']);
+  for (const name of ['SingletonLock', 'lockfile', 'Local State', 'Network Persistent State']) fs.writeFileSync(path.join(where.chromium, name), 'x');
+  lib.emptyFolder(where.chromium, lib.isChromiumLock);
+  assert.deepEqual(fs.readdirSync(where.chromium).sort(), ['SingletonLock', 'lockfile'], 'Chromium keeps its lock (Windows: lockfile)');
   assert.equal(lib.wsUrl('https://mimi.example.com'), 'wss://mimi.example.com/ws');
   assert.equal(lib.wsUrl('http://localhost:8787'), 'ws://localhost:8787/ws');
 });

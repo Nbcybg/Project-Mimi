@@ -11,6 +11,9 @@ const LOCK_CHOICES = [0, 5, 15, 30, 60];
 /** Where this app keeps things, under the OS account's own folders. Nothing of a person's Mimi data is here. */
 function locations(appData, cacheDir) {
   const root = path.join(appData, 'Mimi');
+  // The cache is wiped whole on sign-out, so it may never be the folder that holds the settings
+  // (on Windows Electron's "cache" path is the same Roaming folder as "appData").
+  const cache = path.resolve(cacheDir) === path.resolve(appData) ? path.join(root, 'cache') : path.join(cacheDir, 'Mimi');
   return {
     root,
     /** Server URL, window place, auto-lock and PC agent choices: settings, no personal data. */
@@ -20,7 +23,7 @@ function locations(appData, cacheDir) {
     /** Chromium's own folder. The window's web data is kept in memory; what Chromium still writes here is wiped. */
     chromium: path.join(root, 'chromium'),
     /** Temporary files of a signed-in session: the agent's browser profile. Wiped on sign-out. */
-    cache: path.join(cacheDir, 'Mimi'),
+    cache,
   };
 }
 
@@ -116,7 +119,15 @@ function wsUrl(server) {
   return url.toString();
 }
 
-/** Removes everything in a folder except the names `keep` matches. */
+/** Chromium's lock on its own folder while it runs: Singleton* on macOS and Linux, lockfile on Windows. */
+function isChromiumLock(name) {
+  return name.startsWith('Singleton') || name === 'lockfile';
+}
+
+/**
+ * Removes everything in a folder except the names `keep` matches. What Windows reports as in
+ * use (open in another process) stays for the next time rather than stopping the app.
+ */
 function emptyFolder(dir, keep = () => false) {
   let names = [];
   try {
@@ -124,7 +135,14 @@ function emptyFolder(dir, keep = () => false) {
   } catch {
     return;
   }
-  for (const name of names) if (!keep(name)) fs.rmSync(path.join(dir, name), { recursive: true, force: true });
+  for (const name of names) {
+    if (keep(name)) continue;
+    try {
+      fs.rmSync(path.join(dir, name), { recursive: true, force: true });
+    } catch (error) {
+      if (error.code !== 'EPERM' && error.code !== 'EBUSY') throw error;
+    }
+  }
 }
 
 /** What is left of a signed-in session: the token file and the temporary cache. */
@@ -139,6 +157,7 @@ module.exports = {
   defaultConfig,
   emptyFolder,
   folderProblem,
+  isChromiumLock,
   locations,
   normalizeServerUrl,
   readConfig,

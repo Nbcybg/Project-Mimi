@@ -29,7 +29,8 @@ export async function electronDist(cacheDir) {
   fs.mkdirSync(target, { recursive: true });
   // ditto keeps the app bundle's symlinks and permissions on macOS.
   if (process.platform === 'darwin') execFileSync('ditto', ['-x', '-k', zip, target]);
-  else execFileSync('tar', ['-xf', zip, '-C', target]);
+  // Windows' own tar (bsdtar) reads zip; a GNU tar earlier on PATH (Git Bash) does not.
+  else execFileSync(path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe'), ['-xf', zip, '-C', target]);
   fs.writeFileSync(marker, version);
   return target;
 }

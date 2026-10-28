@@ -17,6 +17,7 @@
     "restore": "node --env-file-if-exists=.env packages/core/src/cli/backup.ts restore",
     "build:desktop": "node scripts/build-desktop.mjs",
     "build:mac": "node scripts/build-mac.mjs",
+    "build:win": "node scripts/build-win.mjs",
     "chat": "node --env-file-if-exists=.env packages/core/src/cli/chat.ts",
     "cost": "node --env-file-if-exists=.env packages/core/src/cli/cost.ts",
     "desktop": "node scripts/run-desktop.mjs",

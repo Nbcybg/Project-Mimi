@@ -134,6 +134,17 @@ Railway build จาก `Dockerfile` ใน repo ให้เอง ได้โ
 7. เปิด `https://<ชื่อ>.up.railway.app/` ใส่ `MIMI_TOKEN` (หรือเปิด `…/#token=<token>` ครั้งเดียว — token อยู่หลัง `#` จึงไม่ถูกส่งไปที่ server หรือ log ของ Railway)
 8. ทำตาม "เช็กลิสต์หลังย้าย" ท้ายไฟล์นี้ โดยเฉพาะ **ปิดแอปบนเครื่องเดิม** ไม่อย่างนั้น trigger จะทำงานซ้ำสองที่
 
+### ตรวจแล้วบน Railway จริง (2026-10-29)
+
+- build จาก `Dockerfile` ผ่าน (~2 นาที) log มี `Mimi core listening on http://localhost:8080` และ `File/shell tools need a connected PC agent`
+- `/health` ผ่านโดเมน `*.up.railway.app` ได้ 200 · healthcheck ของ Railway ผ่าน
+- header `Host` ผ่าน proxy ไม่เปลี่ยน: WebSocket ที่ `Origin` ตรงกับโดเมนได้ `welcome`, `Origin` อื่นถูกปฏิเสธตอน upgrade (401),
+  ไม่มี `Origin` (แบบ PC agent) ต่อได้, token ผิดได้ close 4003
+- private network: service อื่นในโปรเจกต์เรียก `http://mimi.railway.internal:8080/health` ได้ 200 ผ่าน IPv6 (`fd12:…`)
+  เมื่อตั้ง `MIMI_HOST=::` และ `PORT=8080` (แนะนำให้ตั้งสองค่านี้กับ core ทุกตัว ใช้ได้ทั้งโดเมนสาธารณะและ private network)
+- `MIMI_PUSH_CONTACT` ใส่เป็น `https://<โดเมน>` ได้ (VAPID รับ URL https) ถ้าไม่อยากใส่อีเมล
+- ยังไม่ได้ตรวจ: Push บนมือถือจริง, การย้ายข้อมูลเดิม (ต้องใช้ Railway CLI)
+
 ### ย้ายข้อมูลเดิมขึ้น Railway (ยังไม่ได้ทดสอบกับบัญชีจริง)
 
 `restore` จะไม่ยอมทำงานขณะ core เปิดอยู่ และบน Railway ตัว container ก็คือ core ที่เปิดอยู่ จึงต้องหยุดชั่วคราว:
@@ -275,8 +286,19 @@ node packages/core/src/cli/accounts.ts backup /app/user/backups/accounts-<วั
 แอปเวอร์ชันเก่าที่รัน core ในเครื่องเก็บข้อมูลไว้ที่ `~/Documents/Mimi`, `~/Library/Application Support/Electron` และ `~/Library/Logs/Mimi.log`
 แอปใหม่ไม่แตะที่เหล่านี้ ถ้าย้ายขึ้นเซิร์ฟเวอร์แล้วให้ `npm run backup` ก่อน แล้วลบเองเมื่อแน่ใจ
 
-ยังไม่ได้ทำ: ลงนามด้วย Developer ID / notarize (ตอนนี้ลงนามแบบ ad hoc ครั้งแรกต้องคลิกขวา → Open), แอป Windows แบบเดียวกัน
-(`build:desktop` ยังเป็นแบบ core ในเครื่อง), อัปเดตอัตโนมัติ
+ยังไม่ได้ทำ: ลงนามด้วย Developer ID / notarize (ตอนนี้ลงนามแบบ ad hoc ครั้งแรกต้องคลิกขวา → Open), อัปเดตอัตโนมัติ
+
+## แอป Windows (ต่อเซิร์ฟเวอร์ ไม่เก็บข้อมูลในเครื่อง)
+
+`npm run build:win` (บน Windows) สร้าง `dist/win/Mimi/Mimi.exe` และ `dist/Mimi-<version>-win-x64.zip` เป็นแอปเดียวกับแอป Mac
+(`packages/desktop/remote.cjs`): ไม่มี core ไม่มีฐานข้อมูล ทุกเมนูและตัวเลือกเหมือนหัวข้อ Mac ด้านบน ไอคอนอยู่ที่ถาดระบบมุมขวาล่าง
+(`build:desktop` แบบเดิมที่รัน core บนเครื่องนี้ยังอยู่ สำหรับคนที่ไม่ใช้เซิร์ฟเวอร์)
+
+- ติดตั้ง: แตก zip ไว้ในที่ถาวร (เช่น `%LOCALAPPDATA%\Programs\Mimi`) แล้วดับเบิลคลิก `install.cmd` ได้ทางลัดบน Desktop และ Start menu
+- ยังไม่ได้ลงนาม: SmartScreen เตือนครั้งแรก กด "More info" → "Run anyway" · ไอคอนของไฟล์ `.exe` ยังเป็นของ Electron (หน้าต่างและถาดเป็นไอคอน Mimi)
+- เก็บบนเครื่อง: `%APPDATA%\Mimi\config.json` (ที่อยู่เซิร์ฟเวอร์, ตัวเลือก), `%APPDATA%\Mimi\session.bin` (token เข้ารหัสด้วย DPAPI ของผู้ใช้ Windows นั้น),
+  `%APPDATA%\Mimi\chromium\` (ล้างทุกครั้งที่เริ่ม), `%LOCALAPPDATA%\Mimi\` (โปรไฟล์เบราว์เซอร์ของ PC agent ลบตอนออกจากระบบ)
+- PC agent เลือกโฟลเดอร์ได้เฉพาะในโฟลเดอร์ผู้ใช้ ค่าเริ่มต้น `%USERPROFILE%\Mimi-Workspace`
 
 ## มือถือ Android (ติดตั้งเป็นแอปจากเว็บ / PWA)
 

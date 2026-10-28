@@ -1,6 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import http from 'node:http';
-import type { AddressInfo } from 'node:net';
+import { loopbackReceiver, type ReceiverFactory } from './callback.ts';
 
 export interface GenericOAuthTokens {
   accessToken: string;
@@ -20,10 +19,12 @@ export interface GenericOAuthOptions {
   fetchFn?: typeof fetch;
   now?: () => number;
   timeoutMs?: number;
+  /** Where the provider sends the code back; a temporary local port when not given. */
+  receiver?: ReceiverFactory;
 }
 
 export interface GenericOAuthFlow {
-  /** The provider page the user opens; the callback lands on a temporary local port. */
+  /** The provider page the user opens; the callback lands on a temporary local port or the core's public callback. */
   url: string;
   done: Promise<GenericOAuthTokens>;
 }
@@ -108,9 +109,8 @@ export async function startGenericOAuth(options: GenericOAuthOptions): Promise<G
   const pkce = options.extra?.pkce === true;
   const verifier = pkce ? randomBytes(32).toString('base64url') : undefined;
 
-  const server = http.createServer();
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const redirectUri = `http://127.0.0.1:${(server.address() as AddressInfo).port}/callback`;
+  const receiver = await (options.receiver ?? loopbackReceiver)(state, { label: 'Connector', path: '/callback', timeoutMs });
+  const { redirectUri } = receiver;
 
   const params = new URLSearchParams({
     response_type: 'code',
@@ -128,35 +128,7 @@ export async function startGenericOAuth(options: GenericOAuthOptions): Promise<G
   }
   const url = `${options.authorizeUrl}${options.authorizeUrl.includes('?') ? '&' : '?'}${params}`;
 
-  const code = new Promise<string>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('Connector sign-in timed out')), timeoutMs);
-    const finish = (error: Error) => {
-      clearTimeout(timer);
-      server.close();
-      reject(error);
-    };
-    server.on('request', (request, response) => {
-      const callback = new URL(request.url ?? '/', redirectUri);
-      const answer = (status: number, text: string) => {
-        response.writeHead(status, { 'content-type': 'text/plain; charset=utf-8' });
-        response.end(text);
-      };
-      if (!request.url?.startsWith('/callback')) return answer(404, 'Not found.');
-      if (callback.searchParams.get('state') !== state) return answer(400, 'State mismatch. Start again.');
-      const error = callback.searchParams.get('error') ?? callback.searchParams.get('error_description');
-      const value = callback.searchParams.get('code');
-      if (error || !value) {
-        answer(400, `Sign-in was not completed: ${error ?? 'no code'}`);
-        return finish(new Error(`Connector sign-in was not completed: ${error ?? 'no code'}`));
-      }
-      answer(200, 'Mimi is connected. You can close this tab.');
-      clearTimeout(timer);
-      server.close();
-      resolve(value);
-    });
-  });
-
-  const done = code
+  const done = receiver.code
     .then((value) =>
       handleOAuthCallback({
         tokenUrl: options.tokenUrl,
@@ -170,7 +142,7 @@ export async function startGenericOAuth(options: GenericOAuthOptions): Promise<G
         now,
       }),
     )
-    .finally(() => server.close());
+    .finally(() => receiver.close());
 
   return { url, done };
 }

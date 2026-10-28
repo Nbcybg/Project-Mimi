@@ -1,8 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import fs from 'node:fs';
-import http from 'node:http';
-import type { AddressInfo } from 'node:net';
 import path from 'node:path';
+import { loopbackReceiver, type ReceiverFactory } from '../oauth/callback.ts';
 
 /** Outlook mail, Outlook calendar, Microsoft To Do and OneDrive, plus offline access so the sign-in lasts. */
 export const MICROSOFT_SCOPES = [
@@ -158,19 +157,20 @@ export class MicrosoftAuth {
   }
 
   /**
-   * Starts the sign-in: the user opens `url`, Microsoft redirects back to a temporary
-   * listener on localhost, and the code is exchanged (with PKCE) for a refresh token.
-   * The Azure app needs the redirect URI `http://localhost` under "Mobile and desktop applications".
+   * Starts the sign-in: the user opens `url`, Microsoft redirects back with a code, and the
+   * code is exchanged (with PKCE) for a refresh token. On a computer the redirect goes to a
+   * temporary listener on localhost (the Azure app needs `http://localhost` under "Mobile and
+   * desktop applications"); a core on a server passes its own `receiver`, and the Azure app
+   * needs that public `/oauth/callback` address under the same platform.
    */
-  async startSignIn(): Promise<{ url: string; done: Promise<void> }> {
+  async startSignIn(receiverFactory: ReceiverFactory = loopbackReceiver): Promise<{ url: string; done: Promise<void> }> {
     const { clientId, tenant } = this.options.credentials();
     if (!clientId) throw new MicrosoftNotConfiguredError('no client ID');
     const state = randomBytes(16).toString('hex');
     const verifier = randomBytes(48).toString('base64url');
     const challenge = createHash('sha256').update(verifier).digest('base64url');
-    const server = http.createServer();
-    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-    const redirectUri = `http://localhost:${(server.address() as AddressInfo).port}`;
+    const receiver = await receiverFactory(state, { label: 'Microsoft', host: 'localhost' });
+    const { redirectUri } = receiver;
 
     const url = `${authority(tenant)}/authorize?${new URLSearchParams({
       client_id: clientId,
@@ -184,28 +184,7 @@ export class MicrosoftAuth {
       prompt: 'select_account',
     })}`;
 
-    const code = new Promise<string>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('Microsoft sign-in timed out')), 10 * 60 * 1000);
-      server.on('request', (request, response) => {
-        const callback = new URL(request.url ?? '/', redirectUri);
-        const answer = (status: number, text: string) => {
-          response.writeHead(status, { 'content-type': 'text/plain; charset=utf-8' });
-          response.end(text);
-        };
-        if (callback.searchParams.get('state') !== state) return answer(400, 'State mismatch. Start again.');
-        clearTimeout(timer);
-        const value = callback.searchParams.get('code');
-        if (!value) {
-          const reason = callback.searchParams.get('error_description') ?? callback.searchParams.get('error') ?? 'no code';
-          answer(400, `Sign-in was not completed: ${reason}`);
-          return reject(new Error(`Microsoft sign-in was not completed: ${reason.split('\n')[0]}`));
-        }
-        answer(200, 'Mimi is connected to Microsoft. You can close this tab.');
-        resolve(value);
-      });
-    });
-
-    const done = code
+    const done = receiver.code
       .then(async (value) => {
         const response = await (this.options.fetchFn ?? fetch)(`${authority(tenant)}/token`, {
           method: 'POST',
@@ -228,7 +207,7 @@ export class MicrosoftAuth {
         this.storeRefreshToken(token.refresh_token);
         this.reset();
       })
-      .finally(() => server.close());
+      .finally(() => receiver.close());
     done.catch(() => {}); // callers decide whether to await it
     return { url, done };
   }

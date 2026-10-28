@@ -295,7 +295,12 @@
     const speakLabel = el('label', 'wcheck');
     speakLabel.append(speakBox, el('span', '', 'อ่านคำตอบออกเสียงอัตโนมัติ (เฉพาะเครื่องนี้)'));
     panel.append(speakLabel);
-    const save = button('btn pri', 'บันทึก', () =>
+    // The notification chime is a per-device choice too (feature-notify.js plays it).
+    const chimeHook = window.MimiHooks && window.MimiHooks.notify;
+    if (chimeHook && chimeHook.soundToggle) panel.append(chimeHook.soundToggle());
+    // Saved as soon as something changes (a field when it loses focus); per-device
+    // choices above are kept in this browser and are not sent.
+    const save = () =>
       M().send({
         type: 'preferences-save',
         preferences: {
@@ -305,10 +310,10 @@
           pushKinds: [...kinds],
           urgentApprovals: urgent.checked,
         },
-      }),
-    );
-    save.style.marginTop = '8px';
-    panel.append(save);
+      });
+    for (const field of [budget, quietFrom, quietTo, urgent]) field.addEventListener('change', save);
+    kindBox.addEventListener('change', save);
+    panel.append(el('p', 'hint', 'บันทึกอัตโนมัติเมื่อแก้ไข'));
   }
 
   // ---------- backups (same settings page) ----------

@@ -1,8 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
-import http from 'node:http';
-import type { AddressInfo } from 'node:net';
 import path from 'node:path';
+import { loopbackReceiver, type ReceiverFactory } from '../oauth/callback.ts';
 import { GOOGLE_SCOPES, TOKEN_ENDPOINT } from './auth.ts';
 
 export interface OAuthFlow {
@@ -12,23 +11,22 @@ export interface OAuthFlow {
   done: Promise<void>;
 }
 
-const FLOW_TIMEOUT_MS = 10 * 60 * 1000;
-
 /**
- * Google's "desktop app" sign-in: the user opens a link, Google redirects back to a
- * temporary listener on 127.0.0.1, and the returned code is exchanged for a refresh
- * token that is saved to `tokenFile`.
+ * Google's sign-in: the user opens a link and Google redirects back with a code, which is
+ * exchanged for a refresh token saved to `tokenFile`. On a computer the redirect goes to a
+ * temporary listener on 127.0.0.1 ("desktop app" clients); a core on a server passes its
+ * own `receiver` so Google redirects to its public `/oauth/callback` ("web" clients).
  */
 export async function startGoogleOAuth(options: {
   clientId: string;
   clientSecret: string;
   tokenFile: string;
+  receiver?: ReceiverFactory;
 }): Promise<OAuthFlow> {
   const { clientId, clientSecret, tokenFile } = options;
   const state = randomBytes(16).toString('hex');
-  const server = http.createServer();
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const redirectUri = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const receiver = await (options.receiver ?? loopbackReceiver)(state, { label: 'Google' });
+  const { redirectUri } = receiver;
 
   const url = `https://accounts.google.com/o/oauth2/v2/auth?${new URLSearchParams({
     client_id: clientId,
@@ -40,28 +38,7 @@ export async function startGoogleOAuth(options: {
     state,
   })}`;
 
-  const code = new Promise<string>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('Google sign-in timed out')), FLOW_TIMEOUT_MS);
-    server.on('request', (request, response) => {
-      const callback = new URL(request.url ?? '/', redirectUri);
-      const answer = (status: number, text: string) => {
-        response.writeHead(status, { 'content-type': 'text/plain; charset=utf-8' });
-        response.end(text);
-      };
-      if (callback.searchParams.get('state') !== state) return answer(400, 'State mismatch. Start again.');
-      clearTimeout(timer);
-      const error = callback.searchParams.get('error');
-      const value = callback.searchParams.get('code');
-      if (error || !value) {
-        answer(400, `Sign-in was not completed: ${error ?? 'no code'}`);
-        return reject(new Error(`Google sign-in was not completed: ${error ?? 'no code'}`));
-      }
-      answer(200, 'Mimi is connected to Google. You can close this tab.');
-      resolve(value);
-    });
-  });
-
-  const done = code
+  const done = receiver.code
     .then(async (value) => {
       const response = await fetch(TOKEN_ENDPOINT, {
         method: 'POST',
@@ -81,7 +58,7 @@ export async function startGoogleOAuth(options: {
       fs.mkdirSync(path.dirname(tokenFile), { recursive: true });
       fs.writeFileSync(tokenFile, JSON.stringify({ refresh_token: token.refresh_token }, null, 2), { mode: 0o600 });
     })
-    .finally(() => server.close());
+    .finally(() => receiver.close());
   done.catch(() => {}); // callers decide whether to await it
 
   return { url, done };

@@ -1,0 +1,19 @@
+// The Android app: a Trusted Web Activity around the Mimi web client (Chrome shows the
+// server's page full screen, so sign-in, voice and push notifications work as on the web).
+// Built by .github/workflows/release.yml; see android/README.md.
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+rootProject.name = 'mimi-android'
+include ':app'

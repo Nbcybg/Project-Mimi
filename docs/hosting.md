@@ -143,6 +143,19 @@ Railway build จาก `Dockerfile` ใน repo ให้เอง ได้โ
 - private network: service อื่นในโปรเจกต์เรียก `http://mimi.railway.internal:8080/health` ได้ 200 ผ่าน IPv6 (`fd12:…`)
   เมื่อตั้ง `MIMI_HOST=::` และ `PORT=8080` (แนะนำให้ตั้งสองค่านี้กับ core ทุกตัว ใช้ได้ทั้งโดเมนสาธารณะและ private network)
 - `MIMI_PUSH_CONTACT` ใส่เป็น `https://<โดเมน>` ได้ (VAPID รับ URL https) ถ้าไม่อยากใส่อีเมล
+
+### เชื่อม Google / Microsoft บนเซิร์ฟเวอร์ (OAuth)
+
+บนเครื่องตัวเอง การล็อกอินส่งกลับมาที่พอร์ตชั่วคราวบน `127.0.0.1` แต่บนเซิร์ฟเวอร์เบราว์เซอร์ของผู้ใช้เข้าถึงพอร์ตนั้นไม่ได้
+core จึงรับรหัสล็อกอินที่ `https://<โดเมน>/oauth/callback` แทน เมื่อรู้ที่อยู่สาธารณะของตัวเอง:
+`MIMI_PUBLIC_URL` หรือ `RAILWAY_PUBLIC_DOMAIN` (Railway ใส่ให้เอง) หน้า ตั้งค่า บอก redirect URI ที่ต้องลงทะเบียนให้
+
+- Google Cloud Console → Credentials → OAuth client ชนิด **Web application** → Authorized redirect URIs: `https://<โดเมน>/oauth/callback`
+- Azure → App registrations → Authentication → platform **Mobile and desktop applications** → redirect URI เดียวกัน (ไม่ใช้ client secret)
+- ใส่ Client ID (+ secret ของ Google) ที่หน้า ตั้งค่า แล้วกด "เชื่อมต่อ"
+- route นี้ไม่ต้องใช้ token (เบราว์เซอร์ถูกส่งกลับมา) แต่ทำงานเฉพาะการล็อกอินที่ core เริ่มไว้ (ตรวจด้วย `state` ที่สุ่ม หมดอายุ 10 นาที ใช้ได้ครั้งเดียว)
+- โหมดหลายผู้ใช้: ตั้ง `MIMI_PUBLIC_URL=https://<โดเมน gateway>/h/<รหัสของบัญชี>` ให้ core ของคนนั้น
+  gateway ส่ง `/h/<รหัส>/oauth/callback` ต่อให้ core นั้น (รหัสคือส่วนเดียวกับใน URL ของ webhook)
 - ยังไม่ได้ตรวจ: Push บนมือถือจริง, การย้ายข้อมูลเดิม (ต้องใช้ Railway CLI)
 
 ### ย้ายข้อมูลเดิมขึ้น Railway (ยังไม่ได้ทดสอบกับบัญชีจริง)
@@ -286,7 +299,22 @@ node packages/core/src/cli/accounts.ts backup /app/user/backups/accounts-<วั
 แอปเวอร์ชันเก่าที่รัน core ในเครื่องเก็บข้อมูลไว้ที่ `~/Documents/Mimi`, `~/Library/Application Support/Electron` และ `~/Library/Logs/Mimi.log`
 แอปใหม่ไม่แตะที่เหล่านี้ ถ้าย้ายขึ้นเซิร์ฟเวอร์แล้วให้ `npm run backup` ก่อน แล้วลบเองเมื่อแน่ใจ
 
-ยังไม่ได้ทำ: ลงนามด้วย Developer ID / notarize (ตอนนี้ลงนามแบบ ad hoc ครั้งแรกต้องคลิกขวา → Open), อัปเดตอัตโนมัติ
+ยังไม่ได้ทำ: ลงนามด้วย Developer ID / notarize (ตอนนี้ลงนามแบบ ad hoc ครั้งแรกต้องคลิกขวา → Open)
+
+## Release และอัปเดตอัตโนมัติ
+
+push tag เวอร์ชันแล้ว GitHub Actions (`.github/workflows/release.yml`) build แอป Windows, Mac และ Android แล้วสร้าง GitHub release ให้:
+
+```
+git tag v0.6.0
+git push origin v0.6.0
+```
+
+- แอป Windows / Mac (`packages/desktop/updater.cjs`): ตรวจ release ล่าสุด 30 วินาทีหลังเปิดและทุก 6 ชั่วโมง ถ้าใหม่กว่า
+  จะแจ้งเตือน และมีเมนู "⬆ อัปเดตเป็น …" ที่ไอคอน Mimi กดแล้วถามยืนยัน ดาวน์โหลด ปิดแอป แทนที่ไฟล์ และเปิดใหม่เอง (ยังล็อกอินอยู่)
+  ไม่อัปเดตเองโดยไม่ถาม · ใช้เฉพาะแอปที่ build แล้ว (ไม่ใช่ `npm run desktop`) · repo มาจาก `repository` ใน `package.json`
+- แอป Android: หน้าเว็บที่แอปเปิดถาม GitHub แล้วขึ้นแถบให้ดาวน์โหลด APK ใหม่ (ดู `android/README.md`)
+- เลขเวอร์ชันมาจาก `package.json` (เปลี่ยนก่อนติด tag)
 
 ## แอป Windows (ต่อเซิร์ฟเวอร์ ไม่เก็บข้อมูลในเครื่อง)
 
@@ -300,9 +328,13 @@ node packages/core/src/cli/accounts.ts backup /app/user/backups/accounts-<วั
   `%APPDATA%\Mimi\chromium\` (ล้างทุกครั้งที่เริ่ม), `%LOCALAPPDATA%\Mimi\` (โปรไฟล์เบราว์เซอร์ของ PC agent ลบตอนออกจากระบบ)
 - PC agent เลือกโฟลเดอร์ได้เฉพาะในโฟลเดอร์ผู้ใช้ ค่าเริ่มต้น `%USERPROFILE%\Mimi-Workspace`
 
-## มือถือ Android (ติดตั้งเป็นแอปจากเว็บ / PWA)
+## มือถือ Android
 
-ไม่ต้องมีไฟล์ APK: เว็บของ Mimi ติดตั้งเป็นแอปบน Android ได้เลย ต้องเปิดผ่าน **HTTPS** (Railway, Tailscale, Cloudflare Tunnel)
+**แอป (APK):** ดาวน์โหลด `Mimi-<version>-android.apk` จากหน้า Releases ของ repo บน GitHub แล้วติดตั้ง
+(Android จะถามให้อนุญาตติดตั้งแอปจากเบราว์เซอร์ครั้งแรก) แอปเปิดเซิร์ฟเวอร์ที่ตั้งไว้ตอน build ใน Chrome แบบเต็มจอ
+ใช้งานเหมือนข้อ 1–4 ด้านล่างโดยไม่ต้องกด "ติดตั้งแอป" · มีเวอร์ชันใหม่ แอปจะขึ้นแถบให้ดาวน์โหลด (รายละเอียด: `android/README.md`)
+
+**หรือติดตั้งจากเว็บ (PWA):** ไม่ต้องมีไฟล์ APK: เว็บของ Mimi ติดตั้งเป็นแอปบน Android ได้เลย ต้องเปิดผ่าน **HTTPS** (Railway, Tailscale, Cloudflare Tunnel)
 
 1. เปิด `https://<โดเมนของ gateway หรือ core>/` ด้วย Chrome บน Android แล้วเข้าสู่ระบบ
    (เครื่องที่ใช้ร่วมกับคนอื่น: ติ๊ก "เครื่องนี้ไม่ใช่ของฉัน" แล้วไม่ต้องติดตั้งเป็นแอป)
@@ -315,7 +347,7 @@ node packages/core/src/cli/accounts.ts backup /app/user/backups/accounts-<วั
 และหน้า "ยังต่อเซิร์ฟเวอร์ Mimi ไม่ได้" ที่แสดงตอนไม่มีเน็ต (ไม่มีแชตหรือข้อมูลส่วนตัว) · core ส่ง Push ไปได้เฉพาะบริการบนอินเทอร์เน็ต
 (ปลายทางที่ชี้เข้าเครือข่ายภายในของเซิร์ฟเวอร์ถูกปฏิเสธ)
 
-ยังไม่ได้ทำ (ทำเมื่อต้องการ): ห่อเป็นแอปใน Play Store ด้วย TWA หรือ Capacitor · iPhone ติดตั้งได้แบบเดียวกันผ่าน Safari → แชร์ → "เพิ่มลงหน้าจอโฮม" (iOS 16.4 ขึ้นไปสำหรับ Push)
+ยังไม่ได้ทำ (ทำเมื่อต้องการ): ส่งแอปขึ้น Play Store · iPhone ติดตั้งได้แบบเดียวกันผ่าน Safari → แชร์ → "เพิ่มลงหน้าจอโฮม" (iOS 16.4 ขึ้นไปสำหรับ Push)
 
 ## ต่อ PC agent เข้ากับ core ที่อยู่ที่อื่น
 

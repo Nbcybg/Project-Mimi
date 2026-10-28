@@ -44,6 +44,8 @@ import { AgentAssets } from '../chat/agent-assets.ts';
 import type { CoreConfig } from '../config.ts';
 import { type Core, type CoreOptions, createCore } from '../core.ts';
 import { startGoogleOAuth } from '../google/oauth-flow.ts';
+import { HostedCallbacks, publicBaseUrl } from '../oauth/callback.ts';
+import { serveAssetLinks } from './assetlinks.ts';
 import { type DiscoveredModel, discoverModels } from '../providers/discovery.ts';
 import {
   CUSTOM_PROVIDER_NPM,
@@ -339,6 +341,12 @@ export async function startServer(
   const validateNode = (node: WorkflowNode, agent: string) => validateWorkflowNode(node, agent, workflowRules);
   const validateWorkflow = (view: WorkflowView) => validateWorkflowView(view, workflowRules);
 
+  // On a server (MIMI_PUBLIC_URL or Railway's domain) OAuth providers send the browser back to
+  // this core's own /oauth/callback; on a computer the sign-in uses a temporary local port.
+  const publicUrl = publicBaseUrl(process.env);
+  const hostedCallbacks = publicUrl ? new HostedCallbacks(publicUrl) : undefined;
+  const oauthReceiver = hostedCallbacks?.receiver;
+
   /** What the settings screen shows. Keys themselves are never sent back to a client. */
   const settingsView = (): SettingsView => {    const defaultAgent = core.defaultAgentName();
     const available = core.registry.available();
@@ -389,6 +397,7 @@ export async function startServer(
       google: { hasClient: core.google.hasClient, connected: core.google.isConfigured },
       microsoft: { hasClient: core.microsoft.hasClient, connected: core.microsoft.isConfigured },
       accounts: core.oauth.views(),
+      ...(hostedCallbacks ? { oauthRedirectUri: hostedCallbacks.redirectUri } : {}),
       preferences: appSettings.preferences,
       spentTodayUsd: core.spentToday(),
       toolKeys: { serper: Boolean(process.env.SERPER_API_KEY), openweather: Boolean(process.env.OPENWEATHER_API_KEY) },
@@ -651,7 +660,7 @@ export async function startServer(
     const reply = (response: ServerMessage) => socket.send(JSON.stringify(response));
     /** Starts the sign-in of one OAuth account and tells the client where to go. */
     const beginOAuthConnect = (id: string) => {
-      void core.oauth.startConnect(id).then(
+      void core.oauth.startConnect(id, oauthReceiver).then(
         (flow) => {
           const account = core.oauth.find(id);
           reply({ type: 'oauth-auth-url', accountId: id, service: account?.service ?? 'google', url: flow.url });
@@ -772,7 +781,7 @@ export async function startServer(
         const clientId = process.env.GOOGLE_OAUTH_CLIENT_ID;
         const clientSecret = process.env.GOOGLE_OAUTH_CLIENT_SECRET;
         if (!clientId || !clientSecret) throw new Error('Save the Google OAuth client ID and secret first.');
-        void startGoogleOAuth({ clientId, clientSecret, tokenFile: config.googleTokenPath }).then((flow) => {
+        void startGoogleOAuth({ clientId, clientSecret, tokenFile: config.googleTokenPath, receiver: oauthReceiver }).then((flow) => {
           reply({ type: 'google-auth-url', url: flow.url });
           flow.done.then(
             () => {
@@ -790,7 +799,7 @@ export async function startServer(
           beginOAuthConnect(account.id);
           break;
         }
-        void core.microsoft.startSignIn().then(
+        void core.microsoft.startSignIn(oauthReceiver).then(
           (flow) => {
             reply({ type: 'microsoft-auth-url', url: flow.url });
             flow.done.then(
@@ -844,7 +853,7 @@ export async function startServer(
         break;
       case 'connector-connection-connect': {
         const connectionId = message.id;
-        void core.connections.startConnect(connectionId).then(
+        void core.connections.startConnect(connectionId, oauthReceiver).then(
           (flow) => {
             reply({ type: 'connector-auth-url', connectionId, url: flow.url });
             void flow.done.then(
@@ -1463,6 +1472,10 @@ export async function startServer(
         mimi.onAppAction(url.pathname.slice('/app/'.length));
         response.writeHead(204).end();
       }
+    } else if (hostedCallbacks?.handle(request.method, url, response)) {
+      // an OAuth provider sent the browser back with a sign-in code
+    } else if (serveAssetLinks(request.method, url.pathname, response)) {
+      // Chrome checking that the Android app belongs to this site
     } else if (request.method === 'GET' && url.pathname === '/health') {
       // Open to anyone (launcher, Docker/Railway health checks): nothing about use or the PC.
       response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });

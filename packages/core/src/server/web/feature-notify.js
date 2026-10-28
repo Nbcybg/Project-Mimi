@@ -19,6 +19,76 @@
 
   const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window && window.isSecureContext;
 
+  // ---------- chime ----------
+  // A short two-note chime, made in code (no sound file), when a notification arrives while
+  // the app is open. Per device; on unless turned off. Pushes to a closed app use the
+  // system's own notification sound.
+  const SOUND_KEY = 'mimi.notifySound';
+  let audio = null;
+  const soundOn = () => {
+    try {
+      return localStorage.getItem(SOUND_KEY) !== '0';
+    } catch {
+      return true;
+    }
+  };
+  /** Browsers start audio only after a tap or key press: the context is made on the first one. */
+  const unlockAudio = () => {
+    if (audio || !(window.AudioContext || window.webkitAudioContext)) return;
+    audio = new (window.AudioContext || window.webkitAudioContext)();
+  };
+  document.addEventListener('pointerdown', unlockAudio, { once: true, capture: true });
+  document.addEventListener('keydown', unlockAudio, { once: true, capture: true });
+  /** Inside the do-not-disturb hours of the settings (e.g. 22:00-07:00, across midnight too). */
+  function quietNow() {
+    const prefs = (M().state.settings && M().state.settings.preferences) || {};
+    if (!prefs.quietFrom || !prefs.quietTo) return false;
+    const minutes = (text) => Number(text.slice(0, 2)) * 60 + Number(text.slice(3, 5));
+    const now = new Date();
+    const at = now.getHours() * 60 + now.getMinutes();
+    const from = minutes(prefs.quietFrom);
+    const to = minutes(prefs.quietTo);
+    return from <= to ? at >= from && at < to : at >= from || at < to;
+  }
+  function chime(force = false) {
+    if (!force && (!soundOn() || quietNow())) return;
+    unlockAudio();
+    if (!audio) return;
+    if (audio.state === 'suspended') void audio.resume();
+    const start = audio.currentTime + 0.02;
+    for (const [frequency, offset] of [[880, 0], [1318.5, 0.14]]) {
+      const tone = audio.createOscillator();
+      const gain = audio.createGain();
+      tone.type = 'sine';
+      tone.frequency.value = frequency;
+      gain.gain.setValueAtTime(0.0001, start + offset);
+      gain.gain.exponentialRampToValueAtTime(0.18, start + offset + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + offset + 0.45);
+      tone.connect(gain).connect(audio.destination);
+      tone.start(start + offset);
+      tone.stop(start + offset + 0.5);
+    }
+  }
+  /** The on/off switch for the settings page, with a button to hear it. */
+  function soundToggle() {
+    const wrap = el('div', 'hstack');
+    const label = el('label', 'wcheck');
+    const box = el('input');
+    box.type = 'checkbox';
+    box.checked = soundOn();
+    box.onchange = () => {
+      try {
+        localStorage.setItem(SOUND_KEY, box.checked ? '1' : '0');
+      } catch {
+        // storage blocked: the default (on) stays
+      }
+      if (box.checked) chime(true);
+    };
+    label.append(box, el('span', '', 'เสียงแจ้งเตือนเมื่อมีการแจ้งเตือนเข้า (เฉพาะเครื่องนี้)'));
+    wrap.append(label, button('btn ghost', '🔊 ลองฟัง', () => chime(true)));
+    return wrap;
+  }
+
   // ---------- bell ----------
   function bell() {
     let node = document.getElementById('nbell');
@@ -220,6 +290,7 @@
           unread++;
           bell();
           render();
+          chime();
         }
         break;
       case 'push-key':
@@ -257,5 +328,5 @@
     M().send({ type: 'push-unsubscribe', endpoint: subscription.endpoint });
     await subscription.unsubscribe();
   }
-  window.MimiHooks.notify = { onConnect, onMessage, bell, forgetDevice };
+  window.MimiHooks.notify = { onConnect, onMessage, bell, forgetDevice, chime, soundToggle };
 })();

@@ -9,6 +9,7 @@ import type {
 import type { ConnectorRegistry } from '../connectors/registry.ts';
 import type { ConnectorAuthValues } from '../connectors/types.ts';
 import { safeFetch, type Lookup } from '../workflows/net-guard.ts';
+import type { ReceiverFactory } from './callback.ts';
 import { startGenericOAuth } from './generic-flow.ts';
 import type { SecretStore } from '../app/secrets.ts';
 
@@ -231,7 +232,7 @@ export class ConnectorConnections {
    * opens `url`; `done` stores the returned tokens in the vault. Google connectors use
    * the OAuth accounts screen instead.
    */
-  async startConnect(id: string): Promise<{ url: string; done: Promise<void> }> {
+  async startConnect(id: string, receiver?: ReceiverFactory): Promise<{ url: string; done: Promise<void> }> {
     const connection = this.require(id);
     const spec = this.registry.get(connection.connector);
     if (!spec) throw new Error(`Unknown connector "${connection.connector}".`);
@@ -253,6 +254,7 @@ export class ConnectorConnections {
       extra: spec.auth.extra,
       fetchFn: (input, init) => this.request(input, init),
       now: this.now,
+      receiver,
     });
     const done = flow.done.then((tokens) => {
       const fresh = {

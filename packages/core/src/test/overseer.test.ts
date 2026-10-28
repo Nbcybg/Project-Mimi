@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import type { ClientMessage, ServerMessage, ToolContext, ToolDefinition } from '@mimi/shared';
 import { ModelCatalog } from '../providers/catalog.ts';
 import { startServer } from '../server/server.ts';
-import { ensureOverseer, OVERSEER_NAME } from '../overseer/overseer.ts';
+import { ensureOverseer, OVERSEER_MAX_TOKENS, OVERSEER_NAME } from '../overseer/overseer.ts';
 import { makeTestCore, testCoreParts } from './core-helpers.ts';
 
 const context: ToolContext = { traceId: 'overseer-test', thread: 'main', agent: OVERSEER_NAME, allowedDirs: [] };
@@ -21,6 +21,14 @@ test('overseer: created on first use, then authors agents, tools, presets and sk
     assert.equal(overseer.name, OVERSEER_NAME);
     assert.ok(fs.existsSync(file));
     assert.equal(ensureOverseer(config.agentsDir).name, OVERSEER_NAME);
+    // It edits the whole setup, so its token budget is open (largest value - 1).
+    assert.equal(overseer.budgets.maxTokens, OVERSEER_MAX_TOKENS);
+    assert.equal(OVERSEER_MAX_TOKENS, Number.MAX_SAFE_INTEGER - 1);
+    // A file from an earlier version (150,000) is opened up; a budget the user chose stays.
+    fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(/max_tokens: \d+/, 'max_tokens: 150000'));
+    assert.equal(ensureOverseer(config.agentsDir).budgets.maxTokens, OVERSEER_MAX_TOKENS);
+    fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(/max_tokens: \d+/, 'max_tokens: 500000'));
+    assert.equal(ensureOverseer(config.agentsDir).budgets.maxTokens, 500_000);
 
     const tools = core.deps.extraTools?.(overseer, { agent: overseer }) ?? [];
     const tool = (name: string): ToolDefinition<any> => {

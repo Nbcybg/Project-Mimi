@@ -15,7 +15,9 @@ const DIST = path.join(ROOT, 'dist');
 const STAGE = path.join(DIST, 'win', 'Mimi');
 const APP = path.join(STAGE, 'resources', 'app');
 const CACHE = path.join(DIST, '.cache');
-const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
+const ROOT_PACKAGE = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+const VERSION = ROOT_PACKAGE.version;
+const UPDATE_REPO = String(ROOT_PACKAGE.repository ?? '').replace(/^github:/, '') || null;
 const ZIP_NAME = `Mimi-${VERSION}-win-${process.arch}.zip`;
 
 const log = (line) => console.log(`[build] ${line}`);
@@ -37,12 +39,13 @@ log(`Electron ${path.basename(electron)} copied`);
 
 // 2. The app: the desktop shell, and the PC agent with what it imports. Tests stay behind.
 fs.mkdirSync(APP, { recursive: true });
-for (const file of ['remote.cjs', 'remote-lib.cjs', 'preload.cjs', 'connect.html']) {
+for (const file of ['remote.cjs', 'remote-lib.cjs', 'updater.cjs', 'preload.cjs', 'connect.html']) {
   fs.copyFileSync(path.join(ROOT, 'packages', 'desktop', file), path.join(APP, file));
 }
+// updateRepo: where the app looks for newer releases (updater.cjs).
 fs.writeFileSync(
   path.join(APP, 'package.json'),
-  `${JSON.stringify({ name: 'mimi', productName: 'Mimi', version: VERSION, private: true, main: 'remote.cjs' }, null, 2)}\n`,
+  `${JSON.stringify({ name: 'mimi', productName: 'Mimi', version: VERSION, private: true, main: 'remote.cjs', updateRepo: UPDATE_REPO }, null, 2)}\n`,
 );
 const skipTests = (src) => !/\.test\.ts$/.test(src) && !path.basename(src).startsWith('._') && path.basename(src) !== '.DS_Store';
 for (const pkg of ['shared', 'pc-agent']) {

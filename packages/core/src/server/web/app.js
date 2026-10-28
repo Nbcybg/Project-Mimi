@@ -1692,7 +1692,8 @@
   function renderAgents() {
     const page = $('view-agents');
     const agent = agentOf(ui.agent) || null;
-    const list = el('div', 'panel');
+    // Stays in view while the long form scrolls (a strip across the top on a phone).
+    const list = el('div', 'panel agentpick');
     list.append(el('h3', '', 'Agent ทั้งหมด'));
     const visible = state.agents.filter((entry) => entry.name !== 'overseer');
     const items = el('div', 'list');
@@ -1982,7 +1983,36 @@
     const name = textInput(preset ? preset.name : '', 'เช่น creative, precise, pro');
     name.readOnly = Boolean(preset);
     const model = modelSelect(preset ? preset.model : '', 'เลือกโมเดล', null, false);
-    form.append(labelled('ชื่อ (ตัวพิมพ์เล็ก ไม่มีเว้นวรรค)', name), labelled('โมเดล', model));
+    form.append(labelled('ชื่อ (ตัวพิมพ์เล็ก ไม่มีเว้นวรรค)', name));
+    // With several providers the same model can come from more than one of them: pick the
+    // provider first, then only its models are listed.
+    const providerOf = (ref) => (ref.includes('/') ? ref.slice(0, ref.indexOf('/')) : '');
+    const providerIds = [...new Set(view.models.map((entry) => providerOf(entry.ref)).filter(Boolean))];
+    if (providerIds.length > 1) {
+      const names = new Map((view.providers || []).map((entry) => [entry.id, entry.name]));
+      const provider = el('select');
+      for (const id of providerIds) {
+        const option = el('option', '', `${names.get(id) || id} (${view.models.filter((entry) => providerOf(entry.ref) === id).length})`);
+        option.value = id;
+        provider.append(option);
+      }
+      provider.value = (preset && providerOf(preset.model)) || providerIds[0];
+      const filter = () => {
+        for (const option of model.options) {
+          if (!option.value) continue;
+          const from = providerOf(option.value);
+          option.hidden = Boolean(from) && from !== provider.value;
+        }
+        if (model.selectedOptions[0]?.hidden) model.value = '';
+      };
+      provider.onchange = () => {
+        filter();
+        ui.presetDirty = true;
+      };
+      filter();
+      form.append(labelled('ผู้ให้บริการ', provider));
+    }
+    form.append(labelled('โมเดล', model));
     if (view.models.length === 0) form.append(el('p', 'hint', 'ยังไม่มีโมเดลให้เลือก: เชื่อมต่อผู้ให้บริการที่หน้า "ตั้งค่า" ก่อน'));
     const knobs = {};
     for (const [key, label, min, max, step] of [
@@ -2288,7 +2318,20 @@
     dirs.value = view.allowedDirs.join('\n');
     dirs.dataset.initial = dirs.value;
     general.append(dirs);
-    general.append(el('h4', '', 'Gmail และ Google Calendar'), el('p', 'hint', view.google.connected ? 'เชื่อมต่อแล้ว ✓' : 'สร้าง OAuth client ชนิด "Desktop app" ใน Google Cloud Console แล้ววางสองค่านี้ บันทึก จากนั้นกดเชื่อมต่อ'));
+    // On a server the providers send the browser back to this address; it has to be registered.
+    const redirect = view.oauthRedirectUri;
+    general.append(
+      el('h4', '', 'Gmail และ Google Calendar'),
+      el(
+        'p',
+        'hint',
+        view.google.connected
+          ? 'เชื่อมต่อแล้ว ✓'
+          : redirect
+            ? `สร้าง OAuth client ชนิด "Web application" ใน Google Cloud Console แล้วเพิ่ม Authorized redirect URI เป็น ${redirect} วางสองค่านี้ บันทึก จากนั้นกดเชื่อมต่อ`
+            : 'สร้าง OAuth client ชนิด "Desktop app" ใน Google Cloud Console แล้ววางสองค่านี้ บันทึก จากนั้นกดเชื่อมต่อ',
+      ),
+    );
     const google = el('div', 'grid2');
     const googleKeys = [];
     for (const [key, label] of [['GOOGLE_OAUTH_CLIENT_ID', 'Client ID'], ['GOOGLE_OAUTH_CLIENT_SECRET', 'Client secret']]) {
@@ -2314,7 +2357,9 @@
         'hint',
         view.microsoft.connected
           ? 'เชื่อมต่อแล้ว ✓'
-          : 'ลงทะเบียนแอปของคุณเองที่ Azure Portal → App registrations แล้วเพิ่ม platform "Mobile and desktop applications" โดยใส่ redirect URI เป็น http://localhost จากนั้นวาง Application (client) ID ที่นี่ บันทึก แล้วกดเชื่อมต่อ (ไม่ต้องใช้ client secret)',
+          : redirect
+            ? `ลงทะเบียนแอปของคุณเองที่ Azure Portal → App registrations แล้วเพิ่ม platform "Mobile and desktop applications" โดยใส่ redirect URI เป็น ${redirect} จากนั้นวาง Application (client) ID ที่นี่ บันทึก แล้วกดเชื่อมต่อ (ไม่ต้องใช้ client secret)`
+            : 'ลงทะเบียนแอปของคุณเองที่ Azure Portal → App registrations แล้วเพิ่ม platform "Mobile and desktop applications" โดยใส่ redirect URI เป็น http://localhost จากนั้นวาง Application (client) ID ที่นี่ บันทึก แล้วกดเชื่อมต่อ (ไม่ต้องใช้ client secret)',
       ),
     );
     const microsoft = el('div', 'grid2');
@@ -2350,22 +2395,24 @@
     }
     general.append(toolKeys);
 
+    // Saved as soon as something changes: a choice right away, a typed field when it loses
+    // focus (so the page is not rebuilt while typing). Only what changed is sent.
     const foot = el('div', 'foot');
-    foot.append(
-      el('span', 'msg'),
-      button('btn pri', 'บันทึก', () => {
-        const change = { type: 'settings-save' };
-        const keys = {};
-        for (const field of googleKeys) if (field.value.trim()) keys[field.dataset.key] = field.value.trim();
-        if (Object.keys(keys).length) change.keys = keys;
-        const chosen = {};
-        for (const select of defaults.querySelectorAll('select')) if (select.value !== select.dataset.initial) chosen[select.dataset.default] = select.value;
-        if (Object.keys(chosen).length) change.defaults = chosen;
-        if (dirs.value !== dirs.dataset.initial) change.allowedDirs = dirs.value.split('\n').map((line) => line.trim()).filter(Boolean);
-        flash('กำลังบันทึก…');
-        send(change);
-      }),
-    );
+    foot.append(el('span', 'msg', 'บันทึกอัตโนมัติเมื่อแก้ไข'));
+    const autoSave = () => {
+      const change = { type: 'settings-save' };
+      const keys = {};
+      for (const field of googleKeys) if (field.value.trim()) keys[field.dataset.key] = field.value.trim();
+      if (Object.keys(keys).length) change.keys = keys;
+      const chosen = {};
+      for (const select of defaults.querySelectorAll('select')) if (select.value !== select.dataset.initial) chosen[select.dataset.default] = select.value;
+      if (Object.keys(chosen).length) change.defaults = chosen;
+      if (dirs.value !== dirs.dataset.initial) change.allowedDirs = dirs.value.split('\n').map((line) => line.trim()).filter(Boolean);
+      if (Object.keys(change).length === 1) return;
+      flash('กำลังบันทึก…');
+      send(change);
+    };
+    general.addEventListener('change', autoSave);
     general.append(foot);
     stack.append(general);
 

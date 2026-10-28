@@ -5,6 +5,7 @@ import type { OAuthAccountInput, OAuthAccountView, OAuthService } from '@mimi/sh
 import type { SecretStore } from '../app/secrets.ts';
 import { GoogleAuth } from '../google/auth.ts';
 import { startGoogleOAuth, type OAuthFlow } from '../google/oauth-flow.ts';
+import type { ReceiverFactory } from './callback.ts';
 import { MicrosoftAuth } from '../microsoft/auth.ts';
 
 interface StoredAccount {
@@ -364,13 +365,13 @@ export class OAuthAccounts {
    * Starts the sign-in for one account. The caller opens `url`; `done` resolves after
    * the refresh token is stored in the account's own token file.
    */
-  async startConnect(id: string): Promise<OAuthFlow> {
+  async startConnect(id: string, receiver?: ReceiverFactory): Promise<OAuthFlow> {
     const account = this.require(id);
     if (account.service === 'google') {
       const secret = this.secrets.get(secretName(account.id));
       if (!account.clientId || !secret) throw new Error('บัญชี Google ยังไม่มี Client ID หรือ secret');
-      return startGoogleOAuth({ clientId: account.clientId, clientSecret: secret, tokenFile: this.tokenFile(account.id) });
+      return startGoogleOAuth({ clientId: account.clientId, clientSecret: secret, tokenFile: this.tokenFile(account.id), receiver });
     }
-    return this.microsoftAuthFor(account).startSignIn();
+    return this.microsoftAuthFor(account).startSignIn(receiver);
   }
 }

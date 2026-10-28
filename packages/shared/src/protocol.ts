@@ -436,6 +436,11 @@ export interface SettingsView {
   google: { hasClient: boolean; connected: boolean };
   /** Outlook mail, calendar and To Do: `hasClient` once the Azure app's client ID is saved. */
   microsoft: { hasClient: boolean; connected: boolean };
+  /**
+   * On a server: the address OAuth providers send the browser back to, which has to be
+   * registered with the Google / Azure app. Absent on a computer (temporary local port).
+   */
+  oauthRedirectUri?: string;
   /** Every OAuth account (Google / Microsoft) with its own client and token. */
   accounts: OAuthAccountView[];
   /** Spending limit and notification choices, plus what was spent today. */

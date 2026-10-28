@@ -1,0 +1,61 @@
+plugins {
+    id 'com.android.application'
+}
+
+// The server this app opens, e.g. -PmimiHost=mimi.example.com (https only).
+def mimiHost = (project.findProperty('mimiHost') ?: 'mimi-production-c4c7.up.railway.app').toString()
+def appVersion = (project.findProperty('versionName') ?: '0.0.0').toString()
+def appCode = (project.findProperty('versionCode') ?: '1').toString().toInteger()
+// Release signing: a PKCS#12 keystore whose path and password come from the environment
+// (GitHub secrets in CI). Without one the debug key signs, and such an APK cannot update
+// an installed one that was signed with the release key.
+def keystore = System.getenv('MIMI_KEYSTORE')
+def keystorePassword = System.getenv('MIMI_KEYSTORE_PASSWORD')
+
+android {
+    namespace 'app.mimi.android'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'app.mimi.android'
+        minSdk 23
+        targetSdk 35
+        versionCode appCode
+        versionName appVersion
+        manifestPlaceholders = [
+            hostName : mimiHost,
+            // The web client reads app/appv to offer a newer APK from GitHub releases.
+            launchUrl: "https://${mimiHost}/?app=android&appv=${appVersion}".toString(),
+        ]
+        resValue 'string', 'assetStatements',
+            "[{ \"relation\": [\"delegate_permission/common.handle_all_urls\"], \"target\": { \"namespace\": \"web\", \"site\": \"https://${mimiHost}\" } }]".toString()
+    }
+
+    signingConfigs {
+        release {
+            if (keystore) {
+                storeFile file(keystore)
+                storePassword keystorePassword
+                keyAlias 'mimi'
+                keyPassword keystorePassword
+                storeType 'pkcs12'
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig keystore ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation 'com.google.androidbrowserhelper:androidbrowserhelper:2.5.0'
+}

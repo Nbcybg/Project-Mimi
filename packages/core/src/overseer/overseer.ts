@@ -51,10 +51,23 @@ Safety rules:
 - Never invent a capability. If something is not available, say so plainly and offer the closest real option.
 - Reply in the user's language (Thai when they write Thai). Be concise and concrete.`;
 
+/**
+ * The Overseer rebuilds agents, tools and workflows, which can take many long rounds, so its
+ * token budget is open: the largest value the budget holds, minus one.
+ */
+export const OVERSEER_MAX_TOKENS = Number.MAX_SAFE_INTEGER - 1;
+/** The budget earlier versions wrote; such a file is opened up on start. */
+const OLD_OVERSEER_MAX_TOKENS = 150_000;
+
 /** Creates the Overseer agent file on first use and returns it. */
 export function ensureOverseer(agentsDir: string): AgentDefinition {
   const file = agentFile(agentsDir, OVERSEER_NAME);
-  if (fs.existsSync(file)) return loadAgent(agentsDir, OVERSEER_NAME);
+  if (fs.existsSync(file)) {
+    const existing = loadAgent(agentsDir, OVERSEER_NAME);
+    // A budget the user chose stays; only the old built-in default is raised.
+    if (existing.budgets.maxTokens !== OLD_OVERSEER_MAX_TOKENS) return existing;
+    return saveAgent(agentsDir, { ...existing, budgets: { ...existing.budgets, maxTokens: OVERSEER_MAX_TOKENS } });
+  }
   const agent: AgentDefinition = {
     name: OVERSEER_NAME,
     displayName: OVERSEER_DISPLAY_NAME,
@@ -64,7 +77,7 @@ export function ensureOverseer(agentsDir: string): AgentDefinition {
     tools: [],
     skills: [],
     canMessage: [],
-    budgets: { maxRounds: 20, maxTokens: 150_000 },
+    budgets: { maxRounds: 20, maxTokens: OVERSEER_MAX_TOKENS },
     systemPrompt: SYSTEM_PROMPT,
   };
   fs.mkdirSync(path.join(agentsDir, OVERSEER_NAME), { recursive: true });

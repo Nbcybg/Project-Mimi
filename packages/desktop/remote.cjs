@@ -34,6 +34,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const lib = require('./remote-lib.cjs');
+const updater = require('./updater.cjs');
 
 const home = os.homedir();
 app.setName('Mimi');
@@ -415,10 +416,67 @@ function showWindow(view) {
 
 let tray = null;
 
+// ---------- updates from GitHub releases (updater.cjs) ----------
+// Only the packaged app updates itself, and only when its package.json names the repository
+// (the build scripts write it). It asks first; "update" downloads, swaps and restarts.
+const UPDATE_REPO = (() => {
+  try {
+    return app.isPackaged ? require('./package.json').updateRepo || null : null;
+  } catch {
+    return null;
+  }
+})();
+let update = null; // { version, url, name, size } when a newer release exists
+let updating = false;
+let updateNotified = null;
+
+async function checkForUpdate() {
+  if (!UPDATE_REPO || updating) return;
+  try {
+    update = await updater.findUpdate(UPDATE_REPO, app.getVersion());
+  } catch {
+    return; // offline or GitHub unreachable: the next check tries again
+  }
+  refreshMenu();
+  if (update && updateNotified !== update.version && Notification.isSupported()) {
+    updateNotified = update.version;
+    const note = new Notification({ title: `Mimi ${update.version} พร้อมอัปเดต`, body: 'คลิกเพื่ออัปเดต (หรือเลือก "อัปเดต" ที่ไอคอน Mimi)', icon: ICON });
+    note.on('click', () => void installUpdate());
+    note.show();
+  }
+}
+
+async function installUpdate() {
+  if (!update || updating) return;
+  const choice = await dialog.showMessageBox({
+    type: 'question',
+    buttons: ['อัปเดตเลย', 'ไว้ทีหลัง'],
+    defaultId: 0,
+    cancelId: 1,
+    title: 'อัปเดต Mimi',
+    message: `อัปเดต Mimi เป็นเวอร์ชัน ${update.version}?`,
+    detail: `ตอนนี้ ${app.getVersion()} · ดาวน์โหลด ~${Math.round(update.size / 1048576)} MB แล้ว Mimi จะปิดและเปิดใหม่เอง (ยังเข้าสู่ระบบอยู่เหมือนเดิม)`,
+  });
+  if (choice.response !== 0) return;
+  updating = true;
+  refreshMenu();
+  try {
+    const stageDir = path.join(cacheDir, 'Mimi-update');
+    const source = await updater.download(update, stageDir);
+    updater.startSwap({ source, target: updater.installTarget(), stageDir });
+    app.quit();
+  } catch (error) {
+    updating = false;
+    refreshMenu();
+    dialog.showErrorBox('อัปเดต Mimi ไม่สำเร็จ', `${error.message}\n\nลองใหม่ภายหลัง หรือดาวน์โหลดเองจากหน้า Releases ของ Mimi บน GitHub`);
+  }
+}
+
 function buildMenu() {
   const signedIn = Boolean(current);
   const lockLabel = (minutes) => (minutes === 0 ? 'ปิด' : `ไม่ได้ใช้ ${minutes} นาที`);
   return Menu.buildFromTemplate([
+    ...(update ? [{ label: updating ? `กำลังอัปเดตเป็น ${update.version}…` : `⬆ อัปเดตเป็น ${update.version}`, enabled: !updating, click: () => void installUpdate() }, { type: 'separator' }] : []),
     { label: 'เปิด Mimi', click: () => showWindow('chat') },
     ...(signedIn ? [['agents', 'Agent'], ['hub', 'Hub'], ['settings', 'ตั้งค่า']].map(([view, label]) => ({ label, click: () => showWindow(view) })) : []),
     { type: 'separator' },
@@ -562,4 +620,8 @@ app.whenReady().then(() => {
   createTray();
   createWindow();
   startPcAgent();
+  if (UPDATE_REPO) {
+    setTimeout(() => void checkForUpdate(), 30_000).unref?.();
+    setInterval(() => void checkForUpdate(), 6 * 3600_000).unref?.();
+  }
 });

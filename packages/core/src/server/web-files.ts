@@ -43,6 +43,7 @@ const WEB_FILES: Record<string, [string, string]> = {
   '/feature-canvas.js': ['feature-canvas.js', 'text/javascript; charset=utf-8'],
   '/feature-profile.js': ['feature-profile.js', 'text/javascript; charset=utf-8'],
   '/feature-notify.js': ['feature-notify.js', 'text/javascript; charset=utf-8'],
+  '/feature-update.js': ['feature-update.js', 'text/javascript; charset=utf-8'],
   '/feature-vrm.js': ['feature-vrm.js', 'text/javascript; charset=utf-8'],
 };
 
@@ -88,8 +89,9 @@ function securityHeaders(file: string, body: Buffer): Record<string, string> {
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' blob: data: https:",
     "media-src 'self' blob: data: https:",
-    // The 3D stage loads its models and textures from blob: and data: URLs.
-    "connect-src 'self' blob: data:",
+    // The 3D stage loads its models and textures from blob: and data: URLs; the Android app
+    // asks GitHub (read only, no credentials) whether a newer release exists (feature-update.js).
+    "connect-src 'self' blob: data: https://api.github.com",
     "font-src 'self' data:",
     "worker-src 'self'",
     "manifest-src 'self'",

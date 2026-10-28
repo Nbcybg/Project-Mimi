@@ -3,6 +3,7 @@ import https from 'node:https';
 import type { AddressInfo } from 'node:net';
 import { type RawData, WebSocket, WebSocketServer } from 'ws';
 import { AuthLimiter, clientAddress } from '../server/auth-limiter.ts';
+import { serveAssetLinks } from '../server/assetlinks.ts';
 import { APP_VERSION, serveWebFile } from '../server/web-files.ts';
 import type { AccountStore, SessionTarget } from './accounts.ts';
 
@@ -20,6 +21,7 @@ import type { AccountStore, SessionTarget } from './accounts.ts';
  *   POST /auth/logout                       Bearer token -> 204; open sockets of it are closed
  *   *    /api/*                             Bearer token -> the person's core
  *   *    /h/<id>/api/(workflow|webhook)/<k> webhooks of one person's core (no sign-in, like a core)
+ *   *    /h/<id>/oauth/callback             OAuth sign-in callback of that core (no sign-in, like a core)
  *   WS   /ws                                first frame { type: 'hello', token } -> the person's core
  */
 
@@ -189,6 +191,7 @@ export async function startGateway(options: GatewayOptions): Promise<Gateway> {
     const url = new URL(request.url ?? '/', 'http://localhost');
     const method = request.method ?? 'GET';
     if (method === 'GET' && serveWebFile(url.pathname, response)) return;
+    if (serveAssetLinks(method, url.pathname, response)) return;
     if (method === 'GET' && url.pathname === '/health') {
       sendJson(response, 200, { ok: true, version: APP_VERSION, accounts: true });
       return;
@@ -244,7 +247,9 @@ export async function startGateway(options: GatewayOptions): Promise<Gateway> {
       return;
     }
 
-    const hook = /^\/h\/([\w-]{1,64})(\/api\/(?:workflow|webhook)\/[^/]+)$/.exec(url.pathname);
+    // Webhooks, and the OAuth sign-in callback of a core whose MIMI_PUBLIC_URL is <gateway>/h/<id>
+    // (the provider's redirect carries no session; the core acts only on a sign-in it started).
+    const hook = /^\/h\/([\w-]{1,64})(\/api\/(?:workflow|webhook)\/[^/]+|\/oauth\/callback)$/.exec(url.pathname);
     if (hook) {
       const route = accounts.route(hook[1]!);
       if (!route) sendJson(response, 404, { error: 'No such webhook.' });

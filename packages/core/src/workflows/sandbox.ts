@@ -2,8 +2,8 @@ import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
 import type { JsonValue } from '@mimi/shared';
 
 /**
- * Where code people write runs: workflow expressions (`{{ $json.x }}`) and custom tools of
- * the "code" kind. `node:vm` alone is not a security boundary (an expression could reach the
+ * Where code people write runs: workflow expressions (`{{ $json.x }}`), workflow code nodes
+ * and custom tools of the "code" kind. `node:vm` alone is not a security boundary (an expression could reach the
  * core's `process`, its keys and files), so this code runs in a separate, locked-down Node
  * process that lives as long as the core:
  *
@@ -15,7 +15,7 @@ import type { JsonValue } from '@mimi/shared';
  *   object of that process is reachable from the code;
  * - a time limit per request; a stuck process is killed and started again.
  *
- * Data in and out is JSON. The workflow code node keeps its own sandbox (code-sandbox.ts).
+ * Data in and out is JSON.
  */
 
 const CHILD = String.raw`
@@ -71,21 +71,33 @@ function evaluate(request) {
   });
 }
 
+// The n8n-style names a workflow code node sees, over its items' JSON.
+const NODE_PRELUDE = '(() => {' +
+  'const items = globalThis.items;' +
+  'globalThis.$json = items[0] ?? {}; globalThis.$items = items;' +
+  'globalThis.$input = { all: () => items.map((json) => ({ json })), first: () => ({ json: items[0] ?? {} }),' +
+  ' last: () => ({ json: items.at(-1) ?? {} }), item: { json: items[0] ?? {} } };' +
+  '})()';
+
 async function code(request) {
+  const node = request.op === 'node';
   const logs = [];
   const log = (...parts) => logs.push(parts.map((part) => (typeof part === 'string' ? part : JSON.stringify(part))).join(' ').slice(0, 2000));
   // Not ECMAScript built-ins, so they come from this process: harmless here, nothing beyond it.
-  const context = fresh({ input: request.input ?? null, settings: request.settings ?? {} }, (target) => {
+  const variables = node ? { items: Array.isArray(request.items) ? request.items : [] } : { input: request.input ?? null, settings: request.settings ?? {} };
+  const context = fresh(variables, (target) => {
     target.__log = log;
     target.URL = Url; target.URLSearchParams = UrlSearchParams; target.TextEncoder = Encoder; target.TextDecoder = Decoder;
   });
   vm.runInContext('globalThis.console = { log: __log, info: __log, warn: __log, error: __log }; delete globalThis.__log;', context);
-  const script = new vm.Script('(async () => {\n' + request.code + '\n})().then(__out)', { filename: 'tool:' + request.name });
+  if (node) vm.runInContext(NODE_PRELUDE, context);
+  const script = new vm.Script('(async () => {\n' + request.code + '\n})().then(__out)', { filename: node ? 'code node' : 'tool:' + request.name });
   const timeout = request.timeoutMs || 10000;
   const pending = script.runInContext(context, { timeout });
   let timer;
   const value = await Promise.race([pending, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('stopped after ' + timeout / 1000 + ' s')), timeout); })]);
   clearTimeout(timer);
+  if (node && Array.isArray(value) && String(value[1]).length > 10 * 1024 * 1024) throw new Error('the result is too large (over 10 MB)');
   return { value: out(value), logs };
 }
 
@@ -107,7 +119,7 @@ process.stdin.on('data', (chunk) => {
       let results;
       try { results = evaluate(request); } catch (error) { send({ id: request.id, ok: false, error: String(error && error.message || error) }); continue; }
       send({ id: request.id, ok: true, results });
-    } else if (request.op === 'code') {
+    } else if (request.op === 'code' || request.op === 'node') {
       code(request).then(
         (result) => send({ id: request.id, ok: true, ...result }),
         (error) => send({ id: request.id, ok: false, error: String(error && error.message ? error.message : error) }),
@@ -220,18 +232,29 @@ export class Sandbox {
     }
   }
 
-  private request(body: Record<string, unknown>, timeoutMs: number): Promise<Record<string, unknown>> {
+  private request(body: Record<string, unknown>, timeoutMs: number, signal?: AbortSignal): Promise<Record<string, unknown>> {
+    if (signal?.aborted) return Promise.reject(new Error('aborted'));
     this.child ??= this.start();
     const id = this.nextId++;
     const child = this.child;
     return new Promise((resolve, reject) => {
-      // Past its time the process may be stuck in a loop: it is replaced.
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`stopped after ${Math.round(timeoutMs / 1000)} s`));
-        if (this.child === child) this.restart(new Error('the sandbox was restarted after a request ran too long'));
-      }, timeoutMs);
-      this.pending.set(id, { resolve, reject, timer });
+      // Past its time, or when the run is stopped, the code may still be running (perhaps in a
+      // loop): the process is replaced.
+      const stop = (error: Error, reason: string) => {
+        if (!this.pending.delete(id)) return;
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', onAbort);
+        reject(error);
+        if (this.child === child) this.restart(new Error(reason));
+      };
+      const timer = setTimeout(() => stop(new Error(`stopped after ${Math.round(timeoutMs / 1000)} s`), 'the sandbox was restarted after a request ran too long'), timeoutMs);
+      const onAbort = () => stop(new Error('aborted'), 'the sandbox was restarted after a run was stopped');
+      signal?.addEventListener('abort', onAbort, { once: true });
+      const settled = <T>(settle: (value: T) => void) => (value: T) => {
+        signal?.removeEventListener('abort', onAbort);
+        settle(value);
+      };
+      this.pending.set(id, { resolve: settled(resolve), reject: settled(reject), timer });
       this.idle();
       child.stdin.write(`${JSON.stringify({ id, ...body })}\n`);
     });
@@ -255,6 +278,21 @@ export class Sandbox {
     timeoutMs = 10_000,
   ): Promise<{ value: SandboxValue; logs: string[] }> {
     const reply = await this.request({ op: 'code', name, code, ...variables, timeoutMs }, timeoutMs + 3000);
+    if (reply.ok !== true) throw new Error(String(reply.error ?? 'the code failed'));
+    return { value: decode(reply.value), logs: (reply.logs as string[] | undefined) ?? [] };
+  }
+
+  /**
+   * Runs a workflow code node over its items' JSON. It sees `items`, `$json`, `$items` and
+   * `$input` as in n8n and may `return` items; the value is `undefined` when it returns nothing.
+   */
+  async runNode(
+    code: string,
+    items: JsonValue[],
+    options: { timeoutMs?: number; signal?: AbortSignal } = {},
+  ): Promise<{ value: SandboxValue; logs: string[] }> {
+    const timeoutMs = options.timeoutMs ?? 15_000;
+    const reply = await this.request({ op: 'node', code, items, timeoutMs }, timeoutMs + 3000, options.signal);
     if (reply.ok !== true) throw new Error(String(reply.error ?? 'the code failed'));
     return { value: decode(reply.value), logs: (reply.logs as string[] | undefined) ?? [] };
   }

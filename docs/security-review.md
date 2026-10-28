@@ -56,8 +56,9 @@
   ลองใส่แบบเดิม (vm ใน process) กลับไปชั่วคราว test จับได้ว่าเข้าถึง `process` ของ core ได้
 - อิมเมจ Docker ใช้ **Node 26** (`node:26-bookworm-slim`) ตั้งแต่ 2026-10-27: permission model ปิดเน็ตของ process sandbox ด้วย
   ตรวจในอิมเมจจริงแล้ว: TCP และ `fetch` ได้ `ERR_ACCESS_DENIED` (ถ้ารัน core เองบน Node 24 ชั้นนี้จะไม่มี เหลือชั้นอื่นทั้งหมด)
-- node "code" ของ workflow (`code-sandbox.ts`) แยก process อยู่แล้วตั้งแต่ก่อน (ไม่มีไฟล์ ไม่มี env และบน Node 26 ไม่มีเน็ต)
-  แต่ยังไม่ปิดการสร้างโค้ดจากข้อความและรันใน global ของ process นั้น ถ้าจะให้เท่ากันควรย้ายมาใช้ sandbox เดียวกัน
+- node "code" ของ workflow ใช้ sandbox เดียวกันแล้ว (`Sandbox.runNode`, 2026-10-29; ลบ `code-sandbox.ts`):
+  context ใหม่ทุกครั้ง สร้างโค้ดจากข้อความไม่ได้ ผลลัพธ์ไม่เกิน 10 MB timeout 15 วินาที หยุด run = ฆ่า process แล้วเริ่มใหม่
+  test ใน `sandbox.test.ts` ลองทางหนีแบบเดียวกับ code tool, import, ผลใหญ่เกิน, ลูปหลัง `await` และการ abort
 
 ## 3. ค่าลับ
 

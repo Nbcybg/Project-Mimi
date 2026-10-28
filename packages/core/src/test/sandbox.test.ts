@@ -96,3 +96,33 @@ test('the sandbox process itself: no files, no child processes, no keys, no code
   // Node 25 and later also fence the network under the permission model; Node 24 does not.
   if (process.allowedNodeEnvironmentFlags.has('--allow-net')) assert.equal(seen.netFenced, true);
 });
+
+test('code node: runs in the same sandbox; the escapes fail and expressions carry on', async () => {
+  const run = (code: string, signal?: AbortSignal) => sandbox().runNode(code, [{ n: 1 }, { n: 2 }], { timeoutMs: 2000, signal });
+  const done = await run('console.log($input.all().length); return items.map((item) => ({ json: { n: item.n + $json.n, last: $input.last().json.n } }));');
+  assert.deepEqual(done.value, [{ json: { n: 2, last: 2 } }, { json: { n: 3, last: 2 } }]);
+  assert.deepEqual(done.logs, ['2']);
+  for (const code of [
+    'return this.constructor.constructor("return process")().env.MIMI_SANDBOX_CANARY',
+    'return $input.all.constructor("return process")().env',
+    'return eval("process")',
+    'return new Function("return globalThis")().__mimiCanary',
+  ]) {
+    await assert.rejects(run(code), /Code generation from strings disallowed/, code);
+  }
+  assert.equal((await run('return [typeof process, typeof require, typeof fetch, typeof globalThis.__mimiCanary].join(" ")')).value, 'undefined undefined undefined undefined');
+  await assert.rejects(run('return (await import("node:fs")).readFileSync("/etc/hosts", "utf8")'), /dynamic import/);
+  await assert.rejects(run('return "x".repeat(11 * 1024 * 1024)'), /too large \(over 10 MB\)/);
+
+  // A loop after an await is past the vm's own time limit: the process is replaced.
+  await assert.rejects(run('await null; while (true) {}'), /stopped after/);
+  assert.equal(await resolveString('{{ $json.amount + 1 }}', context()), 121);
+
+  // Stopping the run stops the code, even in a loop, and the sandbox comes back.
+  const controller = new AbortController();
+  const stuck = run('await null; while (true) {}', controller.signal);
+  setTimeout(() => controller.abort(), 200);
+  await assert.rejects(stuck, /aborted/);
+  await assert.rejects(run('return 1', AbortSignal.abort()), /aborted/);
+  assert.equal((await run('return "still working"')).value, 'still working');
+});

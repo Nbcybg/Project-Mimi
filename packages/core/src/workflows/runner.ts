@@ -8,7 +8,7 @@ import type { KnowledgeStore } from '../knowledge/store.ts';
 import { renderHits } from '../knowledge/store.ts';
 import type { ApprovalDecision } from './approvals.ts';
 import { DEFAULT_TOKEN_SECRET, sendTelegram } from './telegram.ts';
-import { runCodeIsolated } from './code-sandbox.ts';
+import { sandbox } from './sandbox.ts';
 import { safeFetch, type Lookup } from './net-guard.ts';
 import { redactText } from './redact.ts';
 import { readXlsx, sheetItems } from './xlsx.ts';
@@ -616,8 +616,13 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
     case 'code': {
       const code = String(node.config.code ?? '');
       if (!code.trim()) throw new Error('code node: no code');
-      // A separate locked-down process: no files, no programs, no keys (see code-sandbox.ts).
-      const { result } = await runCodeIsolated(code, items.map((item) => item.json), { signal: ctx.signal });
+      // The same locked-down process as expressions: no files, no programs, no keys (see sandbox.ts).
+      let result: JsonValue | undefined;
+      try {
+        ({ value: result } = await sandbox().runNode(code, items.map((item) => item.json), { signal: ctx.signal }));
+      } catch (error) {
+        throw new Error(`code node: ${(error as Error).message}`);
+      }
       if (result === undefined) return { main: items };
       return { main: unwrapItems(result) };
     }

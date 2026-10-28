@@ -3,19 +3,22 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { after, test } from 'node:test';
-import type { WorkflowView } from '@mimi/shared';
+import type { JsonValue, WorkflowView } from '@mimi/shared';
 import { z } from 'zod';
 import { UserProfileStore } from '../profile/user-profile.ts';
 import { AuthLimiter } from '../server/auth-limiter.ts';
 import { startServer } from '../server/server.ts';
 import { defineTool } from '../tools/registry.ts';
-import { runCodeIsolated } from '../workflows/code-sandbox.ts';
 import { assertPublicUrl, isPrivateAddress } from '../workflows/net-guard.ts';
+import { sandbox } from '../workflows/sandbox.ts';
 import { runWorkflowNode, type WorkflowRunnerDeps, WorkflowState } from '../workflows/runner.ts';
 import { testCoreParts } from './core-helpers.ts';
 
 const tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'mimi-sec-')));
-after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+after(() => {
+  sandbox().close();
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
 
 const workflow = (): WorkflowView => ({ name: 'f', agent: 'mimi', title: 'F', description: '', enabled: true, trigger: { pool: 'manual', config: {} }, webhook: null, nodes: [] });
 
@@ -32,23 +35,24 @@ function deps(extra: Partial<WorkflowRunnerDeps> = {}): WorkflowRunnerDeps {
 }
 
 test('code sandbox: runs code on items, but no files, no programs, no keys', async () => {
-  const done = await runCodeIsolated('return items.map((item) => ({ json: { n: item.n * 2 } }));', [{ n: 2 }, { n: 5 }]);
-  assert.deepEqual(done.result, [{ json: { n: 4 } }, { json: { n: 10 } }]);
-  assert.equal((await runCodeIsolated('console.log("x"); return undefined;', [])).result, undefined);
+  const run = (code: string, items: JsonValue[] = [], timeoutMs?: number) => sandbox().runNode(code, items, { timeoutMs });
+  const done = await run('return items.map((item) => ({ json: { n: item.n * 2 } }));', [{ n: 2 }, { n: 5 }]);
+  assert.deepEqual(done.value, [{ json: { n: 4 } }, { json: { n: 10 } }]);
+  const quiet = await run('console.log("x"); return undefined;');
+  assert.equal(quiet.value, undefined);
+  assert.deepEqual(quiet.logs, ['x']);
 
   const secretFile = path.join(tmp, 'secret.txt');
   fs.writeFileSync(secretFile, 'top secret');
-  await assert.rejects(runCodeIsolated(`return require('fs').readFileSync(${JSON.stringify(secretFile)}, 'utf8');`, []), /ERR_ACCESS_DENIED|denied|restricted|not defined/i);
-  await assert.rejects(runCodeIsolated(`return require('child_process').execSync('whoami').toString();`, []), /ERR_ACCESS_DENIED|denied|restricted|not defined/i);
+  await assert.rejects(run(`return require('fs').readFileSync(${JSON.stringify(secretFile)}, 'utf8');`), /not defined/);
+  await assert.rejects(run(`return (await import('node:child_process')).execSync('whoami').toString();`), /dynamic import/);
   // The parent's keys do not reach the sandbox.
   process.env.MIMI_TEST_SECRET = 'should-not-leak';
-  const env = await runCodeIsolated('return Object.keys(process.env).filter((key) => /SECRET|KEY|TOKEN/i.test(key));', []);
-  assert.deepEqual(env.result, []);
-  // Escaping through a constructor reaches only the sandbox's own process.
-  const escape = await runCodeIsolated("return this.constructor.constructor('return typeof process.env.MIMI_TEST_SECRET')();", []);
-  assert.equal(escape.result, 'undefined');
-  await assert.rejects(runCodeIsolated('throw new Error("boom")', []), /boom/);
-  await assert.rejects(runCodeIsolated('while (true) {}', [], { timeoutMs: 1500 }), /stopped after 1.5 s/);
+  assert.equal((await run('return typeof process')).value, 'undefined');
+  // Escaping through a constructor needs code from strings, which the sandbox refuses.
+  await assert.rejects(run("return this.constructor.constructor('return process.env.MIMI_TEST_SECRET')();"), /Code generation from strings disallowed/);
+  await assert.rejects(run('throw new Error("boom")'), /boom/);
+  await assert.rejects(run('while (true) {}', [], 1500), /timed out|stopped after/);
 });
 
 test('code node: goes through the sandbox and keeps the n8n-style helpers', async () => {

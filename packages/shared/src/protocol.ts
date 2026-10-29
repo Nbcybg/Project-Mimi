@@ -163,6 +163,20 @@ export interface SessionView {
   unread: boolean;
 }
 
+/** How full a session is: what the header meter and the "Context ของ session" panel show. */
+export interface SessionContextView {
+  /** Tokens the model was sent last time (real, from the provider) or an estimate of the next prompt. */
+  usedTokens: number;
+  /** The context window the percentage is measured against (the model's, after any cap). */
+  windowTokens: number;
+  /** Cache share of the input tokens over the whole session, 0..100; null before any call. */
+  cacheHitPct: number | null;
+  costUsd: number;
+  /** Tokens said in the session so far, against maxTokens after which a new session starts. */
+  conversationTokens: number;
+  maxTokens: number;
+}
+
 /** A conversation: one agent, or a group of them. */
 export interface ChatView {
   id: number;
@@ -438,11 +452,13 @@ export { BUILTIN_TRIGGERS, NODE_TYPES, OPERATORS } from './workflows.ts';
 
 /** How much disk the user's own space is using, and what they allow for each part. */
 export interface StorageView {
-  /** Files and pictures sent in chats (bytes still on disk). */
+  /** Files and pictures sent in chats (bytes still on disk); removed after `retentionDays`. */
   media: { usedBytes: number; quotaBytes: number; files: number };
+  /** The user's own pictures and models (agent images, backdrops, outfits, gallery); kept until the user deletes them. */
+  userMedia: { usedBytes: number; quotaBytes: number };
   /** Chat text and attachment text kept in the database; never deleted by retention. */
   chat: { usedBytes: number; quotaBytes: number; messages: number };
-  /** Media older than this many days is removed automatically. */
+  /** Chat media older than this many days is removed automatically (user media is not). */
   retentionDays: number;
 }
 
@@ -493,6 +509,12 @@ export interface SettingsView {
   storage: StorageView;
   /** Which API keys of the web tools are set (never the keys themselves). */
   toolKeys: { serper: boolean; openweather: boolean };
+  /** A chat that stays silent this long starts a new session with its next message. */
+  sessionIdleMinutes: number;
+  /** A session this long (tokens of conversation) is followed by a new one; 0 = no limit. */
+  sessionMaxTokens: number;
+  /** Share of the context window at which older messages are summarized automatically (0..1). */
+  compactAt: number;
   /** False until an agent exists and its chat model's provider is connected. */
   ready: boolean;
 }
@@ -522,7 +544,9 @@ export interface SettingsChange {
   defaults?: ModelChoice;
   allowedDirs?: string[];
   /** Quotas in megabytes; 0 restores the default. */
-  storage?: { mediaQuotaMb?: number; chatQuotaMb?: number };
+  storage?: { mediaQuotaMb?: number; userMediaQuotaMb?: number; chatQuotaMb?: number };
+  /** Session rollover: minutes of silence, and tokens of conversation (0 = no limit). */
+  session?: { idleMinutes?: number; maxTokens?: number };
 }
 
 export interface MemoryView {
@@ -593,6 +617,8 @@ export type ClientMessage =
   | { type: 'chat-send'; chatId: number; text: string; attachments?: string[]; replyTo?: number; forward?: { from: string; chat: string } }
   /** Starts a new session by hand; the next message goes there. */
   | { type: 'session-new'; chatId: number }
+  /** Asks for the size, cache hit and cost of a session (the latest by default). */
+  | { type: 'session-context'; chatId: number; sessionId?: number }
   /** Pins a message (or removes the pin). */
   | { type: 'message-pin'; messageId: number; pinned: boolean }
   /** Adds the emoji as a reaction to a message, or takes it away when it is already there. */
@@ -786,6 +812,7 @@ export type ServerMessage =
   | { type: 'message-marks'; chatId: number; sessionId: number; messageId: number; pinned: boolean; reactions: string[]; pins: PinView[] }
   /** A turn landed in this session; `started` when the session was opened for it. */
   | { type: 'chat-session'; chatId: number; session: SessionView; started: boolean }
+  | { type: 'session-context'; chatId: number; sessionId: number; context: SessionContextView }
   | { type: 'chat-message'; chatId: number; sessionId: number; message: ChatMessageView }
   | { type: 'chat-event'; chatId: number; sessionId: number; agent: string; event: AgentEvent }
   /** A turn started (`done` unset) or finished (`done: true`) in this chat; turns in different chats run in parallel. */

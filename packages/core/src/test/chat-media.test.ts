@@ -334,3 +334,58 @@ test('extract_file node reads a file sent in the chat by its id', async () => {
   assert.match(failed.result, /no chat file "nope"/);
   await target.cleanup();
 });
+
+/** A mono 16-bit PCM WAV of `samples` samples, each set to `level`. */
+function wav(samples: number, level: number): Buffer {
+  const header = Buffer.alloc(44);
+  header.write('RIFF', 0, 'latin1');
+  header.writeUInt32LE(36 + samples * 2, 4);
+  header.write('WAVEfmt ', 8, 'latin1');
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(1, 22);
+  header.writeUInt32LE(16000, 24);
+  header.writeUInt32LE(32000, 28);
+  header.writeUInt16LE(2, 32);
+  header.writeUInt16LE(16, 34);
+  header.write('data', 36, 'latin1');
+  header.writeUInt32LE(samples * 2, 40);
+  const body = Buffer.alloc(samples * 2);
+  for (let i = 0; i < samples; i++) body.writeInt16LE(level, i * 2);
+  return Buffer.concat([header, body]);
+}
+
+const answering = (replies: string[]) => {
+  let call = 0;
+  return new MockLanguageModelV4({
+    doGenerate: async () => ({
+      content: [{ type: 'text', text: replies[Math.min(call++, replies.length - 1)]! }],
+      finishReason: { unified: 'stop', raw: undefined },
+      usage: {
+        inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: undefined },
+        outputTokens: { total: 1, text: 1, reasoning: undefined },
+      },
+      warnings: [],
+    }),
+  });
+};
+
+test('a recording with no sound is "(no speech)" without asking a model, and an empty answer is asked once more', async () => {
+  const silence = answering(['should not be asked']);
+  const mimi = scriptedModel([textStep('ok'), textStep('ok')]);
+  const target = await makeTestCore({ models: { mimi }, small: silence });
+  const chat = target.core.chats.directChat('mimi');
+  const quiet = target.core.attachments.save({ name: 'voice.wav', mime: 'audio/wav', data: wav(1600, 0) });
+  await turn(target, { chatId: chat.id, text: 'ฟังนี่', attachments: [quiet.id] });
+  assert.equal(target.core.attachments.get(quiet.id)!.text, '(no speech)');
+  assert.equal(silence.doGenerateCalls.length, 0);
+  await target.cleanup();
+
+  const hesitant = answering(['', 'สวัสดีค่ะ']);
+  const second = await makeTestCore({ models: { mimi: scriptedModel([textStep('ok')]) }, small: hesitant });
+  const spoken = second.core.attachments.save({ name: 'voice.wav', mime: 'audio/wav', data: wav(1600, 3000) });
+  await turn(second, { chatId: second.core.chats.directChat('mimi').id, text: 'ฟังนี่', attachments: [spoken.id] });
+  assert.equal(second.core.attachments.get(spoken.id)!.text, 'สวัสดีค่ะ');
+  assert.equal(hesitant.doGenerateCalls.length, 2);
+  await second.cleanup();
+});

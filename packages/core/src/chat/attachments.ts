@@ -5,6 +5,7 @@ import type { MessageRole } from '@mimi/shared';
 import { generateText } from 'ai';
 import type { AgentDefinition } from '../agents/loader.ts';
 import type { Db } from '../db/db.ts';
+import { providerOptionsFor } from '../providers/registry.ts';
 import type { ModelService } from '../providers/routing.ts';
 import type { UsageLogger } from '../usage/logger.ts';
 import { xlsxText } from '../workflows/xlsx.ts';
@@ -104,13 +105,12 @@ export class AttachmentStore {
   private readonly db: Db;
   private readonly dir: string;
   private readonly quotaBytes?: () => number;
-  private readonly extraUsageBytes?: () => number;
 
-  constructor(db: Db, dir: string, options: { quotaBytes?: () => number; extraUsageBytes?: () => number } = {}) {
+  /** `quotaBytes` bounds chat media only; the user's own pictures and models have their own quota. */
+  constructor(db: Db, dir: string, options: { quotaBytes?: () => number } = {}) {
     this.db = db;
     this.dir = dir;
     this.quotaBytes = options.quotaBytes;
-    this.extraUsageBytes = options.extraUsageBytes;
   }
 
   /** Bytes and files still on disk (expired media is not counted). */
@@ -150,11 +150,11 @@ export class AttachmentStore {
     if (file.data.length === 0) throw new Error('The file is empty.');
     if (file.data.length > MAX_ATTACHMENT_BYTES) throw new Error('The file is larger than 25 MB.');
     const quota = this.quotaBytes?.() ?? 0;
-    const usedBytes = quota > 0 ? this.usage().bytes + (this.extraUsageBytes?.() ?? 0) : 0;
+    const usedBytes = quota > 0 ? this.usage().bytes : 0;
     if (quota > 0 && usedBytes + file.data.length > quota) {
       const used = Math.round((usedBytes / 1024 / 1024) * 10) / 10;
       const limit = Math.round((quota / 1024 / 1024) * 10) / 10;
-      throw new AttachmentQuotaError(`Media storage is full (${used} MB of ${limit} MB). Older media is removed after ${MEDIA_RETENTION_DAYS} days, or raise the quota in Settings.`);
+      throw new AttachmentQuotaError(`Chat media storage is full (${used} MB of ${limit} MB). Older chat media is removed after ${MEDIA_RETENTION_DAYS} days, or raise the quota in Settings.`);
     }
     const id = randomUUID();
     const declared = sniffMime(file.data, file.mime);
@@ -467,37 +467,86 @@ async function readAttachment(
     return `(binary file, ${attachment.mime}, ${attachment.size} bytes; its content is not readable as text)`;
   }
 
+  // A recording with no sound in it (a muted microphone, a permission that came late) is
+  // not worth a model call, and a model has nothing to say about it.
+  if (attachment.kind === 'audio' && wavIsSilent(data)) return SILENT_AUDIO_TEXT;
+
   const capability = attachment.kind === 'audio' ? 'transcript' : 'vision';
   const ref = deps.models.resolve(capability, input.agent.models);
   const info = deps.models.info(ref);
   const model = await deps.models.languageModel(ref);
-  const startedAt = Date.now();
-  const result = await generateText({
-    model,
-    messages: [
-      {
-        role: 'user',
-        content: [
-          { type: 'text', text: PROMPTS[isPdf ? 'pdf' : (attachment.kind as 'image' | 'audio' | 'video')] },
-          { type: 'file', mediaType: isPdf ? 'application/pdf' : attachment.mime, data, filename: attachment.name },
-        ],
-      },
-    ],
-    abortSignal: input.signal,
-  });
-  deps.usage.logCall({
-    runId: null,
-    traceId: input.traceId,
-    agent: input.agent.name,
-    kind: capability,
-    model: info,
-    inputTokens: result.usage.inputTokens ?? 0,
-    outputTokens: result.usage.outputTokens ?? 0,
-    cachedTokens: result.usage.inputTokenDetails.cacheReadTokens ?? 0,
-    cacheWriteTokens: result.usage.inputTokenDetails.cacheWriteTokens ?? 0,
-    durationMs: Date.now() - startedAt,
-  });
-  const text = result.text.trim();
-  if (!text) throw new Error('the model returned nothing');
-  return text;
+  const ask = async (prompt: string) => {
+    const startedAt = Date.now();
+    const result = await generateText({
+      model,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: prompt },
+            { type: 'file', mediaType: isPdf ? 'application/pdf' : attachment.mime, data, filename: attachment.name },
+          ],
+        },
+      ],
+      providerOptions: providerOptionsFor(info),
+      abortSignal: input.signal,
+    });
+    deps.usage.logCall({
+      runId: null,
+      traceId: input.traceId,
+      agent: input.agent.name,
+      kind: capability,
+      model: info,
+      inputTokens: result.usage.inputTokens ?? 0,
+      outputTokens: result.usage.outputTokens ?? 0,
+      cachedTokens: result.usage.inputTokenDetails.cacheReadTokens ?? 0,
+      cacheWriteTokens: result.usage.inputTokenDetails.cacheWriteTokens ?? 0,
+      durationMs: Date.now() - startedAt,
+    });
+    return { text: result.text.trim(), finish: result.finishReason };
+  };
+
+  const key = isPdf ? 'pdf' : (attachment.kind as 'image' | 'audio' | 'video');
+  let answer = await ask(PROMPTS[key]);
+  // Some models answer a long instruction with nothing at all (or spend their budget thinking):
+  // one more try with the shortest possible question before giving up.
+  if (!answer.text) answer = await ask(RETRY_PROMPTS[key]);
+  if (!answer.text) throw new Error(`the model returned nothing (${info.ref.provider}/${info.ref.model}, finish: ${answer.finish})`);
+  return answer.text;
 }
+
+/** What an audio file with no sound is read as. */
+export const SILENT_AUDIO_TEXT = '(no speech)';
+
+/**
+ * True for a 16-bit PCM WAV whose samples are all (almost) zero. Any other format, or a
+ * WAV that cannot be parsed, is never called silent: the model gets to hear it.
+ */
+export function wavIsSilent(data: Buffer): boolean {
+  if (data.length < 44 || data.toString('latin1', 0, 4) !== 'RIFF' || data.toString('latin1', 8, 12) !== 'WAVE') return false;
+  let offset = 12;
+  let bits = 0;
+  while (offset + 8 <= data.length) {
+    const id = data.toString('latin1', offset, offset + 4);
+    const size = data.readUInt32LE(offset + 4);
+    const body = offset + 8;
+    if (id === 'fmt ' && body + 16 <= data.length) {
+      bits = data.readUInt16LE(body + 14);
+    } else if (id === 'data') {
+      if (bits !== 16) return false;
+      const end = Math.min(data.length, body + size);
+      let peak = 0;
+      for (let at = body; at + 1 < end; at += 2) peak = Math.max(peak, Math.abs(data.readInt16LE(at)));
+      return peak < 40;
+    }
+    offset = body + size + (size % 2);
+  }
+  return false;
+}
+
+const RETRY_PROMPTS: Record<'image' | 'audio' | 'video' | 'pdf', string> = {
+  image: 'What is in this image? Answer in a few sentences.',
+  audio: 'What is said in this recording? Write the words only, in the language spoken.',
+  video: 'What happens in this video? Answer in a few sentences.',
+  pdf: 'Write out the text of this document.',
+};

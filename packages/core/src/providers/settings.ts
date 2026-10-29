@@ -110,6 +110,8 @@ export const SettingsSchema = z.strictObject({
     .strictObject({
       /** A chat that was silent this long continues in a new session, which starts by itself. */
       idle_minutes: z.number().positive().default(240),
+      /** A session whose conversation outgrew this many tokens continues in a new one; 0 turns this off. */
+      max_tokens: z.number().int().min(0).default(200_000),
     })
     .prefault({}),
   /** Per-tool permission override: "allow" runs without asking, "ask" always asks, "deny" disables. */

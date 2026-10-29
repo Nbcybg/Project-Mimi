@@ -7,7 +7,6 @@ import { AgentCatalog } from './agents/loader.ts';
 import type { AppSettings } from './app/app-settings.ts';
 import { SecretStore } from './app/secrets.ts';
 import { type AttachmentKind, AttachmentStore, ingestAttachments, MAX_ATTACHMENT_BYTES, PROMPTS } from './chat/attachments.ts';
-import { assetBytes } from './chat/media-usage.ts';
 import { ToolFileExecutor } from './chat/tool-files.ts';
 import { ChatStore } from './chat/chat-store.ts';
 import { ChatEngine } from './chat/engine.ts';
@@ -316,10 +315,9 @@ export async function createCore(
   const backgrounds = new BackgroundStore(config.backgroundsDir);
   const gallery = new GalleryStore(config.agentsDir);
   const attachments = new AttachmentStore(db, config.filesDir, {
-    // A cloud user's disk is bounded: the settings screen owns this number, and the
-    // count includes the pictures/models kept outside chat (agents, backdrops, outfits).
+    // A cloud user's disk is bounded: the settings screen owns this number. It counts chat
+    // media only (which expires); pictures and models the user keeps have their own quota.
     quotaBytes: () => options.app?.storage.mediaQuotaBytes ?? 0,
-    extraUsageBytes: () => assetBytes([config.agentsDir, config.backgroundsDir, config.wardrobeDir]),
   });
 
   // The database stays the source of truth; the mirrors under `user/sessions`,
@@ -356,7 +354,9 @@ export async function createCore(
   mirror(() => memoryFiles.sync(memory.list()));
   mirror(() => sessionFiles.sync(chats));
   mirror(() => historyFiles.sync(messages));
-  const idleMs = settings.session.idle_minutes * 60_000;
+  // The app's settings screen may override mimi.json, and the change applies to the next message.
+  const sessionIdleMs = () => (options.app?.session.idleMinutes ?? settings.session.idle_minutes) * 60_000;
+  const sessionMaxTokens = () => options.app?.session.maxTokens ?? settings.session.max_tokens;
   /** The agent that answers when a client names none: the configured one, else the first normal agent. */
   const defaultAgentName = (): string | null => {
     const names = agents.names();
@@ -1011,7 +1011,7 @@ export async function createCore(
   function postUserMessage(chatId: number, text: string, attachmentIds: string[] = []): { sessionId: number; id: number; createdAt: string } {
     const chat = chats.getChat(chatId);
     if (!chat) throw new Error(`Chat #${chatId} does not exist.`);
-    const { session } = chats.currentSession(chat.id, idleMs);
+    const { session } = chats.currentSession(chat.id, sessionIdleMs(), sessionMaxTokens());
     const id = messages.append({ thread: session.thread, traceId: randomUUID(), agent: chat.agents[0] ?? '', role: 'user', content: text, text });
     if (attachmentIds.length > 0) attachments.link(attachmentIds, id);
     chats.touch(session.id);
@@ -1207,7 +1207,7 @@ export async function createCore(
     let thread = USER_THREAD;
     if (agents.names().includes(speaker)) {
       const chat = chats.directChat(speaker);
-      const { session } = chats.currentSession(chat.id, idleMs);
+      const { session } = chats.currentSession(chat.id, sessionIdleMs(), sessionMaxTokens());
       chats.touch(session.id);
       chatId = chat.id;
       thread = session.thread;
@@ -1341,7 +1341,12 @@ export async function createCore(
     attachments,
     models,
     usage,
-    idleMs,
+    get idleMs() {
+      return sessionIdleMs();
+    },
+    get maxSessionTokens() {
+      return sessionMaxTokens();
+    },
     maxGroupTurns: settings.mesh.max_hops,
     run: runWithHandoffs,
     beforeRun: async (thread, agent) => {

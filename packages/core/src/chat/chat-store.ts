@@ -179,14 +179,52 @@ export class ChatStore {
    * The session a new message belongs to. If the chat has been silent for longer than
    * `idleMs`, a new session starts by itself; `previous` is then the one that just ended.
    */
-  currentSession(chatId: number, idleMs: number): { session: Session; previous: Session | null; started: boolean } {
+  currentSession(
+    chatId: number,
+    idleMs: number,
+    maxTokens = 0,
+  ): { session: Session; previous: Session | null; started: boolean } {
     const [latest] = this.sessions(chatId, 1);
     if (!latest) return { session: this.newSession(chatId, true), previous: null, started: true };
     const idle = this.now().getTime() - new Date(latest.lastMessageAt).getTime();
     // A session nobody has written in yet is reused, however old it is.
     const empty = latest.lastMessageAt === latest.createdAt && !this.hasMessages(latest.thread);
-    if (idle <= idleMs || empty) return { session: latest, previous: null, started: false };
+    if (empty) return { session: latest, previous: null, started: false };
+    // A conversation that grew past maxTokens moves on, silent or not; its summary goes with it.
+    const full = maxTokens > 0 && this.sessionTokens(latest.thread) >= maxTokens;
+    if (idle <= idleMs && !full) return { session: latest, previous: null, started: false };
     return { session: this.newSession(chatId, true), previous: latest, started: true };
+  }
+
+  /** Estimated size of everything said in a thread (UTF-8 bytes / 3, like the prompt estimate). */
+  sessionTokens(thread: string): number {
+    const row = this.db
+      .prepare(`SELECT COALESCE(SUM(length(CAST(content AS BLOB))), 0) AS bytes FROM messages WHERE thread = ? AND hidden_at IS NULL`)
+      .get(thread) as { bytes: number };
+    return Math.ceil(Number(row.bytes) / 3);
+  }
+
+  /** What a session cost and how much of its input the cache served, from the model calls of its turns. */
+  sessionUsage(thread: string): { costUsd: number; inputTokens: number; cachedTokens: number; lastPromptTokens: number } {
+    const traces = `SELECT DISTINCT trace_id FROM messages WHERE thread = ?`;
+    const total = this.db
+      .prepare(
+        `SELECT COALESCE(SUM(cost_usd), 0) AS cost, COALESCE(SUM(input_tokens), 0) AS input, COALESCE(SUM(cached_tokens), 0) AS cached
+           FROM usage_log WHERE trace_id IN (${traces})`,
+      )
+      .get(thread) as { cost: number; input: number; cached: number };
+    const last = this.db
+      .prepare(
+        `SELECT input_tokens + output_tokens AS size FROM usage_log
+          WHERE capability = 'chat' AND trace_id IN (${traces}) ORDER BY id DESC LIMIT 1`,
+      )
+      .get(thread) as { size: number } | undefined;
+    return {
+      costUsd: Number(total.cost),
+      inputTokens: Number(total.input),
+      cachedTokens: Number(total.cached),
+      lastPromptTokens: Number(last?.size ?? 0),
+    };
   }
 
   private hasMessages(thread: string): boolean {

@@ -759,9 +759,15 @@ function liveStart() {
   live.clock = new THREE.Timer();
   live.observer = new ResizeObserver(() => liveResize());
 
-  const tick = () => {
+  let lastDraw = 0;
+  const tick = (now = performance.now()) => {
     requestAnimationFrame(tick);
     if (!canvas.isConnected || document.hidden || !live.vrm) return;
+    // While a text field has the keyboard the character redraws at ~15 fps: typing (and
+    // holding Backspace) stays smooth on a phone, which cannot do both at full rate.
+    const field = document.activeElement;
+    if (field && (field.tagName === 'TEXTAREA' || field.tagName === 'INPUT') && now - lastDraw < 66) return;
+    lastDraw = now;
     live.clock.update();
     const delta = Math.min(live.clock.getDelta(), 0.1);
     const t = live.clock.getElapsed();

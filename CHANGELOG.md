@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### 0.7.3-prototype
+
+- Auto-update works again: the apps look at GitHub's "latest release", which skips
+  pre-releases, and v0.7.1 / v0.7.2 had been published as pre-releases. Tags like
+  `v0.7.3-prototype` are now normal releases (only `-rc` / `-beta` are held back).
+- Sessions roll over by length too: once a conversation passes `session.max_tokens`
+  (default 200 000, 0 = off) the next message opens a new session with the old
+  one summarized, besides the silence rule. Both numbers are editable in
+  Settings → แอปและระบบ → Session อัตโนมัติ.
+- Context meter from the first design: a percentage at the top of the chat and a
+  "Context ของ session" panel in the chat settings (tokens used / window,
+  cache hit, cost of the session, summary threshold, session-length limit).
+- Storage is split: chat media (removed after 7 days) and the user's own media
+  (agent pictures, backdrops, outfits, gallery, VRM; kept until deleted), each
+  with its own quota.
+- Google / Microsoft accounts and the search / weather keys live only in
+  Hub → บัญชี; the duplicate forms in Settings are gone.
+- A voice recording with no sound is read as "(no speech)" without a model call,
+  and a model that answers a transcription with nothing is asked once more.
+- Typing on a phone: no blur behind the message box, and the character redraws at
+  ~15 fps while a text field has focus. The chat-settings card scrolls as a whole.
+
 ### 0.7.2-prototype
 
 - Each picture in a batch can carry its own caption ("คำบรรยายรูปนี้"): it shows

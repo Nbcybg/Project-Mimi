@@ -142,6 +142,13 @@ test('chats over the socket: create, send with a file, search, go back', async (
     [['user', 'จำรายการนี้ไว้', 1], ['assistant', 'รับทราบค่ะ', 0], ['user', 'ข้อความที่สอง', 0], ['assistant', 'รับทราบค่ะ', 0]],
   );
   assert.equal(history.session!.title, 'จำรายการนี้ไว้');
+
+  // The header meter and the "Context ของ session" panel ask for these numbers.
+  const context = await app.ask({ type: 'session-context', chatId, sessionId: history.session!.id }, 'session-context');
+  assert.equal(context.sessionId, history.session!.id);
+  assert.ok(context.context.windowTokens > 0 && context.context.usedTokens > 0, 'the prompt size is estimated even without a provider report');
+  assert.ok(context.context.conversationTokens > 0 && context.context.maxTokens === 200_000);
+  assert.ok(context.context.costUsd >= 0);
   const listed = await app.ask({ type: 'chats-list' }, 'chats');
   assert.deepEqual(listed.chats.map((chat) => [chat.id, chat.preview]), [[chatId, 'รับทราบค่ะ']]);
   assert.equal(listed.chats[0]!.unread, false, 'opening the chat clears the new mark');

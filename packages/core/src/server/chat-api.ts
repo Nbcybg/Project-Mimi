@@ -462,6 +462,31 @@ export function createChatApi(context: ChatApiContext) {
         reply(historyMessage(chat.id, session.id));
         return true;
       }
+      case 'session-context': {
+        const chat = chats.getChat(Number(message.chatId));
+        if (!chat) throw new Error(`Chat #${message.chatId} does not exist.`);
+        const session = message.sessionId !== undefined ? chats.getSession(Number(message.sessionId)) : chats.sessions(chat.id, 1)[0];
+        if (!session || session.chatId !== chat.id) return true;
+        const known = chat.agents.filter((name) => core.agents.names().includes(name));
+        if (known.length === 0) return true;
+        const agent = core.agents.get(known[0]!);
+        const usage = chats.sessionUsage(session.thread);
+        const windowTokens = core.compactor.contextWindow(agent);
+        reply({
+          type: 'session-context',
+          chatId: chat.id,
+          sessionId: session.id,
+          context: {
+            usedTokens: usage.lastPromptTokens > 0 ? usage.lastPromptTokens : core.compactor.estimatePromptTokens(session.thread, agent),
+            windowTokens,
+            cacheHitPct: usage.inputTokens > 0 ? Math.round((usage.cachedTokens / usage.inputTokens) * 100) : null,
+            costUsd: usage.costUsd,
+            conversationTokens: chats.sessionTokens(session.thread),
+            maxTokens: appSettings.session.maxTokens ?? core.settings.session.max_tokens,
+          },
+        });
+        return true;
+      }
       case 'rewind': {
         if (context.busy()) throw new Error('Wait for the running turn to finish, or stop it, before going back.');
         const session = chats.getSession(Number(message.sessionId));

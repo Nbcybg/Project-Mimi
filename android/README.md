@@ -16,7 +16,7 @@
 ## Build
 
 ไม่ต้อง build เอง: `.github/workflows/release.yml` build ให้ทุกครั้งที่ push tag `v*` แล้วแนบ `Mimi-<version>-android.apk` ใน GitHub release
-(tag ที่มี `-` เช่น `v0.7.0-prototype` เป็น pre-release: ตัวเช็กอัปเดตของแอปข้ามไป)
+(ตัวเช็กอัปเดตของแอปอ่าน "latest release" ของ GitHub ซึ่งข้าม pre-release: tag อย่าง `v0.7.3-prototype` เป็น release ปกติ มีแต่ tag ที่ลงท้าย `-rc` / `-beta` เท่านั้นที่เป็น pre-release)
 
 - เซิร์ฟเวอร์ที่แอปเปิด: repository variable `MIMI_ANDROID_HOST` (ค่าเริ่มต้นคือโดเมน Railway ของ core)
 - กุญแจเซ็น: secrets `ANDROID_KEYSTORE_BASE64` + `ANDROID_KEYSTORE_PASSWORD` (PKCS#12, alias `mimi`) ต้องใช้กุญแจเดิมตลอด

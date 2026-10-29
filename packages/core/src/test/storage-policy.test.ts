@@ -16,9 +16,9 @@ test('storage quotas default and survive a restart', () => {
   const dir = tempDir();
   const file = path.join(dir, 'app-settings.json');
   const first = AppSettings.load(file);
-  assert.deepEqual(first.storage, { mediaQuotaBytes: 2_048 * 1024 * 1024, chatQuotaBytes: 1_024 * 1024 * 1024 });
-  first.setStorage({ mediaQuotaMb: 3_000, chatQuotaMb: 200 });
-  assert.deepEqual(AppSettings.load(file).storage, { mediaQuotaBytes: 3_000 * 1024 * 1024, chatQuotaBytes: 200 * 1024 * 1024 });
+  assert.deepEqual(first.storage, { mediaQuotaBytes: 2_048 * 1024 * 1024, userMediaQuotaBytes: 2_048 * 1024 * 1024, chatQuotaBytes: 1_024 * 1024 * 1024 });
+  first.setStorage({ mediaQuotaMb: 3_000, userMediaQuotaMb: 500, chatQuotaMb: 200 });
+  assert.deepEqual(AppSettings.load(file).storage, { mediaQuotaBytes: 3_000 * 1024 * 1024, userMediaQuotaBytes: 500 * 1024 * 1024, chatQuotaBytes: 200 * 1024 * 1024 });
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

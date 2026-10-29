@@ -37,11 +37,29 @@ interface StoredSettings {
   /** The model pool: named presets (model + sampling settings) that agents and skills refer to by name. */
   presets: Record<string, ModelPreset>;
   allowedDirs: string[];
-  /** How much disk the user allows for chat media and for chat text, in bytes. */
-  storage: { mediaQuotaBytes: number; chatQuotaBytes: number };
+  /**
+   * How much disk the user allows, in bytes: chat media (expires), the user's own media
+   * (pictures and models kept until deleted) and chat text.
+   */
+  storage: StorageQuotas;
+  /** Session rollover set in the app; unset keeps what mimi.json says. */
+  session: SessionPolicy;
   preferences: PreferencesView;
   /** Screen settings every device of the user shares (character position, sounds, …), key → value. */
   ui: Record<string, string>;
+}
+
+export interface SessionPolicy {
+  /** Minutes of silence after which the next message opens a new session. */
+  idleMinutes?: number;
+  /** Tokens a session's conversation may reach before the next message opens a new one; 0 = never. */
+  maxTokens?: number;
+}
+
+export interface StorageQuotas {
+  mediaQuotaBytes: number;
+  userMediaQuotaBytes: number;
+  chatQuotaBytes: number;
 }
 
 /** Keys of `ui`: "mimi." and up to 200 characters; values up to 4000; at most 1000 keys. */
@@ -63,7 +81,19 @@ function savedQuotaBytes(value: unknown, fallbackMb: number): number {
   return Math.round(Math.min(bytes, 100_000 * 1024 * 1024));
 }
 
+/** Only sane numbers survive; anything else means "use the mimi.json value". */
+function sessionPolicy(value: unknown): SessionPolicy {
+  const raw = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>;
+  const out: SessionPolicy = {};
+  const idle = Number(raw.idleMinutes);
+  if (raw.idleMinutes !== undefined && Number.isFinite(idle) && idle >= 1) out.idleMinutes = Math.min(Math.round(idle), 60 * 24 * 365);
+  const max = Number(raw.maxTokens);
+  if (raw.maxTokens !== undefined && Number.isFinite(max) && max >= 0) out.maxTokens = Math.min(Math.round(max), 100_000_000);
+  return out;
+}
+
 const DEFAULT_MEDIA_QUOTA_MB = 2_048;
+const DEFAULT_USER_MEDIA_QUOTA_MB = 2_048;
 const DEFAULT_CHAT_QUOTA_MB = 1_024;
 
 /**
@@ -96,8 +126,10 @@ export class AppSettings {
       allowedDirs: Array.isArray(stored.allowedDirs) ? stored.allowedDirs.map(String) : [],
       storage: {
         mediaQuotaBytes: savedQuotaBytes(stored.storage?.mediaQuotaBytes, DEFAULT_MEDIA_QUOTA_MB),
+        userMediaQuotaBytes: savedQuotaBytes(stored.storage?.userMediaQuotaBytes, DEFAULT_USER_MEDIA_QUOTA_MB),
         chatQuotaBytes: savedQuotaBytes(stored.storage?.chatQuotaBytes, DEFAULT_CHAT_QUOTA_MB),
       },
+      session: sessionPolicy(stored.session),
       preferences: { ...stored.preferences },
       ui: stored.ui && typeof stored.ui === 'object' ? { ...stored.ui } : {},
     });
@@ -122,13 +154,24 @@ export class AppSettings {
     return this.data.allowedDirs;
   }
 
-  get storage(): { mediaQuotaBytes: number; chatQuotaBytes: number } {
+  get session(): SessionPolicy {
+    return this.data.session;
+  }
+
+  /** Values as typed on the settings screen; a bad one goes back to the mimi.json default. */
+  setSession(change: { idleMinutes?: number; maxTokens?: number }): void {
+    this.data.session = sessionPolicy({ ...this.data.session, ...change });
+    this.save();
+  }
+
+  get storage(): StorageQuotas {
     return this.data.storage;
   }
 
   /** Quotas arrive as megabytes from the settings screen; 0 or a bad value resets to default. */
-  setStorage(change: { mediaQuotaMb?: number; chatQuotaMb?: number }): void {
+  setStorage(change: { mediaQuotaMb?: number; userMediaQuotaMb?: number; chatQuotaMb?: number }): void {
     if (change.mediaQuotaMb !== undefined) this.data.storage.mediaQuotaBytes = quotaBytes(change.mediaQuotaMb, DEFAULT_MEDIA_QUOTA_MB);
+    if (change.userMediaQuotaMb !== undefined) this.data.storage.userMediaQuotaBytes = quotaBytes(change.userMediaQuotaMb, DEFAULT_USER_MEDIA_QUOTA_MB);
     if (change.chatQuotaMb !== undefined) this.data.storage.chatQuotaBytes = quotaBytes(change.chatQuotaMb, DEFAULT_CHAT_QUOTA_MB);
     this.save();
   }

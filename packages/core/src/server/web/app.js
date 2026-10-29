@@ -1222,6 +1222,7 @@
           state.typingByChat.delete(chatId);
         }
         live = null;
+        if (state.chat && state.chat.id === chatId) requestContext();
         renderHeader();
         renderChatList();
         break;
@@ -1257,6 +1258,51 @@
     }
     return node;
   }
+  /** The size of the open session: the percentage at the top and the panel in the chat settings. */
+  const fmtTokens = (value) => (value >= 100000 ? `${Math.round(value / 1000)}k` : value.toLocaleString('en-US'));
+  function currentContext() {
+    const known = state.sessionContext;
+    return known && state.chat && state.session && known.chatId === state.chat.id && known.sessionId === state.session.id ? known.context : null;
+  }
+  function requestContext() {
+    if (state.chat && state.session) send({ type: 'session-context', chatId: state.chat.id, sessionId: state.session.id });
+  }
+  function renderContextMeter() {
+    const box = $('ctx-box');
+    const context = currentContext();
+    box.hidden = !context || context.windowTokens <= 0;
+    if (box.hidden) return;
+    const pct = Math.min(100, Math.round((context.usedTokens / context.windowTokens) * 100));
+    const compactAt = Math.round(((state.settings && state.settings.compactAt) || 0.65) * 100);
+    $('ctx-meter').firstElementChild.style.width = `${pct}%`;
+    $('ctx-meter').classList.toggle('warn', pct >= compactAt);
+    $('ctx-pct').textContent = `${pct}%`;
+    box.title = `context ${context.usedTokens.toLocaleString('en-US')} / ${context.windowTokens.toLocaleString('en-US')} token`;
+  }
+  /** "Context ของ session": how full it is, what it cost, and when it is summarized or replaced. */
+  function contextPanel() {
+    const context = currentContext();
+    if (!context || context.windowTokens <= 0) return null;
+    const pct = Math.min(100, (context.usedTokens / context.windowTokens) * 100);
+    const compactAt = Math.round(((state.settings && state.settings.compactAt) || 0.65) * 100);
+    const section = el('div', `ctxpanel${pct >= compactAt ? ' warn' : ''}`);
+    section.append(el('h3', '', 'Context ของ session'));
+    const bar = el('progress');
+    bar.max = 100;
+    bar.value = pct;
+    const rows = [
+      ['ใช้ไป', `${fmtTokens(context.usedTokens)} / ${fmtTokens(context.windowTokens)}`],
+      ['cache hit', context.cacheHitPct === null ? '—' : `${context.cacheHitPct}%`],
+      ['ค่าใช้จ่าย session นี้', `$${context.costUsd.toFixed(4)}`],
+      ['สรุปอัตโนมัติเมื่อถึง', `${compactAt}%`],
+      ['session ใหม่เมื่อคุยยาวถึง', context.maxTokens > 0 ? `${fmtTokens(context.conversationTokens)} / ${fmtTokens(context.maxTokens)}` : 'ไม่จำกัด'],
+    ];
+    const stat = el('div', 'stat');
+    for (const [label, value] of rows) stat.append(el('span', '', label), el('span', '', value));
+    section.append(bar, stat);
+    return section;
+  }
+
   function renderHeader() {
     const chat = state.chat;
     applyTextSize();
@@ -1313,6 +1359,7 @@
     bar.replaceChildren(...chips);
     bar.hidden = chips.length === 0;
 
+    renderContextMeter();
     window.MimiHooks?.stage?.refresh();
 
     $('box').hidden = !chat || !state.latest;
@@ -1425,7 +1472,14 @@
         sessions.append(row);
       }
       if (state.sessions.length === 0) sessions.append(el('div', 'empty', 'ยังไม่มี session — เริ่มเองอัตโนมัติเมื่อส่งข้อความแรก'));
+      const idleMinutes = state.settings && state.settings.sessionIdleMinutes;
+      if (idleMinutes) {
+        const hours = idleMinutes >= 60 ? `${Math.round((idleMinutes / 60) * 10) / 10} ชั่วโมง` : `${idleMinutes} นาที`;
+        sessions.append(el('p', 'hint', `session ใหม่เริ่มเองเมื่อแชตเงียบเกิน ${hours} แล้วคุณส่งข้อความถัดไป (ไม่มีตัวจับเวลาเปิด session ว่าง) · Mimi สรุป session เดิมให้ตัวใหม่เอง · ปรับได้ที่ mimi.json → session.idle_minutes`));
+      }
       nodes.push(sessions);
+      const contextSection = contextPanel();
+      if (contextSection) nodes.push(contextSection);
 
       if (chat.kind === 'direct') {
         const agent = agentOf(chat.agents[0]);
@@ -2773,13 +2827,14 @@
   const SETTINGS_TABS = [
     ['profile', 'โปรไฟล์ของฉัน', 'ข้อมูลของคุณ งบประมาณ การแจ้งเตือน และการสำรองข้อมูล'],
     ['memory', 'ความจำ', 'สิ่งที่ Mimi จำเกี่ยวกับคุณ — ใช้ร่วมกันทุก agent'],
-    ['app', 'แอปและระบบ', 'ผู้ให้บริการโมเดล โมเดลเริ่มต้น พื้นที่เก็บข้อมูล โฟลเดอร์ และบัญชี Google / Microsoft'],
+    ['app', 'แอปและระบบ', 'ผู้ให้บริการโมเดล โมเดลเริ่มต้น พื้นที่เก็บข้อมูล session อัตโนมัติ และโฟลเดอร์'],
   ];
 
-  /** Disk use split the way the user pays for it: chat media (expires) and chat text (kept). */
+  /** Disk use split the way the user pays for it: chat media (expires), the user's own media (kept) and chat text (kept). */
   function storagePanel() {
     const info = state.settings.storage || {
       media: { usedBytes: 0, quotaBytes: 0, files: 0 },
+      userMedia: { usedBytes: 0, quotaBytes: 0 },
       chat: { usedBytes: 0, quotaBytes: 0, messages: 0 },
       retentionDays: 7,
     };
@@ -2789,7 +2844,7 @@
       el(
         'p',
         'hint',
-        `มีเดีย (รูป เสียง วิดีโอ ไฟล์ในแชต + รูป agent / ฉากหลัง / ชุด) เก็บ ${info.retentionDays} วันแล้วลบอัตโนมัติ — เก็บเกินโควตาจะอัปโหลดใหม่ไม่ได้ · ข้อความแชตไม่ถูกลบ ดาวน์โหลด CSV เก็บไว้ในเครื่องได้`,
+        `มีเดียแชต (รูป เสียง วิดีโอ ไฟล์ที่ส่งในแชต) เก็บ ${info.retentionDays} วันแล้วลบอัตโนมัติ · มีเดียของฉัน (รูป agent / ฉากหลัง / ชุด / แกลเลอรี / โมเดล VRM) เก็บไว้จนกว่าจะลบเอง · แต่ละส่วนมีโควตาของตัวเอง เกินแล้วอัปโหลดเพิ่มไม่ได้ · ข้อความแชตไม่ถูกลบ ดาวน์โหลด CSV เก็บไว้ในเครื่องได้`,
       ),
     );
     const addMeter = (label, part, extra) => {
@@ -2807,7 +2862,8 @@
       return box;
     };
     panel.append(
-      addMeter('มีเดีย', info.media, `${info.media.files} ไฟล์`),
+      addMeter('มีเดียแชต', info.media, `${info.media.files} ไฟล์ · ลบเองใน ${info.retentionDays} วัน`),
+      addMeter('มีเดียของฉัน', info.userMedia, 'เก็บตลอด'),
       addMeter('แชต', info.chat, `${info.chat.messages} ข้อความ`),
     );
     if (info.chat.quotaBytes > 0 && info.chat.usedBytes >= info.chat.quotaBytes) {
@@ -2816,17 +2872,21 @@
     const mediaMb = textInput(String(Math.round(info.media.quotaBytes / 1024 / 1024)), 'MB', 'number');
     mediaMb.min = '100';
     mediaMb.step = '100';
+    const userMediaMb = textInput(String(Math.round(info.userMedia.quotaBytes / 1024 / 1024)), 'MB', 'number');
+    userMediaMb.min = '100';
+    userMediaMb.step = '100';
     const chatMb = textInput(String(Math.round(info.chat.quotaBytes / 1024 / 1024)), 'MB', 'number');
     chatMb.min = '100';
     chatMb.step = '100';
     const saveQuota = () => {
       flash('กำลังบันทึก…');
-      send({ type: 'settings-save', storage: { mediaQuotaMb: Number(mediaMb.value) || 0, chatQuotaMb: Number(chatMb.value) || 0 } });
+      send({ type: 'settings-save', storage: { mediaQuotaMb: Number(mediaMb.value) || 0, userMediaQuotaMb: Number(userMediaMb.value) || 0, chatQuotaMb: Number(chatMb.value) || 0 } });
     };
     mediaMb.onchange = saveQuota;
+    userMediaMb.onchange = saveQuota;
     chatMb.onchange = saveQuota;
     const grid = el('div', 'grid2');
-    grid.append(labelled('โควตามีเดีย (MB)', mediaMb), labelled('โควตาแชต (MB)', chatMb));
+    grid.append(labelled('โควตามีเดียแชต (MB)', mediaMb), labelled('โควตามีเดียของฉัน (MB)', userMediaMb), labelled('โควตาข้อความแชต (MB)', chatMb));
     panel.append(grid);
     panel.append(
       button('btn', 'ดาวน์โหลดแชตทั้งหมด (CSV)', () => downloadFromApi('/api/export/chats.csv', 'mimi-chats.csv'), 'ข้อความและรายชื่อไฟล์ของทุกแชต — ไม่มีตัวไฟล์มีเดีย'),
@@ -2936,88 +2996,38 @@
         }
       }
       general.append(defaults);
+      general.append(el('h4', '', 'Session อัตโนมัติ'), el('p', 'hint', 'ข้อความถัดไปจะเปิด session ใหม่ให้เอง (และสรุป session เดิมใส่ให้) เมื่อแชตเงียบนานเกินกำหนด หรือบทสนทนายาวเกินจำนวน token · ใส่ 0 ที่ token = ไม่จำกัด'));
+      const sessionGrid = el('div', 'grid2');
+      const idleField = textInput(String(view.sessionIdleMinutes), 'นาที', 'number');
+      idleField.min = '1';
+      idleField.step = '30';
+      idleField.dataset.session = 'idleMinutes';
+      const maxField = textInput(String(view.sessionMaxTokens), 'token', 'number');
+      maxField.min = '0';
+      maxField.step = '10000';
+      maxField.dataset.session = 'maxTokens';
+      sessionGrid.append(labelled('เงียบนานเกิน (นาที)', idleField), labelled('บทสนทนายาวเกิน (token)', maxField));
+      general.append(sessionGrid);
       general.append(el('h4', '', 'โฟลเดอร์ที่อนุญาตให้อ่าน/เขียนไฟล์และรันคำสั่ง'), el('p', 'hint', 'บรรทัดละหนึ่งโฟลเดอร์ บรรทัดแรกคือโฟลเดอร์ทำงานหลัก'));
       const dirs = el('textarea');
       dirs.value = view.allowedDirs.join('\n');
       dirs.dataset.initial = dirs.value;
       general.append(dirs);
-      // On a server the providers send the browser back to this address; it has to be registered.
-      const redirect = view.oauthRedirectUri;
-      general.append(
-        el('h4', '', 'Gmail และ Google Calendar'),
-        el(
-          'p',
-          'hint',
-          view.google.connected
-            ? 'เชื่อมต่อแล้ว ✓'
-            : redirect
-              ? `สร้าง OAuth client ชนิด "Web application" ใน Google Cloud Console แล้วเพิ่ม Authorized redirect URI เป็น ${redirect} วางสองค่านี้ บันทึก จากนั้นกดเชื่อมต่อ`
-              : 'สร้าง OAuth client ชนิด "Desktop app" ใน Google Cloud Console แล้ววางสองค่านี้ บันทึก จากนั้นกดเชื่อมต่อ',
-        ),
-      );
-      const google = el('div', 'grid2');
+      // Google and Microsoft sign-ins live in one place: Hub → บัญชี (several accounts, each with its own client).
       const googleKeys = [];
-      for (const [key, label] of [['GOOGLE_OAUTH_CLIENT_ID', 'Client ID'], ['GOOGLE_OAUTH_CLIENT_SECRET', 'Client secret']]) {
-        const field = textInput('', view.google.hasClient ? 'ใส่แล้ว ✓' : 'วางค่าที่นี่', 'password');
-        field.dataset.key = key;
-        googleKeys.push(field);
-        google.append(labelled(label, field));
-      }
-      general.append(google);
-      const connectGoogle = button('btn', view.google.connected ? 'เชื่อมต่อ Google ใหม่' : 'เชื่อมต่อ Google', () => send({ type: 'google-connect' }));
-      connectGoogle.disabled = !view.google.hasClient;
-      const googleLink = el('span');
-      googleLink.id = 'google-link';
-      const googleRow = el('div', 'btns');
-      googleRow.style.marginTop = '8px';
-      googleRow.append(connectGoogle, googleLink);
-      general.append(googleRow);
-
-      general.append(
-        el('h4', '', 'Outlook, ปฏิทิน Outlook และ Microsoft To Do'),
-        el(
-          'p',
-          'hint',
-          view.microsoft.connected
-            ? 'เชื่อมต่อแล้ว ✓'
-            : redirect
-              ? `ลงทะเบียนแอปที่ Azure Portal → App registrations แล้วเพิ่ม redirect URI ${redirect} · แอปที่มี client secret (platform "Web" เช่นแอปที่ทำไว้ให้ n8n): ใส่ URI นี้ใต้ "Web" แล้วใส่ secret ด้วย · ไม่มี secret: ใส่ใต้ "Mobile and desktop applications" · วางค่า บันทึก แล้วกดเชื่อมต่อ`
-              : 'ลงทะเบียนแอปที่ Azure Portal → App registrations แล้วเพิ่ม platform "Mobile and desktop applications" โดยใส่ redirect URI เป็น http://localhost จากนั้นวาง Application (client) ID ที่นี่ บันทึก แล้วกดเชื่อมต่อ (ไม่ต้องใช้ client secret)',
-        ),
+      const accountsRow = el('div', 'btns');
+      accountsRow.style.marginTop = '8px';
+      accountsRow.append(
+        button('btn', 'ไปที่ Hub → บัญชี', () => {
+          ui.hubTab = 'accounts';
+          setView('hub');
+        }),
       );
-      const microsoft = el('div', 'grid2');
-      for (const [key, label, placeholder, type] of [
-        ['MICROSOFT_CLIENT_ID', 'Application (client) ID', view.microsoft.hasClient ? 'ใส่แล้ว ✓' : 'วางค่าที่นี่'],
-        ['MICROSOFT_CLIENT_SECRET', 'Client secret (เฉพาะแอปแบบ Web)', view.microsoft.hasSecret ? 'ใส่แล้ว ✓' : 'เว้นว่างถ้าเป็นแอปแบบ Mobile/desktop', 'password'],
-        ['MICROSOFT_TENANT', 'Tenant (ไม่บังคับ)', 'common — ใช้ได้ทั้งบัญชีส่วนตัวและบัญชีองค์กร'],
-      ]) {
-        const field = textInput('', placeholder, type);
-        field.dataset.key = key;
-        googleKeys.push(field);
-        microsoft.append(labelled(label, field));
-      }
-      general.append(microsoft);
-      const connectMicrosoft = button('btn', view.microsoft.connected ? 'เชื่อมต่อ Microsoft ใหม่' : 'เชื่อมต่อ Microsoft', () => send({ type: 'microsoft-connect' }));
-      connectMicrosoft.disabled = !view.microsoft.hasClient;
-      const microsoftLink = el('span');
-      microsoftLink.id = 'microsoft-link';
-      const microsoftRow = el('div', 'btns');
-      microsoftRow.style.marginTop = '8px';
-      microsoftRow.append(connectMicrosoft, microsoftLink);
-      general.append(microsoftRow);
-
-      general.append(el('h4', '', 'คีย์ของเครื่องมือค้นหา'), el('p', 'hint', 'ใช้กับเครื่องมือ web_search, map_search และ weather คีย์เก็บในเครื่องนี้เท่านั้น · คีย์ลับส่วนตัว (vault) อยู่ที่หน้า Hub → คีย์ลับ'));
-      const toolKeys = el('div', 'grid2');
-      for (const [key, label, isSet] of [
-        ['SERPER_API_KEY', 'ค้นเว็บ + แผนที่ (serper.dev)', view.toolKeys.serper],
-        ['OPENWEATHER_API_KEY', 'พยากรณ์อากาศ (openweathermap.org)', view.toolKeys.openweather],
-      ]) {
-        const field = textInput('', isSet ? 'ใส่แล้ว ✓' : 'วาง API key ที่นี่', 'password');
-        field.dataset.key = key;
-        googleKeys.push(field);
-        toolKeys.append(labelled(label, field));
-      }
-      general.append(toolKeys);
+      general.append(
+        el('h4', '', 'บัญชีและคีย์บริการภายนอก'),
+        el('p', 'hint', `${view.google.connected ? 'Google เชื่อมต่อแล้ว ✓' : 'Google ยังไม่เชื่อมต่อ'} · ${view.microsoft.connected ? 'Microsoft เชื่อมต่อแล้ว ✓' : 'Microsoft ยังไม่เชื่อมต่อ'} · ค้นเว็บ/แผนที่ ${view.toolKeys.serper ? '✓' : '—'} · พยากรณ์อากาศ ${view.toolKeys.openweather ? '✓' : '—'} — Gmail, Outlook, ปฏิทิน, คีย์ค้นหา และคีย์พยากรณ์อากาศ ตั้งที่เดียวที่ Hub → บัญชี (ใช้ได้หลายบัญชีพร้อมกัน)`),
+        accountsRow,
+      );
 
       // Saved as soon as something changes: a choice right away, a typed field when it loses
       // focus (so the page is not rebuilt while typing). Only what changed is sent.
@@ -3031,6 +3041,10 @@
         const chosen = {};
         for (const select of defaults.querySelectorAll('select')) if (select.value !== select.dataset.initial) chosen[select.dataset.default] = select.value;
         if (Object.keys(chosen).length) change.defaults = chosen;
+        const session = {};
+        if (idleField.value !== String(view.sessionIdleMinutes)) session.idleMinutes = Number(idleField.value) || 0;
+        if (maxField.value !== String(view.sessionMaxTokens)) session.maxTokens = Number(maxField.value) || 0;
+        if (Object.keys(session).length) change.session = session;
         if (dirs.value !== dirs.dataset.initial) change.allowedDirs = dirs.value.split('\n').map((line) => line.trim()).filter(Boolean);
         if (Object.keys(change).length === 1) return;
         flash('กำลังบันทึก…');
@@ -3333,6 +3347,7 @@
         renderChatList();
         renderHeader();
         renderRail();
+        requestContext();
         const key = message.session ? `${message.chat.id}:${message.session.id}` : `${message.chat.id}:`;
         const ids = message.messages.map((entry) => entry.id);
         const prefix =
@@ -3384,6 +3399,13 @@
           logInner.replaceChildren(sessionDivider(message.session, automatic));
         }
         renderRail();
+        requestContext();
+        break;
+      }
+      case 'session-context': {
+        state.sessionContext = { chatId: message.chatId, sessionId: message.sessionId, context: message.context };
+        renderContextMeter();
+        if (!$('rail').hidden) renderRail();
         break;
       }
       case 'chat-message': {

@@ -422,7 +422,8 @@ export async function startServer(
       preferences: appSettings.preferences,
       spentTodayUsd: core.spentToday(),
       storage: {
-        media: { usedBytes: mediaUsage.bytes + mediaAssets, quotaBytes: appSettings.storage.mediaQuotaBytes, files: mediaUsage.files },
+        media: { usedBytes: mediaUsage.bytes, quotaBytes: appSettings.storage.mediaQuotaBytes, files: mediaUsage.files },
+        userMedia: { usedBytes: mediaAssets, quotaBytes: appSettings.storage.userMediaQuotaBytes },
         chat: {
           usedBytes: Number(chatUsage.bytes) + Number(attachmentUsage.bytes),
           quotaBytes: appSettings.storage.chatQuotaBytes,
@@ -431,6 +432,9 @@ export async function startServer(
         retentionDays: MEDIA_RETENTION_DAYS,
       },
       toolKeys: { serper: Boolean(process.env.SERPER_API_KEY), openweather: Boolean(process.env.OPENWEATHER_API_KEY) },
+      sessionIdleMinutes: appSettings.session.idleMinutes ?? core.settings.session.idle_minutes,
+      sessionMaxTokens: appSettings.session.maxTokens ?? core.settings.session.max_tokens,
+      compactAt: core.settings.compaction.threshold,
       ready: (() => {
         try {
           return defaultAgent !== null && usable(core.models.resolve('chat', core.agents.get(defaultAgent).models));
@@ -558,6 +562,9 @@ export async function startServer(
     }
     if (change.storage) {
       appSettings.setStorage(change.storage);
+    }
+    if (change.session) {
+      appSettings.setSession(change.session);
     }
     if (change.allowedDirs) {
       const dirs = change.allowedDirs
@@ -1606,9 +1613,9 @@ export async function startServer(
     imagesChanged: () => broadcast(agentsMessage()),
     backupsDir: config.backupsDir,
     chatCsv: (chatId?: number) => chatCsv(core.db, chatId),
-    media: {
-      usedBytes: () => core.attachments.usage().bytes + assetBytes([config.agentsDir, config.backgroundsDir, config.wardrobeDir]),
-      quotaBytes: () => appSettings.storage.mediaQuotaBytes,
+    userMedia: {
+      usedBytes: () => assetBytes([config.agentsDir, config.backgroundsDir, config.wardrobeDir]),
+      quotaBytes: () => appSettings.storage.userMediaQuotaBytes,
     },
     widgetChats: (_since: string | null) => {
       const name = (agent: string) => {

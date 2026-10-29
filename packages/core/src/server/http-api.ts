@@ -53,8 +53,8 @@ export interface HttpApiDeps {
   notificationsSync?(since: string | null): unknown;
   /** Chat transcript as CSV, for keeping a copy outside the cloud storage. */
   chatCsv?(chatId?: number): { csv: string; filename: string } | null;
-  /** Total media use (chat files + user pictures/models) and the quota, for upload checks. */
-  media?: { usedBytes(): number; quotaBytes(): number };
+  /** The user's own pictures and models (kept until deleted) and their quota, for upload checks. */
+  userMedia?: { usedBytes(): number; quotaBytes(): number };
 }
 
 export function toAttachmentView(attachment: Attachment): AttachmentView {
@@ -172,15 +172,15 @@ export async function handleHttpApi(
 
     if (!deps.authorized(request)) throw new HttpError(401, 'Missing or wrong token.');
 
-    /** Pictures and models share the user's media quota with files sent in a chat. */
+    /** Pictures and models count against the user-media quota, apart from files sent in a chat. */
     const checkMedia = (incomingBytes: number) => {
-      if (!deps.media) return;
-      const limit = deps.media.quotaBytes();
+      if (!deps.userMedia) return;
+      const limit = deps.userMedia.quotaBytes();
       if (limit <= 0) return;
-      const used = deps.media.usedBytes();
+      const used = deps.userMedia.usedBytes();
       if (used + incomingBytes <= limit) return;
       const mb = (value: number) => Math.round((value / 1024 / 1024) * 10) / 10;
-      throw new HttpError(507, `Media storage is full (${mb(used)} MB of ${mb(limit)} MB). Delete some pictures or raise the quota in Settings.`);
+      throw new HttpError(507, `User media storage is full (${mb(used)} MB of ${mb(limit)} MB). Delete some pictures or raise the quota in Settings.`);
     };
 
     if (resource === 'export' && request.method === 'GET' && deps.chatCsv) {

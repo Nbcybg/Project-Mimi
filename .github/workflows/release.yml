@@ -108,6 +108,7 @@ jobs:
         with:
           files: assets/*
           generate_release_notes: true
-          # v0.7.0-prototype and other tags with "-" are pre-releases: the apps' update checks skip them.
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          # The apps' update checks use GitHub's "latest release", which skips pre-releases.
+          # So v0.7.3-prototype is a normal release; only an explicit -rc / -beta tag is held back.
+          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') }}
           fail_on_unmatched_files: true

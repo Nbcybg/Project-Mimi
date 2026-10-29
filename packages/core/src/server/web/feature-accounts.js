@@ -97,8 +97,64 @@
     const wrap = el('div');
     const split = el('div', 'split');
     split.append(listPanel(), adding || selected ? editorPanel() : introPanel());
-    wrap.append(split, connectionsPanel());
+    wrap.append(split, toolKeysPanel(), connectionsPanel());
     return wrap;
+  }
+
+  // Keys of the lookup tools. One dropdown of services, like the accounts above and the
+  // connections below; a key is kept on this machine only and is never sent back to the screen.
+  const TOOL_KEYS = {
+    SERPER_API_KEY: {
+      label: 'Serper (serper.dev)',
+      tools: 'web_search, map_search, youtube_search',
+      hint: 'ค้นเว็บและแผนที่ได้แบบพื้นฐานอยู่แล้วโดยไม่ต้องมีคีย์ · ใส่คีย์เพื่อผลที่นิ่งกว่า มีคะแนนร้าน และ youtube_search (ต้องมีคีย์)',
+      isSet: (settings) => Boolean(settings.toolKeys && settings.toolKeys.serper),
+    },
+    OPENWEATHER_API_KEY: {
+      label: 'OpenWeatherMap (openweathermap.org)',
+      tools: 'weather',
+      hint: 'ต้องมีคีย์ weather จึงจะทำงาน',
+      isSet: (settings) => Boolean(settings.toolKeys && settings.toolKeys.openweather),
+    },
+  };
+  let toolKeyName = 'SERPER_API_KEY';
+
+  function toolKeysPanel() {
+    const panel = el('div', 'panel');
+    panel.append(
+      el('h3', '', 'คีย์เครื่องมือค้นหาและข้อมูล'),
+      el('p', 'hint', 'เลือกบริการแล้ววางคีย์ · เก็บในเครื่องนี้เท่านั้น · คีย์ลับส่วนตัว (vault) อยู่ที่แท็บ คีย์ลับ'),
+    );
+    const settings = M().state.settings;
+    if (!settings) return panel;
+    const choose = selectOf(
+      Object.entries(TOOL_KEYS).map(([key, spec]) => [key, `${spec.label} — ${spec.isSet(settings) ? '● ตั้งแล้ว' : '○ ยังไม่ตั้ง'}`]),
+      toolKeyName,
+    );
+    choose.onchange = () => {
+      toolKeyName = choose.value;
+      rerender();
+    };
+    const spec = TOOL_KEYS[toolKeyName];
+    const field = M().textInput('', spec.isSet(settings) ? 'ตั้งไว้แล้ว ◆ (วางคีย์ใหม่เพื่อเปลี่ยน)' : 'วาง API key ที่นี่', 'password');
+    const actions = el('div', 'btns');
+    actions.style.marginTop = '8px';
+    actions.append(
+      button('btn', 'บันทึก', () => {
+        if (!field.value.trim()) return M().toast('ยังไม่ได้วางคีย์', 'วางคีย์ก่อนกดบันทึก', true);
+        M().send({ type: 'settings-save', keys: { [toolKeyName]: field.value.trim() } });
+        field.value = '';
+      }),
+    );
+    if (spec.isSet(settings)) {
+      actions.append(
+        button('btn ghost', 'ลบคีย์', () => {
+          if (confirm(`ลบคีย์ของ ${spec.label}?`)) M().send({ type: 'settings-save', keys: { [toolKeyName]: '' } });
+        }),
+      );
+    }
+    panel.append(M().labelled('บริการ', choose), el('p', 'hint', `ใช้กับเครื่องมือ: ${spec.tools} — ${spec.hint}`), M().labelled('API key', field), actions);
+    return panel;
   }
 
   function connectionsPanel() {

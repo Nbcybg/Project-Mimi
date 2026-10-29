@@ -434,3 +434,22 @@ test('forwarding copies the files and marks where the message came from', async 
   assert.equal(target.core.attachments.get(file.id)!.messageId, first.userMessage!.id, 'the original keeps its file');
   await target.cleanup();
 });
+
+test('a session whose conversation outgrew max_tokens continues in a new one, with usage numbers for the old one', async () => {
+  const mimi = scriptedModel([textStep('ได้ค่ะ'), textStep('ค่ะ')]);
+  const small = replyingModel([(prompt) => (prompt.includes('You file finished conversations') ? { text: 'TITLE: เรื่องยาว\nSUMMARY: คุยกันยาวมาก' } : { text: 'nothing' })]);
+  const target = await makeTestCore({ models: { mimi }, small, settings: { session: { max_tokens: 40 } } });
+  setAgent(target, 'mimi', 'model: test/mimi\ntools: []');
+  const chat = target.core.chats.directChat('mimi');
+
+  const first = await turn(target, { chatId: chat.id, text: 'เล่าเรื่องยาว ๆ ให้ฟังหน่อย '.repeat(10) });
+  const second = await turn(target, { chatId: chat.id, text: 'ต่อเลย' });
+
+  assert.ok(first.session.type === 'session' && second.session.type === 'session');
+  assert.equal(second.session.started, true, 'the long session is followed by a new one without any silence');
+  assert.notEqual(second.session.session.id, first.session.session.id);
+  assert.ok(target.core.chats.sessionTokens(first.session.session.thread) >= 40);
+  const usage = target.core.chats.sessionUsage(first.session.session.thread);
+  assert.ok(usage.inputTokens >= 0 && usage.costUsd >= 0);
+  await target.cleanup();
+});

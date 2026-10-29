@@ -58,6 +58,8 @@ export interface ChatEngineDeps {
   usage: UsageLogger;
   /** A new session starts by itself after this much silence. */
   idleMs: number;
+  /** ... or once a session's conversation is this long (0 = no limit). */
+  maxSessionTokens: number;
   /** Most agent turns one user message may set off in a group. */
   maxGroupTurns: number;
   /** Runs one agent (and whoever it hands off to); returns the finish of the first run. */
@@ -130,7 +132,7 @@ export class ChatEngine {
     if (members.length === 0) throw new Error('The agents of this chat no longer exist.');
     const group = chat.kind === 'group';
 
-    const { session, started } = deps.chats.currentSession(chat.id, deps.idleMs);
+    const { session, started } = deps.chats.currentSession(chat.id, deps.idleMs, deps.maxSessionTokens);
     yield { type: 'session', chat, session, started };
     const thread = session.thread;
 

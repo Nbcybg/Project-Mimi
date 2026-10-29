@@ -53,7 +53,7 @@ if (!app.isPackaged && process.env.MIMI_DESKTOP_DEBUG_PORT) app.commandLine.appe
 
 if (!app.requestSingleInstanceLock()) process.exit(0);
 // Leftovers of earlier runs in Chromium's folder (caches, crash dumps) go before it is used.
-lib.emptyFolder(where.chromium, lib.isChromiumLock);
+lib.emptyFolder(where.chromium, lib.chromiumKeeps);
 
 app.setAppUserModelId('app.mimi');
 nativeTheme.themeSource = 'dark';

@@ -89,13 +89,13 @@
 <div id="gate">
   <form id="gate-form">
     <strong id="gate-title">เชื่อมต่อ Mimi</strong>
-    <p id="gate-hint">ใส่ token ของเครื่องนี้ (หรือเปิดลิงก์ที่แอปพิมพ์ไว้ตอนเริ่มทำงาน)</p>
+    <p id="gate-hint">ใส่รหัสผ่านของ Mimi (ใส่ครั้งเดียว จำไว้จนกว่าจะออกจากระบบ)</p>
     <input class="inp" id="gate-user" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="ชื่อผู้ใช้" hidden>
     <input class="inp" id="gate-pass" type="password" autocomplete="current-password" placeholder="รหัสผ่าน" hidden>
-    <input class="inp" id="token" type="password" autocomplete="off" placeholder="token">
+    <input class="inp" id="token" type="password" autocomplete="current-password" placeholder="รหัสผ่าน">
     <label class="hint"><input type="checkbox" id="gate-shared"> เครื่องนี้ไม่ใช่ของฉัน (ไม่จำการเข้าสู่ระบบ: ลืมเมื่อปิดแท็บ/แอป)</label>
     <p id="gate-error" style="color: var(--bad)"></p>
-    <button class="btn pri" type="submit">เชื่อมต่อ</button>
+    <button class="btn pri" type="submit">เข้าสู่ระบบ</button>
   </form>
 </div>
 <script type="importmap">

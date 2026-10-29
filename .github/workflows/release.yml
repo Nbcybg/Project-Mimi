@@ -28,11 +28,12 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci --no-audit --no-fund
+      # When the runner image has NSIS (makensis), the installer goes out beside the zip.
       - run: npm run build:win
       - uses: actions/upload-artifact@v4
         with:
           name: windows
-          path: dist/Mimi-*-win-*.zip
+          path: dist/Mimi-*-win-*.*
           if-no-files-found: error
 
   mac:

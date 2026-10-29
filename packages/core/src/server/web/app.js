@@ -2256,8 +2256,8 @@
         el('h3', '', 'บัญชี'),
         el('p', 'hint', accountsMode
           ? 'ออกจากระบบบนเครื่องนี้: ยกเลิกเซสชันที่เซิร์ฟเวอร์ เลิกส่งแจ้งเตือนมาเครื่องนี้ และลบข้อมูลของ Mimi ในเบราว์เซอร์นี้'
-          : 'ลืม token บนเครื่องนี้: เลิกส่งแจ้งเตือนมาเครื่องนี้ และลบข้อมูลของ Mimi ในเบราว์เซอร์นี้'),
-        button('btn', accountsMode ? 'ออกจากระบบ' : 'ลืม token บนเครื่องนี้', () => void signOut()),
+          : 'ออกจากระบบบนเครื่องนี้: ต้องใส่รหัสผ่านใหม่ครั้งหน้า เลิกส่งแจ้งเตือนมาเครื่องนี้ และลบข้อมูลของ Mimi ในเบราว์เซอร์นี้'),
+        button('btn', 'ออกจากระบบ', () => void signOut()),
       );
       stack.append(account);
     }
@@ -3084,7 +3084,7 @@
           store.removeItem(WEBHOOK_KEY);
         }
         window.MimiDesktop?.signedOut('expired');
-        $('gate-error').textContent = accountsMode ? 'ออกจากระบบแล้ว หรือเซสชันหมดอายุ — เข้าสู่ระบบใหม่' : 'token ไม่ถูกต้อง';
+        $('gate-error').textContent = accountsMode ? 'ออกจากระบบแล้ว หรือเซสชันหมดอายุ — เข้าสู่ระบบใหม่' : 'รหัสผ่านไม่ถูกต้อง';
         $('gate').style.display = 'flex';
         return;
       }
@@ -3095,11 +3095,11 @@
   function setGateMode(accounts) {
     accountsMode = accounts;
     $('gate-title').textContent = accounts ? 'เข้าสู่ระบบ Mimi' : 'เชื่อมต่อ Mimi';
-    $('gate-hint').textContent = accounts ? 'ใช้ชื่อผู้ใช้และรหัสผ่านที่ผู้ดูแลสร้างให้' : 'ใส่ token ของเครื่องนี้ (หรือเปิดลิงก์ที่แอปพิมพ์ไว้ตอนเริ่มทำงาน)';
+    $('gate-hint').textContent = accounts ? 'ใช้ชื่อผู้ใช้และรหัสผ่านที่ผู้ดูแลสร้างให้' : 'ใส่รหัสผ่านของ Mimi (ใส่ครั้งเดียว จำไว้จนกว่าจะออกจากระบบ)';
     $('gate-user').hidden = !accounts;
     $('gate-pass').hidden = !accounts;
     $('token').hidden = accounts;
-    $('gate-form').querySelector('button[type="submit"]').textContent = accounts ? 'เข้าสู่ระบบ' : 'เชื่อมต่อ';
+    $('gate-form').querySelector('button[type="submit"]').textContent = 'เข้าสู่ระบบ';
   }
 
   async function signIn() {

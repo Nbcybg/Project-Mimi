@@ -4,6 +4,14 @@
 
 ### Fixes
 
+- Windows desktop app: the sign-in is remembered until sign-out. Emptying
+  Chromium's folder at start also removed "Local State", which holds the key
+  that seals `session.bin` on Windows, so every start asked again.
+- The sign-in page of a one-person core asks for a password (the core's
+  `MIMI_TOKEN`) instead of a "token"; settings say "ออกจากระบบ".
+- Windows: `npm run build:win` also makes `Mimi-<version>-win-x64-setup.exe`, a
+  per-user NSIS installer (Start menu + Desktop shortcuts, uninstall entry).
+
 - A base URL (`api`) set for a provider in the settings file now replaces
   per-model endpoints the models.dev catalog pinned, so a gateway change takes
   effect everywhere; a per-model `provider.api` in the settings file still wins

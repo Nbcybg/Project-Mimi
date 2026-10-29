@@ -28,7 +28,7 @@ const lib = createRequire(import.meta.url)('../../../desktop/remote-lib.cjs') as
   agentBrowserDir(cache: string, server: string, username: string): string;
   wipeSession(where: Where): void;
   emptyFolder(dir: string, keep?: (name: string) => boolean): void;
-  isChromiumLock(name: string): boolean;
+  chromiumKeeps(name: string): boolean;
   wsUrl(server: string): string;
 };
 
@@ -102,8 +102,8 @@ test('sign-out wipe: the token file and the temporary cache go, the settings sta
 
   fs.mkdirSync(path.join(where.chromium, 'GPUCache'), { recursive: true });
   for (const name of ['SingletonLock', 'lockfile', 'Local State', 'Network Persistent State']) fs.writeFileSync(path.join(where.chromium, name), 'x');
-  lib.emptyFolder(where.chromium, lib.isChromiumLock);
-  assert.deepEqual(fs.readdirSync(where.chromium).sort(), ['SingletonLock', 'lockfile'], 'Chromium keeps its lock (Windows: lockfile)');
+  lib.emptyFolder(where.chromium, lib.chromiumKeeps);
+  assert.deepEqual(fs.readdirSync(where.chromium).sort(), ['Local State', 'SingletonLock', 'lockfile'], 'Chromium keeps its lock (Windows: lockfile) and the key session.bin is sealed with');
   assert.equal(lib.wsUrl('https://mimi.example.com'), 'wss://mimi.example.com/ws');
   assert.equal(lib.wsUrl('http://localhost:8787'), 'ws://localhost:8787/ws');
 });

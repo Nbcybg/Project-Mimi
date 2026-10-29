@@ -8,6 +8,8 @@ import { electronDist } from './electron-dist.mjs';
 // elsewhere (the accounts gateway, or one core), the same app as build-mac.mjs. It holds no
 // core and no database; see packages/desktop/remote.cjs for what it keeps on the computer.
 // The older all-in-one build with a core on this PC stays: npm run build:desktop.
+// Two files to hand out: Mimi-<version>-win-x64-setup.exe (an installer, made with NSIS when
+// makensis is found: MAKENSIS, PATH or Program Files) and the zip the app updates itself from.
 //   npm run build:win
 
 const ROOT = path.resolve(import.meta.dirname, '..');
@@ -19,6 +21,9 @@ const ROOT_PACKAGE = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'),
 const VERSION = ROOT_PACKAGE.version;
 const UPDATE_REPO = String(ROOT_PACKAGE.repository ?? '').replace(/^github:/, '') || null;
 const ZIP_NAME = `Mimi-${VERSION}-win-${process.arch}.zip`;
+const SETUP_NAME = `Mimi-${VERSION}-win-${process.arch}-setup.exe`;
+// The updater (updater.cjs) mirrors a new version over the install folder but leaves this file.
+const UNINSTALLER = 'Uninstall Mimi.exe';
 
 const log = (line) => console.log(`[build] ${line}`);
 const run = (command, args, cwd = DIST) => execFileSync(command, args, { cwd, stdio: 'inherit' });
@@ -62,6 +67,15 @@ log('app and PC agent copied');
 // keeps Electron's own icon: changing it needs a resource editor this build does not carry.
 const { renderIconPng } = await import(pathToFileURL(path.join(ROOT, 'packages/core/src/app/icon.ts')).href);
 fs.writeFileSync(path.join(APP, 'icon.png'), renderIconPng());
+const icoPng = renderIconPng(256);
+const icoHeader = Buffer.alloc(22);
+icoHeader.writeUInt16LE(1, 2); // type: icon
+icoHeader.writeUInt16LE(1, 4); // one image
+icoHeader.writeUInt16LE(1, 10); // planes (width/height 0 = 256)
+icoHeader.writeUInt16LE(32, 12); // bits per pixel
+icoHeader.writeUInt32LE(icoPng.length, 14);
+icoHeader.writeUInt32LE(22, 18);
+fs.writeFileSync(path.join(STAGE, 'Mimi.ico'), Buffer.concat([icoHeader, icoPng]));
 log('icon written');
 
 // 4. A Start menu and Desktop shortcut for this Windows account, made from where the folder ends up.
@@ -105,3 +119,82 @@ log(`packing ${ZIP_NAME}...`);
 run(path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe'), ['-a', '-c', '-f', zipPath, '-C', path.dirname(STAGE), path.basename(STAGE)]);
 const sizeMb = (fs.statSync(zipPath).size / 1024 / 1024).toFixed(1);
 log(`done: ${path.relative(ROOT, zipPath)} (${sizeMb} MB)`);
+
+// 6. The installer: per Windows account (no admin), always into %LOCALAPPDATA%ProgramsMimi,
+// with Start menu and Desktop shortcuts and an entry in "Apps" to uninstall. The sign-in
+// (%APPDATA%Mimi) is left alone, so a reinstall or an update stays signed in.
+function findMakensis() {
+  const candidates = [
+    process.env.MAKENSIS,
+    ...String(process.env.PATH ?? '').split(path.delimiter).map((dir) => dir && path.join(dir, 'makensis.exe')),
+    ...[process.env['ProgramFiles(x86)'], process.env.ProgramFiles].map((dir) => dir && path.join(dir, 'NSIS', 'makensis.exe')),
+  ];
+  return candidates.find((file) => file && fs.existsSync(file)) ?? null;
+}
+const makensis = findMakensis();
+if (!makensis) {
+  console.warn('[build] makensis not found (install NSIS or set MAKENSIS): no installer this time, only the zip');
+} else {
+  const numeric = `${VERSION.split('-')[0].split('.').concat('0', '0', '0').slice(0, 3).join('.')}.0`;
+  const icon = path.join(STAGE, 'Mimi.ico');
+  const key = String.raw`HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Mimi"`;
+  const closeMimi = String.raw`  nsExec::Exec '"$SYSDIR\taskkill.exe" /IM Mimi.exe /F'`;
+  const uninstaller = path.win32.join('$INSTDIR', UNINSTALLER);
+  const nsi = String.raw`Unicode true
+ManifestDPIAware true
+!include "MUI2.nsh"
+Name "Mimi"
+OutFile "${path.join(DIST, SETUP_NAME)}"
+InstallDir "$LOCALAPPDATA\Programs\Mimi"
+RequestExecutionLevel user
+SetCompressor /SOLID lzma
+VIProductVersion "${numeric}"
+VIAddVersionKey /LANG=0 "ProductName" "Mimi"
+VIAddVersionKey /LANG=0 "ProductVersion" "${VERSION}"
+VIAddVersionKey /LANG=0 "FileVersion" "${VERSION}"
+VIAddVersionKey /LANG=0 "FileDescription" "Mimi installer"
+!define MUI_ICON "${icon}"
+!define MUI_UNICON "${icon}"
+!define MUI_WELCOMEPAGE_TEXT "ติดตั้ง Mimi ${VERSION} สำหรับผู้ใช้ Windows คนนี้ (ไม่ต้องใช้สิทธิ์ผู้ดูแล)$\r$\n$\r$\nถ้า Mimi เปิดอยู่ ตัวติดตั้งจะปิดให้ก่อน การเข้าสู่ระบบยังอยู่เหมือนเดิม"
+!define MUI_FINISHPAGE_RUN "$INSTDIR\Mimi.exe"
+!define MUI_FINISHPAGE_RUN_TEXT "เปิด Mimi"
+!insertmacro MUI_PAGE_WELCOME
+!insertmacro MUI_PAGE_INSTFILES
+!insertmacro MUI_PAGE_FINISH
+!insertmacro MUI_UNPAGE_CONFIRM
+!insertmacro MUI_UNPAGE_INSTFILES
+!insertmacro MUI_LANGUAGE "Thai"
+Section
+${closeMimi}
+  Sleep 1000
+  SetOutPath "$INSTDIR"
+  File /r /x install.cmd /x README.txt "${STAGE}\*"
+  WriteUninstaller "${uninstaller}"
+  CreateShortCut "$SMPROGRAMS\Mimi.lnk" "$INSTDIR\Mimi.exe" "" "$INSTDIR\Mimi.ico"
+  CreateShortCut "$DESKTOP\Mimi.lnk" "$INSTDIR\Mimi.exe" "" "$INSTDIR\Mimi.ico"
+  WriteRegStr ${key} "DisplayName" "Mimi"
+  WriteRegStr ${key} "DisplayVersion" "${VERSION}"
+  WriteRegStr ${key} "Publisher" "Mimi"
+  WriteRegStr ${key} "DisplayIcon" "$INSTDIR\Mimi.ico"
+  WriteRegStr ${key} "InstallLocation" "$INSTDIR"
+  WriteRegStr ${key} "UninstallString" '"${uninstaller}"'
+  WriteRegDWORD ${key} "NoModify" 1
+  WriteRegDWORD ${key} "NoRepair" 1
+SectionEnd
+Section "Uninstall"
+${closeMimi}
+  Sleep 1000
+  Delete "$SMPROGRAMS\Mimi.lnk"
+  Delete "$DESKTOP\Mimi.lnk"
+  RMDir /r "$INSTDIR"
+  DeleteRegKey ${key}
+SectionEnd
+`.replaceAll('\n', '\r\n');
+  const nsiPath = path.join(DIST, 'win', 'mimi-setup.nsi');
+  // A BOM tells makensis the script is UTF-8 (the Thai text).
+  fs.writeFileSync(nsiPath, `﻿${nsi}`, 'utf8');
+  log(`making ${SETUP_NAME}...`);
+  execFileSync(makensis, ['/V2', nsiPath], { stdio: 'inherit' });
+  const setupMb = (fs.statSync(path.join(DIST, SETUP_NAME)).size / 1024 / 1024).toFixed(1);
+  log(`done: dist/${SETUP_NAME} (${setupMb} MB)`);
+}

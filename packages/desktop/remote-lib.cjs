@@ -119,9 +119,14 @@ function wsUrl(server) {
   return url.toString();
 }
 
-/** Chromium's lock on its own folder while it runs: Singleton* on macOS and Linux, lockfile on Windows. */
-function isChromiumLock(name) {
-  return name.startsWith('Singleton') || name === 'lockfile';
+/**
+ * What stays in Chromium's folder when it is emptied: its lock while it runs (Singleton* on
+ * macOS and Linux, lockfile on Windows), and "Local State", which on Windows holds the key
+ * safeStorage seals session.bin with (itself sealed by DPAPI); without it the saved sign-in
+ * could never be read again and every start asked for the password.
+ */
+function chromiumKeeps(name) {
+  return name.startsWith('Singleton') || name === 'lockfile' || name === 'Local State';
 }
 
 /**
@@ -157,7 +162,7 @@ module.exports = {
   defaultConfig,
   emptyFolder,
   folderProblem,
-  isChromiumLock,
+  chromiumKeeps,
   locations,
   normalizeServerUrl,
   readConfig,

@@ -76,7 +76,8 @@ function swapScript({ pid, source, target, stageDir, platform = process.platform
       '@echo off',
       ':wait',
       `tasklist /FI "PID eq ${pid}" 2>nul | find "${pid}" >nul && (timeout /t 1 /nobreak >nul & goto wait)`,
-      `robocopy "${source}" "${target}" /MIR /R:5 /W:1 /NFL /NDL /NJH /NJS /NP >nul`,
+      // /XF: the installer's uninstaller is not in the zip and stays.
+      `robocopy "${source}" "${target}" /MIR /XF "Uninstall Mimi.exe" /R:5 /W:1 /NFL /NDL /NJH /NJS /NP >nul`,
       `start "" "${path.join(target, 'Mimi.exe')}"`,
       `rmdir /s /q "${stageDir}"`,
       '',

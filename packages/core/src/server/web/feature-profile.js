@@ -276,7 +276,7 @@
     const urgentLabel = el('label', 'wcheck');
     urgentLabel.append(urgent, el('span', '', 'ขออนุมัติยังเด้งในช่วงห้ามรบกวน'));
     panel.append(urgentLabel);
-    // Read-aloud is a per-device choice (this browser only).
+    // Read-aloud, like the sounds below, is shared by the user's devices (M().store syncs it).
     const speakBox = el('input');
     speakBox.type = 'checkbox';
     try {
@@ -285,22 +285,18 @@
       speakBox.disabled = true;
     }
     speakBox.onchange = () => {
-      try {
-        localStorage.setItem(M().SPEAK_KEY, speakBox.checked ? '1' : '0');
-      } catch {
-        // storage blocked: nothing to remember
-      }
+      M().store.set(M().SPEAK_KEY, speakBox.checked ? '1' : '0');
       if (speakBox.checked) M().speak('เปิดอ่านออกเสียงคำตอบแล้ว');
     };
     const speakLabel = el('label', 'wcheck');
-    speakLabel.append(speakBox, el('span', '', 'อ่านคำตอบออกเสียงอัตโนมัติ (เฉพาะเครื่องนี้)'));
+    speakLabel.append(speakBox, el('span', '', 'อ่านคำตอบออกเสียงอัตโนมัติ'));
     panel.append(speakLabel);
     // The notification chime is a per-device choice too (feature-notify.js plays it).
     const chimeHook = window.MimiHooks && window.MimiHooks.notify;
     if (chimeHook && chimeHook.soundToggle) panel.append(chimeHook.soundToggle());
     if (chimeHook && chimeHook.chatSoundToggle) panel.append(chimeHook.chatSoundToggle());
-    // Saved as soon as something changes (a field when it loses focus); per-device
-    // choices above are kept in this browser and are not sent.
+    // Saved as soon as something changes (a field when it loses focus); the switches
+    // above go to the user's other devices through M().store instead.
     const save = () =>
       M().send({
         type: 'preferences-save',

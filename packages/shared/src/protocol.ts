@@ -607,6 +607,8 @@ export type ClientMessage =
   | { type: 'push-devices' }
   | { type: 'push-test' }
   | { type: 'preferences-save'; preferences: PreferencesView }
+  /** Screen settings shared by all the user's devices (null removes one). */
+  | { type: 'ui-set'; values: Record<string, string | null> }
   /** Backups of the user folder: list, make one now (download with GET /api/backups/<name>). */
   | { type: 'backups-list' }
   | { type: 'backup-create'; includeSecrets: boolean }
@@ -673,7 +675,11 @@ export type ServerMessage =
       /** The chat a turn is running in right now, if any. */
       busyChat?: number | null;
       pendingPermissions: PermissionRequest[];
+      /** Screen settings shared by all the user's devices (character position, sounds, …). */
+      ui?: Record<string, string>;
     }
+  /** Shared screen settings that changed on another device (null: removed). */
+  | { type: 'ui'; values: Record<string, string | null> }
   | { type: 'event'; event: AgentEvent }
   /** A turn started by one client, echoed so every client shows it. */
   | { type: 'user-message'; text: string; agent: string }

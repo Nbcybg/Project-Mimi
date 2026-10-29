@@ -215,10 +215,13 @@
     /** Switches the language; the screens draw their text again on the next load. */
     set(code) {
       if (!LANGUAGES[code]) return;
-      try {
-        localStorage.setItem(KEY, code);
-      } catch {
-        // not remembered
+      if (window.Mimi && window.Mimi.store) window.Mimi.store.set(KEY, code); // shared by the user's devices
+      else {
+        try {
+          localStorage.setItem(KEY, code);
+        } catch {
+          // not remembered
+        }
       }
       location.reload();
     },

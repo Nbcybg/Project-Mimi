@@ -38,7 +38,14 @@ interface StoredSettings {
   presets: Record<string, ModelPreset>;
   allowedDirs: string[];
   preferences: PreferencesView;
+  /** Screen settings every device of the user shares (character position, sounds, …), key → value. */
+  ui: Record<string, string>;
 }
+
+/** Keys of `ui`: "mimi." and up to 200 characters; values up to 4000; at most 1000 keys. */
+const UI_KEY = /^mimi\.[^\s]{1,195}$/u;
+const UI_MAX_VALUE = 4000;
+const UI_MAX_KEYS = 1000;
 
 /**
  * What the user sets inside the app instead of editing files: connected providers,
@@ -69,6 +76,7 @@ export class AppSettings {
       presets: { ...stored.presets },
       allowedDirs: Array.isArray(stored.allowedDirs) ? stored.allowedDirs.map(String) : [],
       preferences: { ...stored.preferences },
+      ui: stored.ui && typeof stored.ui === 'object' ? { ...stored.ui } : {},
     });
     if (stored.token !== settings.data.token) settings.save();
     return settings;
@@ -102,6 +110,31 @@ export class AppSettings {
   setPreferences(preferences: PreferencesView): void {
     this.data.preferences = preferences;
     this.save();
+  }
+
+  get ui(): Record<string, string> {
+    return this.data.ui;
+  }
+
+  /** Sets (or with null removes) shared screen settings; returns the keys that changed. */
+  setUi(changes: Record<string, string | null>): string[] {
+    const changed: string[] = [];
+    for (const [key, value] of Object.entries(changes)) {
+      if (!UI_KEY.test(key)) continue;
+      if (value === null) {
+        if (key in this.data.ui) {
+          delete this.data.ui[key];
+          changed.push(key);
+        }
+        continue;
+      }
+      if (typeof value !== 'string' || value.length > UI_MAX_VALUE || this.data.ui[key] === value) continue;
+      if (!(key in this.data.ui) && Object.keys(this.data.ui).length >= UI_MAX_KEYS) continue;
+      this.data.ui[key] = value;
+      changed.push(key);
+    }
+    if (changed.length > 0) this.save();
+    return changed;
   }
 
   get presets(): Record<string, ModelPreset> {

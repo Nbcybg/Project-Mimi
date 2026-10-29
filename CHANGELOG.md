@@ -7,6 +7,11 @@
 - Chat sounds: a short "pop" when a message goes out and two notes when the
   agent finishes its reply (made in code, per device; Settings has a switch and
   buttons to hear them; quiet hours mute them).
+- Screen settings follow the user to every device: character position (per
+  mobile / desktop layout), chat over the character, the character on/off,
+  chat and notification sounds, read-aloud and language are kept on the
+  server (`ui` in app-settings.json) and sent to the other open devices at
+  once; the first device to connect hands up what it had.
 - Character position has no limit: the sliders reach further (zoom 0.1-10×,
   ±300 %) and a number box beside each takes any value.
 - Android app: its own WebView instead of a Chrome Trusted Web Activity, so the

@@ -70,7 +70,7 @@
     }
   }
   // Chat sounds: a soft rising "pop" when a message goes out, two falling notes when the
-  // agent finishes its reply. Per device, on unless turned off; quiet hours mute them too.
+  // agent finishes its reply. On unless turned off (shared by the user's devices); quiet hours mute them too.
   const CHAT_SOUND_KEY = 'mimi.chatSound';
   const chatSoundOn = () => {
     try {
@@ -111,14 +111,10 @@
     box.type = 'checkbox';
     box.checked = chatSoundOn();
     box.onchange = () => {
-      try {
-        localStorage.setItem(CHAT_SOUND_KEY, box.checked ? '1' : '0');
-      } catch {
-        // storage blocked: the default (on) stays
-      }
+      M().store.set(CHAT_SOUND_KEY, box.checked ? '1' : '0');
       if (box.checked) chatSound('sent', true);
     };
-    label.append(box, el('span', '', 'เสียงตอนส่งข้อความและตอนตอบเสร็จ (เฉพาะเครื่องนี้)'));
+    label.append(box, el('span', '', 'เสียงตอนส่งข้อความและตอนตอบเสร็จ'));
     wrap.append(
       label,
       button('btn ghost', '🔊 ส่ง', () => chatSound('sent', true)),
@@ -135,14 +131,10 @@
     box.type = 'checkbox';
     box.checked = soundOn();
     box.onchange = () => {
-      try {
-        localStorage.setItem(SOUND_KEY, box.checked ? '1' : '0');
-      } catch {
-        // storage blocked: the default (on) stays
-      }
+      M().store.set(SOUND_KEY, box.checked ? '1' : '0');
       if (box.checked) chime(true);
     };
-    label.append(box, el('span', '', 'เสียงแจ้งเตือนเมื่อมีการแจ้งเตือนเข้า (เฉพาะเครื่องนี้)'));
+    label.append(box, el('span', '', 'เสียงแจ้งเตือนเมื่อมีการแจ้งเตือนเข้า'));
     wrap.append(label, button('btn ghost', '🔊 ลองฟัง', () => chime(true)));
     return wrap;
   }

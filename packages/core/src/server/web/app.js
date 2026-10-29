@@ -27,6 +27,10 @@
   const MOBILE_MAX = 820;
   const modeNow = () => (window.innerWidth <= MOBILE_MAX ? 'mobile' : 'desktop');
   document.documentElement.dataset.mode = modeNow();
+  // Screen settings the user's devices share through the server (character position, chat
+  // over the character, sounds, read-aloud, language); the rest stays on this device.
+  const SYNCED_KEYS = new Set(['mimi.chatSound', 'mimi.notifySound', 'mimi.autoSpeak', 'mimi.lang']);
+  const synced = (key) => SYNCED_KEYS.has(key) || /^mimi\.(view|bubbles|character)\./.test(key);
   const store = {
     get(key) {
       try {
@@ -41,6 +45,7 @@
       } catch {
         // private window: not remembered
       }
+      if (synced(key)) syncUi({ [key]: value });
     },
   };
   /** How much of the chat shows over the character: 0 none, 1 only the newest message, 2 all (the usual). Per mode. */
@@ -234,6 +239,44 @@
 
   let socket = null;
   let retryMs = 1000;
+  /** Hands changed shared settings to the server, which passes them on to the other devices. */
+  function syncUi(values) {
+    if (socket && socket.readyState === WebSocket.OPEN) send({ type: 'ui-set', values });
+  }
+  /**
+   * Shared settings from the server: they replace this device's. On connecting (`hello`), what
+   * this device has and the server does not yet goes up, so the first device seeds the rest.
+   */
+  function takeUi(values, hello) {
+    const changed = [];
+    for (const [key, value] of Object.entries(values)) {
+      if (!synced(key)) continue;
+      try {
+        if (localStorage.getItem(key) === value) continue;
+        if (value === null) localStorage.removeItem(key);
+        else localStorage.setItem(key, value);
+        changed.push(key);
+      } catch {
+        // storage blocked: this device keeps its defaults
+      }
+    }
+    if (hello) {
+      const missing = {};
+      try {
+        for (let index = 0; index < localStorage.length; index++) {
+          const key = localStorage.key(index);
+          if (synced(key) && !(key in values)) missing[key] = localStorage.getItem(key);
+        }
+      } catch {
+        // storage blocked: nothing to hand up
+      }
+      if (Object.keys(missing).length > 0) syncUi(missing);
+    }
+    if (changed.length === 0) return;
+    renderHeader();
+    renderRail();
+    window.MimiHooks?.stage?.refresh();
+  }
   function send(payload) {
     if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(payload));
     else toast('ยังไม่ได้เชื่อมต่อ', 'กำลังเชื่อมต่อใหม่ ลองอีกครั้งในอีกสักครู่', true);
@@ -2664,6 +2707,7 @@
     switch (message.type) {
       case 'welcome':
         $('gate').style.display = 'none';
+        takeUi(message.ui || {}, true);
         setPc(message.pcOnline);
         state.busyChat = message.busyChat === undefined ? null : message.busyChat;
         state.pendingPerms = new Map(message.pendingPermissions.map((request) => [request.id, request]));
@@ -2672,6 +2716,9 @@
         for (const type of ['overseer-get', 'agents-list', 'settings-get', 'chats-list', 'skills-list', 'tools-list', 'workflows-list']) send({ type });
         reportPresence(true);
         if (state.chat) send({ type: 'chat-open', chatId: state.chat.id, sessionId: state.latest ? undefined : state.session && state.session.id });
+        break;
+      case 'ui':
+        takeUi(message.values || {}, false);
         break;
       case 'chats':
         state.chats = message.chats;

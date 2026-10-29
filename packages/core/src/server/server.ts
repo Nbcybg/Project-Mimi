@@ -1126,6 +1126,16 @@ export async function startServer(
         broadcast({ type: 'settings', settings: settingsView(), saved: true });
         break;
       }
+      case 'ui-set': {
+        const values = message.values && typeof message.values === 'object' ? message.values : {};
+        const changed = appSettings.setUi(values);
+        if (changed.length > 0) {
+          const update: ServerMessage = { type: 'ui', values: Object.fromEntries(changed.map((key) => [key, appSettings.ui[key] ?? null])) };
+          // The device that changed it already shows it.
+          for (const other of clients) if (other !== socket && other.readyState === WebSocket.OPEN) other.send(JSON.stringify(update));
+        }
+        break;
+      }
       case 'backups-list':
         reply({ type: 'backups', backups: listBackups(config.backupsDir), dir: config.backupsDir });
         break;
@@ -1579,6 +1589,7 @@ export async function startServer(
             busy: queued > 0,
             busyChat: activeChat,
             pendingPermissions: broker.pending(),
+            ui: appSettings.ui,
           };
           socket.send(JSON.stringify(welcome));
         }

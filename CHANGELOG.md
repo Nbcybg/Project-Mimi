@@ -4,6 +4,15 @@
 
 ### Fixes
 
+- OAuth like n8n's credential form. Microsoft accounts take a client secret
+  (an Azure app under the "Web" platform, such as one made for n8n); it goes
+  with the code exchange and every refresh, never into the browser link. The
+  account form and OAuth2 connections show the OAuth Redirect URL to register
+  (with a copy button), the Authorization and Access Token URLs, and, for
+  connections, editable endpoints and scopes per connection (https only; the
+  token URL still goes through the net guard). "บันทึกและเชื่อมต่อ OAuth2"
+  saves and opens the sign-in in one step. Settings take
+  `MICROSOFT_CLIENT_SECRET`.
 - Windows desktop app: the sign-in is remembered until sign-out. Emptying
   Chromium's folder at start also removed "Local State", which holds the key
   that seals `session.bin` on Windows, so every start asked again.

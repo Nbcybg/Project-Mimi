@@ -22,6 +22,12 @@ export interface MicrosoftCredentials {
   clientId: string | undefined;
   /** `common` works for personal and work accounts; a tenant id restricts it to one organization. */
   tenant: string;
+  /**
+   * Only for an app whose redirect URI is under the "Web" platform (a confidential client,
+   * e.g. one made for n8n): Microsoft then requires the secret at every token request.
+   * Without one the app signs in as a public client ("Mobile and desktop applications").
+   */
+  clientSecret?: string;
 }
 
 export interface MicrosoftAuthOptions {
@@ -51,7 +57,7 @@ export function microsoftAuthResolver(source: MicrosoftAuthSource): (account?: s
 
 /**
  * Signs in to Microsoft as a public client (no secret: the app runs on the user's own
- * machine) and calls Microsoft Graph. Microsoft replaces the refresh token on every
+ * machine), or with the client secret when one is saved, and calls Microsoft Graph. Microsoft replaces the refresh token on every
  * refresh, so the newest one is written back to the token file each time.
  */
 export class MicrosoftAuth {
@@ -64,7 +70,11 @@ export class MicrosoftAuth {
 
   static fromEnv(env: NodeJS.ProcessEnv, tokenFile: string): MicrosoftAuth {
     return new MicrosoftAuth({
-      credentials: () => ({ clientId: env.MICROSOFT_CLIENT_ID, tenant: env.MICROSOFT_TENANT || 'common' }),
+      credentials: () => ({
+        clientId: env.MICROSOFT_CLIENT_ID,
+        tenant: env.MICROSOFT_TENANT || 'common',
+        clientSecret: env.MICROSOFT_CLIENT_SECRET || undefined,
+      }),
       tokenFile,
     });
   }
@@ -97,7 +107,7 @@ export class MicrosoftAuth {
   async accessToken(): Promise<string> {
     const now = this.options.now?.() ?? Date.now();
     if (this.cached && this.cached.expiresAt > now + 60_000) return this.cached.token;
-    const { clientId, tenant } = this.options.credentials();
+    const { clientId, tenant, clientSecret } = this.options.credentials();
     if (!clientId) throw new MicrosoftNotConfiguredError('no client ID');
     const refreshToken = this.refreshToken();
     if (!refreshToken) throw new MicrosoftNotConfiguredError('not signed in');
@@ -110,6 +120,7 @@ export class MicrosoftAuth {
         refresh_token: refreshToken,
         grant_type: 'refresh_token',
         scope: MICROSOFT_SCOPES.join(' '),
+        ...(clientSecret ? { client_secret: clientSecret } : {}),
       }),
     });
     const body = (await response.json()) as {
@@ -161,10 +172,11 @@ export class MicrosoftAuth {
    * code is exchanged (with PKCE) for a refresh token. On a computer the redirect goes to a
    * temporary listener on localhost (the Azure app needs `http://localhost` under "Mobile and
    * desktop applications"); a core on a server passes its own `receiver`, and the Azure app
-   * needs that public `/oauth/callback` address under the same platform.
+   * needs that public `/oauth/callback` address under the same platform, or under "Web"
+   * when the account has a client secret.
    */
   async startSignIn(receiverFactory: ReceiverFactory = loopbackReceiver): Promise<{ url: string; done: Promise<void> }> {
-    const { clientId, tenant } = this.options.credentials();
+    const { clientId, tenant, clientSecret } = this.options.credentials();
     if (!clientId) throw new MicrosoftNotConfiguredError('no client ID');
     const state = randomBytes(16).toString('hex');
     const verifier = randomBytes(48).toString('base64url');
@@ -196,6 +208,7 @@ export class MicrosoftAuth {
             grant_type: 'authorization_code',
             code_verifier: verifier,
             scope: MICROSOFT_SCOPES.join(' '),
+            ...(clientSecret ? { client_secret: clientSecret } : {}),
           }),
         });
         const token = (await response.json()) as { refresh_token?: string; error_description?: string; error?: string };

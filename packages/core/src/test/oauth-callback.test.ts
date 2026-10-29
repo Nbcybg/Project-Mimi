@@ -114,3 +114,24 @@ test('loopback receiver (a computer): still the temporary local listener', async
   assert.match(microsoft.redirectUri, /^http:\/\/localhost:\d+$/);
   microsoft.close();
 });
+
+test('Microsoft with a client secret (an app under the "Web" platform): the secret goes with the code and with refreshes', async () => {
+  const callbacks = new HostedCallbacks('https://mimi.example.com');
+  const bodies: URLSearchParams[] = [];
+  const microsoft = new MicrosoftAuth({
+    credentials: () => ({ clientId: 'ms-client', tenant: 'common', clientSecret: 'ms-secret' }),
+    tokenFile: path.join(tmp, 'ms-web.json'),
+    fetchFn: (async (_url: string | URL | Request, init?: RequestInit) => {
+      bodies.push(new URLSearchParams(String(init?.body ?? '')));
+      return Response.json({ refresh_token: 'ms-rt', access_token: 'ms-at', expires_in: 3600 });
+    }) as typeof fetch,
+  });
+  const flow = await microsoft.startSignIn(callbacks.receiver);
+  assert.equal(new URL(flow.url).searchParams.get('client_secret'), null, 'the secret never goes into the browser link');
+  visit(callbacks, `https://mimi.example.com/oauth/callback?state=${new URL(flow.url).searchParams.get('state')}&code=c`);
+  await flow.done;
+  assert.equal(bodies[0]?.get('client_secret'), 'ms-secret');
+  assert.equal(await microsoft.accessToken(), 'ms-at');
+  assert.equal(bodies[1]?.get('grant_type'), 'refresh_token');
+  assert.equal(bodies[1]?.get('client_secret'), 'ms-secret');
+});

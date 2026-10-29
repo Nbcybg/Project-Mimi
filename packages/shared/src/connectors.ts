@@ -179,6 +179,7 @@ export interface ConnectorAuthView {
   fields: ConnectorField[];
   scopes?: string[];
   authorizeUrl?: string;
+  tokenUrl?: string;
   /** True when this machine has at least one usable credential for the connector. */
   connected?: boolean;
 }

@@ -13,7 +13,7 @@ export interface OAuthAccountView {
   tenant?: string;
   /** A token is stored and the client is complete. */
   connected: boolean;
-  /** A client secret is stored in this machine's vault (Google needs one). */
+  /** A client secret is stored in this machine's vault (Google needs one; Microsoft only for a "Web" app). */
   hasSecret: boolean;
   /** The account used when a tool or workflow does not name one. */
   default: boolean;
@@ -43,7 +43,16 @@ export interface ConnectorConnectionView {
   hasSecret: boolean;
   /** The connection used when a tool or workflow does not name one. */
   default: boolean;
+  /** OAuth2 only: endpoints and scopes this connection uses instead of the connector's own. */
+  oauth?: ConnectorOAuthOverrides;
   createdAt: string;
+}
+
+/** Per-connection OAuth2 settings (like n8n's credential form); a missing value keeps the connector default. */
+export interface ConnectorOAuthOverrides {
+  authorizeUrl?: string;
+  tokenUrl?: string;
+  scopes?: string[];
 }
 
 /** What the connector connection screen sends. Empty fields keep the stored value. */
@@ -53,4 +62,6 @@ export interface ConnectorConnectionInput {
   /** Credential field key -> value; values never travel back to clients. */
   fields?: Record<string, string>;
   default?: boolean;
+  /** OAuth2 only. An empty string or list goes back to the connector default. */
+  oauth?: ConnectorOAuthOverrides;
 }

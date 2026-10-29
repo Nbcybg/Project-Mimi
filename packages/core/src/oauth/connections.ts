@@ -5,6 +5,7 @@ import type {
   ConnectorConnectionInput,
   ConnectorConnectionView,
   ConnectorField,
+  ConnectorOAuthOverrides,
 } from '@mimi/shared';
 import type { ConnectorRegistry } from '../connectors/registry.ts';
 import type { ConnectorAuthValues } from '../connectors/types.ts';
@@ -18,6 +19,8 @@ interface StoredConnection {
   connector: string;
   name: string;
   default?: boolean;
+  /** OAuth2 endpoints / scopes chosen for this connection (not secrets, so not in the vault). */
+  oauth?: ConnectorOAuthOverrides;
   createdAt: string;
 }
 
@@ -160,6 +163,7 @@ export class ConnectorConnections {
           connected: this.connected(entry),
           hasSecret: Object.keys(values).length > 0,
           default: Boolean(entry.default),
+          ...(entry.oauth ? { oauth: entry.oauth } : {}),
           createdAt: entry.createdAt,
         };
       });
@@ -182,6 +186,11 @@ export class ConnectorConnections {
     };
     connection.name = name;
     if (input.default) connection.default = true;
+    if (input.oauth !== undefined && spec.auth.kind === 'oauth2') {
+      const oauth = this.oauthOverrides(input.oauth);
+      if (oauth) connection.oauth = oauth;
+      else delete connection.oauth;
+    }
 
     const fields = input.fields ?? {};
     for (const [key, value] of Object.entries(fields)) {
@@ -202,6 +211,40 @@ export class ConnectorConnections {
     }
     this.persist();
     return this.views(spec.key).find((view) => view.id === connection.id)!;
+  }
+
+  /** Checks what the form sent: http(s) endpoints only (the token URL is still fetched through the net guard). */
+  private oauthOverrides(input: ConnectorOAuthOverrides): ConnectorOAuthOverrides | undefined {
+    const out: ConnectorOAuthOverrides = {};
+    for (const key of ['authorizeUrl', 'tokenUrl'] as const) {
+      const value = String(input[key] ?? '').trim();
+      if (!value) continue;
+      let url: URL;
+      try {
+        url = new URL(value);
+      } catch {
+        throw new Error(`${key === 'authorizeUrl' ? 'Authorization URL' : 'Access Token URL'} ไม่ใช่ URL`);
+      }
+      if (url.protocol !== 'https:' && !(this.allowLocal && url.protocol === 'http:')) {
+        throw new Error(`${key === 'authorizeUrl' ? 'Authorization URL' : 'Access Token URL'} ต้องเป็น https://`);
+      }
+      out[key] = url.toString();
+    }
+    const scopes = (Array.isArray(input.scopes) ? input.scopes : [])
+      .flatMap((scope) => String(scope).split(/[\s,]+/))
+      .filter(Boolean);
+    if (scopes.length > 0) out.scopes = [...new Set(scopes)];
+    return Object.keys(out).length > 0 ? out : undefined;
+  }
+
+  /** The OAuth2 endpoints and scopes a connection uses: its own, else the connector's. */
+  private oauthOf(connection: StoredConnection): { authorizeUrl?: string; tokenUrl?: string; scopes: string[] } {
+    const auth = this.registry.get(connection.connector)?.auth;
+    return {
+      authorizeUrl: connection.oauth?.authorizeUrl ?? auth?.authorizeUrl,
+      tokenUrl: connection.oauth?.tokenUrl ?? auth?.tokenUrl,
+      scopes: connection.oauth?.scopes ?? auth?.scopes ?? [],
+    };
   }
 
   remove(id: string): void {
@@ -238,7 +281,8 @@ export class ConnectorConnections {
     if (!spec) throw new Error(`Unknown connector "${connection.connector}".`);
     if (spec.auth.kind !== 'oauth2') throw new Error(`"${connection.connector}" is not an OAuth2 connector.`);
     if (spec.auth.extra?.provider === 'google') throw new Error('Google ใช้บัญชี Google ที่ Hub → บัญชี ไม่ใช่ connection');
-    if (!spec.auth.authorizeUrl || !spec.auth.tokenUrl) throw new Error(`"${connection.connector}" ยังไม่มี OAuth2 endpoints`);
+    const oauth = this.oauthOf(connection);
+    if (!oauth.authorizeUrl || !oauth.tokenUrl) throw new Error(`"${connection.connector}" ยังไม่มี OAuth2 endpoints: ใส่ Authorization URL และ Access Token URL`);
     const fields = new Set(spec.auth.fields.map((field) => field.key));
     if (!fields.has('clientId') || !fields.has('accessToken')) {
       throw new Error(`"${connection.connector}" ต้องประกาศ field clientId และ accessToken สำหรับ OAuth2`);
@@ -246,11 +290,11 @@ export class ConnectorConnections {
     const values = this.valuesOf(id);
     if (!values.clientId) throw new Error(`ยังไม่มี Client ID ของ "${connection.name}"`);
     const flow = await startGenericOAuth({
-      authorizeUrl: spec.auth.authorizeUrl,
-      tokenUrl: spec.auth.tokenUrl,
+      authorizeUrl: oauth.authorizeUrl,
+      tokenUrl: oauth.tokenUrl,
       clientId: values.clientId,
       clientSecret: values.clientSecret,
-      scopes: spec.auth.scopes ?? [],
+      scopes: oauth.scopes,
       extra: spec.auth.extra,
       fetchFn: (input, init) => this.request(input, init),
       now: this.now,
@@ -291,7 +335,7 @@ export class ConnectorConnections {
     }
     const values = this.valuesOf(connection.id);
     if (spec.auth.kind !== 'oauth2') return values;
-    return this.refreshIfNeeded(spec.auth.tokenUrl, spec.auth.fields, connection.id, values);
+    return this.refreshIfNeeded(this.oauthOf(connection).tokenUrl, spec.auth.fields, connection.id, values);
   }
 
   private async refreshIfNeeded(

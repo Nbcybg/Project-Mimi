@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import type { ConnectorSpec } from '@mimi/shared';
 import { SecretStore } from '../app/secrets.ts';
 import { ConnectorRegistry } from '../connectors/registry.ts';
+import { HostedCallbacks } from '../oauth/callback.ts';
 import { ConnectorConnections } from '../oauth/connections.ts';
 import { slackConnector } from '../connectors/services/slack.ts';
 
@@ -174,6 +175,44 @@ test('connections: generic OAuth2 sign-in exchanges the code and stores tokens',
     assert.equal(secrets.get(`connector.${saved.id}.refreshToken`), 'signed-refresh');
     assert.equal(secrets.get(`connector.${saved.id}.expiresAt`), '1060000');
     assert.equal((await connections.resolve('oauth_demo', saved.id))?.accessToken, 'signed-access');
+  } finally {
+    cleanup();
+  }
+});
+
+test('connections: OAuth2 endpoints and scopes per connection (like n8n), checked and used', async () => {
+  const calls: string[] = [];
+  const fetchFn = (async (input: string | URL | Request) => {
+    calls.push(String(input));
+    return Response.json({ access_token: 'a', refresh_token: 'r', expires_in: 60 });
+  }) as typeof fetch;
+  const { connections, cleanup } = setup(fetchFn);
+  try {
+    assert.throws(
+      () => connections.save({ connector: 'oauth_demo', name: 'bad', oauth: { tokenUrl: 'http://auth.example/token' } }),
+      /https/,
+    );
+    const saved = connections.save({
+      connector: 'oauth_demo',
+      name: 'tenant',
+      fields: { clientId: 'client-id', clientSecret: 'client-secret' },
+      oauth: { authorizeUrl: 'https://login.example/t1/authorize', tokenUrl: 'https://login.example/t1/token', scopes: ['read write', 'read'] },
+    });
+    assert.deepEqual(connections.views('oauth_demo')[0]?.oauth?.scopes, ['read', 'write']);
+    const flow = await connections.startConnect(saved.id);
+    const authorize = new URL(flow.url);
+    assert.equal(authorize.origin + authorize.pathname, 'https://login.example/t1/authorize');
+    assert.equal(authorize.searchParams.get('scope'), 'read write');
+    await fetch(`${authorize.searchParams.get('redirect_uri')}?code=c&state=${authorize.searchParams.get('state')}`);
+    await flow.done;
+    assert.equal(calls[0], 'https://login.example/t1/token');
+
+    // Empty values go back to the connector's own endpoints.
+    connections.save({ connector: 'oauth_demo', name: 'tenant', oauth: { authorizeUrl: '', tokenUrl: '', scopes: [] } }, saved.id);
+    assert.equal(connections.views('oauth_demo')[0]?.oauth, undefined);
+    // A hosted receiver: its wait does not keep the test process alive.
+    const plain = await connections.startConnect(saved.id, new HostedCallbacks('https://mimi.example.com').receiver);
+    assert.equal(new URL(plain.url).origin, 'https://auth.example');
   } finally {
     cleanup();
   }

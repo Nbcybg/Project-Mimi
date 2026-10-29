@@ -127,6 +127,8 @@ export class OAuthAccounts {
         if (secret) this.secrets.set(secretName(id), secret);
         this.copyLegacyToken(service, env.GOOGLE_OAUTH_REFRESH_TOKEN);
       } else {
+        const secret = env.MICROSOFT_CLIENT_SECRET?.trim();
+        if (secret) this.secrets.set(secretName(id), secret);
         this.copyLegacyToken(service);
       }
       this.accounts.push(account);
@@ -199,7 +201,7 @@ export class OAuthAccounts {
     const auth = new MicrosoftAuth({
       credentials: () => {
         const current = this.find(account.id);
-        return { clientId: current?.clientId, tenant: current?.tenant || 'common' };
+        return { clientId: current?.clientId, tenant: current?.tenant || 'common', clientSecret: this.secrets.get(secretName(account.id)) };
       },
       tokenFile: this.tokenFile(account.id),
     });
@@ -321,7 +323,9 @@ export class OAuthAccounts {
         if (secret) this.secrets.set(secretName(account.id), secret);
       } else {
         const clientId = env.MICROSOFT_CLIENT_ID?.trim();
+        const secret = env.MICROSOFT_CLIENT_SECRET?.trim();
         if (clientId) account.clientId = clientId;
+        if (secret) this.secrets.set(secretName(account.id), secret);
         account.tenant = env.MICROSOFT_TENANT?.trim() || 'common';
       }
       this.reset(account.id);

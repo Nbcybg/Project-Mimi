@@ -435,7 +435,7 @@ export interface SettingsView {
   allowedDirs: string[];
   google: { hasClient: boolean; connected: boolean };
   /** Outlook mail, calendar and To Do: `hasClient` once the Azure app's client ID is saved. */
-  microsoft: { hasClient: boolean; connected: boolean };
+  microsoft: { hasClient: boolean; connected: boolean; hasSecret?: boolean };
   /**
    * On a server: the address OAuth providers send the browser back to, which has to be
    * registered with the Google / Azure app. Absent on a computer (temporary local port).

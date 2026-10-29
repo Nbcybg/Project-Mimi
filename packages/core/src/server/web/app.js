@@ -2358,16 +2358,17 @@
         view.microsoft.connected
           ? 'เชื่อมต่อแล้ว ✓'
           : redirect
-            ? `ลงทะเบียนแอปของคุณเองที่ Azure Portal → App registrations แล้วเพิ่ม platform "Mobile and desktop applications" โดยใส่ redirect URI เป็น ${redirect} จากนั้นวาง Application (client) ID ที่นี่ บันทึก แล้วกดเชื่อมต่อ (ไม่ต้องใช้ client secret)`
-            : 'ลงทะเบียนแอปของคุณเองที่ Azure Portal → App registrations แล้วเพิ่ม platform "Mobile and desktop applications" โดยใส่ redirect URI เป็น http://localhost จากนั้นวาง Application (client) ID ที่นี่ บันทึก แล้วกดเชื่อมต่อ (ไม่ต้องใช้ client secret)',
+            ? `ลงทะเบียนแอปที่ Azure Portal → App registrations แล้วเพิ่ม redirect URI ${redirect} · แอปที่มี client secret (platform "Web" เช่นแอปที่ทำไว้ให้ n8n): ใส่ URI นี้ใต้ "Web" แล้วใส่ secret ด้วย · ไม่มี secret: ใส่ใต้ "Mobile and desktop applications" · วางค่า บันทึก แล้วกดเชื่อมต่อ`
+            : 'ลงทะเบียนแอปที่ Azure Portal → App registrations แล้วเพิ่ม platform "Mobile and desktop applications" โดยใส่ redirect URI เป็น http://localhost จากนั้นวาง Application (client) ID ที่นี่ บันทึก แล้วกดเชื่อมต่อ (ไม่ต้องใช้ client secret)',
       ),
     );
     const microsoft = el('div', 'grid2');
-    for (const [key, label, placeholder] of [
+    for (const [key, label, placeholder, type] of [
       ['MICROSOFT_CLIENT_ID', 'Application (client) ID', view.microsoft.hasClient ? 'ใส่แล้ว ✓' : 'วางค่าที่นี่'],
+      ['MICROSOFT_CLIENT_SECRET', 'Client secret (เฉพาะแอปแบบ Web)', view.microsoft.hasSecret ? 'ใส่แล้ว ✓' : 'เว้นว่างถ้าเป็นแอปแบบ Mobile/desktop', 'password'],
       ['MICROSOFT_TENANT', 'Tenant (ไม่บังคับ)', 'common — ใช้ได้ทั้งบัญชีส่วนตัวและบัญชีองค์กร'],
     ]) {
-      const field = textInput('', placeholder);
+      const field = textInput('', placeholder, type);
       field.dataset.key = key;
       googleKeys.push(field);
       microsoft.append(labelled(label, field));

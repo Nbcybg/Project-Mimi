@@ -264,6 +264,7 @@ export class ConnectorRegistry {
           fields: spec.auth.fields,
           ...(spec.auth.scopes === undefined ? {} : { scopes: spec.auth.scopes }),
           ...(spec.auth.authorizeUrl === undefined ? {} : { authorizeUrl: spec.auth.authorizeUrl }),
+          ...(spec.auth.tokenUrl === undefined ? {} : { tokenUrl: spec.auth.tokenUrl }),
           ...(options.connected === undefined ? {} : { connected: options.connected(spec.key) }),
         },
         operations: spec.operations.map((operation) => ({

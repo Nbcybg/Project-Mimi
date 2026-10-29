@@ -395,7 +395,11 @@ export async function startServer(
       agents: core.agents.names().filter((name) => name !== OVERSEER_NAME).length,
       allowedDirs: [...config.allowedDirs],
       google: { hasClient: core.google.hasClient, connected: core.google.isConfigured },
-      microsoft: { hasClient: core.microsoft.hasClient, connected: core.microsoft.isConfigured },
+      microsoft: {
+        hasClient: core.microsoft.hasClient,
+        connected: core.microsoft.isConfigured,
+        hasSecret: core.oauth.views().some((account) => account.service === 'microsoft' && account.default && account.hasSecret) || Boolean(process.env.MICROSOFT_CLIENT_SECRET),
+      },
       accounts: core.oauth.views(),
       ...(hostedCallbacks ? { oauthRedirectUri: hostedCallbacks.redirectUri } : {}),
       preferences: appSettings.preferences,

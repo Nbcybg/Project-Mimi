@@ -22,6 +22,9 @@
   let connectionConnector = 'slack';
   let connectionLink = null; // { connectionId, url } from the last connector-auth-url
   let connectionWaiting = null; // connection id with a generic OAuth2 sign-in in progress
+  let connectAfterSave = null; // connection ids before "บันทึกและเชื่อมต่อ", to find the new one
+  // Token fields an OAuth2 sign-in fills by itself; the form tucks them away.
+  const OAUTH_TOKEN_FIELDS = new Set(['refreshToken', 'accessToken', 'expiresAt']);
 
   const accounts = () => (M().state.settings && M().state.settings.accounts) || [];
   const find = (id) => accounts().find((entry) => entry.id === id) || null;
@@ -40,6 +43,36 @@
     return node;
   }
 
+  /**
+   * Where the provider sends the browser back. A core on a server has one fixed address
+   * (to register with the provider); on a computer it is a temporary local port.
+   */
+  function redirectUri(local) {
+    return (M().state.settings && M().state.settings.oauthRedirectUri) || local;
+  }
+
+  /** A read-only value with a copy button, like the redirect URL of n8n's credential form. */
+  function copyField(label, value, hint) {
+    const box = el('div');
+    const row = el('div', 'btns');
+    const input = M().textInput(value);
+    input.readOnly = true;
+    input.style.flex = '1';
+    input.onfocus = () => input.select();
+    row.append(
+      input,
+      button('btn ghost', 'คัดลอก', () => {
+        navigator.clipboard?.writeText(value).then(
+          () => M().toast('คัดลอกแล้ว'),
+          () => {},
+        );
+      }),
+    );
+    box.append(M().labelled(label, row));
+    if (hint) box.append(el('p', 'hint', hint));
+    return box;
+  }
+
   function rerender() {
     if (M().state.view === 'hub' && M().ui.hubTab === 'accounts') M().renderHub();
   }
@@ -54,6 +87,8 @@
     if (!requested && !M().state.settings?.accounts) {
       requested = true;
       M().send({ type: 'oauth-accounts' });
+      // The settings carry the server's OAuth redirect URL.
+      if (!M().state.settings) M().send({ type: 'settings-get' });
     }
     if (!connectionsRequested && !M().state.connections) {
       connectionsRequested = true;
@@ -140,13 +175,42 @@
     const name = M().textInput(entry ? entry.name : '', spec ? `ชื่อเล่น เช่น งาน (${spec.label})` : 'ชื่อ connection');
     box.append(M().labelled('ชื่อ connection', name));
     const inputs = {};
+    const isOAuth2 = spec?.auth.kind === 'oauth2';
+    let oauthInputs = null;
+    if (isOAuth2) {
+      box.append(
+        copyField(
+          'OAuth Redirect URL',
+          redirectUri('http://127.0.0.1:<พอร์ตชั่วคราว>/callback'),
+          'ใส่ URL นี้เป็น redirect / callback URL ในแอปที่สร้างไว้กับผู้ให้บริการ (เช่น Azure → Authentication → Web) ต้องตรงทุกตัวอักษร',
+        ),
+      );
+      const own = entry?.oauth || {};
+      oauthInputs = {
+        authorizeUrl: M().textInput(own.authorizeUrl || spec.auth.authorizeUrl || '', 'https://…/authorize'),
+        tokenUrl: M().textInput(own.tokenUrl || spec.auth.tokenUrl || '', 'https://…/token'),
+        scopes: M().textInput((own.scopes || spec.auth.scopes || []).join(' '), 'scope คั่นด้วยช่องว่าง'),
+      };
+      for (const input of Object.values(oauthInputs)) input.style.width = '100%';
+      box.append(
+        M().labelled('Authorization URL', oauthInputs.authorizeUrl),
+        M().labelled('Access Token URL', oauthInputs.tokenUrl),
+        M().labelled('Scopes', oauthInputs.scopes),
+        el('p', 'hint', 'ค่าเริ่มต้นมาจาก connector · แก้ได้ เช่น เปลี่ยน /common/ เป็น tenant ขององค์กร หรือเพิ่ม scope'),
+      );
+    }
     if (spec) {
+      const tokens = el('details');
+      tokens.append(el('summary', 'hint', 'Token (ได้เองหลังเชื่อมต่อ OAuth2 · ใส่เองได้ถ้ามีอยู่แล้ว)'));
       for (const field of spec.auth.fields) {
         const input = M().textInput('', field.placeholder || (entry ? 'ตั้งไว้แล้ว ◆ (เว้นว่าง = คงเดิม)' : ''), field.type === 'secret' ? 'password' : undefined);
         inputs[field.key] = input;
-        box.append(M().labelled(`${field.label}${field.required !== false ? ' *' : ''}`, input));
-        if (field.description) box.append(el('p', 'hint', field.description));
+        const tucked = isOAuth2 && OAUTH_TOKEN_FIELDS.has(field.key);
+        const target = tucked ? tokens : box;
+        target.append(M().labelled(`${field.label}${field.required !== false && !tucked ? ' *' : ''}`, input));
+        if (field.description) target.append(el('p', 'hint', field.description));
       }
+      if (tokens.childElementCount > 1) box.append(tokens);
     }
     const makeDefault = el('input');
     makeDefault.type = 'checkbox';
@@ -156,11 +220,27 @@
     box.append(defaultLabel);
     const actions = el('div');
     actions.style.marginTop = '10px';
-    actions.append(button('btn', entry ? 'บันทึก' : 'เพิ่ม connection', () => {
+    const save = (thenConnect) => {
       if (!name.value.trim()) return M().toast('กรอกไม่ครบ', 'ต้องมีชื่อ connection', true);
       const fields = {};
       for (const [key, input] of Object.entries(inputs)) {
         if (input.value) fields[key] = input.value;
+      }
+      // A value equal to the connector's own is not stored, so a fixed connector reaches it too.
+      let oauth;
+      if (oauthInputs) {
+        const authorizeUrl = oauthInputs.authorizeUrl.value.trim();
+        const tokenUrl = oauthInputs.tokenUrl.value.trim();
+        const scopes = oauthInputs.scopes.value.trim().split(/\s+/).filter(Boolean);
+        oauth = {
+          authorizeUrl: authorizeUrl === (spec.auth.authorizeUrl || '') ? '' : authorizeUrl,
+          tokenUrl: tokenUrl === (spec.auth.tokenUrl || '') ? '' : tokenUrl,
+          scopes: scopes.join(' ') === (spec.auth.scopes || []).join(' ') ? [] : scopes,
+        };
+      }
+      if (thenConnect) {
+        if (entry) connectionWaiting = entry.id;
+        else connectAfterSave = new Set(connections().map((item) => item.id));
       }
       M().send({
         type: 'connector-connection-save',
@@ -170,18 +250,22 @@
           name: name.value.trim(),
           fields,
           default: makeDefault.checked,
+          ...(oauth ? { oauth } : {}),
         },
       });
-    }));
-    if (entry && spec?.auth.kind === 'oauth2' && spec.auth.authorizeUrl && spec.auth.tokenUrl) {
+      if (thenConnect && entry) {
+        connectionLink = null;
+        M().send({ type: 'connector-connection-connect', id: entry.id });
+      }
+    };
+    actions.append(button('btn', entry ? 'บันทึก' : 'เพิ่ม connection', () => save(false)));
+    if (isOAuth2) {
+      const busy = Boolean(entry) && connectionWaiting === entry.id;
+      actions.append(button('btn', busy ? 'รอการเชื่อมต่อ…' : 'บันทึกและเชื่อมต่อ OAuth2', () => save(true)));
+    }
+    if (entry && isOAuth2) {
       const oauth = el('div');
       oauth.style.marginTop = '10px';
-      oauth.append(button('btn', connectionWaiting === entry.id ? 'รอการเชื่อมต่อ…' : 'เชื่อมต่อ OAuth2', () => {
-        connectionWaiting = entry.id;
-        connectionLink = null;
-        rerender();
-        M().send({ type: 'connector-connection-connect', id: entry.id });
-      }));
       if (connectionWaiting === entry.id) {
         oauth.append(el('p', 'hint', 'เปิดลิงก์ด้านล่างแล้วทำตามขั้นตอนในเบราว์เซอร์'));
       }
@@ -282,22 +366,58 @@
     panel.append(M().labelled('Client ID', clientId));
 
     const secret = M().textInput('', entry && entry.hasSecret ? 'ตั้งไว้แล้ว ◆ (เว้นว่าง = คงเดิม)' : 'Client secret (ถ้ามี)', 'password');
-    panel.append(M().labelled('Client secret', secret));
+    const secretHint = el('p', 'hint');
+    panel.append(M().labelled('Client secret', secret), secretHint);
 
     const tenant = M().textInput(entry ? entry.tenant || '' : '', 'common (ใช้ได้ทั้งบัญชีส่วนตัวและองค์กร)');
     const tenantLabel = M().labelled('Tenant', tenant);
     panel.append(tenantLabel);
+
+    // What the provider needs to know, shown the way n8n's credential form does.
+    const hosted = Boolean(M().state.settings && M().state.settings.oauthRedirectUri);
+    const endpoints = el('div');
+    panel.append(endpoints);
 
     const info = el('p', 'hint');
     const detected = el('p', 'hint');
     const applyProvider = () => {
       const service = provider.value;
       tenantLabel.hidden = service !== 'microsoft';
+      secretHint.textContent =
+        service === 'microsoft'
+          ? 'ใส่เฉพาะแอปที่ redirect URI อยู่ใต้ platform “Web” (เช่นแอปที่ทำไว้ให้ n8n) · แอปแบบ “Mobile and desktop applications” เว้นว่าง'
+          : '';
+      endpoints.replaceChildren();
+      if (service === 'microsoft') {
+        const authority = `https://login.microsoftonline.com/${encodeURIComponent(tenant.value.trim() || 'common')}/oauth2/v2.0`;
+        endpoints.append(
+          copyField(
+            'OAuth Redirect URL',
+            redirectUri('http://localhost'),
+            hosted
+              ? 'Azure → App registrations → แอปนี้ → Authentication → เพิ่ม URI นี้ (มี secret: ใต้ “Web” · ไม่มี secret: ใต้ “Mobile and desktop applications”)'
+              : 'Azure → Authentication → “Mobile and desktop applications” → เพิ่ม http://localhost',
+          ),
+          copyField('Authorization URL', `${authority}/authorize`),
+          copyField('Access Token URL', `${authority}/token`),
+        );
+      } else {
+        endpoints.append(
+          copyField(
+            'OAuth Redirect URL',
+            redirectUri('http://127.0.0.1 (พอร์ตชั่วคราว ไม่ต้องลงทะเบียน)'),
+            hosted ? 'Google Cloud Console → OAuth client ชนิด “Web application” → Authorized redirect URIs → เพิ่ม URI นี้' : '',
+          ),
+        );
+      }
       info.textContent =
         service === 'google'
-          ? 'สร้าง OAuth client ชนิด “Desktop app” ใน Google Cloud Console แล้วเปิด API ที่ต้องใช้ (Gmail, Calendar, Sheets, Drive) · redirect URI ไม่ต้องใส่ (ใช้ 127.0.0.1 ชั่วคราว)'
-          : 'สร้าง app registration ใน Azure (Entra) และเพิ่ม redirect URI แบบ “Mobile and desktop applications”: http://localhost';
+          ? hosted
+            ? 'สร้าง OAuth client ชนิด “Web application” ใน Google Cloud Console แล้วเปิด API ที่ต้องใช้ (Gmail, Calendar, Sheets, Drive)'
+            : 'สร้าง OAuth client ชนิด “Desktop app” ใน Google Cloud Console แล้วเปิด API ที่ต้องใช้ (Gmail, Calendar, Sheets, Drive) · redirect URI ไม่ต้องใส่ (ใช้ 127.0.0.1 ชั่วคราว)'
+          : 'สร้าง app registration ใน Azure (Entra) ใส่ redirect URL ด้านบน แล้วให้สิทธิ์ Microsoft Graph: Mail, Calendars, Tasks, Files, User.Read, offline_access';
     };
+    tenant.addEventListener('change', applyProvider);
     const detectProvider = () => {
       const value = clientId.value.trim();
       let service = null;
@@ -422,11 +542,30 @@
   }
 
   function onConnections(message) {
-    if (message.saved) {
+    // "บันทึกและเชื่อมต่อ" on a new connection: open it and start its sign-in.
+    if (message.saved && connectAfterSave) {
+      const fresh = connections().find((entry) => !connectAfterSave.has(entry.id));
+      connectAfterSave = null;
+      if (fresh) {
+        connectionAdding = false;
+        connectionEditing = fresh.id;
+        connectionWaiting = fresh.id;
+        connectionLink = null;
+        M().send({ type: 'connector-connection-connect', id: fresh.id });
+        rerender();
+        return;
+      }
+    }
+    if (message.saved && !connectionWaiting) {
       connectionAdding = false;
       connectionEditing = null;
       connectionLink = null;
+    }
+    // The server sends the list again when a sign-in finishes.
+    if (message.saved && connectionWaiting && connectionLink && findConnection(connectionWaiting)?.connected) {
       connectionWaiting = null;
+      connectionLink = null;
+      M().toast('เชื่อมต่อ OAuth2 แล้ว ✓');
     }
     rerender();
   }

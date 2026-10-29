@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### 0.7.1-prototype
+
+- "Push mail": watches the connected Google and Microsoft accounts and any IMAP /
+  POP3 mailbox for new unread mail and raises a notification for each.
+- Subscription ("รายเดือน") logins for providers, as an alternative to an API key.
+- Export tools: files such as PDF are made by the agent (a Thai font ships with the app).
+- PC agent: a screen tool.
+- Conversations remember when they were last read, so new ones are marked "ใหม่"
+  (database schema 18).
+- Android app: sync and widget fixes.
+
 ### 0.7.0-prototype
 
 - Chat sounds: a short "pop" when a message goes out and two notes when the

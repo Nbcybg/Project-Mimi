@@ -157,6 +157,58 @@ export function createGoogleTools(source: GoogleAuthSource, timezone: string): T
     },
   });
 
+  /** An RFC 2047-encoded header with the value the message already used. */
+  const headerOf = (message: GmailMessage, name: string) => header(message, name).replace(/\s+/g, ' ').trim();
+  /** The "From" address without a display name: `Name <a@b.c>` → `a@b.c`. */
+  const addressOf = (from: string) => {
+    const match = /<([^>]+)>/.exec(from);
+    return match ? match[1]! : from;
+  };
+
+  const gmailReply = defineTool({
+    name: 'gmail_reply',
+    description:
+      'Reply to an e-mail the user received (message id from gmail_search). Goes to the sender, threads correctly (Re: subject), and quotes nothing; write the reply text exactly as the user wants it.',
+    risk: 'network',
+    target: 'core',
+    settings: [accountSetting('google')],
+    inputSchema: z.object({
+      id: z.string().min(1).describe('The id of the message to answer (from gmail_search)'),
+      body: z.string().min(1).describe('The reply text'),
+      to: z.string().optional().describe('Other recipients instead of the sender (rarely needed)'),
+      cc: z.string().optional(),
+    }),
+    summarize: (input) => `Reply to Gmail message ${input.id}`,
+    async execute(input, _context, settings) {
+      const original = await client(settings).request<GmailMessage & { threadId?: string }>(`${GMAIL}/messages/${encodeURIComponent(input.id)}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Cc&metadataHeaders=Subject&metadataHeaders=Message-ID&metadataHeaders=References&metadataHeaders=In-Reply-To`);
+      const subject = headerOf(original, 'Subject');
+      const to = input.to?.trim() || addressOf(headerOf(original, 'From'));
+      const references = [
+        headerOf(original, 'References'),
+        headerOf(original, 'Message-ID'),
+      ].filter(Boolean).join(' ');
+      const inReplyTo = headerOf(original, 'Message-ID');
+      const lines = [
+        `To: ${to}`,
+        ...(input.cc ? [`Cc: ${input.cc}`] : []),
+        `Subject: ${encodeHeader(/^re:/i.test(subject) ? subject : `Re: ${subject}`)}`,
+        `In-Reply-To: ${inReplyTo}`,
+        ...(references ? [`References: ${references}`] : []),
+        'MIME-Version: 1.0',
+        'Content-Type: text/plain; charset=UTF-8',
+        'Content-Transfer-Encoding: base64',
+        '',
+        Buffer.from(input.body, 'utf8').toString('base64').replace(/(.{76})/g, '$1\r\n'),
+      ];
+      const raw = Buffer.from(lines.join('\r\n'), 'utf8').toString('base64url');
+      const sent = await client(settings).request<{ id: string }>(`${GMAIL}/messages/send`, {
+        method: 'POST',
+        body: { raw, ...(original.threadId ? { threadId: original.threadId } : {}) },
+      });
+      return `Replied to ${to} (message id ${sent.id}).`;
+    },
+  });
+
   const calendarList = defineTool({
     name: 'calendar_list',
     description: 'List events on the user\'s primary Google Calendar between two date-times (ISO 8601 with offset, e.g. 2026-10-13T00:00:00+07:00).',
@@ -212,7 +264,7 @@ export function createGoogleTools(source: GoogleAuthSource, timezone: string): T
     },
   });
 
-  return [gmailSearch, gmailRead, gmailSend, calendarList, calendarCreate];
+  return [gmailSearch, gmailRead, gmailSend, gmailReply, calendarList, calendarCreate];
 }
 
 /** One mail, as a trigger hands it to a workflow run. */

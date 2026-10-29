@@ -1,6 +1,6 @@
 {
   "name": "@mimi/core",
-  "version": "0.7.0-prototype",
+  "version": "0.7.1-prototype",
   "private": true,
   "type": "module",
   "dependencies": {
@@ -8,12 +8,15 @@
     "@ai-sdk/deepseek": "^3.0.63",
     "@ai-sdk/google": "^4.0.93",
     "@ai-sdk/openai-compatible": "^3.0.67",
+    "@fontsource/noto-sans-thai": "^5.3.0",
     "@mimi/pc-agent": "*",
     "@mimi/shared": "*",
     "@pixiv/three-vrm": "^3.5.5",
     "ai": "^7.0.137",
     "better-sqlite3": "^13.0.3",
     "croner": "^10.0.1",
+    "imapflow": "^2.9.1",
+    "pdfkit": "^0.20.2",
     "three": "^0.186.1",
     "ws": "^8.22.0",
     "yaml": "^2.9.1",
@@ -21,6 +24,7 @@
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",
+    "@types/pdfkit": "^0.17.7",
     "@types/ws": "^8.18.2"
   }
 }

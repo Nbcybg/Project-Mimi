@@ -48,15 +48,45 @@
       if (synced(key)) syncUi({ [key]: value });
     },
   };
-  /** How much of the chat shows over the character: 0 none, 1 only the newest message, 2 all (the usual). Per mode. */
+  /** A per-chat override of a screen setting, with a global fallback. Chats remember their own look. */
+  function chatPref(key, fallback) {
+    if (state.chat) {
+      const value = store.get(`mimi.chat.${state.chat.id}.${key}`);
+      if (value !== null) return value;
+    }
+    return fallback();
+  }
+  /** Whether this chat has its own override of `key` (so it can be cleared). */
+  const chatHasPref = (key) => Boolean(state.chat && store.get(`mimi.chat.${state.chat.id}.${key}`) !== null);
+  const clearChatPref = (key) => {
+    if (!state.chat) return;
+    try {
+      localStorage.removeItem(`mimi.chat.${state.chat.id}.${key}`);
+    } catch {
+      // not remembered, still cleared
+    }
+    renderHeader();
+    renderRail();
+  };
+  /** How much of the chat shows over the character: 0 none, 1 only the newest message, 2 all (the usual). Per mode, with a per-chat override. */
   const bubbleLevel = () => {
-    const saved = store.get(`mimi.bubbles.${modeNow()}`);
+    const saved = chatPref('bubbles', () => store.get(`mimi.bubbles.${modeNow()}`));
     if (saved === null) return 2;
     const level = Number(saved);
     return level === 0 || level === 1 ? level : 2;
   };
-  /** The character on the chat stage can be switched off (to read more of the chat); remembered per mode. */
-  const characterOn = () => store.get(`mimi.character.${modeNow()}`) !== '0';
+  /** The character on the chat stage can be switched off (to read more of the chat); remembered per chat, else per mode. */
+  const characterOn = () => chatPref('character', () => store.get(`mimi.character.${modeNow()}`)) !== '0';
+  /** Text size of the chat, per chat with a per-device default: 0 small, 1 normal, 2 large. */
+  const textSize = () => {
+    const saved = chatPref('textSize', () => store.get('mimi.textSize'));
+    if (saved === null) return 1;
+    const level = Number(saved);
+    return level === 0 || level === 2 ? level : 1;
+  };
+  const applyTextSize = () => {
+    document.documentElement.dataset.text = String(textSize());
+  };
   /** Tray window: tool calls and other details are hidden unless "แสดง prompt" is on. */
   let showPrompt = false;
   try {
@@ -227,15 +257,22 @@
     latest: true,
     railOpen: window.innerWidth <= 1180 ? false : store.get('mimi.rail') === null ? window.innerWidth >= 1480 : store.get('mimi.rail') === '1',
     pins: [],
-    busyChat: null,
-    typing: null,
+    /** Chats with a turn running right now (they run in parallel). */
+    busyChats: new Set(),
+    /** Per chat: the agent that is answering there. */
+    typingByChat: new Map(),
+    /** Your own messages shown right after sending, until the server echoes them. */
+    pendingEchoes: [],
+    /** The conversation currently on screen, to merge updates instead of re-rendering (no flash). */
+    historyKey: null,
+    historyIds: [],
     staged: [],
     pendingPerms: new Map(),
     highlight: null,
     lastSent: null,
     booted: false,
   };
-  const ui = { agent: null, agentDirty: false, hubTab: 'models', preset: null, presetDirty: false, skill: null, skillDirty: false, toolDirty: false, providerDirty: false, triggerDirty: false, workflowDirty: false, memory: null, overseerDirty: false };
+  const ui = { agent: null, agentDirty: false, hubTab: 'models', railTab: 'status', settingsTab: 'profile', preset: null, presetDirty: false, skill: null, skillDirty: false, toolDirty: false, providerDirty: false, triggerDirty: false, workflowDirty: false, memory: null, overseerDirty: false };
 
   let socket = null;
   let retryMs = 1000;
@@ -411,7 +448,7 @@
   // ---------- chat list ----------
   function renderChatList() {
     const nodes = state.chats.map((chat) => {
-      const busy = state.busyChat === chat.id;
+      const busy = state.busyChats.has(chat.id);
       const row = button(`chat${state.chat && state.chat.id === chat.id ? ' on' : ''}`, null, () => openChat(chat.id));
       const middle = el('div');
       middle.style.minWidth = '0';
@@ -464,8 +501,12 @@
   const logInner = $('log-inner');
   /** The assistant block being streamed into right now. */
   let live = null;
+  /** The streaming block's DOM node; it stays on screen after `live` ends, until the stored messages replace it. */
+  let liveNode = null;
   /** A chat that changed while its turn was still streaming: reloaded once the turn ends. */
   let refreshAfterTurn = null;
+  /** Pending coalesced re-render of the streaming text (one per frame, keeps typing smooth). */
+  let liveFrame = null;
   const cards = new Map();
 
   const pinned = () => logBox.scrollHeight - logBox.scrollTop - logBox.clientHeight < 140;
@@ -696,9 +737,11 @@
     row.dataset.id = message.id;
     row.dataset.role = 'user';
     const actions = el('div', 'acts');
-    actions.append(
-      button('', '↩ ย้อนกลับ', () => rewind(message), 'ย้อนบทสนทนากลับไปก่อนข้อความนี้ แล้วแก้ไขส่งใหม่ได้'),
-    );
+    if (typeof message.id === 'number') {
+      actions.append(
+        button('', '↩ ย้อนกลับ', () => rewind(message), 'ย้อนบทสนทนากลับไปก่อนข้อความนี้ แล้วแก้ไขส่งใหม่ได้'),
+      );
+    }
     const column = el('div', 'col');
     if (state.chat && state.chat.kind === 'group') column.append(el('div', 'nm mine', 'คุณ'));
     if (message.forwardedFrom) {
@@ -782,11 +825,15 @@
 
   function renderLog(history) {
     live = null;
+    liveNode = null;
     cards.clear();
     messageStore.clear();
     lastDay = null;
     logInner.replaceChildren();
     if (!state.chat) return emptyState();
+    state.pendingEchoes = [];
+    state.historyKey = state.session ? `${state.chat.id}:${state.session.id}` : `${state.chat.id}:`;
+    state.historyIds = history.messages.map((message) => message.id);
     if (history.hasMore) logInner.append(olderButton(history.messages[0]));
     else if (state.session) logInner.append(sessionDivider(state.session));
     if (history.messages.length === 0 && !history.hasMore) {
@@ -832,6 +879,70 @@
     logBox.scrollTop += logBox.scrollHeight - scrollBefore;
   }
 
+  /**
+   * The same conversation is already on screen: only the messages that arrived since join it,
+   * instead of rebuilding the whole log (which made the screen flash when a turn finished).
+   */
+  function mergeHistory(message, key, ids) {
+    const fresh = message.messages.slice(state.historyIds.length);
+    if (liveFrame) {
+      cancelAnimationFrame(liveFrame);
+      liveFrame = null;
+    }
+    if (liveNode) {
+      // The stored version of the streamed answer replaces the provisional bubble.
+      liveNode.remove();
+      liveNode = null;
+      live = null;
+    }
+    // The usage / stop notes of the finished turn sit at the tail; they belong to it.
+    for (const note of [...logInner.children].reverse()) {
+      if (!note.classList || !note.classList.contains('note')) break;
+      note.remove();
+    }
+    state.historyKey = key;
+    state.historyIds = ids;
+    let block = null;
+    for (const entry of fresh) block = appendStored(logInner, entry, block);
+    state.pendingEchoes = [];
+    renderLiveSnapshot(message.live, message.chat.id);
+    if (followLog) scrollDown();
+  }
+
+  /** A turn still streaming: rebuilds its bubble, tool rows and permission cards so nothing is lost. */
+  function renderLiveSnapshot(liveView, chatId) {
+    if (!liveView) return;
+    live = assistantBlock(liveView.agent, new Date().toISOString());
+    liveNode = live.node;
+    add(live.node);
+    if (liveView.text) {
+      live.bubble = el('div', 'tx');
+      live.raw = liveView.text;
+      const parsed = parseSpeech(liveView.text, true);
+      live.speech = parsed.speech || liveView.speech;
+      renderText(live.bubble, parsed.text, live.speech);
+      live.body.append(live.bubble, metaRow({ createdAt: new Date().toISOString() }));
+    } else {
+      think(true);
+    }
+    for (const tool of liveView.tools) {
+      const row = toolRow(tool.name, tool.arg, tool.ok === null, tool.risk);
+      live.tools.set(tool.id, row);
+      if (tool.ok !== null) row.finish(tool.ok, tool.output);
+      live.body.append(row.node);
+    }
+    for (const attachment of liveView.attachments) {
+      const box = el('div', 'agentfiles');
+      box.append(...attachmentNodes([attachment]));
+      live.body.append(box);
+    }
+    for (const request of liveView.pendingPermissions) {
+      state.pendingPerms.set(request.id, request);
+      permissionCard(request);
+    }
+    state.typingByChat.set(chatId, liveView.agent);
+  }
+
   function permissionCard(request) {
     if (cards.has(request.id)) return;
     const card = el('div', 'perm');
@@ -839,6 +950,11 @@
       el('div', 'ttl', `${nameOf(request.agent)} ขออนุญาตใช้ ${request.tool} (${request.risk})`),
       el('div', '', request.summary),
       el('div', 'kv', JSON.stringify(request.input, null, 2)),
+      el(
+        'div',
+        'faint',
+        `ขอเมื่อ ${request.createdAt ? fmtTime(request.createdAt) : 'ตอนนี้'} · รอได้ ${Math.max(1, Math.round((request.timeoutMs || 120000) / 60000))} นาที · session: ${state.session ? state.session.title || `#${state.session.id}` : '—'}`,
+      ),
     );
     const answer = (allow) => send({ type: 'permission-response', requestId: request.id, allow });
     const allow = button('btn pri', 'อนุญาต', () => answer(true));
@@ -892,11 +1008,24 @@
       live.dots = null;
     }
   }
+  /** Re-renders the streaming text at most once per frame, so rapid chunks don't jank the phone. */
+  function scheduleLiveRender() {
+    if (liveFrame) return;
+    liveFrame = requestAnimationFrame(() => {
+      liveFrame = null;
+      if (!live || !live.bubble) return;
+      const parsed = parseSpeech(live.raw, true);
+      if (parsed.speech) live.speech = parsed.speech;
+      renderText(live.bubble, parsed.text, live.speech);
+      window.MimiHooks?.stage?.onText(parsed.text);
+      if (pinned()) scrollDown();
+    });
+  }
   /** `sub` is set when the event comes from an agent (or skill) working for the one that is answering. */
-  function handleEvent(event, sub) {
+  function handleEvent(event, sub, chatId) {
     switch (event.type) {
       case 'agent-activity':
-        handleEvent(event.event, event.agent);
+        handleEvent(event.event, event.agent, chatId);
         break;
       case 'run-start':
         if (sub) {
@@ -904,9 +1033,10 @@
           break;
         }
         live = assistantBlock(event.agent, new Date().toISOString());
+        liveNode = live.node;
         add(live.node);
         think(true);
-        state.typing = event.agent;
+        state.typingByChat.set(chatId, event.agent);
         renderHeader();
         break;
       case 'text-delta': {
@@ -919,12 +1049,8 @@
           live.body.append(live.bubble, metaRow({ createdAt: new Date().toISOString() }));
         }
         live.raw += event.text;
-        const parsed = parseSpeech(live.raw, true);
-        if (parsed.speech) live.speech = parsed.speech;
-        window.MimiHooks?.stage?.onText(parsed.text);
-        const stick = pinned();
-        renderText(live.bubble, parsed.text, live.speech);
-        if (stick) scrollDown();
+        // Every chunk on its own frame would jank the phone; render once per frame.
+        scheduleLiveRender();
         break;
       }
       case 'tool-call': {
@@ -965,6 +1091,7 @@
         break;
       }
       case 'permission-request':
+        // Remembered even while the user is in another chat, so the card is there when they return.
         state.pendingPerms.set(event.request.id, event.request);
         think(false);
         permissionCard(event.request);
@@ -978,6 +1105,10 @@
           break;
         }
         think(false);
+        if (liveFrame) {
+          cancelAnimationFrame(liveFrame);
+          liveFrame = null;
+        }
         if (event.text && live && live.bubble) {
           const final = parseSpeech(event.text);
           renderText(live.bubble, final.text, event.speech || final.speech || live.speech);
@@ -994,7 +1125,7 @@
         if (event.reason === 'stop' && event.text && autoSpeak()) speak(event.text, event.speech);
         if (event.reason !== 'handoff') window.MimiHooks?.notify?.chatSound('done');
         live = null;
-        state.typing = null;
+        state.typingByChat.delete(chatId);
         renderHeader();
         break;
       }
@@ -1005,7 +1136,7 @@
 
   function rewind(message) {
     if (!state.latest) return toast('ย้อนกลับได้เฉพาะใน session ล่าสุด');
-    if (state.busyChat !== null) return toast('รอให้ตอบเสร็จก่อน หรือกดหยุด แล้วค่อยย้อนกลับ');
+    if (state.busyChats.has(state.chat.id)) return toast('รอให้ตอบเสร็จก่อน หรือกดหยุด แล้วค่อยย้อนกลับ');
     if (!confirm('ย้อนบทสนทนากลับไปก่อนข้อความนี้?\nข้อความนี้และทุกอย่างหลังจากนี้จะถูกซ่อน แล้วข้อความจะกลับมาอยู่ในช่องพิมพ์ให้แก้ไขส่งใหม่\n(ไฟล์ที่ agent แก้ไปแล้ว และสิ่งที่จำไว้แล้ว จะไม่ถูกย้อน)')) return;
     send({ type: 'rewind', sessionId: state.session.id, messageId: message.id });
   }
@@ -1019,6 +1150,7 @@
   ];
   function renderHeader() {
     const chat = state.chat;
+    applyTextSize();
     const direct = chat && chat.kind === 'direct' ? agentOf(chat.agents[0]) : null;
     $('chat-avatars').replaceChildren(
       ...(chat ? chat.agents.slice(0, 4).map((name) => avatar(name, chat.kind === 'group' ? 'sm' : '')) : []),
@@ -1035,11 +1167,12 @@
     syncTopButtons();
     input.placeholder = direct ? t('composer.placeholderTo', { name: nameOf(direct.name) }) : t('composer.placeholder');
     const sub = $('chat-sub');
-    sub.className = `sub${state.typing ? ' typing' : ''}`;
+    const typingHere = chat ? state.typingByChat.get(chat.id) : null;
+    sub.className = `sub${typingHere ? ' typing' : ''}`;
     sub.textContent = !chat
       ? ''
-      : state.typing
-        ? `${nameOf(state.typing)} กำลังพิมพ์…`
+      : typingHere
+        ? `${nameOf(typingHere)} กำลังพิมพ์…`
         : chat.kind === 'group'
           ? `กลุ่ม · ${chat.agents.map(nameOf).join(', ')}`
           : (direct && direct.description) || '';
@@ -1065,7 +1198,7 @@
     $('box').hidden = !chat || !state.latest;
     $('old-session').hidden = !chat || state.latest;
     $('new-session').hidden = !chat;
-    const busyHere = Boolean(chat && state.busyChat === chat.id);
+    const busyHere = Boolean(chat && state.busyChats.has(chat.id));
     $('stop').hidden = !busyHere;
     $('box').classList.toggle('busy', busyHere);
     markEmpty();
@@ -1112,6 +1245,11 @@
     return label;
   }
 
+  const RAIL_TABS = [
+    ['status', 'สถานะ / Session', 'สถานะตอนนี้ของ agent และรายการ session ของแชตนี้'],
+    ['appearance', 'หน้าตา', 'ตัวละคร ฟองข้อความ และฉากหลัง — จำเฉพาะแชตนี้'],
+    ['info', 'ข้อมูล / ตั้งค่า', 'ข้อมูล agent หรือสมาชิก ภาษา และการตั้งค่าอื่น ๆ'],
+  ];
   function renderRail() {
     const rail = $('rail');
     rail.hidden = !(state.railOpen && state.view === 'chat' && state.chat);
@@ -1124,143 +1262,212 @@
 
     // A floating panel always has a way back; in mobile mode it also carries what the clean screen leaves out.
     const railHead = el('div', 'rail-head');
-    railHead.append(el('b', '', t('setting.title')), button('btn ghost', t('setting.fold'), () => setRail(false), t('setting.foldHint')));
-    nodes.push(railHead);
-    const quick = el('div', 'rail-quick');
-    if (chat.kind === 'direct') {
-      quick.append(button(`btn${characterOn() ? ' on' : ''}`, t(characterOn() ? 'setting.characterOn' : 'setting.characterOff'), toggleCharacter, t('setting.characterHint')));
+    railHead.append(el('b', '', 'ตั้งค่าแชต'), button('btn ghost', t('setting.fold'), () => setRail(false), t('setting.foldHint')));
+
+    // The chat settings are split into three pages, so each one stays short on a phone.
+    const tabs = el('div', 'tabs');
+    for (const [key, label, hint] of RAIL_TABS) {
+      tabs.append(
+        button(ui.railTab === key ? 'on' : '', label, () => {
+          ui.railTab = key;
+          renderRail();
+        }, hint),
+      );
     }
-    quick.append(
-      button('btn', t('setting.search'), () => {
-        setRail(false);
-        $('open-search').click();
-      }),
-      button('btn', t('setting.newSession'), () => {
-        setRail(false);
-        $('new-session').click();
-      }),
-    );
-    quick.append(promptSwitch());
-    nodes.push(quick);
-    if (chat.kind === 'direct' && characterOn()) {
-      // How much chat shows over the character.
-      const levels = el('div');
-      levels.append(el('h3', '', t('bubbles.title')));
-      const row = el('div', 'seg');
+    const railTop = el('div', 'rail-top');
+    railTop.append(railHead, tabs);
+    nodes.push(railTop);
+
+    if (ui.railTab === 'status') {
+      const quick = el('div', 'rail-quick');
+      quick.append(
+        button('btn', t('setting.search'), () => {
+          setRail(false);
+          $('open-search').click();
+        }),
+        button('btn', t('setting.newSession'), () => {
+          setRail(false);
+          $('new-session').click();
+        }),
+      );
+      nodes.push(quick);
+
+      const sessions = el('div');
+      const head = el('h3', '', 'Session');
+      head.append(button('', '+ ใหม่', () => send({ type: 'session-new', chatId: chat.id })));
+      sessions.append(head);
+      for (const session of state.sessions) {
+        const row = button(`sess${state.session && state.session.id === session.id ? ' on' : ''}`, null, () => openChat(chat.id, session.id));
+        const label = el('div', 't');
+        if (session.unread && (!state.session || state.session.id !== session.id)) label.append(el('span', 'unread', 'ใหม่ · '));
+        label.append(session.title || 'ยังไม่มีชื่อ');
+        row.append(label, el('div', 'm', `${fmtDate(session.lastMessageAt)}${session.summary ? ` · ${session.summary}` : ''}`));
+        sessions.append(row);
+      }
+      if (state.sessions.length === 0) sessions.append(el('div', 'empty', 'ยังไม่มี session — เริ่มเองอัตโนมัติเมื่อส่งข้อความแรก'));
+      nodes.push(sessions);
+
+      if (chat.kind === 'direct') {
+        const agent = agentOf(chat.agents[0]);
+        const section = el('div');
+        section.append(el('h3', '', 'สถานะตอนนี้'));
+        const grid = el('div', 'kvs');
+        for (const [key, label] of STATUS) {
+          const value = (agent && agent.status && agent.status[key]) || '';
+          grid.append(
+            el('span', '', label),
+            button(value ? '' : 'unset', value || 'ยังไม่ระบุ', () => {
+              const next = prompt(`${label} ของ ${nameOf(chat.agents[0])} (เว้นว่างเพื่อล้าง)`, value);
+              if (next !== null) send({ type: 'status-set', agent: chat.agents[0], key, value: next });
+            }, 'แตะเพื่อแก้ไข (ปกติ agent อัปเดตเองระหว่างคุย)'),
+          );
+        }
+        section.append(grid);
+        nodes.push(section);
+        if (agent && agent.status && agent.status.situation) {
+          const cg = el('div');
+          cg.append(el('h3', '', 'ภาพสถานการณ์'));
+          cg.append(button('btn ghost', 'เอาภาพออกจากแชต', () => send({ type: 'status-set', agent: chat.agents[0], key: 'situation', value: '' })));
+          nodes.push(cg);
+        }
+      } else {
+        nodes.push(el('p', 'hint', 'พิมพ์ @ชื่อ เพื่อเรียกคนตอบ ถ้าไม่ระบุ คนแรกในรายชื่อจะตอบ agent เรียกกันเองด้วย @ชื่อ ได้เช่นกัน'));
+      }
+    }
+
+    if (ui.railTab === 'appearance') {
+      nodes.push(el('p', 'hint', 'หน้าตาของแชตนี้ถูกจำแยกจากแชตอื่น (คนนี้เปิดตัวละคร อีกคนปิดได้) — ค่าที่ไม่ได้ตั้งเองจะใช้ค่าเดิมของแอป'));
+      const sizes = el('div');
+      sizes.append(el('h3', '', 'ขนาดข้อความ'));
+      const sizeRow = el('div', 'seg');
+      const SIZE_LABELS = ['เล็ก', 'ปกติ', 'ใหญ่'];
       for (const level of [0, 1, 2]) {
-        row.append(
-          button(bubbleLevel() === level ? 'on' : '', t(`bubbles.${level}`), () => {
-            store.set(`mimi.bubbles.${modeNow()}`, String(level));
+        sizeRow.append(
+          button(textSize() === level ? 'on' : '', SIZE_LABELS[level], () => {
+            try {
+              if (state.chat) localStorage.setItem(`mimi.chat.${chat.id}.textSize`, String(level));
+              else localStorage.setItem('mimi.textSize', String(level));
+            } catch {
+              // not remembered, still switched
+            }
+            applyTextSize();
+            renderRail();
+          }, level === 0 ? 'ตัวอักษรเล็กลง เห็นข้อความมากกว่า' : level === 1 ? 'ขนาดมาตรฐาน' : 'ตัวอักษรใหญ่ขึ้น อ่านง่ายกว่า'),
+        );
+      }
+      sizes.append(sizeRow);
+      nodes.push(sizes);
+      if (chat.kind === 'direct') {
+        const row = el('div', 'rail-quick');
+        row.append(button(`btn${characterOn() ? ' on' : ''}`, t(characterOn() ? 'setting.characterOn' : 'setting.characterOff'), toggleCharacter, t('setting.characterHint')));
+        nodes.push(row);
+        if (characterOn()) {
+          // How much chat shows over the character.
+          const levels = el('div');
+          levels.append(el('h3', '', t('bubbles.title')));
+          const seg = el('div', 'seg');
+          for (const level of [0, 1, 2]) {
+            seg.append(
+              button(bubbleLevel() === level ? 'on' : '', t(`bubbles.${level}`), () => {
+                try {
+                  localStorage.setItem(`mimi.chat.${chat.id}.bubbles`, String(level));
+                } catch {
+                  // not remembered, still switched
+                }
+                renderHeader();
+                renderRail();
+              }, t(`bubbles.${level}.hint`)),
+            );
+          }
+          levels.append(seg);
+          nodes.push(levels);
+          const placing = window.MimiHooks?.stage?.viewControls?.();
+          if (placing) nodes.push(placing);
+        }
+        const hooks = window.MimiHooks && window.MimiHooks.backgrounds;
+        if (hooks) {
+          const backdrop = el('div');
+          backdrop.append(el('h3', '', 'ฉากหลัง'));
+          const settings = (state.backgrounds && state.backgrounds.settings) || { agents: {} };
+          backdrop.append(hooks.choiceSelect(settings.agents[chat.agents[0]] || '', true, (choice) => send({ type: 'background-select', agent: chat.agents[0], choice })));
+          nodes.push(backdrop);
+        }
+      } else {
+        nodes.push(el('p', 'hint', 'แชตกลุ่มไม่มีตัวละคร — ตั้งค่าหน้าตาของตัวละครได้ในแชตตัวต่อตัวของแต่ละคน'));
+      }
+      if (chatHasPref('character') || chatHasPref('bubbles') || chatHasPref('textSize')) {
+        nodes.push(
+          button('btn ghost', 'ใช้ค่าเดิมของแอป (ล้างค่าของแชตนี้)', () => {
+            clearChatPref('character');
+            clearChatPref('bubbles');
+            clearChatPref('textSize');
+          }),
+        );
+      }
+    }
+
+    if (ui.railTab === 'info') {
+      if (chat.kind === 'direct') {
+        const agent = agentOf(chat.agents[0]);
+        const card = el('div', 'who-card');
+        card.append(avatar(chat.agents[0], 'xl'), el('b', '', nameOf(chat.agents[0])), el('small', '', (agent && agent.description) || ''));
+        card.append(
+          button('btn ghost', 'แก้ไข agent', () => {
+            ui.agent = chat.agents[0];
+            ui.agentDirty = false;
+            setView('agents');
+          }),
+        );
+        nodes.push(card);
+      } else {
+        const section = el('div');
+        const head = el('h3', '', 'สมาชิก');
+        head.append(
+          button('', 'เปลี่ยนชื่อกลุ่ม', () => {
+            const title = prompt('ชื่อกลุ่ม', chat.title);
+            if (title !== null) send({ type: 'chat-update', chatId: chat.id, title });
+          }),
+        );
+        section.append(head);
+        for (const name of chat.agents) {
+          const agent = agentOf(name);
+          const status = (agent && agent.status) || {};
+          const row = el('div', 'member');
+          const info = el('div');
+          info.append(el('b', '', nameOf(name)), el('div', 's', [status.mood, status.current_task, status.location].filter(Boolean).join(' · ') || (agent && agent.description) || ''));
+          row.append(avatar(name), info);
+          section.append(row);
+        }
+        nodes.push(section);
+      }
+
+      nodes.push(promptSwitch());
+
+      const languages = el('div');
+      languages.append(el('h3', '', t('setting.language')));
+      const languageRow = el('div', 'seg');
+      for (const { code, name } of window.MimiI18n.languages()) {
+        languageRow.append(button(window.MimiI18n.current() === code ? 'on' : '', name, () => window.MimiI18n.set(code)));
+      }
+      languages.append(languageRow);
+      nodes.push(languages);
+
+      nodes.push(
+        button('btn danger', 'ลบแชตนี้', () => {
+          if (confirm(`ลบแชต "${chatTitle(chat)}" ?\nประวัติจะไม่แสดงอีก (ความจำที่บันทึกไว้แล้วยังอยู่)`)) {
+            send({ type: 'chat-delete', chatId: chat.id });
+            state.chat = null;
+            state.session = null;
+            state.sessions = [];
+            emptyState();
             renderHeader();
             renderRail();
-          }, t(`bubbles.${level}.hint`)),
-        );
-      }
-      levels.append(row);
-      nodes.push(levels);
-      const placing = window.MimiHooks?.stage?.viewControls?.();
-      if (placing) nodes.push(placing);
-    }
-
-    if (chat.kind === 'direct') {
-      const agent = agentOf(chat.agents[0]);
-      const card = el('div', 'who-card');
-      card.append(avatar(chat.agents[0], 'xl'), el('b', '', nameOf(chat.agents[0])), el('small', '', (agent && agent.description) || ''));
-      card.append(
-        button('btn ghost', 'แก้ไข agent', () => {
-          ui.agent = chat.agents[0];
-          ui.agentDirty = false;
-          setView('agents');
+            $('app').classList.add('show-side');
+          }
         }),
       );
-      nodes.push(card);
-      const section = el('div');
-      section.append(el('h3', '', 'สถานะตอนนี้'));
-      const grid = el('div', 'kvs');
-      for (const [key, label] of STATUS) {
-        const value = (agent && agent.status && agent.status[key]) || '';
-        grid.append(
-          el('span', '', label),
-          button(value ? '' : 'unset', value || 'ยังไม่ระบุ', () => {
-            const next = prompt(`${label} ของ ${nameOf(chat.agents[0])} (เว้นว่างเพื่อล้าง)`, value);
-            if (next !== null) send({ type: 'status-set', agent: chat.agents[0], key, value: next });
-          }, 'แตะเพื่อแก้ไข (ปกติ agent อัปเดตเองระหว่างคุย)'),
-        );
-      }
-      section.append(grid);
-      nodes.push(section);
-      if (agent && agent.status && agent.status.situation) {
-        const cg = el('div');
-        cg.append(el('h3', '', 'ภาพสถานการณ์'));
-        cg.append(button('btn ghost', 'เอาภาพออกจากแชต', () => send({ type: 'status-set', agent: chat.agents[0], key: 'situation', value: '' })));
-        nodes.push(cg);
-      }
-      const hooks = window.MimiHooks && window.MimiHooks.backgrounds;
-      if (hooks) {
-        const backdrop = el('div');
-        backdrop.append(el('h3', '', 'ฉากหลัง'));
-        const settings = (state.backgrounds && state.backgrounds.settings) || { agents: {} };
-        backdrop.append(hooks.choiceSelect(settings.agents[chat.agents[0]] || '', true, (choice) => send({ type: 'background-select', agent: chat.agents[0], choice })));
-        nodes.push(backdrop);
-      }
-    } else {
-      const section = el('div');
-      const head = el('h3', '', 'สมาชิก');
-      head.append(
-        button('', 'เปลี่ยนชื่อกลุ่ม', () => {
-          const title = prompt('ชื่อกลุ่ม', chat.title);
-          if (title !== null) send({ type: 'chat-update', chatId: chat.id, title });
-        }),
-      );
-      section.append(head);
-      for (const name of chat.agents) {
-        const agent = agentOf(name);
-        const status = (agent && agent.status) || {};
-        const row = el('div', 'member');
-        const info = el('div');
-        info.append(el('b', '', nameOf(name)), el('div', 's', [status.mood, status.current_task, status.location].filter(Boolean).join(' · ') || (agent && agent.description) || ''));
-        row.append(avatar(name), info);
-        section.append(row);
-      }
-      section.append(el('p', 'hint', 'พิมพ์ @ชื่อ เพื่อเรียกคนตอบ ถ้าไม่ระบุ คนแรกในรายชื่อจะตอบ agent เรียกกันเองด้วย @ชื่อ ได้เช่นกัน'));
-      nodes.push(section);
     }
 
-    const sessions = el('div');
-    const head = el('h3', '', 'Session');
-    head.append(button('', '+ ใหม่', () => send({ type: 'session-new', chatId: chat.id })));
-    sessions.append(head);
-    for (const session of state.sessions) {
-      const row = button(`sess${state.session && state.session.id === session.id ? ' on' : ''}`, null, () => openChat(chat.id, session.id));
-      row.append(el('div', 't', session.title || 'ยังไม่มีชื่อ'), el('div', 'm', `${fmtDate(session.lastMessageAt)}${session.summary ? ` · ${session.summary}` : ''}`));
-      sessions.append(row);
-    }
-    if (state.sessions.length === 0) sessions.append(el('div', 'empty', 'ยังไม่มี session — เริ่มเองอัตโนมัติเมื่อส่งข้อความแรก'));
-    nodes.push(sessions);
-
-    const languages = el('div');
-    languages.append(el('h3', '', t('setting.language')));
-    const languageRow = el('div', 'seg');
-    for (const { code, name } of window.MimiI18n.languages()) {
-      languageRow.append(button(window.MimiI18n.current() === code ? 'on' : '', name, () => window.MimiI18n.set(code)));
-    }
-    languages.append(languageRow);
-    nodes.push(languages);
-
-    nodes.push(
-      button('btn danger', 'ลบแชตนี้', () => {
-        if (confirm(`ลบแชต "${chatTitle(chat)}" ?\nประวัติจะไม่แสดงอีก (ความจำที่บันทึกไว้แล้วยังอยู่)`)) {
-          send({ type: 'chat-delete', chatId: chat.id });
-          state.chat = null;
-          state.session = null;
-          state.sessions = [];
-          emptyState();
-          renderHeader();
-          renderRail();
-          $('app').classList.add('show-side');
-        }
-      }),
-    );
     rail.replaceChildren(...nodes);
   }
 
@@ -1279,7 +1486,7 @@
     }
     const parts = ['Enter ส่ง · Shift+Enter ขึ้นบรรทัดใหม่'];
     if (state.chat && state.chat.kind === 'group') parts.push('@ชื่อ เพื่อเรียกคนตอบ');
-    if (state.busyChat !== null && state.chat && state.busyChat !== state.chat.id) parts.push('มีแชตอื่นกำลังตอบอยู่ ข้อความนี้จะเข้าคิว');
+    if (state.chat && state.busyChats.has(state.chat.id)) parts.push('กำลังตอบอยู่ ข้อความนี้จะเข้าคิวหลังคำตอบนี้');
     hints.replaceChildren(...parts.map((part) => el('span', '', part)));
   }
   function renderStaged() {
@@ -1341,6 +1548,53 @@
     }
     renderStaged();
   }
+  /** Your message as sent; shown right away so the input "confirms" itself on screen, even before the server echoes it. */
+  let echoSeq = 0;
+  function echoUserMessage(chatId, text, staged) {
+    const attachments = staged
+      .filter((entry) => entry.id)
+      .map((entry) => ({
+        id: entry.id,
+        name: entry.file.name,
+        kind: entry.file.type.startsWith('image/') ? 'image' : entry.file.type.startsWith('audio/') ? 'audio' : entry.file.type.startsWith('video/') ? 'video' : 'file',
+        mime: entry.file.type,
+        size: entry.file.size,
+        text: '',
+      }));
+    const message = {
+      id: `pending-${++echoSeq}`,
+      role: 'user',
+      agent: '',
+      text,
+      createdAt: new Date().toISOString(),
+      attachments,
+      tools: [],
+      replyTo: compose.replyTo ? { id: compose.replyTo.id, role: 'user', agent: '', text: compose.replyTo.text } : null,
+    };
+    state.pendingEchoes.push(message);
+    if (state.chat && state.chat.id === chatId) {
+      ensureDay(logInner, message.createdAt);
+      messageStore.set(message.id, message);
+      add(userRow(message));
+      scrollDown();
+    }
+  }
+  /** The server stored (and echoed) your message: the provisional bubble makes way for the real one. */
+  function confirmEcho(message) {
+    const index = state.pendingEchoes.findIndex((entry) => entry.text === message.text && entry.attachments.length === message.attachments.length);
+    if (index < 0) return false;
+    const [pending] = state.pendingEchoes.splice(index, 1);
+    const row = logInner.querySelector(`[data-id="${pending.id}"]`);
+    if (row) {
+      row.dataset.id = message.id;
+      row.replaceWith(userRow(message));
+    }
+    messageStore.delete(pending.id);
+    messageStore.set(message.id, message);
+    // Now part of the stored conversation: the next merge skips it.
+    if (state.historyKey && !state.historyIds.includes(message.id)) state.historyIds.push(message.id);
+    return true;
+  }
   function sendMessage() {
     if (!state.chat || !state.latest) return;
     if (state.staged.some((entry) => entry.uploading)) return toast('รอสักครู่', 'กำลังอัปโหลดไฟล์อยู่');
@@ -1348,8 +1602,10 @@
     const attachments = state.staged.filter((entry) => entry.id).map((entry) => entry.id);
     if (!text && attachments.length === 0) return;
     if (!socket || socket.readyState !== WebSocket.OPEN) return toast('ยังไม่ได้เชื่อมต่อ', 'ข้อความยังอยู่ในช่องพิมพ์ ลองส่งอีกครั้ง', true);
+    const sentStaged = state.staged;
     send({ type: 'chat-send', chatId: state.chat.id, text, attachments, ...(compose.replyTo ? { replyTo: compose.replyTo.id } : {}) });
     state.lastSent = text;
+    echoUserMessage(state.chat.id, text, sentStaged);
     input.value = '';
     compose.replyTo = null;
     if (window.MimiHooks && window.MimiHooks.chat) window.MimiHooks.chat.onSent();
@@ -1408,7 +1664,7 @@
     }
     if (event.key === 'Escape') {
       mention.hidden = true;
-      if (!input.value && !$('stop').hidden) send({ type: 'abort' });
+      if (!input.value && !$('stop').hidden) send({ type: 'abort', chatId: state.chat && state.chat.id });
     }
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
       event.preventDefault();
@@ -1422,7 +1678,7 @@
     files.forEach(stageFile);
   });
   $('send').onclick = sendMessage;
-  $('stop').onclick = () => send({ type: 'abort' });
+  $('stop').onclick = () => send({ type: 'abort', chatId: state.chat && state.chat.id });
   // The attach button. With a finger: a tap opens the camera, a long press the list (picture, file,
   // sound, video). With a mouse: a click opens the list.
   const cameraInput = el('input');
@@ -1514,7 +1770,12 @@
     if (event.key === 'Escape' && railFloats() && state.railOpen && !$('rail').hidden && !document.querySelector('#overlay .dialog')) setRail(false);
   });
   function toggleCharacter() {
-    store.set(`mimi.character.${modeNow()}`, characterOn() ? '0' : '1');
+    if (!state.chat) return;
+    try {
+      localStorage.setItem(`mimi.chat.${state.chat.id}.character`, characterOn() ? '0' : '1');
+    } catch {
+      // not remembered, still switched
+    }
     renderHeader();
     renderRail();
   }
@@ -1581,6 +1842,8 @@
         send({ type: 'triggers-list' });
         send({ type: 'tools-list' });
         send({ type: 'workflows-list' });
+        send({ type: 'secrets-list' });
+        send({ type: 'mail-watch' });
       }
       if (item.dataset.view === 'agents') {
         send({ type: 'tools-list' });
@@ -1588,7 +1851,6 @@
       }
       if (item.dataset.view === 'settings') {
         send({ type: 'memory-list' });
-        send({ type: 'secrets-list' });
       }
     };
   }
@@ -1967,6 +2229,8 @@
     ['skills', 'Skill'],
     ['nodes', 'Node'],
     ['accounts', 'บัญชี'],
+    ['secrets', 'คีย์ลับ'],
+    ['mail', 'Mail push'],
     ['triggers', 'Trigger'],
     ['knowledge', 'คลังความรู้'],
     ['wardrobe', 'ตู้เสื้อผ้า'],
@@ -1988,7 +2252,16 @@
     const accounts = () => (window.MimiHooks && window.MimiHooks.accounts ? window.MimiHooks.accounts.render() : el('div'));
     const wardrobe = () => (window.MimiHooks && window.MimiHooks.wardrobe ? window.MimiHooks.wardrobe.render() : el('div'));
     const backgrounds = () => (window.MimiHooks && window.MimiHooks.backgrounds ? window.MimiHooks.backgrounds.render() : el('div'));
-    const body = { models: hubModels, skills: hubSkills, nodes: hubTools, accounts, triggers: hubTriggers, knowledge, wardrobe, backgrounds, links: hubLinks }[ui.hubTab]();
+    const secrets = () => {
+      const panel = el('div', 'panel form');
+      panel.append(el('h3', '', 'คีย์ลับ (vault)'));
+      const hook = window.MimiHooks && window.MimiHooks.secrets;
+      if (hook) hook.render(panel);
+      else panel.append(el('p', 'hint', '—'));
+      return panel;
+    };
+    const mail = () => (window.MimiHooks && window.MimiHooks.mail ? window.MimiHooks.mail.render() : el('div'));
+    const body = { models: hubModels, skills: hubSkills, nodes: hubTools, accounts, secrets, mail, triggers: hubTriggers, knowledge, wardrobe, backgrounds, links: hubLinks }[ui.hubTab]();
     page.replaceChildren(pageHead('Hub', 'ของกลางที่ agent และ skill หยิบไปใช้: ตั้งค่าที่เดียว ใช้ได้ทุกตัว'), tabs, body);
   }
   const shown = (value) => (value === undefined || value === null ? '—' : String(value));
@@ -2278,26 +2551,43 @@
   }
 
   // ---------- settings page ----------
+  const SETTINGS_TABS = [
+    ['profile', 'โปรไฟล์ของฉัน', 'ข้อมูลของคุณ งบประมาณ การแจ้งเตือน และการสำรองข้อมูล'],
+    ['memory', 'ความจำ', 'สิ่งที่ Mimi จำเกี่ยวกับคุณ — ใช้ร่วมกันทุก agent'],
+    ['app', 'แอปและระบบ', 'ผู้ให้บริการโมเดล โมเดลเริ่มต้น โฟลเดอร์ และบัญชี Google / Microsoft'],
+  ];
   function renderSettings() {
     const page = $('view-settings');
     const view = state.settings;
     if (!view) return page.replaceChildren(pageHead('ตั้งค่า', 'กำลังโหลด…'));
-    const nodes = [pageHead('ตั้งค่า', `ผู้ให้บริการโมเดล โมเดลเริ่มต้น โฟลเดอร์ที่อนุญาต บัญชี Google และความจำ${state.version ? ` · Mimi v${state.version}` : ''}`)];
+    const nodes = [pageHead('ตั้งค่า', `แบ่งเป็น 3 หน้า ตั้งค่าไว้ครั้งเดียวใช้ได้ทุกที่${state.version ? ` · Mimi v${state.version}` : ''}`)];
     if (!view.ready) {
       nodes.push(
         el(
           'p',
           'warnbox',
           !view.providers.some((provider) => provider.connected)
-            ? 'ยังคุยไม่ได้: เชื่อมต่อผู้ให้บริการโมเดลก่อน (ชื่อ + URL + API key)'
+            ? 'ยังคุยไม่ได้: เชื่อมต่อผู้ให้บริการโมเดลก่อน (ชื่อ + URL + API key) — อยู่ที่หน้า "แอปและระบบ"'
             : view.agents === 0
               ? 'เชื่อมต่อผู้ให้บริการแล้ว ขั้นต่อไป: ไปที่แท็บ "Agent" เพื่อสร้าง agent ตัวแรก'
               : 'ยังคุยไม่ได้: โมเดลคุยของ agent เป็นของผู้ให้บริการที่ยังไม่ได้เชื่อมต่อ แก้ที่แท็บ "Agent" หรือเลือกโมเดลเริ่มต้นด้านล่าง',
         ),
       );
     }
+    const tabs = el('div', 'tabs');
+    for (const [key, label, hint] of SETTINGS_TABS) {
+      tabs.append(
+        button(ui.settingsTab === key ? 'on' : '', label, () => {
+          ui.settingsTab = key;
+          renderSettings();
+        }, hint),
+      );
+    }
+    nodes.push(tabs);
+
     const stack = el('div', 'stackv');
-    {
+
+    if (ui.settingsTab === 'profile') {
       const account = el('div', 'panel form');
       account.append(
         el('h3', '', 'บัญชี'),
@@ -2307,164 +2597,157 @@
         button('btn', 'ออกจากระบบ', () => void signOut()),
       );
       stack.append(account);
-    }
 
-    // The user's own profile, shared per agent (feature-profile.js).
-    const profile = el('div', 'panel form');
-    profile.append(el('h3', '', 'โปรไฟล์ของฉัน'));
-    const profileHook = window.MimiHooks && window.MimiHooks.profile;
-    if (profileHook) profileHook.render(profile);
-    stack.append(profile);
+      // The user's own profile, shared per agent (feature-profile.js).
+      const profile = el('div', 'panel form');
+      profile.append(el('h3', '', 'โปรไฟล์ของฉัน'));
+      const profileHook = window.MimiHooks && window.MimiHooks.profile;
+      if (profileHook) profileHook.render(profile);
+      stack.append(profile);
 
-    const prefs = el('div', 'panel form');
-    prefs.append(el('h3', '', 'งบประมาณ & การแจ้งเตือน'));
-    if (profileHook) profileHook.renderPreferences(prefs);
-    stack.append(prefs);
+      const prefs = el('div', 'panel form');
+      prefs.append(el('h3', '', 'งบประมาณ & การแจ้งเตือน'));
+      if (profileHook) profileHook.renderPreferences(prefs);
+      stack.append(prefs);
 
-    const backup = el('div', 'panel form');
-    backup.append(el('h3', '', 'สำรอง / กู้คืนข้อมูล'));
-    if (profileHook) profileHook.renderBackups(backup);
-    stack.append(backup);
+      const backup = el('div', 'panel form');
+      backup.append(el('h3', '', 'สำรอง / กู้คืนข้อมูล'));
+      if (profileHook) profileHook.renderBackups(backup);
+      stack.append(backup);
+    } else if (ui.settingsTab === 'memory') {
+      stack.append(memoryPanel());
+    } else {
+      // Providers: add, edit, remove and manage the model list (feature-providers.js).
+      const providers = el('div', 'panel form');
+      providers.append(el('h3', '', 'ผู้ให้บริการโมเดล'));
+      const providerHook = window.MimiHooks && window.MimiHooks.providers;
+      if (providerHook) providerHook.render(providers);
+      else providers.append(el('p', 'hint', 'โหลดหน้าจอผู้ให้บริการไม่สำเร็จ — รีเฟรชหน้าใหม่'));
+      stack.append(providers);
 
-    // Providers: add, edit, remove and manage the model list (feature-providers.js).
-    const providers = el('div', 'panel form');
-    providers.append(el('h3', '', 'ผู้ให้บริการโมเดล'));
-    const providerHook = window.MimiHooks && window.MimiHooks.providers;
-    if (providerHook) providerHook.render(providers);
-    else providers.append(el('p', 'hint', 'โหลดหน้าจอผู้ให้บริการไม่สำเร็จ — รีเฟรชหน้าใหม่'));
-    stack.append(providers);
-
-    // The API-key vault (machine-local), used by tool templates and preset settings.
-    const secrets = el('div', 'panel form');
-    secrets.append(el('h3', '', 'คีย์ / ความลับ (เก็บในเครื่องนี้เท่านั้น)'));
-    const secretsHook = window.MimiHooks && window.MimiHooks.secrets;
-    if (secretsHook) secretsHook.render(secrets);
-    else secrets.append(el('p', 'hint', '—'));
-    stack.append(secrets);
-
-    const general = el('div', 'panel form');
-    general.append(el('h3', '', 'โมเดลเริ่มต้น'), el('p', 'hint', view.models.length ? 'core เป็นตัวตอบเสมอ · รูปที่ core ดูได้จะถูกส่งให้ core ด้วย · vision / transcript ใช้แปลงไฟล์เป็นข้อความเก็บในประวัติ · แต่ละช่องแสดงเฉพาะโมเดลที่ทำได้' : 'เชื่อมต่อผู้ให้บริการก่อน แล้วรายชื่อโมเดลจะขึ้นให้เลือก'));
-    const defaults = el('div', 'grid2');
-    for (const [group, items] of CAPABILITY_GROUPS) {
-      const heading = el('div', 'hint', group);
-      heading.style.gridColumn = '1 / -1';
-      defaults.append(heading);
-      for (const [key, label] of items) {
-        const select = modelSelect(
-          view.defaults[key] || '',
-          key === 'model' ? null : MEDIA_KEYS.includes(key) ? 'ไม่ใช้' : key === 'small_model' ? 'ใช้โมเดลคุย' : 'ให้ core อ่านเอง',
-          key,
-        );
-        select.dataset.default = key;
-        defaults.append(labelled(label, select));
+      const general = el('div', 'panel form');
+      general.append(el('h3', '', 'โมเดลเริ่มต้น'), el('p', 'hint', view.models.length ? 'core เป็นตัวตอบเสมอ · รูปที่ core ดูได้จะถูกส่งให้ core ด้วย · vision / transcript ใช้แปลงไฟล์เป็นข้อความเก็บในประวัติ · แต่ละช่องแสดงเฉพาะโมเดลที่ทำได้' : 'เชื่อมต่อผู้ให้บริการก่อน แล้วรายชื่อโมเดลจะขึ้นให้เลือก'));
+      const defaults = el('div', 'grid2');
+      for (const [group, items] of CAPABILITY_GROUPS) {
+        const heading = el('div', 'hint', group);
+        heading.style.gridColumn = '1 / -1';
+        defaults.append(heading);
+        for (const [key, label] of items) {
+          const select = modelSelect(
+            view.defaults[key] || '',
+            key === 'model' ? null : MEDIA_KEYS.includes(key) ? 'ไม่ใช้' : key === 'small_model' ? 'ใช้โมเดลคุย' : 'ให้ core อ่านเอง',
+            key,
+          );
+          select.dataset.default = key;
+          defaults.append(labelled(label, select));
+        }
       }
-    }
-    general.append(defaults);
-    general.append(el('h4', '', 'โฟลเดอร์ที่อนุญาตให้อ่าน/เขียนไฟล์และรันคำสั่ง'), el('p', 'hint', 'บรรทัดละหนึ่งโฟลเดอร์ บรรทัดแรกคือโฟลเดอร์ทำงานหลัก'));
-    const dirs = el('textarea');
-    dirs.value = view.allowedDirs.join('\n');
-    dirs.dataset.initial = dirs.value;
-    general.append(dirs);
-    // On a server the providers send the browser back to this address; it has to be registered.
-    const redirect = view.oauthRedirectUri;
-    general.append(
-      el('h4', '', 'Gmail และ Google Calendar'),
-      el(
-        'p',
-        'hint',
-        view.google.connected
-          ? 'เชื่อมต่อแล้ว ✓'
-          : redirect
-            ? `สร้าง OAuth client ชนิด "Web application" ใน Google Cloud Console แล้วเพิ่ม Authorized redirect URI เป็น ${redirect} วางสองค่านี้ บันทึก จากนั้นกดเชื่อมต่อ`
-            : 'สร้าง OAuth client ชนิด "Desktop app" ใน Google Cloud Console แล้ววางสองค่านี้ บันทึก จากนั้นกดเชื่อมต่อ',
-      ),
-    );
-    const google = el('div', 'grid2');
-    const googleKeys = [];
-    for (const [key, label] of [['GOOGLE_OAUTH_CLIENT_ID', 'Client ID'], ['GOOGLE_OAUTH_CLIENT_SECRET', 'Client secret']]) {
-      const field = textInput('', view.google.hasClient ? 'ใส่แล้ว ✓' : 'วางค่าที่นี่', 'password');
-      field.dataset.key = key;
-      googleKeys.push(field);
-      google.append(labelled(label, field));
-    }
-    general.append(google);
-    const connectGoogle = button('btn', view.google.connected ? 'เชื่อมต่อ Google ใหม่' : 'เชื่อมต่อ Google', () => send({ type: 'google-connect' }));
-    connectGoogle.disabled = !view.google.hasClient;
-    const googleLink = el('span');
-    googleLink.id = 'google-link';
-    const googleRow = el('div', 'btns');
-    googleRow.style.marginTop = '8px';
-    googleRow.append(connectGoogle, googleLink);
-    general.append(googleRow);
+      general.append(defaults);
+      general.append(el('h4', '', 'โฟลเดอร์ที่อนุญาตให้อ่าน/เขียนไฟล์และรันคำสั่ง'), el('p', 'hint', 'บรรทัดละหนึ่งโฟลเดอร์ บรรทัดแรกคือโฟลเดอร์ทำงานหลัก'));
+      const dirs = el('textarea');
+      dirs.value = view.allowedDirs.join('\n');
+      dirs.dataset.initial = dirs.value;
+      general.append(dirs);
+      // On a server the providers send the browser back to this address; it has to be registered.
+      const redirect = view.oauthRedirectUri;
+      general.append(
+        el('h4', '', 'Gmail และ Google Calendar'),
+        el(
+          'p',
+          'hint',
+          view.google.connected
+            ? 'เชื่อมต่อแล้ว ✓'
+            : redirect
+              ? `สร้าง OAuth client ชนิด "Web application" ใน Google Cloud Console แล้วเพิ่ม Authorized redirect URI เป็น ${redirect} วางสองค่านี้ บันทึก จากนั้นกดเชื่อมต่อ`
+              : 'สร้าง OAuth client ชนิด "Desktop app" ใน Google Cloud Console แล้ววางสองค่านี้ บันทึก จากนั้นกดเชื่อมต่อ',
+        ),
+      );
+      const google = el('div', 'grid2');
+      const googleKeys = [];
+      for (const [key, label] of [['GOOGLE_OAUTH_CLIENT_ID', 'Client ID'], ['GOOGLE_OAUTH_CLIENT_SECRET', 'Client secret']]) {
+        const field = textInput('', view.google.hasClient ? 'ใส่แล้ว ✓' : 'วางค่าที่นี่', 'password');
+        field.dataset.key = key;
+        googleKeys.push(field);
+        google.append(labelled(label, field));
+      }
+      general.append(google);
+      const connectGoogle = button('btn', view.google.connected ? 'เชื่อมต่อ Google ใหม่' : 'เชื่อมต่อ Google', () => send({ type: 'google-connect' }));
+      connectGoogle.disabled = !view.google.hasClient;
+      const googleLink = el('span');
+      googleLink.id = 'google-link';
+      const googleRow = el('div', 'btns');
+      googleRow.style.marginTop = '8px';
+      googleRow.append(connectGoogle, googleLink);
+      general.append(googleRow);
 
-    general.append(
-      el('h4', '', 'Outlook, ปฏิทิน Outlook และ Microsoft To Do'),
-      el(
-        'p',
-        'hint',
-        view.microsoft.connected
-          ? 'เชื่อมต่อแล้ว ✓'
-          : redirect
-            ? `ลงทะเบียนแอปที่ Azure Portal → App registrations แล้วเพิ่ม redirect URI ${redirect} · แอปที่มี client secret (platform "Web" เช่นแอปที่ทำไว้ให้ n8n): ใส่ URI นี้ใต้ "Web" แล้วใส่ secret ด้วย · ไม่มี secret: ใส่ใต้ "Mobile and desktop applications" · วางค่า บันทึก แล้วกดเชื่อมต่อ`
-            : 'ลงทะเบียนแอปที่ Azure Portal → App registrations แล้วเพิ่ม platform "Mobile and desktop applications" โดยใส่ redirect URI เป็น http://localhost จากนั้นวาง Application (client) ID ที่นี่ บันทึก แล้วกดเชื่อมต่อ (ไม่ต้องใช้ client secret)',
-      ),
-    );
-    const microsoft = el('div', 'grid2');
-    for (const [key, label, placeholder, type] of [
-      ['MICROSOFT_CLIENT_ID', 'Application (client) ID', view.microsoft.hasClient ? 'ใส่แล้ว ✓' : 'วางค่าที่นี่'],
-      ['MICROSOFT_CLIENT_SECRET', 'Client secret (เฉพาะแอปแบบ Web)', view.microsoft.hasSecret ? 'ใส่แล้ว ✓' : 'เว้นว่างถ้าเป็นแอปแบบ Mobile/desktop', 'password'],
-      ['MICROSOFT_TENANT', 'Tenant (ไม่บังคับ)', 'common — ใช้ได้ทั้งบัญชีส่วนตัวและบัญชีองค์กร'],
-    ]) {
-      const field = textInput('', placeholder, type);
-      field.dataset.key = key;
-      googleKeys.push(field);
-      microsoft.append(labelled(label, field));
+      general.append(
+        el('h4', '', 'Outlook, ปฏิทิน Outlook และ Microsoft To Do'),
+        el(
+          'p',
+          'hint',
+          view.microsoft.connected
+            ? 'เชื่อมต่อแล้ว ✓'
+            : redirect
+              ? `ลงทะเบียนแอปที่ Azure Portal → App registrations แล้วเพิ่ม redirect URI ${redirect} · แอปที่มี client secret (platform "Web" เช่นแอปที่ทำไว้ให้ n8n): ใส่ URI นี้ใต้ "Web" แล้วใส่ secret ด้วย · ไม่มี secret: ใส่ใต้ "Mobile and desktop applications" · วางค่า บันทึก แล้วกดเชื่อมต่อ`
+              : 'ลงทะเบียนแอปที่ Azure Portal → App registrations แล้วเพิ่ม platform "Mobile and desktop applications" โดยใส่ redirect URI เป็น http://localhost จากนั้นวาง Application (client) ID ที่นี่ บันทึก แล้วกดเชื่อมต่อ (ไม่ต้องใช้ client secret)',
+        ),
+      );
+      const microsoft = el('div', 'grid2');
+      for (const [key, label, placeholder, type] of [
+        ['MICROSOFT_CLIENT_ID', 'Application (client) ID', view.microsoft.hasClient ? 'ใส่แล้ว ✓' : 'วางค่าที่นี่'],
+        ['MICROSOFT_CLIENT_SECRET', 'Client secret (เฉพาะแอปแบบ Web)', view.microsoft.hasSecret ? 'ใส่แล้ว ✓' : 'เว้นว่างถ้าเป็นแอปแบบ Mobile/desktop', 'password'],
+        ['MICROSOFT_TENANT', 'Tenant (ไม่บังคับ)', 'common — ใช้ได้ทั้งบัญชีส่วนตัวและบัญชีองค์กร'],
+      ]) {
+        const field = textInput('', placeholder, type);
+        field.dataset.key = key;
+        googleKeys.push(field);
+        microsoft.append(labelled(label, field));
+      }
+      general.append(microsoft);
+      const connectMicrosoft = button('btn', view.microsoft.connected ? 'เชื่อมต่อ Microsoft ใหม่' : 'เชื่อมต่อ Microsoft', () => send({ type: 'microsoft-connect' }));
+      connectMicrosoft.disabled = !view.microsoft.hasClient;
+      const microsoftLink = el('span');
+      microsoftLink.id = 'microsoft-link';
+      const microsoftRow = el('div', 'btns');
+      microsoftRow.style.marginTop = '8px';
+      microsoftRow.append(connectMicrosoft, microsoftLink);
+      general.append(microsoftRow);
+
+      general.append(el('h4', '', 'คีย์ของเครื่องมือค้นหา'), el('p', 'hint', 'ใช้กับเครื่องมือ web_search, map_search และ weather คีย์เก็บในเครื่องนี้เท่านั้น · คีย์ลับส่วนตัว (vault) อยู่ที่หน้า Hub → คีย์ลับ'));
+      const toolKeys = el('div', 'grid2');
+      for (const [key, label, isSet] of [
+        ['SERPER_API_KEY', 'ค้นเว็บ + แผนที่ (serper.dev)', view.toolKeys.serper],
+        ['OPENWEATHER_API_KEY', 'พยากรณ์อากาศ (openweathermap.org)', view.toolKeys.openweather],
+      ]) {
+        const field = textInput('', isSet ? 'ใส่แล้ว ✓' : 'วาง API key ที่นี่', 'password');
+        field.dataset.key = key;
+        googleKeys.push(field);
+        toolKeys.append(labelled(label, field));
+      }
+      general.append(toolKeys);
+
+      // Saved as soon as something changes: a choice right away, a typed field when it loses
+      // focus (so the page is not rebuilt while typing). Only what changed is sent.
+      const foot = el('div', 'foot');
+      foot.append(el('span', 'msg', 'บันทึกอัตโนมัติเมื่อแก้ไข'));
+      const autoSave = () => {
+        const change = { type: 'settings-save' };
+        const keys = {};
+        for (const field of googleKeys) if (field.value.trim()) keys[field.dataset.key] = field.value.trim();
+        if (Object.keys(keys).length) change.keys = keys;
+        const chosen = {};
+        for (const select of defaults.querySelectorAll('select')) if (select.value !== select.dataset.initial) chosen[select.dataset.default] = select.value;
+        if (Object.keys(chosen).length) change.defaults = chosen;
+        if (dirs.value !== dirs.dataset.initial) change.allowedDirs = dirs.value.split('\n').map((line) => line.trim()).filter(Boolean);
+        if (Object.keys(change).length === 1) return;
+        flash('กำลังบันทึก…');
+        send(change);
+      };
+      general.addEventListener('change', autoSave);
+      general.append(foot);
+      stack.append(general);
     }
-    general.append(microsoft);
-    const connectMicrosoft = button('btn', view.microsoft.connected ? 'เชื่อมต่อ Microsoft ใหม่' : 'เชื่อมต่อ Microsoft', () => send({ type: 'microsoft-connect' }));
-    connectMicrosoft.disabled = !view.microsoft.hasClient;
-    const microsoftLink = el('span');
-    microsoftLink.id = 'microsoft-link';
-    const microsoftRow = el('div', 'btns');
-    microsoftRow.style.marginTop = '8px';
-    microsoftRow.append(connectMicrosoft, microsoftLink);
-    general.append(microsoftRow);
 
-    general.append(el('h4', '', 'คีย์ของเครื่องมือค้นหา'), el('p', 'hint', 'ใช้กับเครื่องมือ web_search, map_search และ weather คีย์เก็บในเครื่องนี้เท่านั้น'));
-    const toolKeys = el('div', 'grid2');
-    for (const [key, label, isSet] of [
-      ['SERPER_API_KEY', 'ค้นเว็บ + แผนที่ (serper.dev)', view.toolKeys.serper],
-      ['OPENWEATHER_API_KEY', 'พยากรณ์อากาศ (openweathermap.org)', view.toolKeys.openweather],
-    ]) {
-      const field = textInput('', isSet ? 'ใส่แล้ว ✓' : 'วาง API key ที่นี่', 'password');
-      field.dataset.key = key;
-      googleKeys.push(field);
-      toolKeys.append(labelled(label, field));
-    }
-    general.append(toolKeys);
-
-    // Saved as soon as something changes: a choice right away, a typed field when it loses
-    // focus (so the page is not rebuilt while typing). Only what changed is sent.
-    const foot = el('div', 'foot');
-    foot.append(el('span', 'msg', 'บันทึกอัตโนมัติเมื่อแก้ไข'));
-    const autoSave = () => {
-      const change = { type: 'settings-save' };
-      const keys = {};
-      for (const field of googleKeys) if (field.value.trim()) keys[field.dataset.key] = field.value.trim();
-      if (Object.keys(keys).length) change.keys = keys;
-      const chosen = {};
-      for (const select of defaults.querySelectorAll('select')) if (select.value !== select.dataset.initial) chosen[select.dataset.default] = select.value;
-      if (Object.keys(chosen).length) change.defaults = chosen;
-      if (dirs.value !== dirs.dataset.initial) change.allowedDirs = dirs.value.split('\n').map((line) => line.trim()).filter(Boolean);
-      if (Object.keys(change).length === 1) return;
-      flash('กำลังบันทึก…');
-      send(change);
-    };
-    general.addEventListener('change', autoSave);
-    general.append(foot);
-    stack.append(general);
-
-    stack.append(memoryPanel());
     nodes.push(stack);
     page.replaceChildren(...nodes);
   }
@@ -2679,22 +2962,32 @@
     $('conn').textContent = online ? 'online' : 'offline';
   }
   /** After the first lists arrive: lead a new user through setup, else reopen the last chat. */
+  // The onboarding jumps only happen once per page load; reconnecting (e.g. the phone woke up)
+  // must never drag the user back out of the screen they were on.
+  let onboarded = false;
   function bootstrap() {
     if (state.booted || !state.settings || !state.gotAgents || !state.gotChats || !state.gotOverseer) return;
     state.booted = true;
+    const firstRun = !onboarded;
+    onboarded = true;
     const normalAgents = state.agents.filter((agent) => agent.name !== 'overseer');
-    if (!state.settings.providers.some((provider) => provider.connected) || !state.overseer?.configured) {
+    // Fresh start with nothing to talk to: lead through the setup. With chats and agents on
+    // hand, the app opens straight into the last chat instead of nagging about setup.
+    if (firstRun && normalAgents.length === 0) {
       setView('overseer');
       $('app').classList.remove('show-side');
-    } else if (normalAgents.length === 0) {
+    } else if (firstRun && !state.settings.providers.some((provider) => provider.connected) && state.chats.length === 0) {
       setView('overseer');
       $('app').classList.remove('show-side');
     } else if (!state.chat) {
       const remembered = Number(localStorage.getItem(CHAT_KEY));
+      // A widget row or a notification can point at a specific chat (`?chat=<id>`).
+      const pointed = Number(new URLSearchParams(location.search).get('chat') || 0);
       // Mobile mode opens straight into a chat: the last one, else the main agent's. Desktop: the first in the list.
       const mobile = modeNow() === 'mobile';
       const main = state.defaultAgent || normalAgents[0].name;
       const chat =
+        state.chats.find((entry) => entry.id === pointed) ||
         state.chats.find((entry) => entry.id === remembered) ||
         (mobile ? state.chats.find((entry) => entry.kind === 'direct' && entry.agents[0] === main) : state.chats[0]);
       if (chat) send({ type: 'chat-open', chatId: chat.id });
@@ -2709,11 +3002,12 @@
         $('gate').style.display = 'none';
         takeUi(message.ui || {}, true);
         setPc(message.pcOnline);
-        state.busyChat = message.busyChat === undefined ? null : message.busyChat;
+        state.busyChats = new Set(message.busyChats || (message.busyChat ? [message.busyChat] : []));
+        state.typingByChat.clear();
         state.pendingPerms = new Map(message.pendingPermissions.map((request) => [request.id, request]));
         state.booted = false;
         state.gotAgents = state.gotChats = state.gotOverseer = false;
-        for (const type of ['overseer-get', 'agents-list', 'settings-get', 'chats-list', 'skills-list', 'tools-list', 'workflows-list']) send({ type });
+        for (const type of ['overseer-get', 'agents-list', 'settings-get', 'chats-list', 'skills-list', 'tools-list', 'workflows-list', 'secrets-list', 'mail-watch']) send({ type });
         reportPresence(true);
         if (state.chat) send({ type: 'chat-open', chatId: state.chat.id, sessionId: state.latest ? undefined : state.session && state.session.id });
         break;
@@ -2738,13 +3032,29 @@
         state.pins = message.pins || [];
         state.sessions = message.sessions;
         state.latest = !message.session || message.sessions[0].id === message.session.id;
-        state.typing = null;
         if (!state.chats.some((chat) => chat.id === message.chat.id)) state.chats.unshift(message.chat);
         localStorage.setItem(CHAT_KEY, String(message.chat.id));
         renderChatList();
         renderHeader();
         renderRail();
-        renderLog(message);
+        const key = message.session ? `${message.chat.id}:${message.session.id}` : `${message.chat.id}:`;
+        const ids = message.messages.map((entry) => entry.id);
+        const prefix =
+          state.historyKey === key &&
+          state.historyIds.length > 0 &&
+          state.historyIds.length <= ids.length &&
+          state.historyIds.every((id, index) => ids[index] === id);
+        if (prefix) {
+          // Same conversation as on screen: only the new messages join, so the screen does not flash.
+          mergeHistory(message, key, ids);
+        } else {
+          renderLog(message);
+          renderLiveSnapshot(message.live, message.chat.id);
+        }
+        if (message.live) {
+          state.typingByChat.set(message.chat.id, message.live.agent);
+          renderHeader();
+        }
         window.MimiHooks?.chat?.renderPins?.();
         window.MimiHooks?.overseer?.onHistory?.(message.chat);
         reportPresence();
@@ -2772,31 +3082,53 @@
           const automatic = Boolean(state.session) && message.session.auto;
           state.session = message.session;
           live = null;
+          liveNode = null;
+          state.historyKey = null;
+          state.historyIds = [];
           logInner.replaceChildren(sessionDivider(message.session, automatic));
         }
         renderRail();
         break;
       }
-      case 'chat-message':
+      case 'chat-message': {
         if (state.lastSent !== null && message.message.text === state.lastSent) state.lastSent = null;
-        if (!showing(message.chatId, message.sessionId)) break;
+        if (!showing(message.chatId, message.sessionId)) {
+          confirmEcho(message.message);
+          break;
+        }
+        // The server's echo takes the provisional bubble's place; no duplicate.
+        if (confirmEcho(message.message)) {
+          scrollDown();
+          break;
+        }
         if (logInner.querySelector('.welcome')) logInner.querySelector('.welcome').remove();
         ensureDay(logInner, message.message.createdAt);
         messageStore.set(message.message.id, message.message);
         add(userRow(message.message));
         scrollDown();
+        if (state.historyKey === `${message.chatId}:${message.sessionId}` && !state.historyIds.includes(message.message.id)) {
+          state.historyIds.push(message.message.id);
+        }
         break;
+      }
       case 'chat-event':
-        if (showing(message.chatId, message.sessionId)) handleEvent(message.event, null);
+        if (showing(message.chatId, message.sessionId)) handleEvent(message.event, null, message.chatId);
         break;
-      case 'busy':
-        state.busyChat = message.chatId;
+      case 'busy': {
         if (message.chatId === null) {
-          state.typing = null;
-          live = null;
-          // The reply that streamed in is reloaded from the log, so its bubbles know their ids (pin, react, reply).
-          if (refreshAfterTurn && state.chat && state.chat.id === refreshAfterTurn.chatId) {
-            send({ type: 'chat-open', chatId: refreshAfterTurn.chatId, sessionId: state.latest ? undefined : state.session && state.session.id });
+          state.busyChats.clear();
+        } else if (message.done) {
+          state.busyChats.delete(message.chatId);
+          state.typingByChat.delete(message.chatId);
+        } else {
+          state.busyChats.add(message.chatId);
+        }
+        if (message.done || message.chatId === null) {
+          // The reply that streamed in is refreshed from the log (its bubbles gain ids for pin / react / reply).
+          // The merge keeps the same conversation on screen, so this does not flash.
+          const endedChat = message.done ? message.chatId : refreshAfterTurn ? refreshAfterTurn.chatId : null;
+          if (endedChat !== null && state.chat && state.chat.id === endedChat) {
+            send({ type: 'chat-open', chatId: endedChat, sessionId: state.latest ? undefined : state.session && state.session.id });
           }
           refreshAfterTurn = null;
         } else if (state.chat && state.chat.id === message.chatId) {
@@ -2805,10 +3137,11 @@
         renderChatList();
         renderHeader();
         break;
+      }
       case 'chat-changed':
         if (!showing(message.chatId, message.sessionId)) break;
         // Reloading now would wipe the reply that is still streaming in; reload when the turn ends.
-        if (state.busyChat === message.chatId) {
+        if (state.busyChats.has(message.chatId)) {
           refreshAfterTurn = { chatId: message.chatId, sessionId: message.sessionId };
           break;
         }
@@ -2840,7 +3173,10 @@
         } : undefined;
         const icon = notice.kind === 'reminder' ? '⏰ ' : notice.kind === 'approval' ? '✋ ' : notice.kind === 'message' ? '💬 ' : '📋 ';
         toast(`${icon}${notice.title}`, notice.body.length > 220 ? `${notice.body.slice(0, 220)}…` : notice.body, false, goTo);
-        if (window.Notification && Notification.permission === 'granted' && (document.visibilityState !== 'visible' || notice.kind !== 'message')) {
+        if (document.visibilityState !== 'visible' && window.MimiAndroid?.notify) {
+          // The Android app posts native notifications itself (Web Push does not exist in a WebView).
+          window.MimiAndroid.notify(`${icon}${notice.title}`, notice.body, notice.kind, notice.chatId || 0);
+        } else if (window.Notification && Notification.permission === 'granted' && (document.visibilityState !== 'visible' || notice.kind !== 'message')) {
           const shown = new Notification(`${icon}${notice.title}`, { body: notice.body.slice(0, 300), tag: notice.id ? `mimi-${notice.id}` : undefined });
           shown.onclick = () => {
             window.focus();
@@ -2849,7 +3185,7 @@
           };
         }
         send({ type: 'chats-list' });
-        if (state.chat && notice.chatId === state.chat.id && state.latest && state.busyChat !== state.chat.id) {
+        if (state.chat && notice.chatId === state.chat.id && state.latest && !state.busyChats.has(state.chat.id)) {
           send({ type: 'chat-open', chatId: state.chat.id });
         }
         break;
@@ -2952,7 +3288,10 @@
       case 'secrets':
         state.secrets = message.names || [];
         if (window.MimiHooks && window.MimiHooks.secrets) window.MimiHooks.secrets.onMessage(message);
-        if (state.view === 'settings' && !ui.providerDirty) renderSettings();
+        if (state.view === 'hub' && ui.hubTab === 'secrets') renderHub();
+        break;
+      case 'mail-watch':
+        window.MimiHooks?.mail?.onMessage(message);
         break;
       case 'workflows':
         state.workflows = message.workflows || [];
@@ -3010,9 +3349,13 @@
       case 'error':
         flash('');
         toast('ผิดพลาด', message.message, true);
+        // A message that never reached the conversation leaves the log and goes back into the input box.
+        for (const pending of state.pendingEchoes.splice(0)) {
+          const row = logInner.querySelector(`[data-id="${pending.id}"]`);
+          if (row) row.remove();
+        }
         if (state.view === 'chat' && state.chat && (message.chatId === undefined || message.chatId === state.chat.id)) {
           add(el('div', 'note bad', `ผิดพลาด: ${message.message}`));
-          // A message that never reached the conversation goes back into the input box.
           if (state.lastSent && !input.value) {
             input.value = state.lastSent;
             autosize();
@@ -3072,21 +3415,37 @@
     renderHints,
   };
 
+  let reconnectTimer = null;
+  let pingTimer = null;
+  let lastTraffic = 0;
+  let lastPong = 0;
+
   function connect() {
     if (!token()) {
       $('gate').style.display = 'flex';
       return;
     }
+    // Never stack connections: one live socket, one reconnect timer.
+    if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+    lastTraffic = lastPong = Date.now();
     socket = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
     socket.onopen = () => {
       retryMs = 1000;
+      lastTraffic = lastPong = Date.now();
       setConn(true);
       socket.send(JSON.stringify({ type: 'hello', role: 'client', token: token(), name: 'web' }));
       window.MimiHooks?.notify?.onConnect();
     };
     socket.onmessage = (event) => {
+      lastTraffic = Date.now();
       try {
         const message = JSON.parse(event.data);
+        if (message.type === 'pong') {
+          lastPong = Date.now();
+          return;
+        }
         // Feature modules that keep their own state hear their messages first.
         if ((message.type.startsWith('knowledge') || message.type === 'error') && window.MimiHooks && window.MimiHooks.knowledge) {
           window.MimiHooks.knowledge.onMessage(message);
@@ -3141,10 +3500,71 @@
         $('gate').style.display = 'flex';
         return;
       }
-      setTimeout(connect, retryMs);
+      reconnectTimer = setTimeout(connect, retryMs);
       retryMs = Math.min(retryMs * 2, 15000);
     };
   }
+
+  /**
+   * After the screen was off or the app sat in the background, the socket can be dead
+   * without the browser having noticed yet: ask, and reconnect right away if it does not answer.
+   */
+  function wake() {
+    if (!token()) return;
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      // A stale connection answers nothing: drop it so `connect` runs again immediately.
+      if (Date.now() - lastTraffic > 12000) {
+        try {
+          socket.close();
+        } catch {
+          // already closing
+        }
+        retryMs = 1000;
+        return;
+      }
+      reportPresence(true);
+      if (Date.now() - lastTraffic > 5000 && state.chat) {
+        // Catch up on what happened while the screen was off (the merge keeps it flicker-free).
+        send({ type: 'chat-open', chatId: state.chat.id, sessionId: state.latest ? undefined : state.session && state.session.id });
+      }
+      return;
+    }
+    retryMs = 1000;
+    connect();
+  }
+  // The Android app calls this when the activity comes back to the front.
+  window.__mimiWake = wake;
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') wake();
+  });
+  window.addEventListener('focus', wake);
+  window.addEventListener('pageshow', wake);
+  window.addEventListener('online', () => {
+    retryMs = 1000;
+    wake();
+  });
+  window.addEventListener('offline', () => setConn(false));
+
+  // Ask for an answer every so often: a phone that went to sleep can sit on a dead socket
+  // for a long time otherwise (the server's own ping never comes back through a frozen tab).
+  function startPing() {
+    if (pingTimer) return;
+    pingTimer = setInterval(() => {
+      if (!socket || socket.readyState !== WebSocket.OPEN) return;
+      if (Date.now() - lastPong > 18000 && Date.now() - lastTraffic > 18000) {
+        // Nothing heard in a while: drop the socket and reconnect instead of guessing.
+        try {
+          socket.close();
+        } catch {
+          // already closing
+        }
+        retryMs = 1000;
+        return;
+      }
+      socket.send(JSON.stringify({ type: 'ping' }));
+    }, 25000);
+  }
+  startPing();
   function setGateMode(accounts) {
     accountsMode = accounts;
     $('gate-title').textContent = accounts ? 'เข้าสู่ระบบ Mimi' : 'เชื่อมต่อ Mimi';

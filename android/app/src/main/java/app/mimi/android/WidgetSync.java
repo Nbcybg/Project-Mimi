@@ -50,7 +50,7 @@ final class WidgetSync {
     static void setToken(Context context, String token) {
         String old = prefs(context).getString("token", "");
         if (old.equals(token)) return;
-        prefs(context).edit().putString("token", token).remove("chats").apply();
+        prefs(context).edit().putString("token", token).remove("chats").remove("notifId").apply();
         refreshAsync(context);
     }
 
@@ -200,6 +200,73 @@ final class WidgetSync {
         SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US);
         format.setTimeZone(TimeZone.getTimeZone("UTC"));
         return format.format(date);
+    }
+
+    // ---------- the notification inbox (while the app page is closed) ----------
+
+    private static final String NOTIF_CHANNEL = "notifications";
+
+    private static NotificationManager notifManager(Context context) {
+        NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+        if (manager == null) return null;
+        if (Build.VERSION.SDK_INT >= 26 && manager.getNotificationChannel(NOTIF_CHANNEL) == null) {
+            manager.createNotificationChannel(new NotificationChannel(NOTIF_CHANNEL, context.getString(R.string.channelReplies), NotificationManager.IMPORTANCE_DEFAULT));
+        }
+        return manager;
+    }
+
+    /** Posts one native notification; `kind` gets the same emoji the web app uses. */
+    static void notifyNative(Context context, String title, String body, String kind, long chatId) {
+        if (MainActivity.visible) return; // the page itself shows it
+        NotificationManager manager = notifManager(context);
+        if (manager == null) return;
+        String icon = "message".equals(kind) ? "💬 " : "reminder".equals(kind) ? "⏰ " : "approval".equals(kind) ? "✋ " : "";
+        int id = (int) (System.currentTimeMillis() & 0x7fffffff);
+        Intent open = new Intent(context, MainActivity.class);
+        if (chatId > 0) open.putExtra("chat", chatId);
+        open.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        PendingIntent tap = PendingIntent.getActivity(context, id, open, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        Notification.Builder builder = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(context, NOTIF_CHANNEL) : new Notification.Builder(context);
+        builder
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle(icon + (title == null ? "" : title))
+            .setContentText(body == null ? "" : body)
+            .setStyle(new Notification.BigTextStyle().bigText(body == null ? "" : body))
+            .setAutoCancel(true)
+            .setContentIntent(tap);
+        try {
+            manager.notify(id, builder.build());
+        } catch (SecurityException ignored) {
+            // notifications not allowed
+        }
+    }
+
+    /**
+     * Asks the server for unread notifications and posts each new one natively — the path
+     * for reminders and approvals while the app is closed. Polled by the same job as the
+     * widget (about every 15 minutes, the shortest Android allows).
+     */
+    static synchronized void syncNotifications(Context context) {
+        SharedPreferences prefs = prefs(context);
+        String token = prefs.getString("token", "");
+        if (token.isEmpty()) return;
+        try {
+            byte[] body = get("/api/notifications", token);
+            JSONArray items = new JSONArray(new String(body, "UTF-8"));
+            long known = prefs.getLong("notifId", 0);
+            long newest = known;
+            for (int i = 0; i < items.length(); i++) {
+                JSONObject item = items.optJSONObject(i);
+                if (item == null) continue;
+                long id = item.optLong("id");
+                newest = Math.max(newest, id);
+                if (id <= known) continue;
+                notifyNative(context, item.optString("title"), item.optString("body"), item.optString("kind"), item.optLong("chatId"));
+            }
+            if (newest != known) prefs.edit().putLong("notifId", newest).apply();
+        } catch (Exception ignored) {
+            // offline or signed out: try again next round
+        }
     }
 
     static Date parse(String iso) {

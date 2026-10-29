@@ -111,7 +111,7 @@
 
   /** The button bar on a message. `node` is the bubble (or the column of a user message). */
   function decorate(node, message) {
-    if (!message.id) return;
+    if (!message.id || typeof message.id !== 'number') return;
     node.classList.add('hasbar');
     node.tabIndex = 0;
     node.dataset.bar = message.id;

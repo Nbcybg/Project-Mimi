@@ -61,6 +61,8 @@ import {
 } from './skills/skills.ts';
 import { makePcRunner, type PcLink, RoutingExecutor } from './tools/executor.ts';
 import { createToolRegistry } from './tools/index.ts';
+import { createExportTools } from './tools/export-tools.ts';
+import { MailWatch } from './notify/mail-watch.ts';
 import { ToolPool } from './tools/pool.ts';
 import { McpHub } from './mcp/hub.ts';
 import { ToolStore } from './tools/tool-store.ts';
@@ -183,6 +185,8 @@ export interface Core {
   notifications: NotificationCenter;
   /** Stores a notification in the inbox, pushes it and hands it to the live clients. */
   notify(notification: Notification): void;
+  /** Watches Gmail / Outlook / IMAP / POP3 for new mail and raises a notification per message. */
+  mailWatch: MailWatch;
   /** The user's profile fields; each agent sees the ones shared with it. */
   profile: UserProfileStore;
   /** Knowledge bases searched by agents (knowledge_search) and workflows. */
@@ -500,7 +504,11 @@ export async function createCore(
     status,
     memos,
     timezone: config.timezone,
-  }).register(...connectorTools(connectorRegistry, connectors));
+  }).register(
+    ...connectorTools(connectorRegistry, connectors),
+    // Word / PDF export of the agent's answers, into the working folder.
+    ...createExportTools({ workDir: config.allowedDirs[0] ?? path.join(config.rootDir, 'workspace') }),
+  );
   const toolStore = new ToolStore(config.toolsDir);
   const pcRunner = makePcRunner(options.pc, config.localPcTools);
   const mcp = new McpHub({
@@ -537,6 +545,19 @@ export async function createCore(
     const item = notifications.add(notification);
     listeners.notification?.({ ...notification, id: item.id });
   };
+  /** New mail in the watched accounts arrives as inbox notifications (push mail). */
+  const mailWatch = new MailWatch({
+    dir: config.dataDir,
+    password: (accountId) => secrets.get(`mail-watch.${accountId}`),
+    setPassword: (accountId, value) => {
+      if (value) secrets.set(`mail-watch.${accountId}`, value);
+      else secrets.remove(`mail-watch.${accountId}`);
+    },
+    google: () => oauth.google(),
+    microsoft: () => oauth.microsoft(),
+    notify: (_kind, title, body) => notify({ kind: 'message', title, body }),
+    timezone: config.timezone,
+  });
   const parkedRuns = new ParkedRuns(db);
   const approvals = new Approvals(db, {
     post: (agent, text) => postAs(agent, text, `approval:${randomUUID()}`),
@@ -1441,6 +1462,7 @@ export async function createCore(
     mesh,
     triggers,
     scheduler,
+    mailWatch,
     deps,
     listeners,
     runTurn,
@@ -1464,6 +1486,7 @@ export async function createCore(
       })),
     async close() {
       scheduler.stop();
+      mailWatch.stop();
       workflowQueue.close();
       await mcp.close();
       closed = true;

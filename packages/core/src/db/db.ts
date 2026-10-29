@@ -23,6 +23,7 @@ const MIGRATIONS = [
   '015-message-marks.sql',
   '016-speech.sql',
   '017-attachment-hash.sql',
+  '018-session-read.sql',
 ];
 
 function migrate(db: Db): void {

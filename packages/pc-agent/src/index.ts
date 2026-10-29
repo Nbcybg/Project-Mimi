@@ -4,6 +4,7 @@ import { browserTools } from './tools/browser.ts';
 import { fileTools } from './tools/files.ts';
 import { pcInternalTools } from './tools/mcp-session.ts';
 import { runShellTool } from './tools/run-shell.ts';
+import { screenTools } from './tools/screen.ts';
 import { systemTools } from './tools/system.ts';
 import { writeFileTool } from './tools/write-file.ts';
 
@@ -28,7 +29,8 @@ export { browserArguments, browserProfileDir, findBrowserExecutable, readDevTool
 export { browserSession, browserTools, formatSnapshot, setBrowserSession } from './tools/browser.ts';
 export { fileTools, moveToTrash, wildcardToRegExp } from './tools/files.ts';
 export { parseProcessList, powerInvocation, systemTools } from './tools/system.ts';
+export { clipboardTool, screenshotTool, screenTools } from './tools/screen.ts';
 export { readFileTool, runShellTool, writeFileTool };
 
 /** Tools that act on the user's machine. The core holds their schemas; the PC agent runs them. */
-export const pcTools: ToolDefinition<any>[] = [readFileTool, writeFileTool, runShellTool, ...fileTools, ...systemTools, ...browserTools];
+export const pcTools: ToolDefinition<any>[] = [readFileTool, writeFileTool, runShellTool, ...fileTools, ...systemTools, ...browserTools, ...screenTools];

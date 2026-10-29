@@ -145,6 +145,9 @@ public class MainActivity extends Activity {
         super.onResume();
         visible = true;
         web.onResume();
+        // The screen was off or the app folded away: the socket inside the page may be dead
+        // without the page having noticed. Ask it to check and reconnect, then resync the chat.
+        web.evaluateJavascript("window.__mimiWake&&window.__mimiWake()", null);
         WidgetSync.markSeen(this);
     }
 
@@ -353,6 +356,12 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void signedIn(String token) {
             WidgetSync.setToken(MainActivity.this, token == null ? "" : token);
+        }
+
+        /** The page got a notification while the app sat in the background: show it natively. */
+        @JavascriptInterface
+        public void notify(String title, String body, String kind, long chatId) {
+            WidgetSync.notifyNative(MainActivity.this, title, body, kind, chatId);
         }
     }
 }

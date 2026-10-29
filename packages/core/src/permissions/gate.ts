@@ -31,7 +31,7 @@ export interface PermissionGateOptions {
   overrides?: Record<string, ToolPermission>;
 }
 
-export type PermissionAsk = Omit<PermissionRequest, 'id' | 'timeoutMs'>;
+export type PermissionAsk = Omit<PermissionRequest, 'id' | 'timeoutMs' | 'createdAt'>;
 
 export class PermissionGate {
   private readonly broker: PermissionBroker;
@@ -60,7 +60,7 @@ export class PermissionGate {
   }
 
   createRequest(ask: PermissionAsk): PermissionRequest {
-    return { ...ask, id: randomUUID(), timeoutMs: this.timeoutMs };
+    return { ...ask, id: randomUUID(), timeoutMs: this.timeoutMs, createdAt: new Date().toISOString() };
   }
 
   /** Asks the user. No answer within the timeout, or a broker failure, counts as a denial. */

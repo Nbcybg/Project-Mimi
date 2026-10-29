@@ -6,16 +6,22 @@ import path from 'node:path';
 import type {
   AgentEvent,
   AgentView,
+  AttachmentView,
+  LiveTurnView,
+  MailWatchAccount,
   ModelChoice,
   ClientMessage,
   JsonValue,
   MemoryView,
   OverseerView,
   PcMessage,
+  PermissionRequest,
   ProviderConnect,
   ServerMessage,
   SettingsChange,
   SettingsView,
+  SpeechStyle,
+  UsageSnapshot,
   WorkflowNode,
   WorkflowView,
 } from '@mimi/shared';
@@ -534,6 +540,20 @@ export async function startServer(
       updatedAt,
     }));
 
+  /** The watch account the client sent, cleaned into a usable shape. */
+  const sanitizeMailAccount = (raw: MailWatchAccount): MailWatchAccount => {
+    const id = String(raw.id ?? '').trim();
+    if (raw.kind === 'google') return { id, kind: 'google', query: String(raw.query ?? '') };
+    if (raw.kind === 'microsoft') return { id, kind: 'microsoft', query: String(raw.query ?? '') };
+    if (raw.kind === 'imap') {
+      return { id, kind: 'imap', host: String(raw.host ?? '').trim(), port: Number(raw.port) || (raw.tls !== false ? 993 : 143), tls: raw.tls !== false, user: String(raw.user ?? '').trim(), query: raw.query ? String(raw.query) : undefined };
+    }
+    if (raw.kind === 'pop3') {
+      return { id, kind: 'pop3', host: String(raw.host ?? '').trim(), port: Number(raw.port) || (raw.tls !== false ? 995 : 110), tls: raw.tls !== false, user: String(raw.user ?? '').trim() };
+    }
+    throw new Error('Mail watch: pick google, microsoft, imap or pop3.');
+  };
+
   const forward = (event: AgentEvent) => {
     broadcast({ type: 'event', event });
     for (const decided of decisionsIn(event)) {
@@ -558,11 +578,146 @@ export async function startServer(
   core.listeners.agentPosted = agentSpoke;
   core.listeners.backgroundEvent = forward;
 
-  // One turn at a time: turns from any client, in any chat, queue up in arrival order.
-  let turns: Promise<void> = Promise.resolve();
-  let queued = 0;
-  let active: AbortController | null = null;
-  let activeChat: number | null = null;
+  // Turns in different chats run in parallel; within one chat they queue in arrival order.
+  // A small cap keeps many chats at once from flooding the model providers.
+  const MAX_CONCURRENT_TURNS = 4;
+  const queues = new Map<number, Promise<void>>();
+  const activeByChat = new Map<number, AbortController>();
+  let running = 0;
+  const waiters: Array<() => void> = [];
+
+  const busy = () => activeByChat.size > 0;
+  const busyChatIds = () => [...activeByChat.keys()].filter((chatId) => chatId >= 0);
+
+  const queueTurn = (chatId: number, job: (signal: AbortSignal) => Promise<void>, tellClients = true) => {
+    const tail = queues.get(chatId) ?? Promise.resolve();
+    const next = tail.then(async () => {
+      await new Promise<void>((resolve) => {
+        if (running < MAX_CONCURRENT_TURNS) {
+          running++;
+          resolve();
+        } else {
+          waiters.push(() => {
+            running++;
+            resolve();
+          });
+        }
+      });
+      const controller = new AbortController();
+      activeByChat.set(chatId, controller);
+      if (tellClients) broadcast({ type: 'busy', chatId });
+      try {
+        await job(controller.signal);
+      } catch (error) {
+        broadcast({ type: 'error', message: (error as Error).message, ...(tellClients ? { chatId } : {}) });
+      } finally {
+        activeByChat.delete(chatId);
+        running--;
+        waiters.shift()?.();
+        if (tellClients) {
+          broadcast({ type: 'busy', chatId, done: true });
+          // Older clients only know "nothing busy"; say so once every turn has finished.
+          if (!busy()) broadcast({ type: 'busy', chatId: null });
+        }
+        reportJobs();
+      }
+    });
+    const settled = next.catch(() => {});
+    queues.set(chatId, settled);
+    settled.finally(() => {
+      if (queues.get(chatId) === settled) queues.delete(chatId);
+    });
+  };
+
+  /** The state of each streaming turn, so a client that opens its chat mid-turn can rebuild it. */
+  const liveTurns = new Map<
+    number,
+    {
+      sessionId: number;
+      agent: string;
+      model: string;
+      text: string;
+      speech?: SpeechStyle;
+      rounds: number;
+      usage: UsageSnapshot;
+      tools: Map<string, LiveTurnView['tools'][number]>;
+      attachments: AttachmentView[];
+      perms: Map<string, PermissionRequest>;
+    }
+  >();
+  const argPreview = (input: unknown) => {
+    const text = (typeof input === 'string' ? input : JSON.stringify(input) || '').replace(/\s+/g, ' ').trim();
+    return text.length > 220 ? `${text.slice(0, 220)}…` : text;
+  };
+  const liveEvent = (chatId: number, sessionId: number, agent: string, event: AgentEvent) => {
+    const live = liveTurns.get(chatId);
+    switch (event.type) {
+      case 'run-start':
+        liveTurns.set(chatId, {
+          sessionId,
+          agent,
+          model: event.model,
+          text: '',
+          rounds: 0,
+          usage: { inputTokens: 0, outputTokens: 0, cachedTokens: 0, costUsd: 0 },
+          tools: new Map(),
+          attachments: [],
+          perms: new Map(),
+        });
+        break;
+      case 'text-delta':
+        if (live) live.text += event.text;
+        break;
+      case 'tool-call':
+        if (live) live.tools.set(event.call.id, { id: event.call.id, name: event.call.name, arg: argPreview(event.call.input), risk: event.risk, ok: null, output: '' });
+        break;
+      case 'tool-result':
+        if (live) {
+          const tool = live.tools.get(event.result.callId);
+          if (tool) {
+            tool.ok = event.result.ok;
+            tool.output = String(event.result.output ?? '').slice(0, 4000);
+          }
+        }
+        break;
+      case 'attachment':
+        if (live) live.attachments.push(event.attachment);
+        break;
+      case 'usage':
+        if (live) {
+          live.rounds = event.round;
+          live.usage = event.usage;
+        }
+        break;
+      case 'permission-request':
+        if (live) live.perms.set(event.request.id, event.request);
+        break;
+      case 'permission-decision':
+        if (live) live.perms.delete(event.requestId);
+        break;
+      case 'run-finish':
+        liveTurns.delete(chatId);
+        break;
+      case 'agent-activity':
+        break;
+    }
+  };
+  const liveView = (chatId: number): LiveTurnView | undefined => {
+    const live = liveTurns.get(chatId);
+    if (!live) return undefined;
+    return {
+      sessionId: live.sessionId,
+      agent: live.agent,
+      model: live.model,
+      text: live.text,
+      ...(live.speech ? { speech: live.speech } : {}),
+      rounds: live.rounds,
+      usage: live.usage,
+      tools: [...live.tools.values()],
+      attachments: live.attachments,
+      pendingPermissions: [...live.perms.values()],
+    };
+  };
 
   const chatApi = createChatApi({
     core,
@@ -572,7 +727,9 @@ export async function startServer(
     broadcast,
     agentSpoke,
     modelRef,
-    busy: () => queued > 0,
+    busy,
+    liveEvent,
+    liveView,
     resolved: (event) => {
       for (const decided of decisionsIn(event)) {
         broadcast({ type: 'permission-resolved', requestId: decided.requestId, decision: decided.decision });
@@ -580,25 +737,7 @@ export async function startServer(
     },
     settingsChanged: () => broadcast({ type: 'settings', settings: settingsView(), saved: true }),
     agentsChanged: () => broadcast(agentsMessage()),
-    enqueue: (chatId, job) => {
-      queued++;
-      turns = turns.then(async () => {
-        active = new AbortController();
-        activeChat = chatId;
-        broadcast({ type: 'busy', chatId });
-        try {
-          await job(active.signal);
-        } catch (error) {
-          broadcast({ type: 'error', message: (error as Error).message, chatId });
-        } finally {
-          active = null;
-          activeChat = null;
-          queued--;
-          broadcast({ type: 'busy', chatId: null });
-        }
-        reportJobs();
-      });
-    },
+    enqueue: (chatId, job) => queueTurn(chatId, job),
   });
   // Workflow messages and approval requests land in a chat outside a turn: clients reload it.
   core.listeners.chatChanged = (chatId) => {
@@ -645,17 +784,13 @@ export async function startServer(
     });
   };
 
-  const runTurn = async (text: string, agentName: string) => {
-    active = new AbortController();
+  const runTurn = async (text: string, agentName: string, signal: AbortSignal) => {
     try {
       const agent = core.agents.get(agentName);
       broadcast({ type: 'user-message', text, agent: agent.name });
-      for await (const event of core.runTurn({ agent, userText: text, signal: active.signal })) forward(event);
+      for await (const event of core.runTurn({ agent, userText: text, signal })) forward(event);
     } catch (error) {
       broadcast({ type: 'error', message: (error as Error).message });
-    } finally {
-      active = null;
-      queued--;
     }
     reportJobs();
   };
@@ -682,6 +817,9 @@ export async function startServer(
     };
     if (chatApi.handle(message, reply)) return;
     switch (message.type) {
+      case 'ping':
+        reply({ type: 'pong' });
+        break;
       case 'presence':
         presence.set(socket, {
           chatId: typeof message.chatId === 'number' && Number.isInteger(message.chatId) ? message.chatId : null,
@@ -693,12 +831,15 @@ export async function startServer(
         if (!text) return;
         const agentName = message.agent || core.defaultAgentName();
         if (!agentName) throw new Error('There is no agent yet. Create one on the Agent screen first.');
-        queued++;
-        turns = turns.then(() => runTurn(text, agentName));
+        queueTurn(-1, (signal) => runTurn(text, agentName, signal), false);
         break;
       }
       case 'abort':
-        active?.abort();
+        if (typeof message.chatId === 'number') {
+          activeByChat.get(message.chatId)?.abort();
+        } else {
+          for (const controller of activeByChat.values()) controller.abort();
+        }
         break;
       case 'permission-response':
         broker.respond(message.requestId, message.allow === true);
@@ -1370,6 +1511,31 @@ export async function startServer(
         core.memory.delete(String(message.path));
         reply({ type: 'memory', entries: memoryView() });
         break;
+      case 'mail-watch': {
+        const view = core.mailWatch.list();
+        reply({ type: 'mail-watch', accounts: view.accounts, lastCheckedAt: view.lastCheckedAt });
+        break;
+      }
+      case 'mail-watch-save': {
+        const raw = message.account;
+        const id = String(raw.id ?? '').trim();
+        if (!id) throw new Error('Mail watch: an account needs an id.');
+        const account = sanitizeMailAccount(raw);
+        core.mailWatch.saveAccount(account, message.password);
+        reply({ type: 'mail-watch', accounts: core.mailWatch.list().accounts, lastCheckedAt: core.mailWatch.list().lastCheckedAt });
+        break;
+      }
+      case 'mail-watch-delete':
+        core.mailWatch.removeAccount(String(message.id));
+        reply({ type: 'mail-watch', accounts: core.mailWatch.list().accounts, lastCheckedAt: core.mailWatch.list().lastCheckedAt });
+        break;
+      case 'mail-watch-check': {
+        void core.mailWatch.tick().then(
+          (found) => reply({ type: 'mail-watch', accounts: core.mailWatch.list().accounts, lastCheckedAt: core.mailWatch.list().lastCheckedAt, checked: { found, at: new Date().toISOString() } }),
+          (error: Error) => reply({ type: 'error', message: (error as Error).message }),
+        );
+        break;
+      }
       default:
         reply({ type: 'error', message: 'Unknown message type' });
     }
@@ -1428,7 +1594,15 @@ export async function startServer(
             unread,
           };
         });
-      return { chats, busyChat: activeChat };
+      return { chats, busyChat: busyChatIds()[0] ?? null };
+    },
+    notificationsSync: (since: string | null) => {
+      const { items } = core.notifications.list(100);
+      const start = since ? Date.parse(since) : 0;
+      return items
+        .filter((item) => !item.read && (!Number.isFinite(start) || Date.parse(item.createdAt) > start))
+        .slice(0, 30)
+        .map((item) => ({ id: item.id, kind: item.kind, title: item.title, body: item.body, chatId: item.chatId ?? null, createdAt: item.createdAt }));
     },
     webhook: async (
       key: string,
@@ -1586,8 +1760,9 @@ export async function startServer(
             agents: core.agents.list(),
             defaultAgent: core.defaultAgentName() ?? '',
             pcOnline: pc.online,
-            busy: queued > 0,
-            busyChat: activeChat,
+            busy: busy(),
+            busyChat: busyChatIds()[0] ?? null,
+            busyChats: busyChatIds(),
             pendingPermissions: broker.pending(),
             ui: appSettings.ui,
           };
@@ -1634,6 +1809,8 @@ export async function startServer(
     server.listen(config.port, config.host, resolve);
   });
   core.scheduler.start();
+  // Push mail: Gmail / Outlook / IMAP / POP3 watched for new unread messages.
+  core.mailWatch.start(Math.max(5, Number(process.env.MIMI_MAIL_WATCH_MINUTES ?? 10)) * 60_000);
 
   const mimi: MimiServer = {
     core,
@@ -1644,11 +1821,11 @@ export async function startServer(
       clearInterval(heartbeat);
       clearInterval(backupTimer);
       clearTimeout(firstBackup);
-      active?.abort();
+      for (const controller of activeByChat.values()) controller.abort();
       for (const socket of wss.clients) socket.terminate();
       await new Promise<void>((resolve) => wss.close(() => resolve()));
       await new Promise<void>((resolve) => server.close(() => resolve()));
-      await turns.catch(() => {});
+      await Promise.allSettled([...queues.values()]);
       await core.close();
     },
   };

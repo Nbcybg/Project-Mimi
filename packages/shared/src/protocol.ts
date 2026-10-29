@@ -1,4 +1,4 @@
-import type { AgentEvent } from './events.ts';
+import type { AgentEvent, UsageSnapshot } from './events.ts';
 import type { MessageRole } from './messages.ts';
 import type { ConnectorConnectionInput, ConnectorConnectionView, OAuthAccountInput, OAuthAccountView } from './oauth.ts';
 import type { ConnectorView } from './connectors.ts';
@@ -121,6 +121,29 @@ export interface ApprovalView {
   note?: string;
 }
 
+/**
+ * A turn still streaming, so a client that opens (or returns to) its chat mid-turn can
+ * rebuild the bubbles and cards shown so far instead of losing the answer. Sent with
+ * `chat-history`; the events that follow continue the stream.
+ */
+export interface LiveTurnView {
+  sessionId: number;
+  agent: string;
+  model: string;
+  /** Everything the agent has typed so far. */
+  text: string;
+  /** How the answer should sound, once the voice direction line was known. */
+  speech?: SpeechStyle;
+  rounds: number;
+  usage: UsageSnapshot;
+  /** Tool calls of this turn, in order; `ok` is null while the tool is still running. */
+  tools: Array<{ id: string; name: string; arg: string; risk: string | null; ok: boolean | null; output: string }>;
+  /** Files the agent sent so far. */
+  attachments: AttachmentView[];
+  /** Permission questions that are still waiting for an answer. */
+  pendingPermissions: PermissionRequest[];
+}
+
 /** One stretch of a chat; a new one starts by itself after a long silence. */
 export interface SessionView {
   id: number;
@@ -130,6 +153,10 @@ export interface SessionView {
   auto: boolean;
   createdAt: string;
   lastMessageAt: string;
+  /** When the user last opened this session; null = never opened. */
+  readAt: string | null;
+  /** True when messages arrived after `readAt` (a "ใหม่" badge in the list). */
+  unread: boolean;
 }
 
 /** A conversation: one agent, or a group of them. */
@@ -490,7 +517,10 @@ export interface MemoryView {
 export type ClientMessage =
   | { type: 'hello'; role: 'client'; token: string; name?: string }
   | { type: 'send'; text: string; agent?: string }
-  | { type: 'abort' }
+  /** Stops the turn of this chat; without a chat id, stops every running turn. */
+  | { type: 'abort'; chatId?: number }
+  /** Keepalive, answered with `pong`; the client reconnects when no answer comes. */
+  | { type: 'ping' }
   | { type: 'permission-response'; requestId: string; allow: boolean }
   | { type: 'history'; beforeId?: number; limit?: number }
   /** Asks for the active triggers so the device can set its own alarms. */
@@ -656,7 +686,12 @@ export type ClientMessage =
   | { type: 'trigger-delete'; id: number }
   /** Fires a trigger right now (also used to test a webhook by hand). */
   | { type: 'trigger-run'; id: number }
-  | { type: 'trigger-cancel'; id: number };
+  | { type: 'trigger-cancel'; id: number }
+  /** The push-mail watcher: list, save (with an optional new password), remove, check now. */
+  | { type: 'mail-watch' }
+  | { type: 'mail-watch-save'; account: MailWatchAccount; password?: string }
+  | { type: 'mail-watch-delete'; id: string }
+  | { type: 'mail-watch-check' };
 
 /** Sent by the PC agent. */
 export type PcMessage =
@@ -674,6 +709,8 @@ export type ServerMessage =
       busy: boolean;
       /** The chat a turn is running in right now, if any. */
       busyChat?: number | null;
+      /** Every chat with a turn running right now (turns in different chats run in parallel). */
+      busyChats?: number[];
       pendingPermissions: PermissionRequest[];
       /** Screen settings shared by all the user's devices (character position, sounds, …). */
       ui?: Record<string, string>;
@@ -722,6 +759,8 @@ export type ServerMessage =
       beforeId?: number;
       /** Every pinned message of the chat, newest pin first. */
       pins?: PinView[];
+      /** A turn still streaming in this chat, to rebuild while it continues. */
+      live?: LiveTurnView | null;
     }
   /** A message was pinned or unpinned, or its reactions changed. */
   | { type: 'message-marks'; chatId: number; sessionId: number; messageId: number; pinned: boolean; reactions: string[]; pins: PinView[] }
@@ -729,8 +768,10 @@ export type ServerMessage =
   | { type: 'chat-session'; chatId: number; session: SessionView; started: boolean }
   | { type: 'chat-message'; chatId: number; sessionId: number; message: ChatMessageView }
   | { type: 'chat-event'; chatId: number; sessionId: number; agent: string; event: AgentEvent }
-  /** The chat a turn is running in; null when nothing is running. */
-  | { type: 'busy'; chatId: number | null }
+  /** A turn started (`done` unset) or finished (`done: true`) in this chat; turns in different chats run in parallel. */
+  | { type: 'busy'; chatId: number | null; done?: boolean }
+  /** Answer to a client `ping`. */
+  | { type: 'pong' }
   /** Messages of a session were hidden or added outside a turn; clients showing it reload it. */
   | { type: 'chat-changed'; chatId: number; sessionId: number }
   /** Answer to `rewind`: the text of the message that was taken back, to edit and resend. */
@@ -776,7 +817,22 @@ export type ServerMessage =
   | { type: 'knowledge-embedded'; collection: string; count: number }
   | { type: 'workflow-run-record'; run: WorkflowRunRecord }
   | { type: 'status'; agent: string; status: AgentStatusView }
-  | { type: 'error'; message: string; chatId?: number };
+  | { type: 'error'; message: string; chatId?: number }
+  /** The push-mail watcher: watched accounts and when they were last checked. */
+  | {
+      type: 'mail-watch';
+      accounts: MailWatchAccount[];
+      lastCheckedAt: string | null;
+      /** Set when this answers a manual `mail-watch-check`. */
+      checked?: { found: number; at: string };
+    };
+
+/** A mailbox the push-mail watcher looks at. Passwords never travel over the socket. */
+export type MailWatchAccount =
+  | { id: string; kind: 'google'; query: string }
+  | { id: string; kind: 'microsoft'; query: string }
+  | { id: string; kind: 'imap'; host: string; port: number; tls: boolean; user: string; query?: string }
+  | { id: string; kind: 'pop3'; host: string; port: number; tls: boolean; user: string };
 
 /** Sent by the core to the PC agent. */
 export type PcRequest = {

@@ -3,6 +3,7 @@ import type {
   ChatMessageView,
   ChatView,
   ClientMessage,
+  LiveTurnView,
   MessageRole,
   PinView,
   PresetView,
@@ -36,9 +37,14 @@ export interface ChatApiContext {
   agentSpoke?(chatId: number, agent: string, text: string): void;
   /** Resolves a model string (preset name or `provider/model`); throws when it is unknown. */
   modelRef(name: string): ModelRef;
-  /** Queues a turn; turns run one at a time. The job is given the signal that `abort` fires. */
+  /** Queues a turn; turns of the same chat run one after another, turns of different chats in parallel. The job is given the signal that `abort` fires. */
   enqueue(chatId: number, job: (signal: AbortSignal) => Promise<void>): void;
+  /** True while any turn runs. */
   busy(): boolean;
+  /** Follows the stream of one turn, so `liveView` can rebuild it for a client. */
+  liveEvent?(chatId: number, sessionId: number, agent: string, event: AgentEvent): void;
+  /** The turn still streaming in this chat, if any. */
+  liveView?(chatId: number): LiveTurnView | undefined;
   /** Forwards permission decisions found in an event to every client. */
   resolved(event: AgentEvent): void;
   /** Tells every client that settings or agents changed. */
@@ -78,6 +84,8 @@ export function createChatApi(context: ChatApiContext) {
     auto: session.auto,
     createdAt: session.createdAt,
     lastMessageAt: session.lastMessageAt,
+    readAt: session.readAt,
+    unread: chats.unread(session),
   });
 
   const chatView = (chat: Chat): ChatView => {
@@ -165,6 +173,11 @@ export function createChatApi(context: ChatApiContext) {
     if (sessionId !== undefined && !session) throw new Error(`Session #${sessionId} does not exist.`);
     const rows = session ? messages.timeline(session.thread, beforeId, PAGE_SIZE + 1) : [];
     const hasMore = rows.length > PAGE_SIZE;
+    // Opening (not just fetching older pages) means the user is reading this session now.
+    if (beforeId === undefined && session) chats.markRead(session.id);
+    // A turn still streaming into this very session: include it so the client can rebuild it.
+    const live = beforeId === undefined ? context.liveView?.(chatId) : undefined;
+    const liveHere = live && (!session || live.sessionId === session.id) ? live : null;
     return {
       type: 'chat-history',
       chat: chatView(chat),
@@ -174,6 +187,7 @@ export function createChatApi(context: ChatApiContext) {
       hasMore,
       beforeId,
       pins: pinsOf(chat),
+      live: liveHere,
     };
   };
 
@@ -202,6 +216,8 @@ export function createChatApi(context: ChatApiContext) {
       for await (const item of core.engine.runTurn({ chatId, ...turn, signal })) {
         if (item.type === 'session') {
           sessionId = item.session.id;
+          // A session that starts for the user's own message is being read right away.
+          if (item.started) chats.markRead(sessionId);
           broadcast({ type: 'chat-session', chatId, session: sessionView(item.session), started: item.started });
         } else if (item.type === 'user-message') {
           broadcast({
@@ -223,6 +239,7 @@ export function createChatApi(context: ChatApiContext) {
           markStored();
         } else {
           broadcast({ type: 'chat-event', chatId, sessionId, agent: item.agent, event: item.event });
+          context.liveEvent?.(chatId, sessionId, item.agent, item.event);
           context.resolved(item.event);
           if (item.event.type === 'run-finish' && item.event.reason !== 'aborted' && item.event.text) {
             context.agentSpoke?.(chatId, item.agent, item.event.text);
@@ -413,7 +430,10 @@ export function createChatApi(context: ChatApiContext) {
           const posted = core.postUserMessage(chatId, text, attachments);
           const sent = attachments.map((id) => core.attachments.get(id)).filter((file) => file !== undefined);
           const session = chats.getSession(posted.sessionId);
-          if (session) broadcast({ type: 'chat-session', chatId, session: sessionView(session), started: false });
+          if (session) {
+            chats.markRead(posted.sessionId);
+            broadcast({ type: 'chat-session', chatId, session: sessionView(session), started: false });
+          }
           broadcast({
             type: 'chat-message',
             chatId,

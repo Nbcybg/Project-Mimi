@@ -7,6 +7,10 @@
   const button = (cls, text, onClick, title) => M().button(cls, text, onClick, title);
 
   let editing = null;
+  const rerender = () => {
+    if (M().state.view === 'hub') M().renderHub();
+    else M().renderSettings();
+  };
 
   function render(panel) {
     panel.append(
@@ -26,7 +30,7 @@
         info,
         button('btn', 'เปลี่ยนค่า', () => {
           editing = name;
-          M().renderSettings();
+          rerender();
         }),
         button('btn danger', 'ลบ', () => confirm(`ลบคีย์ "${name}" ?`) && M().send({ type: 'secrets-save', values: { [name]: '' } })),
       );
@@ -44,7 +48,7 @@
       foot.append(
         button('btn ghost', 'ยกเลิก', () => {
           editing = null;
-          M().renderSettings();
+          rerender();
         }),
       );
     }

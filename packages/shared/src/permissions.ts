@@ -10,6 +10,8 @@ export interface PermissionRequest {
   /** One-line human readable description of what the tool call will do. */
   summary: string;
   timeoutMs: number;
+  /** When the tool asked (UTC ISO-8601), so the client can show the session it belongs to. */
+  createdAt: string;
 }
 
 export type PermissionDecision =

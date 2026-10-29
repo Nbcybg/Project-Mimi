@@ -20,6 +20,8 @@ export interface Session {
   auto: boolean;
   createdAt: string;
   lastMessageAt: string;
+  /** When the user last opened this session; null until then (shows as unread/new). */
+  readAt: string | null;
 }
 
 interface ChatRow {
@@ -38,6 +40,7 @@ interface SessionRow {
   auto: number;
   created_at: string;
   last_message_at: string;
+  read_at: string | null;
 }
 
 const toChat = (row: ChatRow): Chat => ({
@@ -56,6 +59,7 @@ const toSession = (row: SessionRow): Session => ({
   auto: row.auto === 1,
   createdAt: row.created_at,
   lastMessageAt: row.last_message_at,
+  readAt: row.read_at,
 });
 
 /**
@@ -233,6 +237,18 @@ export class ChatStore {
   touch(sessionId: number): void {
     this.db.prepare(`UPDATE sessions SET last_message_at = ? WHERE id = ?`).run(this.now().toISOString(), sessionId);
     this.changed();
+  }
+
+  /** The user opened this session: everything up to now counts as read. */
+  markRead(sessionId: number): void {
+    this.db.prepare(`UPDATE sessions SET read_at = ? WHERE id = ?`).run(this.now().toISOString(), sessionId);
+    this.changed();
+  }
+
+  /** True when a session has messages its reader has not opened yet. */
+  unread(session: Session): boolean {
+    if (!session.readAt) return session.lastMessageAt > session.createdAt;
+    return session.lastMessageAt > session.readAt;
   }
 
   describe(sessionId: number, change: { title?: string; summary?: string }): void {

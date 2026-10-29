@@ -25,6 +25,7 @@ const request: PermissionRequest = {
   input: { command: 'dir' },
   summary: 'Run: dir',
   timeoutMs: 1_000,
+  createdAt: '2026-01-01T00:00:00.000Z',
 };
 
 test('lines typed ahead are queued and handed out in order', async () => {

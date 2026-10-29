@@ -61,6 +61,46 @@
     bar.querySelector('.cancel').hidden = rec.mode !== 'tap';
   }
 
+  /** Decodes a recording with the Web Audio API and re-encodes it as 16-bit mono WAV (the models take mp3/wav, not webm). */
+  async function toWav(blob) {
+    const Context = window.AudioContext || window.webkitAudioContext;
+    const context = new Context();
+    try {
+      const audio = await context.decodeAudioData(await blob.arrayBuffer());
+      const sampleRate = audio.sampleRate;
+      const dataSize = audio.length * 2;
+      const buffer = new ArrayBuffer(44 + dataSize);
+      const view = new DataView(buffer);
+      const writeString = (offset, text) => {
+        for (let i = 0; i < text.length; i++) view.setUint8(offset + i, text.charCodeAt(i));
+      };
+      writeString(0, 'RIFF');
+      view.setUint32(4, 36 + dataSize, true);
+      writeString(8, 'WAVE');
+      writeString(12, 'fmt ');
+      view.setUint32(16, 16, true);
+      view.setUint16(20, 1, true); // PCM
+      view.setUint16(22, 1, true); // mono
+      view.setUint32(24, sampleRate, true);
+      view.setUint32(28, sampleRate * 2, true);
+      view.setUint16(32, 2, true);
+      view.setUint16(34, 16, true);
+      writeString(36, 'data');
+      view.setUint32(40, dataSize, true);
+      let offset = 44;
+      for (let i = 0; i < audio.length; i++) {
+        let sample = 0;
+        for (let channel = 0; channel < audio.numberOfChannels; channel++) sample += audio.getChannelData(channel)[i];
+        sample = Math.max(-1, Math.min(1, sample / audio.numberOfChannels));
+        view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+        offset += 2;
+      }
+      return new Blob([buffer], { type: 'audio/wav' });
+    } finally {
+      context.close().catch(() => {});
+    }
+  }
+
   async function startRecord(mode) {
     if (recorder || rec) return;
     if (!navigator.mediaDevices || !window.MediaRecorder) return toast(t('voice.unsupported'), t('voice.unsupportedHint'), true);
@@ -96,9 +136,19 @@
         const blob = new Blob(chunks, { type });
         const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
         if (blob.size === 0) return;
-        const file = new File([blob], `voice-${stamp}.${type.includes('mp4') ? 'm4a' : 'webm'}`, { type });
         // Held and released: it goes straight away. After a tap it waits in the box (add text, then send).
-        stageFile(file).then(() => mine.send && sendMessage());
+        const stage = (file) => stageFile(file).then(() => mine.send && sendMessage());
+        if (type === 'audio/wav') {
+          stage(new File([blob], `voice-${stamp}.wav`, { type }));
+          return;
+        }
+        // The recorder makes webm/opus (or m4a); the transcription models only take mp3/wav, so re-encode as WAV first.
+        toWav(blob)
+          .then((wav) => stage(new File([wav], `voice-${stamp}.wav`, { type: 'audio/wav' })))
+          .catch(() => {
+            // If decoding failed (rare), send the original so the message is not lost.
+            stage(new File([blob], `voice-${stamp}.${type.includes('mp4') ? 'm4a' : 'webm'}`, { type }));
+          });
       };
       recorder.start();
       recordStarted = Date.now();

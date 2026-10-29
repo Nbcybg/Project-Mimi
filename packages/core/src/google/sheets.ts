@@ -165,5 +165,50 @@ export function createSheetTools(source: GoogleAuthSource): ToolDefinition<any>[
     },
   });
 
-  return [sheetsInfo, sheetsRead, sheetsWrite, sheetsAppend, driveSearch];
+  const sheetsCreate = defineTool({
+    name: 'sheets_create',
+    description: 'Create a new Google spreadsheet in the user\'s Drive and return its id (use it in a "Spreadsheet" setting of a preset, or hand it to sheets_info / sheets_write).',
+    risk: 'write',
+    target: 'core',
+    settings: [accountSetting('google')],
+    inputSchema: z.object({
+      title: z.string().min(1).describe('The name of the new spreadsheet'),
+      folder: z.string().optional().describe('Id of the Drive folder to put it in (from drive_search); default: the user\'s Drive root'),
+    }),
+    summarize: (input) => `Create spreadsheet "${input.title}"`,
+    async execute(input, _context, settings) {
+      const created = await client(settings).request<{ id: string }>(`${DRIVE}?fields=id`, {
+        method: 'POST',
+        body: {
+          name: input.title,
+          mimeType: 'application/vnd.google-apps.spreadsheet',
+          ...(input.folder ? { parents: [spreadsheetId(input.folder)] } : {}),
+        },
+      });
+      return `Created spreadsheet "${input.title}" (id ${created.id}).\nhttps://docs.google.com/spreadsheets/d/${created.id}`;
+    },
+  });
+
+  const sheetsDelete = defineTool({
+    name: 'sheets_delete',
+    description: 'Move a Google spreadsheet to the Drive trash (id from the "Spreadsheet" setting, or drive_search). The user must have confirmed; there is no undo.',
+    risk: 'delete',
+    target: 'core',
+    settings: [
+      { key: 'spreadsheetId', label: 'Spreadsheet', type: 'string', required: false, placeholder: 'ID or https://docs.google.com/spreadsheets/d/…' },
+      accountSetting('google'),
+    ],
+    inputSchema: z.object({
+      spreadsheetId: z.string().optional().describe('The spreadsheet to delete; the preset\'s "Spreadsheet" setting when left out'),
+    }),
+    summarize: (input) => `Delete spreadsheet ${input.spreadsheetId ?? '(configured)'}`,
+    async execute(input, _context, settings) {
+      const id = spreadsheetId(input.spreadsheetId ?? settings?.spreadsheetId);
+      if (!id) throw new Error('Give the spreadsheet id, or make a preset with the "Spreadsheet" setting.');
+      await client(settings).request(`${DRIVE}/${id}`, { method: 'DELETE' });
+      return `Moved spreadsheet ${id} to the Drive trash.`;
+    },
+  });
+
+  return [sheetsInfo, sheetsRead, sheetsWrite, sheetsAppend, sheetsCreate, sheetsDelete, driveSearch];
 }

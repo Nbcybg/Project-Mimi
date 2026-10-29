@@ -27,6 +27,7 @@ public class SyncJob extends JobService {
         Context app = getApplicationContext();
         new Thread(() -> {
             WidgetSync.refresh(app);
+            WidgetSync.syncNotifications(app);
             jobFinished(params, false);
         }, "mimi-sync").start();
         return true;

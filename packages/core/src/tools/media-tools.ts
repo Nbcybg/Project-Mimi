@@ -60,7 +60,7 @@ export function mediaFileName(prompt: string, mime: string, fallback: string): s
   return `${slug || fallback}.${EXTENSION[mime] ?? mime.split('/')[1]?.replace(/[^\w]/g, '') ?? 'bin'}`;
 }
 
-const viewOf = ({ id, kind, name, mime, size, text, caption }: Attachment): AttachmentView => ({ id, kind, name, mime, size, text, caption });
+const viewOf = ({ id, kind, name, mime, size, text, caption, deletedAt }: Attachment): AttachmentView => ({ id, kind, name, mime, size, text, caption, deletedAt });
 
 /** Model metadata for the usage log; a model the catalog does not list is logged without a price. */
 function infoOf(models: ModelService, ref: ModelRef): ModelInfo {

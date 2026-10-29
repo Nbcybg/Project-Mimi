@@ -31,11 +31,24 @@
     return items().find((item) => item.id === choice && item.image) || null;
   }
 
+  // The stage backdrop is switched off for now: with a character portrait on the stage the
+  // chosen backdrop did not change reliably. The Hub editor and the saved files stay, so
+  // turning this back on later only needs `true` here (and the selector in Chat setting).
+  const STAGE_BACKDROPS = false;
+
   /** Called by the stage whenever the chat, the agent or the choices change. */
   function apply() {
     const stage = document.getElementById('stage');
     const wrap = document.getElementById('bg');
     if (!stage || !wrap) return;
+    if (!STAGE_BACKDROPS) {
+      stage.classList.remove('has-bg');
+      wrap.hidden = true;
+      wrap.replaceChildren();
+      shownPath = '';
+      pendingPath = '';
+      return;
+    }
     if (!M().state.backgroundsLoaded) {
       M().state.backgroundsLoaded = true;
       M().send({ type: 'backgrounds-list' });
@@ -235,5 +248,5 @@
   }
 
   window.MimiHooks = window.MimiHooks || {};
-  window.MimiHooks.backgrounds = { render, onMessage, apply, resolve, choiceSelect };
+  window.MimiHooks.backgrounds = { render, onMessage, apply, resolve, choiceSelect, stageEnabled: () => STAGE_BACKDROPS };
 })();

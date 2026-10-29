@@ -101,9 +101,92 @@
     }
   }
 
+  /** Writes mono 16-bit PCM samples as a WAV file; every transcription model takes this shape. */
+  function encodeWav(chunks, length, sampleRate) {
+    const dataSize = length * 2;
+    const buffer = new ArrayBuffer(44 + dataSize);
+    const view = new DataView(buffer);
+    const writeString = (offset, text) => {
+      for (let i = 0; i < text.length; i++) view.setUint8(offset + i, text.charCodeAt(i));
+    };
+    writeString(0, 'RIFF');
+    view.setUint32(4, 36 + dataSize, true);
+    writeString(8, 'WAVE');
+    writeString(12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true); // PCM
+    view.setUint16(22, 1, true); // mono
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    writeString(36, 'data');
+    view.setUint32(40, dataSize, true);
+    let offset = 44;
+    for (const chunk of chunks) {
+      for (let i = 0; i < chunk.length; i++) {
+        const sample = Math.max(-1, Math.min(1, chunk[i]));
+        view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+        offset += 2;
+      }
+    }
+    return new Blob([buffer], { type: 'audio/wav' });
+  }
+
+  const canUsePcm = () => {
+    const Context = window.AudioContext || window.webkitAudioContext;
+    return Boolean(Context && Context.prototype.createScriptProcessor);
+  };
+
+  /**
+   * Records raw samples instead of webm/mp4. Some WebViews cannot decode their own
+   * MediaRecorder output, which left the model with an audio file it could not read.
+   */
+  function makePcmRecorder(stream, chunks) {
+    const Context = window.AudioContext || window.webkitAudioContext;
+    const context = new Context();
+    const source = context.createMediaStreamSource(stream);
+    const processor = context.createScriptProcessor(4096, 1, 1);
+    const mute = context.createGain();
+    mute.gain.value = 0;
+    const samples = [];
+    let length = 0;
+    processor.onaudioprocess = (event) => {
+      const copy = new Float32Array(event.inputBuffer.getChannelData(0).length);
+      copy.set(event.inputBuffer.getChannelData(0));
+      samples.push(copy);
+      length += copy.length;
+    };
+    source.connect(processor);
+    processor.connect(mute);
+    mute.connect(context.destination);
+    context.resume().catch(() => {});
+    return {
+      mimeType: 'audio/wav',
+      state: 'recording',
+      onstop: null,
+      start() {},
+      stop() {
+        if (this.state === 'inactive') return;
+        this.state = 'inactive';
+        try {
+          processor.onaudioprocess = null;
+          source.disconnect();
+          processor.disconnect();
+          mute.disconnect();
+        } catch {
+          // already disconnected
+        }
+        if (length > 0) chunks.push(encodeWav(samples, length, context.sampleRate));
+        context.close().catch(() => {});
+        this.onstop?.();
+      },
+    };
+  }
+
   async function startRecord(mode) {
     if (recorder || rec) return;
-    if (!navigator.mediaDevices || !window.MediaRecorder) return toast(t('voice.unsupported'), t('voice.unsupportedHint'), true);
+    if (!navigator.mediaDevices || (!window.MediaRecorder && !canUsePcm())) return toast(t('voice.unsupported'), t('voice.unsupportedHint'), true);
     const mine = { mode, armed: false, cancelled: false, send: false, abort: false };
     rec = mine;
     try {
@@ -114,13 +197,17 @@
         rec = null;
         return;
       }
-      const mime = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'].find((type) => MediaRecorder.isTypeSupported(type));
       const chunks = [];
       const stopLevel = watchLevel(stream);
-      recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
-      recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) chunks.push(event.data);
-      };
+      if (canUsePcm()) {
+        recorder = makePcmRecorder(stream, chunks);
+      } else {
+        const mime = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'].find((type) => MediaRecorder.isTypeSupported(type));
+        recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+        recorder.ondataavailable = (event) => {
+          if (event.data.size > 0) chunks.push(event.data);
+        };
+      }
       recorder.onstop = () => {
         const type = (recorder.mimeType || 'audio/webm').split(';')[0];
         stream.getTracks().forEach((track) => track.stop());
@@ -150,7 +237,7 @@
             stage(new File([blob], `voice-${stamp}.${type.includes('mp4') ? 'm4a' : 'webm'}`, { type }));
           });
       };
-      recorder.start();
+      if (recorder.start) recorder.start();
       recordStarted = Date.now();
       $('mic').classList.add('rec');
       $('box').classList.add('recording');

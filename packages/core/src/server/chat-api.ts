@@ -98,6 +98,7 @@ export function createChatApi(context: ChatApiContext) {
       agents: chat.agents,
       lastMessageAt: last ? last.createdAt : null,
       preview: last ? stripAttachments(last.text).replace(/\s+/g, ' ').slice(0, PREVIEW_LENGTH) : '',
+      unread: latest ? chats.unread(latest) : false,
     };
   };
   const chatsMessage = (): ServerMessage => ({ type: 'chats', chats: chats.listChats().map(chatView) });
@@ -174,7 +175,11 @@ export function createChatApi(context: ChatApiContext) {
     const rows = session ? messages.timeline(session.thread, beforeId, PAGE_SIZE + 1) : [];
     const hasMore = rows.length > PAGE_SIZE;
     // Opening (not just fetching older pages) means the user is reading this session now.
-    if (beforeId === undefined && session) chats.markRead(session.id);
+    if (beforeId === undefined && session) {
+      chats.markRead(session.id);
+      // Every device should drop the "new" badge, not only the one that opened the chat.
+      broadcast(chatsMessage());
+    }
     // A turn still streaming into this very session: include it so the client can rebuild it.
     const live = beforeId === undefined ? context.liveView?.(chatId) : undefined;
     const liveHere = live && (!session || live.sessionId === session.id) ? live : null;
@@ -216,9 +221,10 @@ export function createChatApi(context: ChatApiContext) {
       for await (const item of core.engine.runTurn({ chatId, ...turn, signal })) {
         if (item.type === 'session') {
           sessionId = item.session.id;
-          // A session that starts for the user's own message is being read right away.
-          if (item.started) chats.markRead(sessionId);
-          broadcast({ type: 'chat-session', chatId, session: sessionView(item.session), started: item.started });
+          // Sending a message is reading the session up to now: only replies after it are new.
+          chats.markRead(sessionId);
+          const current = chats.getSession(sessionId) ?? item.session;
+          broadcast({ type: 'chat-session', chatId, session: sessionView(current), started: item.started });
         } else if (item.type === 'user-message') {
           broadcast({
             type: 'chat-message',

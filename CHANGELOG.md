@@ -12,6 +12,17 @@
 - Smoother typing: the chat box redraws once per frame instead of on every key.
 - The language buttons are only in Settings, no longer repeated in each chat's
   settings.
+- Android: a reply now posts a notification with its text even when the WebView
+  still reports itself visible; the fallback body is "มีข้อความใหม่".
+- The chat list marks unread replies with "ใหม่" (and so does the home-screen
+  widget, from the same read state); opening a chat clears the mark everywhere.
+- The header says which agent is typing, and names the agent taking over on a
+  handoff or when one agent delegates part of a turn to another; on a phone with
+  the character on, a floating chip shows the same.
+- Staged pictures have a clear per-picture caption box, and videos can carry a
+  caption too.
+- Settings and the other pages scroll properly on phones (dynamic viewport,
+  safe areas, and the keyboard resizing the page).
 
 ### 0.7.1-prototype
 

@@ -7,6 +7,7 @@ import { AgentCatalog } from './agents/loader.ts';
 import type { AppSettings } from './app/app-settings.ts';
 import { SecretStore } from './app/secrets.ts';
 import { type AttachmentKind, AttachmentStore, ingestAttachments, MAX_ATTACHMENT_BYTES, PROMPTS } from './chat/attachments.ts';
+import { assetBytes } from './chat/media-usage.ts';
 import { ToolFileExecutor } from './chat/tool-files.ts';
 import { ChatStore } from './chat/chat-store.ts';
 import { ChatEngine } from './chat/engine.ts';
@@ -314,7 +315,12 @@ export async function createCore(
   const wardrobe = new WardrobeStore(config.wardrobeDir, () => agents.names());
   const backgrounds = new BackgroundStore(config.backgroundsDir);
   const gallery = new GalleryStore(config.agentsDir);
-  const attachments = new AttachmentStore(db, config.filesDir);
+  const attachments = new AttachmentStore(db, config.filesDir, {
+    // A cloud user's disk is bounded: the settings screen owns this number, and the
+    // count includes the pictures/models kept outside chat (agents, backdrops, outfits).
+    quotaBytes: () => options.app?.storage.mediaQuotaBytes ?? 0,
+    extraUsageBytes: () => assetBytes([config.agentsDir, config.backgroundsDir, config.wardrobeDir]),
+  });
 
   // The database stays the source of truth; the mirrors under `user/sessions`,
   // `user/memory` and `user/history` keep it readable, syncable and easy to back up.

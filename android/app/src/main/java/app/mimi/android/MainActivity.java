@@ -145,6 +145,8 @@ public class MainActivity extends Activity {
         super.onResume();
         visible = true;
         web.onResume();
+        // The page treats the app as on screen again (its own visibility may lag behind the activity).
+        web.evaluateJavascript("window.__mimiSetVisible&&window.__mimiSetVisible(true)", null);
         // The screen was off or the app folded away: the socket inside the page may be dead
         // without the page having noticed. Ask it to check and reconnect, then resync the chat.
         web.evaluateJavascript("window.__mimiWake&&window.__mimiWake()", null);
@@ -154,6 +156,8 @@ public class MainActivity extends Activity {
     @Override
     protected void onPause() {
         visible = false;
+        // Say so before the WebView is paused: new replies must become notifications.
+        web.evaluateJavascript("window.__mimiSetVisible&&window.__mimiSetVisible(false)", null);
         rememberToken();
         WidgetSync.markSeen(this);
         web.onPause();

@@ -227,7 +227,7 @@
         image.src = url;
         for (const old of wrap.querySelectorAll('img.fig:not(.leaving)')) {
           old.classList.add('leaving');
-          setTimeout(() => old.remove(), 380);
+          setTimeout(() => old.remove(), 460);
         }
         wrap.append(image);
         shown = { path: target.path, outfit: target.outfit };

@@ -132,6 +132,10 @@ test('chats over the socket: create, send with a file, search, go back', async (
 
   await app.finished({ type: 'chat-send', chatId, text: 'ข้อความที่สอง' });
   await app.ask(null, 'busy', (reply) => reply.chatId === null);
+  const unopened = await app.ask({ type: 'chats-list' }, 'chats');
+  assert.equal(unopened.chats.find((chat) => chat.id === chatId)?.unread, true, 'an unopened reply is marked new');
+  const widget = (await (await app.api('/api/widget')).json()) as { chats: Array<{ id: number; unread: number }> };
+  assert.equal(widget.chats.find((chat) => chat.id === chatId)?.unread, 1, 'the widget shows the same unread reply');
   const history = await app.ask({ type: 'chat-open', chatId }, 'chat-history');
   assert.deepEqual(
     history.messages.map((message) => [message.role, message.text, message.attachments.length]),
@@ -140,6 +144,9 @@ test('chats over the socket: create, send with a file, search, go back', async (
   assert.equal(history.session!.title, 'จำรายการนี้ไว้');
   const listed = await app.ask({ type: 'chats-list' }, 'chats');
   assert.deepEqual(listed.chats.map((chat) => [chat.id, chat.preview]), [[chatId, 'รับทราบค่ะ']]);
+  assert.equal(listed.chats[0]!.unread, false, 'opening the chat clears the new mark');
+  const widgetRead = (await (await app.api('/api/widget')).json()) as { chats: Array<{ id: number; unread: number }> };
+  assert.equal(widgetRead.chats.find((chat) => chat.id === chatId)?.unread, 0, 'the widget clears too');
 
   const found = await app.ask({ type: 'search', query: 'ที่สอง' }, 'search-results');
   assert.deepEqual(found.hits.map((hit) => [hit.chatId, hit.role, hit.snippet]), [[chatId, 'user', 'ข้อความที่สอง']]);

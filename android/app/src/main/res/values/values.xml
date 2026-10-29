@@ -6,6 +6,7 @@
     <string name="widgetEmpty">ยังไม่มีแชต · แตะเพื่อเปิด Mimi</string>
     <string name="widgetSignIn">เปิด Mimi แล้วเข้าสู่ระบบ เพื่อให้ widget แสดงแชต</string>
     <string name="channelReplies">คำตอบใหม่</string>
+    <string name="newMessage">มีข้อความใหม่</string>
     <string name="permissionHint">ยังไม่ได้อนุญาตไมค์/กล้อง: เปิดได้ที่ ตั้งค่า &gt; แอป &gt; Mimi &gt; สิทธิ์</string>
     <string name="saved">บันทึกแล้ว: %1$s</string>
     <color name="background">#141618</color>

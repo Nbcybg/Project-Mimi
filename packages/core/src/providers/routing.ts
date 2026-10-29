@@ -87,8 +87,24 @@ export class ModelRouter implements ModelService {
         return parse(pick('small_model'));
       case 'vision':
         return parse(pick('vision_model'));
-      case 'transcript':
+      case 'transcript': {
+        // No transcript model chosen: prefer any connected model that can take audio
+        // over the chat model, which usually cannot.
+        const configured = agent.transcript_model ?? defaults.transcript_model;
+        if (!configured) {
+          const ears = this.registry
+            .available()
+            .flatMap((provider) => provider.models)
+            .find(
+              (model) =>
+                model.inputs?.includes('audio') &&
+                model.textOutput &&
+                (model.type === undefined || model.type === 'chat' || model.type === 'transcription'),
+            );
+          if (ears) return ears.ref;
+        }
         return parse(pick('transcript_model'));
+      }
       case 'image':
       case 'speech':
       case 'video': {

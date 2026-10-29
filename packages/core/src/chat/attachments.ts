@@ -22,6 +22,8 @@ export interface Attachment {
   text: string;
   /** The user's own note about this file, kept apart from what the models read of it. */
   caption: string;
+  /** Set when the bytes were removed (media retention); the row stays for the chat log. */
+  deletedAt: string | null;
   /** SHA-256 of the bytes; the same file uploaded twice shares what the models read. */
   hash: string | null;
   createdAt: string;
@@ -36,6 +38,7 @@ interface AttachmentRow {
   size: number;
   text: string;
   caption: string | null;
+  deleted_at: string | null;
   hash: string | null;
   created_at: string;
 }
@@ -49,11 +52,14 @@ const toAttachment = (row: AttachmentRow): Attachment => ({
   size: row.size,
   text: row.text,
   caption: row.caption ?? '',
+  deletedAt: row.deleted_at ?? null,
   hash: row.hash,
   createdAt: row.created_at,
 });
 
 export const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+/** Media older than this is removed from the disk; its chat row and caption stay. */
+export const MEDIA_RETENTION_DAYS = 7;
 const TEXT_FILE_LIMIT = 60_000;
 /** Total text one user message may carry from its files; the full text stays on each attachment. */
 export const TOTAL_ATTACHMENT_CHARS = 120_000;
@@ -90,19 +96,66 @@ export function sniffMime(data: Buffer, declared: string): string {
   return declared;
 }
 
+/** The media quota is full: the upload is refused until old files expire or the quota grows. */
+export class AttachmentQuotaError extends Error {}
+
 /** Files the user sent: the bytes live in a folder, everything else in the database. */
 export class AttachmentStore {
   private readonly db: Db;
   private readonly dir: string;
+  private readonly quotaBytes?: () => number;
+  private readonly extraUsageBytes?: () => number;
 
-  constructor(db: Db, dir: string) {
+  constructor(db: Db, dir: string, options: { quotaBytes?: () => number; extraUsageBytes?: () => number } = {}) {
     this.db = db;
     this.dir = dir;
+    this.quotaBytes = options.quotaBytes;
+    this.extraUsageBytes = options.extraUsageBytes;
+  }
+
+  /** Bytes and files still on disk (expired media is not counted). */
+  usage(): { bytes: number; files: number } {
+    const row = this.db
+      .prepare(`SELECT COUNT(*) AS files, COALESCE(SUM(size), 0) AS bytes FROM attachments WHERE deleted_at IS NULL`)
+      .get() as { files: number; bytes: number };
+    return { files: Number(row.files), bytes: Number(row.bytes) };
+  }
+
+  /**
+   * Removes media older than `days` from the disk. The database row is kept (with
+   * `deleted_at`) so the chat still shows that a file was there and the CSV can list it.
+   */
+  expireOlderThan(days: number = MEDIA_RETENTION_DAYS, now: Date = new Date()): { files: number; bytes: number } {
+    const cutoff = new Date(now.getTime() - days * 24 * 60 * 60 * 1000).toISOString();
+    const rows = this.db
+      .prepare(`SELECT id, size FROM attachments WHERE deleted_at IS NULL AND created_at <= ?`)
+      .all(cutoff) as Array<{ id: string; size: number }>;
+    let files = 0;
+    let bytes = 0;
+    const mark = this.db.prepare(`UPDATE attachments SET deleted_at = ? WHERE id = ?`);
+    for (const row of rows) {
+      try {
+        fs.unlinkSync(path.join(this.dir, row.id));
+      } catch {
+        // already gone: the row is still marked so it is not retried forever
+      }
+      mark.run(now.toISOString(), row.id);
+      files++;
+      bytes += Number(row.size);
+    }
+    return { files, bytes };
   }
 
   save(file: { name: string; mime: string; data: Buffer; caption?: string }): Attachment {
     if (file.data.length === 0) throw new Error('The file is empty.');
     if (file.data.length > MAX_ATTACHMENT_BYTES) throw new Error('The file is larger than 25 MB.');
+    const quota = this.quotaBytes?.() ?? 0;
+    const usedBytes = quota > 0 ? this.usage().bytes + (this.extraUsageBytes?.() ?? 0) : 0;
+    if (quota > 0 && usedBytes + file.data.length > quota) {
+      const used = Math.round((usedBytes / 1024 / 1024) * 10) / 10;
+      const limit = Math.round((quota / 1024 / 1024) * 10) / 10;
+      throw new AttachmentQuotaError(`Media storage is full (${used} MB of ${limit} MB). Older media is removed after ${MEDIA_RETENTION_DAYS} days, or raise the quota in Settings.`);
+    }
     const id = randomUUID();
     const declared = sniffMime(file.data, file.mime);
     const mime = /^[\w.+-]+\/[\w.+-]+$/.test(declared) ? declared.toLowerCase() : 'application/octet-stream';

@@ -4,7 +4,7 @@ import type http from 'node:http';
 import type { AttachmentView } from '@mimi/shared';
 import { type AgentImages, isImageSlot } from '../chat/agent-images.ts';
 import { AgentAssets } from '../chat/agent-assets.ts';
-import { type Attachment, type AttachmentStore, MAX_ATTACHMENT_BYTES } from '../chat/attachments.ts';
+import { type Attachment, type AttachmentStore, AttachmentQuotaError, MAX_ATTACHMENT_BYTES } from '../chat/attachments.ts';
 import type { WardrobeStore } from '../wardrobe/wardrobe-store.ts';
 import type { BackgroundStore } from '../backgrounds/background-store.ts';
 import type { GalleryStore } from '../gallery/gallery-store.ts';
@@ -47,15 +47,19 @@ export interface HttpApiDeps {
   ): Promise<WebhookReply | null>;
   /** Folder of backup files offered for download. */
   backupsDir?: string;
-  /** The newest chats for the Android home-screen widget; `since` (ISO time) counts unread replies. */
+  /** The newest chats for the Android home-screen widget, with the unread replies of each. */
   widgetChats?(since: string | null): unknown;
   /** Unread notifications for the Android app to post natively while the page is closed. */
   notificationsSync?(since: string | null): unknown;
+  /** Chat transcript as CSV, for keeping a copy outside the cloud storage. */
+  chatCsv?(chatId?: number): { csv: string; filename: string } | null;
+  /** Total media use (chat files + user pictures/models) and the quota, for upload checks. */
+  media?: { usedBytes(): number; quotaBytes(): number };
 }
 
 export function toAttachmentView(attachment: Attachment): AttachmentView {
-  const { id, kind, name, mime, size, text, caption } = attachment;
-  return { id, kind, name, mime, size, text, caption };
+  const { id, kind, name, mime, size, text, caption, deletedAt } = attachment;
+  return { id, kind, name, mime, size, text, caption, deletedAt };
 }
 
 class HttpError extends Error {
@@ -168,6 +172,34 @@ export async function handleHttpApi(
 
     if (!deps.authorized(request)) throw new HttpError(401, 'Missing or wrong token.');
 
+    /** Pictures and models share the user's media quota with files sent in a chat. */
+    const checkMedia = (incomingBytes: number) => {
+      if (!deps.media) return;
+      const limit = deps.media.quotaBytes();
+      if (limit <= 0) return;
+      const used = deps.media.usedBytes();
+      if (used + incomingBytes <= limit) return;
+      const mb = (value: number) => Math.round((value / 1024 / 1024) * 10) / 10;
+      throw new HttpError(507, `Media storage is full (${mb(used)} MB of ${mb(limit)} MB). Delete some pictures or raise the quota in Settings.`);
+    };
+
+    if (resource === 'export' && request.method === 'GET' && deps.chatCsv) {
+      const all = rest.length === 1 && rest[0] === 'chats.csv';
+      const one = rest.length === 2 && rest[0] === 'chat' && /^\d+\.csv$/.test(rest[1] ?? '');
+      if (!all && !one) throw new HttpError(404, 'Not found.');
+      const chatId = one ? Number((rest[1] as string).slice(0, -4)) : undefined;
+      const out = deps.chatCsv(chatId);
+      if (!out) throw new HttpError(404, 'No such chat.');
+      response.writeHead(200, {
+        'content-type': 'text/csv; charset=utf-8',
+        'content-disposition': `attachment; filename="${out.filename}"`,
+        'cache-control': 'no-store',
+      });
+      // Excel on Windows reads Thai correctly only with a UTF-8 byte-order mark.
+      response.end(`\uFEFF${out.csv}`);
+      return true;
+    }
+
     if (resource === 'upload' && request.method === 'POST') {
       const data = await readBody(request, MAX_ATTACHMENT_BYTES);
       const rawCaption = request.headers['x-mimi-caption'];
@@ -179,12 +211,19 @@ export async function handleHttpApi(
           caption = rawCaption;
         }
       }
-      const attachment = deps.attachments.save({
-        name: url.searchParams.get('name') ?? 'file',
-        mime: String(request.headers['content-type'] ?? 'application/octet-stream').split(';')[0]!.trim(),
-        data,
-        caption,
-      });
+      const attachment = (() => {
+        try {
+          return deps.attachments.save({
+            name: url.searchParams.get('name') ?? 'file',
+            mime: String(request.headers['content-type'] ?? 'application/octet-stream').split(';')[0]!.trim(),
+            data,
+            caption,
+          });
+        } catch (error) {
+          if (error instanceof AttachmentQuotaError) throw new HttpError(507, error.message);
+          throw error;
+        }
+      })();
       sendJson(response, 200, toAttachmentView(attachment));
     } else if (resource === 'backups' && request.method === 'GET' && rest.length === 1 && deps.backupsDir) {
       const name = rest[0]!;
@@ -205,8 +244,8 @@ export async function handleHttpApi(
       sendJson(response, 200, deps.notificationsSync(url.searchParams.get('since')));
     } else if (resource === 'files' && request.method === 'GET' && rest.length === 1) {
       const attachment = deps.attachments.get(rest[0]!);
-      const data = attachment && deps.attachments.read(attachment.id);
-      if (!attachment || !data) throw new HttpError(404, 'No such file.');
+      const data = attachment && !attachment.deletedAt ? deps.attachments.read(attachment.id) : undefined;
+      if (!attachment || !data) throw new HttpError(attachment?.deletedAt ? 410 : 404, attachment?.deletedAt ? 'This media was removed after the retention period.' : 'No such file.');
       sendBytes(response, data, attachment.mime, attachment.name);
     } else if (resource === 'agent-image' && rest.length === 2 && isImageSlot(rest[1]!)) {
       const [agent, slot] = rest as [string, 'avatar' | 'portrait'];
@@ -219,7 +258,9 @@ export async function handleHttpApi(
         if (request.method === 'DELETE') deps.images.remove(agent, slot);
         else {
           const mime = String(request.headers['content-type'] ?? '').split(';')[0]!.trim();
-          deps.images.save(agent, slot, mime, await readBody(request, 8 * 1024 * 1024));
+          const data = await readBody(request, 8 * 1024 * 1024);
+          checkMedia(data.length);
+          deps.images.save(agent, slot, mime, data);
         }
         deps.imagesChanged();
         sendJson(response, 200, { ok: true });
@@ -235,7 +276,11 @@ export async function handleHttpApi(
       } else if (request.method === 'POST' || request.method === 'DELETE') {
         if (!deps.agentExists(agent)) throw new HttpError(404, `No agent "${agent}".`);
         if (request.method === 'DELETE') deps.assets.removeModel(agent);
-        else deps.assets.saveModel(agent, await readBody(request, 128 * 1024 * 1024));
+        else {
+          const data = await readBody(request, 128 * 1024 * 1024);
+          checkMedia(data.length);
+          deps.assets.saveModel(agent, data);
+        }
         deps.imagesChanged();
         sendJson(response, 200, { ok: true });
       } else {
@@ -255,7 +300,11 @@ export async function handleHttpApi(
       } else if (request.method === 'POST' || request.method === 'DELETE') {
         if (!deps.agentExists(agent)) throw new HttpError(404, `No agent "${agent}".`);
         if (request.method === 'DELETE') deps.assets.removeMotion(agent, name);
-        else deps.assets.saveMotion(agent, AgentAssets.cleanMotionName(name), await readBody(request, 64 * 1024 * 1024));
+        else {
+          const data = await readBody(request, 64 * 1024 * 1024);
+          checkMedia(data.length);
+          deps.assets.saveMotion(agent, AgentAssets.cleanMotionName(name), data);
+        }
         deps.imagesChanged();
         sendJson(response, 200, { ok: true });
       } else {
@@ -274,7 +323,9 @@ export async function handleHttpApi(
         if (request.method === 'DELETE') set.remove(key);
         else {
           const mime = String(request.headers['content-type'] ?? '').split(';')[0]!.trim();
-          set.save(key, mime, await readBody(request, 8 * 1024 * 1024));
+          const data = await readBody(request, 8 * 1024 * 1024);
+          checkMedia(data.length);
+          set.save(key, mime, data);
         }
         if (scope === 'outfit') deps.wardrobeChanged();
         else deps.imagesChanged();
@@ -291,12 +342,14 @@ export async function handleHttpApi(
       const mime = String(request.headers['content-type'] ?? '').split(';')[0]!.trim();
       if (id === undefined) {
         if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed.');
+        const data = await readBody(request, 12 * 1024 * 1024);
+        checkMedia(data.length);
         const item = deps.gallery.add(agent, {
           title: url.searchParams.get('title') ?? '',
           tags: (url.searchParams.get('tags') ?? '').split(','),
           description: url.searchParams.get('description') ?? '',
           mime,
-          data: await readBody(request, 12 * 1024 * 1024),
+          data,
           source: 'user',
         });
         deps.galleryChanged(agent);
@@ -306,7 +359,9 @@ export async function handleHttpApi(
         if (!image) throw new HttpError(404, 'No picture.');
         sendBytes(response, image.data, image.mime);
       } else if (request.method === 'POST' && part === 'thumb') {
-        deps.gallery.saveThumb(agent, id, mime, await readBody(request, 512 * 1024));
+        const data = await readBody(request, 512 * 1024);
+        checkMedia(data.length);
+        deps.gallery.saveThumb(agent, id, mime, data);
         sendJson(response, 200, { ok: true });
       } else {
         throw new HttpError(405, 'Method not allowed.');
@@ -322,7 +377,9 @@ export async function handleHttpApi(
         if (request.method === 'DELETE') deps.backgrounds.removeImage(id);
         else {
           const mime = String(request.headers['content-type'] ?? '').split(';')[0]!.trim();
-          deps.backgrounds.saveImage(id, mime, await readBody(request, 12 * 1024 * 1024));
+          const data = await readBody(request, 12 * 1024 * 1024);
+          checkMedia(data.length);
+          deps.backgrounds.saveImage(id, mime, data);
         }
         deps.backgroundsChanged();
         sendJson(response, 200, { ok: true });
@@ -338,7 +395,11 @@ export async function handleHttpApi(
       } else if (request.method === 'POST' || request.method === 'DELETE') {
         if (!deps.wardrobe.has(id)) throw new HttpError(404, `No outfit "${id}".`);
         if (request.method === 'DELETE') deps.wardrobe.removeModel(id);
-        else deps.wardrobe.saveModel(id, await readBody(request, 128 * 1024 * 1024));
+        else {
+          const data = await readBody(request, 128 * 1024 * 1024);
+          checkMedia(data.length);
+          deps.wardrobe.saveModel(id, data);
+        }
         deps.wardrobeChanged();
         sendJson(response, 200, { ok: true });
       } else {
@@ -355,7 +416,9 @@ export async function handleHttpApi(
         if (request.method === 'DELETE') deps.wardrobe.removeImage(id);
         else {
           const mime = String(request.headers['content-type'] ?? '').split(';')[0]!.trim();
-          deps.wardrobe.saveImage(id, mime, await readBody(request, 8 * 1024 * 1024));
+          const data = await readBody(request, 8 * 1024 * 1024);
+          checkMedia(data.length);
+          deps.wardrobe.saveImage(id, mime, data);
         }
         deps.wardrobeChanged();
         sendJson(response, 200, { ok: true });

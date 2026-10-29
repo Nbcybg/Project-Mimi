@@ -47,6 +47,9 @@ import { AppSettings, MODEL_KEYS } from '../app/app-settings.ts';
 import { presetSecretKey } from '../app/secrets.ts';
 import { AgentImages } from '../chat/agent-images.ts';
 import { AgentAssets } from '../chat/agent-assets.ts';
+import { MEDIA_RETENTION_DAYS } from '../chat/attachments.ts';
+import { assetBytes } from '../chat/media-usage.ts';
+import { chatCsv } from '../chat/chat-export.ts';
 import type { CoreConfig } from '../config.ts';
 import { type Core, type CoreOptions, createCore } from '../core.ts';
 import { startGoogleOAuth } from '../google/oauth-flow.ts';
@@ -359,6 +362,14 @@ export async function startServer(
     const catalog = core.registry.catalogProviders();
     const inCatalog = new Set(catalog.map((provider) => provider.id));
     const stored = core.providers.list();
+    const mediaUsage = core.attachments.usage();
+    const mediaAssets = assetBytes([config.agentsDir, config.backgroundsDir, config.wardrobeDir]);
+    const chatUsage = core.db
+      .prepare(`SELECT COUNT(*) AS messages, COALESCE(SUM(length(CAST(text AS BLOB)) + length(CAST(content AS BLOB))), 0) AS bytes FROM messages WHERE role IN ('user', 'assistant')`)
+      .get() as { messages: number; bytes: number };
+    const attachmentUsage = core.db
+      .prepare(`SELECT COALESCE(SUM(length(CAST(text AS BLOB)) + length(CAST(caption AS BLOB))), 0) AS bytes FROM attachments`)
+      .get() as { bytes: number };
     // Connected providers, plus ones added in the app that lost their credential.
     const shown = new Set([
       ...available.map((provider) => provider.id),
@@ -410,6 +421,15 @@ export async function startServer(
       ...(hostedCallbacks ? { oauthRedirectUri: hostedCallbacks.redirectUri } : {}),
       preferences: appSettings.preferences,
       spentTodayUsd: core.spentToday(),
+      storage: {
+        media: { usedBytes: mediaUsage.bytes + mediaAssets, quotaBytes: appSettings.storage.mediaQuotaBytes, files: mediaUsage.files },
+        chat: {
+          usedBytes: Number(chatUsage.bytes) + Number(attachmentUsage.bytes),
+          quotaBytes: appSettings.storage.chatQuotaBytes,
+          messages: Number(chatUsage.messages),
+        },
+        retentionDays: MEDIA_RETENTION_DAYS,
+      },
       toolKeys: { serper: Boolean(process.env.SERPER_API_KEY), openweather: Boolean(process.env.OPENWEATHER_API_KEY) },
       ready: (() => {
         try {
@@ -420,6 +440,23 @@ export async function startServer(
       })(),
     };
   };
+
+  /**
+   * Media is kept for a week. The sweep removes expired bytes from the disk, keeps the
+   * attachment row (and its caption) so the chat still makes sense, and tells open
+   * screens that the usage numbers changed.
+   */
+  const sweepMedia = () => {
+    try {
+      const gone = core.attachments.expireOlderThan(MEDIA_RETENTION_DAYS);
+      if (gone.files > 0) broadcast({ type: 'settings', settings: settingsView() });
+    } catch (error) {
+      console.warn(`media retention: ${(error as Error).message}`);
+    }
+  };
+  sweepMedia();
+  const mediaSweepTimer = setInterval(sweepMedia, 6 * 60 * 60 * 1000);
+  mediaSweepTimer.unref?.();
 
   /**
    * opencode-style connect: resolve the provider (catalog entry or the user's own URL),
@@ -518,6 +555,9 @@ export async function startServer(
       // the hub keep their own client and are not touched.
       core.oauth.syncLegacyEnv(process.env);
       core.oauth.reset();
+    }
+    if (change.storage) {
+      appSettings.setStorage(change.storage);
     }
     if (change.allowedDirs) {
       const dirs = change.allowedDirs
@@ -1565,7 +1605,12 @@ export async function startServer(
     agentExists: (name: string) => core.agents.names().includes(name),
     imagesChanged: () => broadcast(agentsMessage()),
     backupsDir: config.backupsDir,
-    widgetChats: (since: string | null) => {
+    chatCsv: (chatId?: number) => chatCsv(core.db, chatId),
+    media: {
+      usedBytes: () => core.attachments.usage().bytes + assetBytes([config.agentsDir, config.backgroundsDir, config.wardrobeDir]),
+      quotaBytes: () => appSettings.storage.mediaQuotaBytes,
+    },
+    widgetChats: (_since: string | null) => {
       const name = (agent: string) => {
         try {
           return core.agents.get(agent).displayName || agent;
@@ -1581,8 +1626,16 @@ export async function startServer(
         .slice(0, 6)
         .map(({ chat, view }) => {
           const [latest] = core.chats.sessions(chat.id, 1);
-          const recent = latest ? core.deps.messages.page(latest.thread, undefined, 30) : [];
-          const unread = since ? recent.filter((message) => message.role === 'assistant' && message.createdAt > since).length : 0;
+          const recent = latest ? core.deps.messages.page(latest.thread, undefined, 60) : [];
+          // Read state is per session on the server, so the widget agrees with the chat list.
+          const readAt = latest?.readAt ?? null;
+          const unread = latest
+            ? recent.filter(
+                (message) =>
+                  message.role === 'assistant' &&
+                  (readAt === null ? message.createdAt > latest.createdAt : message.createdAt > readAt),
+              ).length
+            : 0;
           const agent = chat.agents[0] ?? '';
           return {
             id: chat.id,

@@ -37,6 +37,8 @@ interface StoredSettings {
   /** The model pool: named presets (model + sampling settings) that agents and skills refer to by name. */
   presets: Record<string, ModelPreset>;
   allowedDirs: string[];
+  /** How much disk the user allows for chat media and for chat text, in bytes. */
+  storage: { mediaQuotaBytes: number; chatQuotaBytes: number };
   preferences: PreferencesView;
   /** Screen settings every device of the user shares (character position, sounds, …), key → value. */
   ui: Record<string, string>;
@@ -46,6 +48,23 @@ interface StoredSettings {
 const UI_KEY = /^mimi\.[^\s]{1,195}$/u;
 const UI_MAX_VALUE = 4000;
 const UI_MAX_KEYS = 1000;
+
+/** A quota in megabytes, kept positive and sane; 0 means "use the default". */
+function quotaBytes(value: unknown, fallbackMb: number): number {
+  const mb = Number(value);
+  if (!Number.isFinite(mb) || mb <= 0) return fallbackMb * 1024 * 1024;
+  return Math.round(Math.min(mb, 100_000) * 1024 * 1024);
+}
+
+/** A quota already stored in bytes, or the default when the file has none yet. */
+function savedQuotaBytes(value: unknown, fallbackMb: number): number {
+  const bytes = Number(value);
+  if (!Number.isFinite(bytes) || bytes <= 0) return fallbackMb * 1024 * 1024;
+  return Math.round(Math.min(bytes, 100_000 * 1024 * 1024));
+}
+
+const DEFAULT_MEDIA_QUOTA_MB = 2_048;
+const DEFAULT_CHAT_QUOTA_MB = 1_024;
 
 /**
  * What the user sets inside the app instead of editing files: connected providers,
@@ -75,6 +94,10 @@ export class AppSettings {
       defaults: { ...stored.defaults },
       presets: { ...stored.presets },
       allowedDirs: Array.isArray(stored.allowedDirs) ? stored.allowedDirs.map(String) : [],
+      storage: {
+        mediaQuotaBytes: savedQuotaBytes(stored.storage?.mediaQuotaBytes, DEFAULT_MEDIA_QUOTA_MB),
+        chatQuotaBytes: savedQuotaBytes(stored.storage?.chatQuotaBytes, DEFAULT_CHAT_QUOTA_MB),
+      },
       preferences: { ...stored.preferences },
       ui: stored.ui && typeof stored.ui === 'object' ? { ...stored.ui } : {},
     });
@@ -97,6 +120,17 @@ export class AppSettings {
 
   get allowedDirs(): string[] {
     return this.data.allowedDirs;
+  }
+
+  get storage(): { mediaQuotaBytes: number; chatQuotaBytes: number } {
+    return this.data.storage;
+  }
+
+  /** Quotas arrive as megabytes from the settings screen; 0 or a bad value resets to default. */
+  setStorage(change: { mediaQuotaMb?: number; chatQuotaMb?: number }): void {
+    if (change.mediaQuotaMb !== undefined) this.data.storage.mediaQuotaBytes = quotaBytes(change.mediaQuotaMb, DEFAULT_MEDIA_QUOTA_MB);
+    if (change.chatQuotaMb !== undefined) this.data.storage.chatQuotaBytes = quotaBytes(change.chatQuotaMb, DEFAULT_CHAT_QUOTA_MB);
+    this.save();
   }
 
   get providers(): Record<string, ConnectedProvider> {

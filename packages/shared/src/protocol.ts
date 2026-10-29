@@ -78,6 +78,8 @@ export interface AttachmentView {
   text: string;
   /** The user's own note about this file, when they wrote one. */
   caption: string;
+  /** Set when the bytes were removed by media retention; the chat still shows the file. */
+  deletedAt: string | null;
 }
 
 /** One entry of a chat as a client shows it. */
@@ -171,6 +173,8 @@ export interface ChatView {
   lastMessageAt: string | null;
   /** Start of the latest message. */
   preview: string;
+  /** True when the newest session has replies the user has not opened yet. */
+  unread: boolean;
 }
 
 export type StatusKeyName = 'location' | 'outfit' | 'current_task' | 'mood' | 'situation';
@@ -432,6 +436,16 @@ export type {
 } from './workflows.ts';
 export { BUILTIN_TRIGGERS, NODE_TYPES, OPERATORS } from './workflows.ts';
 
+/** How much disk the user's own space is using, and what they allow for each part. */
+export interface StorageView {
+  /** Files and pictures sent in chats (bytes still on disk). */
+  media: { usedBytes: number; quotaBytes: number; files: number };
+  /** Chat text and attachment text kept in the database; never deleted by retention. */
+  chat: { usedBytes: number; quotaBytes: number; messages: number };
+  /** Media older than this many days is removed automatically. */
+  retentionDays: number;
+}
+
 /** What the settings screen shows. Secrets never travel in this direction: only "is it set". */
 export interface SettingsView {
   /** Providers that are connected (have a credential) or were added in the app. */
@@ -475,6 +489,8 @@ export interface SettingsView {
   /** Spending limit and notification choices, plus what was spent today. */
   preferences: PreferencesView;
   spentTodayUsd: number;
+  /** Disk use and the user's quotas for chat media and chat text. */
+  storage: StorageView;
   /** Which API keys of the web tools are set (never the keys themselves). */
   toolKeys: { serper: boolean; openweather: boolean };
   /** False until an agent exists and its chat model's provider is connected. */
@@ -505,6 +521,8 @@ export interface SettingsChange {
   /** Default model per capability; an empty string clears one. */
   defaults?: ModelChoice;
   allowedDirs?: string[];
+  /** Quotas in megabytes; 0 restores the default. */
+  storage?: { mediaQuotaMb?: number; chatQuotaMb?: number };
 }
 
 export interface MemoryView {

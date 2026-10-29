@@ -173,13 +173,21 @@ final class WidgetSync {
             if (unread > known && !MainActivity.visible) {
                 Intent open = new Intent(context, MainActivity.class).putExtra("chat", id).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                 PendingIntent tap = PendingIntent.getActivity(context, (int) id, open, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+                String title = chat.optString("title");
+                if (title.trim().isEmpty()) title = context.getString(R.string.appName);
+                String preview = chat.optString("preview").trim();
+                if (preview.isEmpty()) preview = context.getString(R.string.newMessage);
                 Notification.Builder builder = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(context, CHANNEL) : new Notification.Builder(context);
                 builder
                     .setSmallIcon(R.mipmap.ic_launcher)
-                    .setContentTitle(chat.optString("title"))
-                    .setContentText(chat.optString("preview"))
-                    .setStyle(new Notification.BigTextStyle().bigText(chat.optString("preview")))
+                    .setContentTitle(title)
+                    .setContentText(preview)
+                    .setStyle(new Notification.BigTextStyle().bigText(preview))
                     .setNumber(unread)
+                    .setWhen(System.currentTimeMillis())
+                    .setShowWhen(true)
+                    .setCategory(Notification.CATEGORY_MESSAGE)
+                    .setPriority(Notification.PRIORITY_DEFAULT)
                     .setAutoCancel(true)
                     .setContentIntent(tap);
                 File avatar = avatarFile(context, chat.optString("agent", ""));
@@ -226,12 +234,19 @@ final class WidgetSync {
         if (chatId > 0) open.putExtra("chat", chatId);
         open.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         PendingIntent tap = PendingIntent.getActivity(context, id, open, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        String safeTitle = title == null || title.trim().isEmpty() ? context.getString(R.string.appName) : title;
+        String safeBody = body == null ? "" : body.trim();
+        if (safeBody.isEmpty()) safeBody = context.getString(R.string.newMessage);
         Notification.Builder builder = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(context, NOTIF_CHANNEL) : new Notification.Builder(context);
         builder
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle(icon + (title == null ? "" : title))
-            .setContentText(body == null ? "" : body)
-            .setStyle(new Notification.BigTextStyle().bigText(body == null ? "" : body))
+            .setContentTitle(icon + safeTitle)
+            .setContentText(safeBody)
+            .setStyle(new Notification.BigTextStyle().bigText(safeBody))
+            .setWhen(System.currentTimeMillis())
+            .setShowWhen(true)
+            .setCategory("message".equals(kind) ? Notification.CATEGORY_MESSAGE : Notification.CATEGORY_REMINDER)
+            .setPriority(Notification.PRIORITY_DEFAULT)
             .setAutoCancel(true)
             .setContentIntent(tap);
         try {

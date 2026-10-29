@@ -525,5 +525,5 @@ export function createChatApi(context: ChatApiContext) {
     }
   };
 
-  return { handle, chatsMessage, presetViews };
+  return { handle, chatsMessage, chatView, presetViews };
 }

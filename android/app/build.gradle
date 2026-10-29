@@ -22,13 +22,14 @@ android {
         targetSdk 35
         versionCode appCode
         versionName appVersion
-        manifestPlaceholders = [
-            hostName : mimiHost,
-            // The web client reads app/appv to offer a newer APK from GitHub releases.
-            launchUrl: "https://${mimiHost}/?app=android&appv=${appVersion}".toString(),
-        ]
-        resValue 'string', 'assetStatements',
-            "[{ \"relation\": [\"delegate_permission/common.handle_all_urls\"], \"target\": { \"namespace\": \"web\", \"site\": \"https://${mimiHost}\" } }]".toString()
+        manifestPlaceholders = [hostName: mimiHost]
+        // The server the app shows; the web client reads app/appv to offer a newer APK from GitHub releases.
+        buildConfigField 'String', 'MIMI_HOST', "\"${mimiHost}\""
+        buildConfigField 'String', 'LAUNCH_URL', "\"https://${mimiHost}/?app=android&appv=${appVersion}\""
+    }
+
+    buildFeatures {
+        buildConfig true
     }
 
     signingConfigs {
@@ -57,5 +58,6 @@ android {
 }
 
 dependencies {
-    implementation 'com.google.androidbrowserhelper:androidbrowserhelper:2.5.0'
+    // FileProvider: hands the camera app a place for the photo it takes.
+    implementation 'androidx.core:core:1.13.1'
 }

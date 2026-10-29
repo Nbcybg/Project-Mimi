@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### 0.7.0-prototype
+
+- Chat sounds: a short "pop" when a message goes out and two notes when the
+  agent finishes its reply (made in code, per device; Settings has a switch and
+  buttons to hear them; quiet hours mute them).
+- Character position has no limit: the sliders reach further (zoom 0.1-10×,
+  ±300 %) and a number box beside each takes any value.
+- Android app: its own WebView instead of a Chrome Trusted Web Activity, so the
+  microphone and camera are the app's permissions (asked at the first start and
+  when the page needs them; the camera button opens the camera app). Files the
+  page saves go to Download. Web Push does not reach a WebView: the app checks
+  for new replies about every 15 minutes and notifies instead.
+- Android home-screen widget "แชต Mimi": the newest chats with picture, name,
+  time, last message and a badge of unseen replies; a row opens its chat. The
+  server answers it at `GET /api/widget?since=<iso>` (Bearer token).
+
 ### Fixes
 
 - OAuth like n8n's credential form. Microsoft accounts take a client secret

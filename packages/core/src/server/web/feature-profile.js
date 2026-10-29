@@ -298,6 +298,7 @@
     // The notification chime is a per-device choice too (feature-notify.js plays it).
     const chimeHook = window.MimiHooks && window.MimiHooks.notify;
     if (chimeHook && chimeHook.soundToggle) panel.append(chimeHook.soundToggle());
+    if (chimeHook && chimeHook.chatSoundToggle) panel.append(chimeHook.chatSoundToggle());
     // Saved as soon as something changes (a field when it loses focus); per-device
     // choices above are kept in this browser and are not sent.
     const save = () =>

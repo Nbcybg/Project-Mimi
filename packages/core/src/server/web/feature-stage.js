@@ -114,14 +114,20 @@
     box.append(el('h3', '', t(kind === '3d' ? 'view.title3d' : 'view.title2d')));
     const rows =
       kind === '3d'
-        ? [['view.yaw', 'yaw', -180, 180, 1, '°'], ['view.pitch', 'pitch', -40, 40, 1, '°'], ['view.zoom', 'zoom', 0.5, 2.5, 0.05, '×'], ['view.x', 'x', -50, 50, 1, '%'], ['view.y', 'y', -50, 50, 1, '%']]
-        : [['view.size', 'zoom', 0.5, 2.5, 0.05, '×'], ['view.x', 'x', -60, 60, 1, '%'], ['view.y', 'y', -70, 70, 1, '%']];
+        ? [['view.yaw', 'yaw', -180, 180, 1, '°'], ['view.pitch', 'pitch', -89, 89, 1, '°'], ['view.zoom', 'zoom', 0.1, 10, 0.05, '×'], ['view.x', 'x', -300, 300, 1, '%'], ['view.y', 'y', -300, 300, 1, '%']]
+        : [['view.size', 'zoom', 0.1, 10, 0.05, '×'], ['view.x', 'x', -300, 300, 1, '%'], ['view.y', 'y', -300, 300, 1, '%']];
     const view = loadView(agent);
     const peek = (on) => document.getElementById('rail')?.classList.toggle('peek', on);
     const inputs = [];
+    // The slider covers a wide range; the number box beside it takes any value (no limit).
     for (const [label, key, min, max, step, unit] of rows) {
       const line = el('label', 'viewrow');
       const shown = el('span', 'v');
+      const number = el('input');
+      number.type = 'number';
+      number.step = String(step);
+      number.inputMode = 'decimal';
+      shown.append(number, el('small', '', unit));
       const slider = el('input');
       slider.type = 'range';
       slider.min = String(min);
@@ -129,15 +135,25 @@
       slider.step = String(step);
       slider.value = String(view[key]);
       const show = () => {
-        shown.textContent = `${key === 'zoom' ? Number(slider.value).toFixed(2) : Math.round(Number(slider.value))}${unit}`;
+        number.value = key === 'zoom' ? Number(view[key]).toFixed(2) : String(Math.round(Number(view[key])));
       };
       show();
-      slider.oninput = () => {
-        view[key] = Number(slider.value);
+      const set = (value) => {
+        view[key] = value;
         M().store.set(viewKey(agent), JSON.stringify(view));
-        show();
         applyView(agent);
       };
+      slider.oninput = () => {
+        set(Number(slider.value));
+        show();
+      };
+      number.oninput = () => {
+        const value = Number(number.value);
+        if (number.value === '' || !Number.isFinite(value) || (key === 'zoom' && value <= 0)) return;
+        slider.value = String(value);
+        set(value);
+      };
+      number.onblur = show;
       // While a slider is held the panel fades, so the character can be seen behind it.
       slider.addEventListener('pointerdown', () => peek(true));
       for (const type of ['pointerup', 'pointercancel', 'change', 'blur']) slider.addEventListener(type, () => peek(false));
@@ -149,10 +165,11 @@
       button('btn ghost', t('view.reset'), () => {
         const fresh = { ...DEFAULT_VIEW[kind] };
         M().store.set(viewKey(agent), JSON.stringify(fresh));
-        for (const [key, slider, show] of inputs) {
+        for (const [key, slider] of inputs) {
+          view[key] = fresh[key];
           slider.value = String(fresh[key]);
-          show();
         }
+        for (const [, , show] of inputs) show();
         applyView(agent);
       }),
     );

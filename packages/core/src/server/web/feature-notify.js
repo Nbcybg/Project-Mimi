@@ -69,6 +69,64 @@
       tone.stop(start + offset + 0.5);
     }
   }
+  // Chat sounds: a soft rising "pop" when a message goes out, two falling notes when the
+  // agent finishes its reply. Per device, on unless turned off; quiet hours mute them too.
+  const CHAT_SOUND_KEY = 'mimi.chatSound';
+  const chatSoundOn = () => {
+    try {
+      return localStorage.getItem(CHAT_SOUND_KEY) !== '0';
+    } catch {
+      return true;
+    }
+  };
+  const CHAT_TONES = {
+    // [type, from Hz, to Hz, start s, length s, volume]
+    sent: [['triangle', 520, 880, 0, 0.12, 0.14]],
+    done: [['sine', 1046.5, 1046.5, 0, 0.28, 0.13], ['sine', 784, 784, 0.12, 0.42, 0.13]],
+  };
+  function chatSound(kind, force = false) {
+    if (!force && (!chatSoundOn() || quietNow())) return;
+    unlockAudio();
+    if (!audio || !CHAT_TONES[kind]) return;
+    if (audio.state === 'suspended') void audio.resume();
+    const start = audio.currentTime + 0.02;
+    for (const [type, from, to, offset, length, volume] of CHAT_TONES[kind]) {
+      const tone = audio.createOscillator();
+      const gain = audio.createGain();
+      tone.type = type;
+      tone.frequency.setValueAtTime(from, start + offset);
+      if (to !== from) tone.frequency.exponentialRampToValueAtTime(to, start + offset + length * 0.8);
+      gain.gain.setValueAtTime(0.0001, start + offset);
+      gain.gain.exponentialRampToValueAtTime(volume, start + offset + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + offset + length);
+      tone.connect(gain).connect(audio.destination);
+      tone.start(start + offset);
+      tone.stop(start + offset + length + 0.05);
+    }
+  }
+  function chatSoundToggle() {
+    const wrap = el('div', 'hstack');
+    const label = el('label', 'wcheck');
+    const box = el('input');
+    box.type = 'checkbox';
+    box.checked = chatSoundOn();
+    box.onchange = () => {
+      try {
+        localStorage.setItem(CHAT_SOUND_KEY, box.checked ? '1' : '0');
+      } catch {
+        // storage blocked: the default (on) stays
+      }
+      if (box.checked) chatSound('sent', true);
+    };
+    label.append(box, el('span', '', 'เสียงตอนส่งข้อความและตอนตอบเสร็จ (เฉพาะเครื่องนี้)'));
+    wrap.append(
+      label,
+      button('btn ghost', '🔊 ส่ง', () => chatSound('sent', true)),
+      button('btn ghost', '🔊 ตอบเสร็จ', () => chatSound('done', true)),
+    );
+    return wrap;
+  }
+
   /** The on/off switch for the settings page, with a button to hear it. */
   function soundToggle() {
     const wrap = el('div', 'hstack');
@@ -328,5 +386,5 @@
     M().send({ type: 'push-unsubscribe', endpoint: subscription.endpoint });
     await subscription.unsubscribe();
   }
-  window.MimiHooks.notify = { onConnect, onMessage, bell, forgetDevice, chime, soundToggle };
+  window.MimiHooks.notify = { onConnect, onMessage, bell, forgetDevice, chime, soundToggle, chatSound, chatSoundToggle };
 })();

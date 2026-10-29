@@ -68,6 +68,8 @@
     store.setItem(WEBHOOK_KEY, webhook);
     // Inside the desktop app: it keeps the token in the OS keychain (or nowhere, on a shared device).
     window.MimiDesktop?.signedIn({ token: value, username, remember: !$('gate-shared').checked });
+    // Inside the Android app: its home-screen widget reads the newest chats with the same token.
+    window.MimiAndroid?.signedIn(value);
   }
   const webhookBase = () => sessionStorage.getItem(WEBHOOK_KEY) ?? localStorage.getItem(WEBHOOK_KEY) ?? '';
 
@@ -947,6 +949,7 @@
         const hit = usage.inputTokens ? Math.round((usage.cachedTokens / usage.inputTokens) * 100) : 0;
         add(el('div', 'note use', `${event.rounds} รอบ · in ${usage.inputTokens} (cache ${hit}%) · out ${usage.outputTokens} · $${usage.costUsd.toFixed(5)}`));
         if (event.reason === 'stop' && event.text && autoSpeak()) speak(event.text, event.speech);
+        if (event.reason !== 'handoff') window.MimiHooks?.notify?.chatSound('done');
         live = null;
         state.typing = null;
         renderHeader();
@@ -1307,6 +1310,7 @@
     input.value = '';
     compose.replyTo = null;
     if (window.MimiHooks && window.MimiHooks.chat) window.MimiHooks.chat.onSent();
+    window.MimiHooks?.notify?.chatSound('sent');
     autosize();
     state.staged = [];
     renderStaged();
@@ -3085,6 +3089,7 @@
           store.removeItem(WEBHOOK_KEY);
         }
         window.MimiDesktop?.signedOut('expired');
+        window.MimiAndroid?.signedIn('');
         $('gate-error').textContent = accountsMode ? 'ออกจากระบบแล้ว หรือเซสชันหมดอายุ — เข้าสู่ระบบใหม่' : 'รหัสผ่านไม่ถูกต้อง';
         $('gate').style.display = 'flex';
         return;
@@ -3150,6 +3155,7 @@
     sessionStorage.clear();
     for (const url of blobs.values()) url.then((href) => URL.revokeObjectURL(href)).catch(() => {});
     // The desktop app wipes its own storage and reopens at the sign-in page.
+    window.MimiAndroid?.signedIn('');
     if (window.MimiDesktop) window.MimiDesktop.signedOut('logout');
     else location.reload();
   }

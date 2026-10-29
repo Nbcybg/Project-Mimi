@@ -1389,6 +1389,37 @@ export async function startServer(
     agentExists: (name: string) => core.agents.names().includes(name),
     imagesChanged: () => broadcast(agentsMessage()),
     backupsDir: config.backupsDir,
+    widgetChats: (since: string | null) => {
+      const name = (agent: string) => {
+        try {
+          return core.agents.get(agent).displayName || agent;
+        } catch {
+          return agent;
+        }
+      };
+      const chats = core.chats
+        .listChats()
+        .map((chat) => ({ chat, view: chatApi.chatView(chat) }))
+        .filter(({ view }) => view.lastMessageAt)
+        .sort((a, b) => String(b.view.lastMessageAt).localeCompare(String(a.view.lastMessageAt)))
+        .slice(0, 6)
+        .map(({ chat, view }) => {
+          const [latest] = core.chats.sessions(chat.id, 1);
+          const recent = latest ? core.deps.messages.page(latest.thread, undefined, 30) : [];
+          const unread = since ? recent.filter((message) => message.role === 'assistant' && message.createdAt > since).length : 0;
+          const agent = chat.agents[0] ?? '';
+          return {
+            id: chat.id,
+            title: chat.kind === 'direct' ? name(agent) : chat.title || chat.agents.map(name).join(', '),
+            agent,
+            avatar: agent && images.version(agent, 'avatar') ? `/api/agent-image/${encodeURIComponent(agent)}/avatar?v=${images.version(agent, 'avatar')}` : null,
+            preview: view.preview,
+            lastMessageAt: view.lastMessageAt,
+            unread,
+          };
+        });
+      return { chats, busyChat: activeChat };
+    },
     webhook: async (
       key: string,
       payload: string,

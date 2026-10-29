@@ -934,8 +934,9 @@ html[data-mode="mobile"] .solo .box.rec-armed #mic.rec::before, html[data-mode="
 .seg button { flex: 1; padding: 7px 4px; border-radius: 9px; font-size: 12.5px; color: var(--ink-2); white-space: nowrap; }
 .seg button.on { background: var(--accent-soft); color: var(--accent-text); box-shadow: inset 0 0 0 1px rgba(224,138,91,.5); }
 .viewctl { display: flex; flex-direction: column; gap: 6px; }
-.viewrow { display: grid; grid-template-columns: 74px minmax(0, 1fr) 46px; gap: 8px; align-items: center; font-size: 12.5px; color: var(--ink-2); margin: 0; }
-.viewrow .v { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+.viewrow { display: grid; grid-template-columns: 74px minmax(0, 1fr) 84px; gap: 8px; align-items: center; font-size: 12.5px; color: var(--ink-2); margin: 0; }
+.viewrow .v { display: flex; align-items: center; gap: 3px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.viewrow .v input { width: 100%; min-width: 0; padding: 2px 4px; font-size: 12px; text-align: right; }
 .viewrow input[type="range"] { width: 100%; accent-color: var(--accent); }
 html[data-mode="mobile"] .rail.peek { opacity: .16; transition: opacity .12s; }
 html[data-mode="mobile"] .rail { transition: opacity .2s; }

@@ -1,43 +1,40 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Voice messages and the camera button of the chat; asked for at the first start. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- The widget's refresh job comes back after a restart. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
     <application
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/appName"
         android:supportsRtl="true"
+        android:hardwareAccelerated="true"
         android:theme="@style/Theme.Mimi">
 
-        <!-- Lets Chrome verify this app against the server's /.well-known/assetlinks.json
-             (then the page is shown without the address bar). -->
-        <meta-data
-            android:name="asset_statements"
-            android:resource="@string/assetStatements" />
-
+        <!-- The Mimi web client in the app's own WebView, so the microphone and camera
+             are this app's permissions (in Chrome they were Chrome's). -->
         <activity
-            android:name="com.google.androidbrowserhelper.trusted.LauncherActivity"
+            android:name=".MainActivity"
             android:exported="true"
-            android:label="@string/appName">
-            <meta-data
-                android:name="android.support.customtabs.trusted.DEFAULT_URL"
-                android:value="${launchUrl}" />
-            <meta-data
-                android:name="android.support.customtabs.trusted.STATUS_BAR_COLOR"
-                android:resource="@color/background" />
-            <meta-data
-                android:name="android.support.customtabs.trusted.NAVIGATION_BAR_COLOR"
-                android:resource="@color/background" />
-            <meta-data
-                android:name="android.support.customtabs.trusted.FALLBACK_STRATEGY"
-                android:value="customtabs" />
-
+            android:launchMode="singleTask"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode|density"
+            android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <intent-filter android:autoVerify="true">
+            <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
@@ -45,24 +42,38 @@
             </intent-filter>
         </activity>
 
-        <activity android:name="com.google.androidbrowserhelper.trusted.FocusActivity" />
-
-        <activity
-            android:name="com.google.androidbrowserhelper.trusted.WebViewFallbackActivity"
-            android:configChanges="orientation|screenSize" />
-
-        <!-- Notifications from the page appear as this app's own. -->
-        <service
-            android:name="com.google.androidbrowserhelper.trusted.DelegationService"
-            android:enabled="true"
-            android:exported="true">
-            <meta-data
-                android:name="android.support.customtabs.trusted.SMALL_ICON"
-                android:resource="@mipmap/ic_launcher" />
+        <!-- Home-screen widget: the newest chats, like a messenger's. -->
+        <receiver
+            android:name=".ChatWidget"
+            android:exported="false"
+            android:label="@string/widgetName">
             <intent-filter>
-                <action android:name="android.support.customtabs.trusted.TRUSTED_WEB_ACTIVITY_SERVICE" />
-                <category android:name="android.intent.category.DEFAULT" />
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="app.mimi.android.WIDGET_REFRESH" />
             </intent-filter>
-        </service>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/chat_widget_info" />
+        </receiver>
+
+        <service
+            android:name=".ChatWidgetService"
+            android:exported="false"
+            android:permission="android.permission.BIND_REMOTEVIEWS" />
+
+        <service
+            android:name=".SyncJob"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 </manifest>

@@ -1,6 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="appName">Mimi</string>
+    <string name="widgetName">แชต Mimi</string>
+    <string name="widgetDescription">แชตล่าสุดกับ agent ของคุณ</string>
+    <string name="widgetEmpty">ยังไม่มีแชต · แตะเพื่อเปิด Mimi</string>
+    <string name="widgetSignIn">เปิด Mimi แล้วเข้าสู่ระบบ เพื่อให้ widget แสดงแชต</string>
+    <string name="channelReplies">คำตอบใหม่</string>
+    <string name="permissionHint">ยังไม่ได้อนุญาตไมค์/กล้อง: เปิดได้ที่ ตั้งค่า &gt; แอป &gt; Mimi &gt; สิทธิ์</string>
+    <string name="saved">บันทึกแล้ว: %1$s</string>
     <color name="background">#141618</color>
     <style name="Theme.Mimi" parent="android:Theme.Material.NoActionBar">
         <item name="android:windowBackground">@color/background</item>

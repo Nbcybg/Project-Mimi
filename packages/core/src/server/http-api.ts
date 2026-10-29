@@ -47,6 +47,8 @@ export interface HttpApiDeps {
   ): Promise<WebhookReply | null>;
   /** Folder of backup files offered for download. */
   backupsDir?: string;
+  /** The newest chats for the Android home-screen widget; `since` (ISO time) counts unread replies. */
+  widgetChats?(since: string | null): unknown;
 }
 
 export function toAttachmentView(attachment: Attachment): AttachmentView {
@@ -184,6 +186,8 @@ export async function handleHttpApi(
         'cache-control': 'no-store',
       });
       fs.createReadStream(file).pipe(response);
+    } else if (resource === 'widget' && request.method === 'GET' && rest.length === 0 && deps.widgetChats) {
+      sendJson(response, 200, deps.widgetChats(url.searchParams.get('since')));
     } else if (resource === 'files' && request.method === 'GET' && rest.length === 1) {
       const attachment = deps.attachments.get(rest[0]!);
       const data = attachment && deps.attachments.read(attachment.id);

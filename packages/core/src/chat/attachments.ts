@@ -20,6 +20,8 @@ export interface Attachment {
   size: number;
   /** What the models can read of the file: a description, a transcript or its text. */
   text: string;
+  /** The user's own note about this file, kept apart from what the models read of it. */
+  caption: string;
   /** SHA-256 of the bytes; the same file uploaded twice shares what the models read. */
   hash: string | null;
   createdAt: string;
@@ -33,6 +35,7 @@ interface AttachmentRow {
   mime: string;
   size: number;
   text: string;
+  caption: string | null;
   hash: string | null;
   created_at: string;
 }
@@ -45,6 +48,7 @@ const toAttachment = (row: AttachmentRow): Attachment => ({
   mime: row.mime,
   size: row.size,
   text: row.text,
+  caption: row.caption ?? '',
   hash: row.hash,
   createdAt: row.created_at,
 });
@@ -96,7 +100,7 @@ export class AttachmentStore {
     this.dir = dir;
   }
 
-  save(file: { name: string; mime: string; data: Buffer }): Attachment {
+  save(file: { name: string; mime: string; data: Buffer; caption?: string }): Attachment {
     if (file.data.length === 0) throw new Error('The file is empty.');
     if (file.data.length > MAX_ATTACHMENT_BYTES) throw new Error('The file is larger than 25 MB.');
     const id = randomUUID();
@@ -106,11 +110,12 @@ export class AttachmentStore {
     // Only the last path segment, without characters a file system or a header would trip over.
     const base = file.name.split(/[\\/]/).pop() ?? '';
     const name = base.replace(/[:*?"<>|\u0000-\u001f]/g, '_').trim().slice(0, 200) || 'file';
+    const caption = (file.caption ?? '').trim().slice(0, 500);
     fs.mkdirSync(this.dir, { recursive: true });
     fs.writeFileSync(path.join(this.dir, id), file.data);
     this.db
-      .prepare(`INSERT INTO attachments (id, kind, name, mime, size, hash) VALUES (?, ?, ?, ?, ?, ?)`)
-      .run(id, kindOf(mime), name, mime, file.data.length, hash);
+      .prepare(`INSERT INTO attachments (id, kind, name, mime, size, caption, hash) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+      .run(id, kindOf(mime), name, mime, file.data.length, caption, hash);
     return this.get(id)!;
   }
 
@@ -152,8 +157,8 @@ export class AttachmentStore {
     fs.mkdirSync(this.dir, { recursive: true });
     fs.writeFileSync(path.join(this.dir, copy), data);
     this.db
-      .prepare(`INSERT INTO attachments (id, kind, name, mime, size, text, hash) VALUES (?, ?, ?, ?, ?, ?, ?)`)
-      .run(copy, source.kind, source.name, source.mime, source.size, source.text, source.hash);
+      .prepare(`INSERT INTO attachments (id, kind, name, mime, size, text, caption, hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(copy, source.kind, source.name, source.mime, source.size, source.text, source.caption, source.hash);
     return copy;
   }
 
@@ -252,7 +257,13 @@ export function renderAttachment(attachment: Attachment, maxChars = 0): string {
     maxChars > 0 && full.length > maxChars
       ? `${full.slice(0, maxChars)}\n[file cut here: ${full.length - maxChars} more characters]`
       : full;
-  return `<attachment id="${attachment.id}" kind="${attachment.kind}" name="${attachment.name}">\n${body}\n</attachment>`;
+  const caption = attachment.caption
+    .trim()
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  const note = caption ? `<caption>${caption}</caption>\n` : '';
+  return `<attachment id="${attachment.id}" kind="${attachment.kind}" name="${attachment.name}">\n${note}${body}\n</attachment>`;
 }
 
 /** Renders every file of one message, sharing a total budget fairly, so none is starved. */
@@ -267,12 +278,18 @@ export function isUnreadableText(text: string): boolean {
   return /^\(this \w+ could not be read:/.test(text);
 }
 
-/** Drops the blocks of attachments the model already receives as bytes. */
+/**
+ * Drops the blocks of attachments the model already receives as bytes. A caption
+ * the user wrote stays: it is their own words, not a second description of the file.
+ */
 export function stripAttachmentBlocks(text: string, ids: ReadonlySet<string>): string {
   if (ids.size === 0) return text;
   const names = [...ids].map((id) => id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
   return text
-    .replace(new RegExp(`\\n*<attachment id="(?:${names})"[^>]*>[\\s\\S]*?<\\/attachment>`, 'g'), '')
+    .replace(new RegExp(`\\n*<attachment id="(?:${names})"[^>]*>[\\s\\S]*?<\\/attachment>`, 'g'), (block) => {
+      const caption = /<caption>([\s\S]*?)<\/caption>/.exec(block);
+      return caption ? `\n<caption>${caption[1]}</caption>` : '';
+    })
     .trim();
 }
 

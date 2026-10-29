@@ -24,6 +24,7 @@ const MIGRATIONS = [
   '016-speech.sql',
   '017-attachment-hash.sql',
   '018-session-read.sql',
+  '019-attachment-caption.sql',
 ];
 
 function migrate(db: Db): void {

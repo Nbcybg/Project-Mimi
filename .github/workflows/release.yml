@@ -28,7 +28,8 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci --no-audit --no-fund
-      # When the runner image has NSIS (makensis), the installer goes out beside the zip.
+      # NSIS (makensis) makes the installer that goes out beside the zip.
+      - run: choco install nsis -y --no-progress
       - run: npm run build:win
       - uses: actions/upload-artifact@v4
         with:

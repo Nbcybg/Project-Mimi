@@ -77,7 +77,7 @@ test('schema v14 keeps the attachments that were there and accepts videos', () =
   first.pragma('user_version = 13');
   first.close();
   const again = openDb(file);
-  assert.equal(again.pragma('user_version', { simple: true }), 18);
+  assert.equal(again.pragma('user_version', { simple: true }), 19);
   assert.deepEqual(again.prepare(`SELECT id, kind, text FROM attachments`).all(), [{ id: 'a', kind: 'image', text: 'แมว' }]);
   assert.equal((again.prepare(`SELECT hash FROM attachments`).get() as { hash: string | null }).hash, null);
   again.prepare(`INSERT INTO attachments (id, kind, name, mime, size) VALUES ('b', 'video', 'x.mp4', 'video/mp4', 1)`).run();

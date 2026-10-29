@@ -76,6 +76,8 @@ export interface AttachmentView {
   size: number;
   /** What the models were given: image description, voice transcript, document text. */
   text: string;
+  /** The user's own note about this file, when they wrote one. */
+  caption: string;
 }
 
 /** One entry of a chat as a client shows it. */

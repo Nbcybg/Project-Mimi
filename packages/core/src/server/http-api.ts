@@ -54,8 +54,8 @@ export interface HttpApiDeps {
 }
 
 export function toAttachmentView(attachment: Attachment): AttachmentView {
-  const { id, kind, name, mime, size, text } = attachment;
-  return { id, kind, name, mime, size, text };
+  const { id, kind, name, mime, size, text, caption } = attachment;
+  return { id, kind, name, mime, size, text, caption };
 }
 
 class HttpError extends Error {
@@ -170,10 +170,20 @@ export async function handleHttpApi(
 
     if (resource === 'upload' && request.method === 'POST') {
       const data = await readBody(request, MAX_ATTACHMENT_BYTES);
+      const rawCaption = request.headers['x-mimi-caption'];
+      let caption = '';
+      if (typeof rawCaption === 'string') {
+        try {
+          caption = decodeURIComponent(rawCaption);
+        } catch {
+          caption = rawCaption;
+        }
+      }
       const attachment = deps.attachments.save({
         name: url.searchParams.get('name') ?? 'file',
         mime: String(request.headers['content-type'] ?? 'application/octet-stream').split(';')[0]!.trim(),
         data,
+        caption,
       });
       sendJson(response, 200, toAttachmentView(attachment));
     } else if (resource === 'backups' && request.method === 'GET' && rest.length === 1 && deps.backupsDir) {

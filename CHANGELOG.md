@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### 0.7.2-prototype
+
+- Each picture in a batch can carry its own caption ("คำบรรยายรูปนี้"): it shows
+  over the picture in the chat and reaches the model with the file, apart from
+  the AI's description (database schema 19, upload header `X-Mimi-Caption`).
+- Staged files are uploaded when the message is sent, so captions can be
+  written first.
+- Smoother typing: the chat box redraws once per frame instead of on every key.
+- The language buttons are only in Settings, no longer repeated in each chat's
+  settings.
+
 ### 0.7.1-prototype
 
 - "Push mail": watches the connected Google and Microsoft accounts and any IMAP /

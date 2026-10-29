@@ -267,6 +267,8 @@
     historyKey: null,
     historyIds: [],
     staged: [],
+    /** True while staged files are being uploaded on send. */
+    sending: false,
     pendingPerms: new Map(),
     highlight: null,
     lastSent: null,
@@ -656,9 +658,10 @@
     if (images.length > 0) {
       const album = el('div', `album${images.length === 1 ? ' one' : ''}`);
       for (const file of images) {
+        const shot = el('div', 'shot');
         const image = el('img');
         image.alt = file.name;
-        image.title = file.text ? `AI เห็นว่า: ${file.text.slice(0, 500)}` : file.name;
+        image.title = file.text ? `AI อธิบายรูป: ${file.text.slice(0, 500)}` : file.name;
         blobUrl(`/api/files/${file.id}`)
           .then((url) => {
             image.src = url;
@@ -669,7 +672,9 @@
         image.onload = () => {
           if (logBox.scrollHeight - logBox.scrollTop - logBox.clientHeight < image.height + 220) scrollDown();
         };
-        album.append(image);
+        shot.append(image);
+        if (file.caption) shot.append(el('div', 'cap', file.caption));
+        album.append(shot);
       }
       nodes.push(album);
     }
@@ -1443,15 +1448,6 @@
 
       nodes.push(promptSwitch());
 
-      const languages = el('div');
-      languages.append(el('h3', '', t('setting.language')));
-      const languageRow = el('div', 'seg');
-      for (const { code, name } of window.MimiI18n.languages()) {
-        languageRow.append(button(window.MimiI18n.current() === code ? 'on' : '', name, () => window.MimiI18n.set(code)));
-      }
-      languages.append(languageRow);
-      nodes.push(languages);
-
       nodes.push(
         button('btn danger', 'ลบแชตนี้', () => {
           if (confirm(`ลบแชต "${chatTitle(chat)}" ?\nประวัติจะไม่แสดงอีก (ความจำที่บันทึกไว้แล้วยังอยู่)`)) {
@@ -1477,6 +1473,18 @@
     input.style.height = 'auto';
     input.style.height = `${Math.min(input.scrollHeight, 180)}px`;
   }
+  let composing = false;
+  let composerFrame = 0;
+  /** One draw per frame instead of one per key: typing stays smooth. */
+  function refreshComposer() {
+    if (composerFrame) cancelAnimationFrame(composerFrame);
+    composerFrame = requestAnimationFrame(() => {
+      composerFrame = 0;
+      autosize();
+      renderMention();
+      markEmpty();
+    });
+  }
   function renderHints() {
     const hints = $('hints');
     const speaking = window.MimiHooks?.voice?.hint();
@@ -1498,15 +1506,28 @@
         const remove = el('u', '', '×');
         remove.onclick = (event) => {
           event.stopPropagation();
+          if (entry.url) URL.revokeObjectURL(entry.url);
           state.staged = state.staged.filter((other) => other !== entry);
           renderStaged();
         };
         if (entry.url) {
+          const item = el('div', 'staged-item');
           const thumb = el('div', `thumb${entry.uploading ? ' wait' : ''}`);
           thumb.style.backgroundImage = `url("${entry.url}")`;
           thumb.title = entry.file.name;
           thumb.append(remove);
-          return thumb;
+          // Each picture has its own caption; the box below the chat stays the message as a whole.
+          const caption = el('input', 'capin');
+          caption.type = 'text';
+          caption.maxLength = 500;
+          caption.value = entry.caption || '';
+          caption.placeholder = 'คำบรรยายรูปนี้ (ไม่ใส่ก็ได้)';
+          caption.setAttribute('aria-label', caption.placeholder);
+          caption.oninput = () => {
+            entry.caption = caption.value;
+          };
+          item.append(thumb, caption);
+          return item;
         }
         const chip = el('div', `filechip${entry.uploading ? ' wait' : ''}`);
         const info = el('div');
@@ -1516,7 +1537,8 @@
       }),
     );
   }
-  async function stageFile(file) {
+  /** Stages a file on this device; the upload waits for Send, so a caption can be written first. */
+  async function stageFile(file, options) {
     if (file.size > 25 * 1024 * 1024) return toast('ไฟล์ใหญ่เกินไป', `${file.name} เกิน 25 MB`, true);
     if (state.staged.length >= 20) return toast('แนบไฟล์ได้สูงสุด 20 ไฟล์', 'ส่งข้อความนี้ก่อน แล้วค่อยแนบชุดถัดไป', true);
     const isImage = file.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|heic|heif|avif)$/i.test(file.name);
@@ -1529,24 +1551,57 @@
     if (/^image\/(heic|heif|avif)$/i.test(file.type) || /\.(heic|heif|avif)$/i.test(file.name)) {
       toast('รูปชนิดนี้อาจไม่แสดงโดยตรง', 'โมเดลอาจเห็นได้เพียงคำอธิบายของรูป ไม่ใช่ตัวรูป', true);
     }
-    const entry = { file, id: null, uploading: true, url: file.type.startsWith('image/') ? URL.createObjectURL(file) : null };
+    const entry = {
+      file,
+      id: null,
+      uploading: false,
+      caption: '',
+      captionSent: '',
+      url: isImage ? URL.createObjectURL(file) : null,
+    };
     state.staged.push(entry);
     renderStaged();
-    try {
-      const response = await api(`/api/upload?name=${encodeURIComponent(file.name)}`, {
-        method: 'POST',
-        headers: { 'content-type': file.type || 'application/octet-stream' },
-        body: file,
+    // Straight from the camera: the cursor is in this picture's caption, ready to type or skip.
+    if (options && options.caption && entry.url) {
+      requestAnimationFrame(() => {
+        const box = $('staged');
+        const fields = box.querySelectorAll('.capin');
+        const last = fields[fields.length - 1];
+        if (last) last.focus();
       });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
-      entry.id = result.id;
-      entry.uploading = false;
-    } catch (error) {
-      state.staged = state.staged.filter((other) => other !== entry);
-      toast('อัปโหลดไม่สำเร็จ', `${file.name}: ${error.message}`, true);
     }
+    return entry;
+  }
+  /** Uploads the staged files that have no id yet; returns one message per failure. */
+  async function uploadStaged(entries) {
+    const failures = [];
+    await Promise.all(
+      entries.map(async (entry) => {
+        const caption = (entry.caption || '').trim();
+        if (entry.id && entry.captionSent === caption) return;
+        entry.uploading = true;
+        renderStaged();
+        try {
+          const headers = { 'content-type': entry.file.type || 'application/octet-stream' };
+          if (caption) headers['x-mimi-caption'] = encodeURIComponent(caption);
+          const response = await api(`/api/upload?name=${encodeURIComponent(entry.file.name)}`, {
+            method: 'POST',
+            headers,
+            body: entry.file,
+          });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+          entry.id = result.id;
+          entry.captionSent = caption;
+        } catch (error) {
+          failures.push(`${entry.file.name}: ${error.message}`);
+        } finally {
+          entry.uploading = false;
+        }
+      }),
+    );
     renderStaged();
+    return failures;
   }
   /** Your message as sent; shown right away so the input "confirms" itself on screen, even before the server echoes it. */
   let echoSeq = 0;
@@ -1560,6 +1615,7 @@
         mime: entry.file.type,
         size: entry.file.size,
         text: '',
+        caption: (entry.caption || '').trim(),
       }));
     const message = {
       id: `pending-${++echoSeq}`,
@@ -1595,31 +1651,46 @@
     if (state.historyKey && !state.historyIds.includes(message.id)) state.historyIds.push(message.id);
     return true;
   }
-  function sendMessage() {
-    if (!state.chat || !state.latest) return;
-    if (state.staged.some((entry) => entry.uploading)) return toast('รอสักครู่', 'กำลังอัปโหลดไฟล์อยู่');
+  async function sendMessage() {
+    if (!state.chat || !state.latest || state.sending) return;
     const text = input.value.trim();
-    const attachments = state.staged.filter((entry) => entry.id).map((entry) => entry.id);
-    if (!text && attachments.length === 0) return;
+    const staged = [...state.staged];
+    if (!text && staged.length === 0) return;
     if (!socket || socket.readyState !== WebSocket.OPEN) return toast('ยังไม่ได้เชื่อมต่อ', 'ข้อความยังอยู่ในช่องพิมพ์ ลองส่งอีกครั้ง', true);
-    const sentStaged = state.staged;
-    send({ type: 'chat-send', chatId: state.chat.id, text, attachments, ...(compose.replyTo ? { replyTo: compose.replyTo.id } : {}) });
-    state.lastSent = text;
-    echoUserMessage(state.chat.id, text, sentStaged);
-    input.value = '';
-    compose.replyTo = null;
-    if (window.MimiHooks && window.MimiHooks.chat) window.MimiHooks.chat.onSent();
-    window.MimiHooks?.notify?.chatSound('sent');
-    autosize();
-    state.staged = [];
-    renderStaged();
-    markEmpty();
-    $('mention').hidden = true;
-    if (window.Notification && Notification.permission === 'default') Notification.requestPermission();
+    state.sending = true;
+    try {
+      // Nothing reached the server until now: send is what uploads, caption and all.
+      const failures = await uploadStaged(staged);
+      if (failures.length > 0) return toast('อัปโหลดไม่สำเร็จ', failures[0], true);
+      const attachments = staged.filter((entry) => entry.id).map((entry) => entry.id);
+      if (!text && attachments.length === 0) return;
+      if (!socket || socket.readyState !== WebSocket.OPEN) return toast('ยังไม่ได้เชื่อมต่อ', 'ข้อความยังอยู่ในช่องพิมพ์ ลองส่งอีกครั้ง', true);
+      send({ type: 'chat-send', chatId: state.chat.id, text, attachments, ...(compose.replyTo ? { replyTo: compose.replyTo.id } : {}) });
+      state.lastSent = text;
+      echoUserMessage(state.chat.id, text, staged);
+      input.value = '';
+      compose.replyTo = null;
+      if (window.MimiHooks && window.MimiHooks.chat) window.MimiHooks.chat.onSent();
+      window.MimiHooks?.notify?.chatSound('sent');
+      autosize();
+      const sent = new Set(staged);
+      for (const entry of staged) if (entry.url) URL.revokeObjectURL(entry.url);
+      state.staged = state.staged.filter((entry) => !sent.has(entry));
+      renderStaged();
+      markEmpty();
+      $('mention').hidden = true;
+      if (window.Notification && Notification.permission === 'default') Notification.requestPermission();
+    } finally {
+      state.sending = false;
+    }
   }
   /** In a group: offers the members while the user types "@na…". */
   function renderMention() {
     const box = $('mention');
+    if (!state.chat || state.chat.kind !== 'group' || !input.value.includes('@')) {
+      box.hidden = true;
+      return;
+    }
     const before = input.value.slice(0, input.selectionStart);
     const match = /(^|\s)@([\p{L}\p{M}\p{N}_-]*)$/u.exec(before);
     if (!match || !state.chat || state.chat.kind !== 'group') {
@@ -1648,10 +1719,18 @@
   function markEmpty() {
     $('box').classList.toggle('empty', !input.value.trim() && state.staged.length === 0);
   }
-  input.addEventListener('input', () => {
-    autosize();
-    renderMention();
-    markEmpty();
+  input.addEventListener('input', (event) => {
+    // Thai (and other) IMEs fire input for every syllable while composing; drawing the
+    // composer mid-composition is what makes typing feel like it stutters.
+    if (composing || event.isComposing) return;
+    refreshComposer();
+  });
+  input.addEventListener('compositionstart', () => {
+    composing = true;
+  });
+  input.addEventListener('compositionend', () => {
+    composing = false;
+    refreshComposer();
   });
   // Search is in the chat list's side pane on desktop; in mobile mode it is a button at the top.
   $('toggle-rail').before(button('btn ghost icon', '⌕', () => $('open-search').click(), t('top.search')));
@@ -1666,7 +1745,7 @@
       mention.hidden = true;
       if (!input.value && !$('stop').hidden) send({ type: 'abort', chatId: state.chat && state.chat.id });
     }
-    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && !composing && event.keyCode !== 229) {
       event.preventDefault();
       sendMessage();
     }
@@ -1688,7 +1767,7 @@
   cameraInput.hidden = true;
   $('file-input').after(cameraInput);
   cameraInput.onchange = (event) => {
-    [...event.target.files].forEach(stageFile);
+    [...event.target.files].forEach((file) => stageFile(file, { caption: true }));
     event.target.value = '';
   };
   if (window.matchMedia('(pointer: coarse)').matches) $('attach').title = t('composer.attachTouch');
@@ -2597,6 +2676,20 @@
         button('btn', 'ออกจากระบบ', () => void signOut()),
       );
       stack.append(account);
+
+      // This changes the app's own text, not the language the agents answer in: they read
+      // the conversation and their system prompt for that.
+      const language = el('div', 'panel form');
+      language.append(
+        el('h3', '', t('setting.language')),
+        el('p', 'hint', 'ภาษาของหน้าจอและปุ่มในแอปเท่านั้น — agent ดูจากข้อความที่คุยและ system prompt เอง ไม่ได้ใช้ค่านี้เลือกภาษา'),
+      );
+      const languageRow = el('div', 'seg');
+      for (const { code, name } of window.MimiI18n.languages()) {
+        languageRow.append(button(window.MimiI18n.current() === code ? 'on' : '', name, () => window.MimiI18n.set(code)));
+      }
+      language.append(languageRow);
+      stack.append(language);
 
       // The user's own profile, shared per agent (feature-profile.js).
       const profile = el('div', 'panel form');

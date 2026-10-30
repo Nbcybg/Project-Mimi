@@ -6,7 +6,16 @@ import type { AgentEvent, ConnectorRuntime, HistoryMessage, Notification, Workfl
 import { AgentCatalog } from './agents/loader.ts';
 import type { AppSettings } from './app/app-settings.ts';
 import { SecretStore } from './app/secrets.ts';
-import { type AttachmentKind, AttachmentStore, ingestAttachments, MAX_ATTACHMENT_BYTES, modelAnswer, PROMPTS } from './chat/attachments.ts';
+import {
+  type AttachmentKind,
+  AttachmentStore,
+  audioInstructions,
+  audioPrompt,
+  ingestAttachments,
+  MAX_ATTACHMENT_BYTES,
+  modelAnswer,
+  PROMPTS,
+} from './chat/attachments.ts';
 import { ToolFileExecutor } from './chat/tool-files.ts';
 import { ChatStore } from './chat/chat-store.ts';
 import { ChatEngine } from './chat/engine.ts';
@@ -810,12 +819,19 @@ export async function createCore(
       const capability = audio ? 'transcript' : 'vision';
       const ref = models.resolve(capability, agent.models);
       const info = models.info(ref);
+      const language = audio ? options.app?.ui['mimi.lang'] : undefined;
       const prompt = instruction
         ? `${instruction}\n\nOutput only the result.`
-        : PROMPTS[audio ? 'audio' : mime.startsWith('video/') ? 'video' : mime === 'application/pdf' ? 'pdf' : 'image'];
+        : audio
+          ? audioPrompt(language)
+          : PROMPTS[mime.startsWith('video/') ? 'video' : mime === 'application/pdf' ? 'pdf' : 'image'];
+      // A user-written instruction (an extract_file node) may ask for another language; only
+      // the built-in reading pins the language of the app.
+      const instructions = audio && !instruction ? audioInstructions(language) : undefined;
       const startedAt = Date.now();
       const result = await generateText({
         model: await models.languageModel(ref),
+        ...(instructions ? { instructions } : {}),
         messages: [{ role: 'user', content: [{ type: 'text', text: prompt }, { type: 'file', mediaType: mime, data, filename: name }] }],
         providerOptions: providerOptionsFor(info),
         ...ref.params,

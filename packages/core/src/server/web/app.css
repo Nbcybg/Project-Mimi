@@ -119,6 +119,8 @@ html[data-mode="mobile"] .solo #back[data-unread]::after { top: -2px; right: -2p
 .note.bad { color: var(--bad); }
 .note.use { align-self: flex-start; font: 11px var(--mono); color: var(--faint); margin-left: 44px; }
 
+/* A long chat keeps hundreds of rows: only the ones near the viewport are laid out. */
+#log-inner > .gmsg, #log-inner > .row-user { content-visibility: auto; contain-intrinsic-size: auto 120px; }
 .row-user { display: flex; justify-content: flex-end; gap: 8px; align-items: flex-end; }
 .row-user .col { max-width: 78%; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; min-width: 0; }
 .user { background: #2a2622; border: 1px solid #3a3129; padding: 8px 13px; border-radius: 14px 14px 4px 14px; white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100%; }
@@ -229,9 +231,12 @@ html[data-mode="mobile"] .solo #back[data-unread]::after { top: -2px; right: -2p
 .ic.stop { background: var(--bad); color: #1a1010; }
 .ic.rec { background: rgba(238,128,121,.18); color: var(--bad); }
 #input { flex: 1; resize: none; border: 0; outline: 0; background: transparent; padding: 7px 4px; min-height: 34px; max-height: 180px; min-width: 0; font-size: var(--chat-fs); line-height: var(--chat-lh); text-rendering: optimizeSpeed; -webkit-text-size-adjust: 100%; }
+/* Android zooms the page when a field under 16px takes focus; keep the composer at 16px
+   there (larger text settings still win) so the keyboard does not resize the page. */
+html[data-mode="mobile"] #input { font-size: max(16px, var(--chat-fs)); }
 /* Thai has no spaces between words: breaking anywhere keeps WebView from running its
    dictionary on every keystroke. word-break is much faster than line-break on Android. */
-#input.th { word-break: break-all; overflow-wrap: anywhere; }
+#input.th { word-break: break-all; }
 .hints { display: flex; gap: 14px; font-size: 11.5px; color: var(--faint); padding: 5px 4px 0; flex-wrap: wrap; }
 .hints .rec { color: var(--bad); }
 .banner { display: flex; gap: 12px; align-items: center; justify-content: center; padding: 10px; border: 1px dashed var(--line); border-radius: 12px; color: var(--muted); font-size: 13px; }
@@ -957,6 +962,19 @@ html[data-mode="mobile"] .solo .line #input::placeholder { color: rgba(255,255,2
 html[data-mode="mobile"] .solo .line #send, html[data-mode="mobile"] .solo .line #stop { order: 4; position: relative; z-index: 2; width: 40px; height: 40px; margin: 0 4px 4px -52px; border-radius: 50%; }
 html[data-mode="mobile"] .solo .line #emoji, html[data-mode="mobile"] .solo .line .camera { display: none; }
 html[data-mode="mobile"] .solo #hints { display: none; }
+/* While the message box has focus the keyboard owns the compositor: the character holds
+   its last frame and its shadow is dropped. In mobile character mode the glass buttons also
+   stop re-blurring the stage behind them, so Thai typing keeps up. */
+body:has(#input:focus) .stage .figure { animation: none !important; filter: none; }
+html[data-mode="mobile"] .solo:has(#input:focus) #mic,
+html[data-mode="mobile"] .solo:has(#input:focus) #attach,
+html[data-mode="mobile"] .solo:has(#input:focus) #back,
+html[data-mode="mobile"] .solo:has(#input:focus) #toggle-rail,
+html[data-mode="mobile"] .solo:has(#input:focus) .typing-chip,
+html[data-mode="mobile"] .solo:has(#input:focus) .pinbar {
+  -webkit-backdrop-filter: none; backdrop-filter: none;
+  background: rgba(24,26,31,.94);
+}
 
 /* ---------- the mic: hold to talk, tap for hands-free ---------- */
 #mic { touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }

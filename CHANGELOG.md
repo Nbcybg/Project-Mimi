@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### 0.7.7-prototype
+
+- Voice messages and `read_document` recordings get the app's language as a system
+  instruction, not only in the question, so MiMo and other Chinese-biased models keep the
+  transcript in Thai/English. The web client also remembers the language it guessed on the
+  first load and hands it to the server, which is what was missing on existing installs.
+- Typing Thai on a phone is smoother: the character stops drawing (and drops its shadow)
+  while the message box has focus, the glass buttons stop blurring over it, the box stays at
+  16px so Android no longer zooms on focus, the Thai line-break rule is set at load, and
+  messages far off screen are only laid out when they scroll into view.
+
 ### 0.7.6-prototype
 
 - Sounds: every app sound plays at 30 % volume. On Android the three chat sounds are bundled

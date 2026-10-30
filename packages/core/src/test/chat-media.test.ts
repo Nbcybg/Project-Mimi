@@ -5,7 +5,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import type { WorkflowView } from '@mimi/shared';
 import { MockLanguageModelV4 } from 'ai/test';
-import { AttachmentStore, audioPrompt, ingestAttachments, modelAnswer, PROMPTS } from '../chat/attachments.ts';
+import { AttachmentStore, audioInstructions, audioPrompt, ingestAttachments, modelAnswer, PROMPTS } from '../chat/attachments.ts';
 import { filesMatch } from '../core.ts';
 import { openDb } from '../db/db.ts';
 import { UsageLogger } from '../usage/logger.ts';
@@ -103,6 +103,55 @@ test('a model preset sampling params reach the transcript call', async () => {
   );
   assert.equal(read!.text, 'สวัสดีครับ');
   assert.deepEqual(seen[0], { reasoning: 'none', temperature: 0.2 });
+  db.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('a recording is transcribed with the app language in the system instruction too', async () => {
+  const seen: string[] = [];
+  const model = new MockLanguageModelV4({
+    doGenerate: async (options) => {
+      seen.push(JSON.stringify(options.prompt));
+      return {
+        content: [{ type: 'text', text: 'สวัสดีครับ' }],
+        finishReason: { unified: 'stop', raw: undefined },
+        usage: {
+          inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: undefined },
+          outputTokens: { total: 1, text: 1, reasoning: undefined },
+        },
+        warnings: [],
+      };
+    },
+  });
+  const db = openDb(':memory:');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mimi-language-'));
+  const store = new AttachmentStore(db, dir);
+  const ref = { provider: 'test', model: 'ear' };
+  const models = {
+    resolve: () => ref,
+    info: () => ({
+      ref,
+      name: 'ear',
+      npm: '@ai-sdk/test',
+      baseURL: undefined,
+      contextLimit: 1000,
+      outputLimit: undefined,
+      cost: null,
+      imageInput: false,
+      toolCall: true,
+      textOutput: true,
+      options: {},
+    }),
+    languageModel: async () => model,
+  };
+  const audio = store.save({ name: 'voice.wav', mime: 'audio/wav', data: wav(1600, 3000) });
+  await ingestAttachments(
+    { store, models, usage: new UsageLogger(db), language: () => 'th' },
+    { ids: [audio.id], agent: makeAgent(), traceId: 't' },
+  );
+  assert.match(seen[0]!, /"role":"system"/);
+  assert.match(seen[0]!, /The speaker speaks Thai/);
+  assert.match(seen[0]!, /never Chinese/);
   db.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -450,6 +499,10 @@ test('a recording is transcribed in the language of the app', () => {
   assert.match(audioPrompt('th'), /Thai script/);
   assert.match(audioPrompt('th'), /never Chinese/);
   assert.match(audioPrompt('en', true), /English/);
-  // No language known: the plain prompt, as before.
+  // No language known: the plain prompt, as before, but still never Chinese by guessing.
   assert.equal(audioPrompt(undefined), PROMPTS.audio);
+  assert.match(PROMPTS.audio, /never switch to another language/);
+  assert.match(audioInstructions('th'), /Thai script/);
+  assert.match(audioInstructions('th'), /never Chinese/);
+  assert.match(audioInstructions(undefined), /language actually spoken/);
 });

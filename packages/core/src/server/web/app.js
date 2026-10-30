@@ -1748,13 +1748,14 @@
    * looks every word break up in a dictionary - cannot do fast on a phone.
    */
   const THAI = /[฀-๿]/;
+  // A Thai app gets the fast line-break rule from the start, not in the middle of the first word.
+  if (document.documentElement.lang === 'th') input.classList.add('th');
   function autosize() {
     input.style.height = 'auto';
     input.style.height = `${Math.min(input.scrollHeight, 180)}px`;
   }
   let composing = false;
   let composerTimer = 0;
-  window.__mimiComposing = false;
   /**
    * Typing must not fight the IME. The empty/send button state is O(1); measuring the
    * box, choosing the Thai line-break rule and the @-list wait until a real pause. Thai
@@ -2315,8 +2316,6 @@
     $('box').classList.toggle('empty', empty);
   }
   input.addEventListener('input', (event) => {
-    // The 3D character leaves the next frames to the keyboard (feature-vrm.js reads this).
-    window.__mimiKeyAt = performance.now();
     // Thai has no spaces: break anywhere as soon as the first Thai letter appears, once,
     // so WebView never runs its word dictionary while the user types.
     if (!input.classList.contains('th') && THAI.test(event.data || input.value)) input.classList.add('th');
@@ -2327,18 +2326,15 @@
   });
   input.addEventListener('compositionstart', () => {
     composing = true;
-    window.__mimiComposing = true;
   });
   input.addEventListener('compositionend', () => {
     composing = false;
-    window.__mimiComposing = false;
     refreshComposer();
   });
   // A keyboard that loses focus mid-composition may never send compositionend.
   input.addEventListener('blur', () => {
     if (!composing) return;
     composing = false;
-    window.__mimiComposing = false;
     refreshComposer();
   });
   // Search is in the chat list's side pane on desktop; in mobile mode it is a button at the top.

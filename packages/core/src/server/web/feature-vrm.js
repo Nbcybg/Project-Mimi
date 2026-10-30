@@ -759,20 +759,14 @@ function liveStart() {
   live.clock = new THREE.Timer();
   live.observer = new ResizeObserver(() => liveResize());
 
-  let lastDraw = 0;
-  const tick = (now = performance.now()) => {
+  const tick = () => {
     requestAnimationFrame(tick);
     if (!canvas.isConnected || document.hidden || !live.vrm) return;
-    // While a text field has the keyboard the character redraws at ~8 fps: typing (and
-    // holding Backspace) stays smooth on a phone, which cannot do both at full rate.
+    // While a text field has the keyboard the character holds its last frame: the IME
+    // owns the compositor then, and a phone cannot draw both at full rate (Thai sends
+    // several input events per syllable).
     const field = document.activeElement;
-    const typing = field && (field.tagName === 'TEXTAREA' || field.tagName === 'INPUT');
-    // While an IME is composing (Thai sends several events per syllable) the character
-    // stops drawing at all; just after a key it leaves the next frames to the keyboard.
-    if (typing && window.__mimiComposing) return;
-    if (typing && now - (window.__mimiKeyAt || 0) < 500) return;
-    if (typing && now - lastDraw < 120) return;
-    lastDraw = now;
+    if (field && (field.tagName === 'TEXTAREA' || field.tagName === 'INPUT')) return;
     live.clock.update();
     const delta = Math.min(live.clock.getDelta(), 0.1);
     const t = live.clock.getElapsed();

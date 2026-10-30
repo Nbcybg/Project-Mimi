@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### 0.7.8-prototype
+
+- Chat: room settings sync across devices, a go-to-bottom button, and permission notifications.
+- Triggers: schedule times are shown in the local time zone, not UTC.
+
 ### 0.7.7-prototype
 
 - Themes: a warm rose / plum palette with light and dark modes (Settings → หน้าตา), and

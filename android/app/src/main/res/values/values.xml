@@ -3,8 +3,11 @@
     <string name="appName">Mimi</string>
     <string name="widgetName">แชต Mimi</string>
     <string name="widgetDescription">แชตล่าสุดกับ agent ของคุณ</string>
+    <string name="widgetTitle">ข้อความที่ยังไม่ได้อ่าน</string>
     <string name="widgetEmpty">ยังไม่มีแชต · แตะเพื่อเปิด Mimi</string>
     <string name="widgetSignIn">เปิด Mimi แล้วเข้าสู่ระบบ เพื่อให้ widget แสดงแชต</string>
+    <string name="channelConnection">การเชื่อมต่อ</string>
+    <string name="connectionText">รอข้อความใหม่จาก agent</string>
     <string name="channelReplies">คำตอบใหม่</string>
     <string name="newMessage">มีข้อความใหม่</string>
     <string name="permissionHint">ยังไม่ได้อนุญาตไมค์/กล้อง: เปิดได้ที่ ตั้งค่า &gt; แอป &gt; Mimi &gt; สิทธิ์</string>

@@ -228,7 +228,8 @@ html[data-mode="mobile"] .solo #back[data-unread]::after { top: -2px; right: -2p
 .ic.send { background: var(--accent); color: var(--accent-ink); }
 .ic.stop { background: var(--bad); color: #1a1010; }
 .ic.rec { background: rgba(238,128,121,.18); color: var(--bad); }
-#input { flex: 1; resize: none; border: 0; outline: 0; background: transparent; padding: 7px 4px; min-height: 34px; max-height: 180px; min-width: 0; font-size: var(--chat-fs); line-height: var(--chat-lh); field-sizing: content; }
+#input { flex: 1; resize: none; border: 0; outline: 0; background: transparent; padding: 7px 4px; min-height: 34px; max-height: 180px; min-width: 0; font-size: var(--chat-fs); line-height: var(--chat-lh); }
+#input.th { line-break: anywhere; }
 .hints { display: flex; gap: 14px; font-size: 11.5px; color: var(--faint); padding: 5px 4px 0; flex-wrap: wrap; }
 .hints .rec { color: var(--bad); }
 .banner { display: flex; gap: 12px; align-items: center; justify-content: center; padding: 10px; border: 1px dashed var(--line); border-radius: 12px; color: var(--muted); font-size: 13px; }
@@ -769,27 +770,8 @@ html[data-mode="mobile"] .solo #back[data-unread]::after { top: -2px; right: -2p
 /* ---------- the character stage: one-to-one chat like a character-chat app ----------
    Both modes (design/screens/8-direct.png on desktop, 11-mobile-direct.png on mobile): a night
    scene, the character in the middle, the newest messages over the lower half. */
-.solo .stage:not(.has-bg) {
-  background:
-    radial-gradient(circle at 96% 38%, rgba(250,232,160,.16) 0, rgba(250,232,160,0) 42%),
-    linear-gradient(180deg, #0e1530 0%, #18224a 48%, #121829 100%);
-}
-.solo .stage:not(.has-bg)::before {
-  content: ""; position: absolute; right: -4%; top: 14%; width: min(30%, 300px); aspect-ratio: 1; border-radius: 50%;
-  background: radial-gradient(circle at 42% 40%, #fff3c4 0%, #f4dc8a 55%, #e2c264 100%);
-  box-shadow: 0 0 70px 24px rgba(250,228,150,.16); pointer-events: none;
-}
-html[data-mode="mobile"] .solo .stage:not(.has-bg)::before { right: -14%; top: 26%; width: 42%; }
-.solo .stage:not(.has-bg)::after {
-  content: ""; position: absolute; inset: 0; pointer-events: none; opacity: .8;
-  background-image:
-    radial-gradient(1.6px 1.6px at 14% 16%, #dfe6ff 50%, transparent 51%),
-    radial-gradient(1.4px 1.4px at 34% 30%, #dfe6ff 50%, transparent 51%),
-    radial-gradient(1.6px 1.6px at 70% 12%, #dfe6ff 50%, transparent 51%),
-    radial-gradient(1.2px 1.2px at 86% 52%, #dfe6ff 50%, transparent 51%),
-    radial-gradient(1.2px 1.2px at 8% 44%, #dfe6ff 50%, transparent 51%),
-    radial-gradient(1.4px 1.4px at 52% 8%, #dfe6ff 50%, transparent 51%);
-}
+/* The night scene (moon, stars) is off for now: the stage is a plain colour until a backdrop returns. */
+.solo .stage:not(.has-bg) { background: var(--bg); }
 .solo .stage .figure { left: 0; right: 0; width: 100%; height: 94%; z-index: 1; }
 .solo .stage .figure img.fig { object-position: bottom center; opacity: 1; }
 .solo .stage .fade { position: absolute; inset: auto 0 0 0; height: 62%; z-index: 2; pointer-events: none;

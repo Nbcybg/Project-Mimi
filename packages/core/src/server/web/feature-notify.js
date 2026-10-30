@@ -83,12 +83,42 @@
     // [type, from Hz, to Hz, start s, length s, volume]
     sent: [['triangle', 520, 880, 0, 0.12, 0.14]],
     done: [['sine', 1046.5, 1046.5, 0, 0.28, 0.13], ['sine', 784, 784, 0.12, 0.42, 0.13]],
+    ask: [['sine', 784, 784, 0, 0.2, 0.13], ['sine', 988, 988, 0.16, 0.3, 0.13]],
   };
+  // The real sounds: chat_1 when the user sends, chat_2 when an agent finishes answering,
+  // chat_3 when an agent asks for permission. Decoded once; the tones above stand in until then.
+  const CHAT_FILES = { sent: '/sounds/chat_1.mp3', done: '/sounds/chat_2.mp3', ask: '/sounds/chat_3.mp3' };
+  const buffers = new Map();
+  const loading = new Set();
+  function loadSounds() {
+    if (!audio) return;
+    for (const [kind, url] of Object.entries(CHAT_FILES)) {
+      if (buffers.has(kind) || loading.has(kind)) continue;
+      loading.add(kind);
+      fetch(url)
+        .then((response) => (response.ok ? response.arrayBuffer() : Promise.reject(new Error(String(response.status)))))
+        .then((data) => audio.decodeAudioData(data))
+        .then((decoded) => buffers.set(kind, decoded))
+        .catch(() => {})
+        .finally(() => loading.delete(kind));
+    }
+  }
+  document.addEventListener('pointerdown', () => setTimeout(loadSounds, 0), { once: true, capture: true });
+  document.addEventListener('keydown', () => setTimeout(loadSounds, 0), { once: true, capture: true });
   function chatSound(kind, force = false) {
     if (!force && (!chatSoundOn() || quietNow())) return;
     unlockAudio();
     if (!audio || !CHAT_TONES[kind]) return;
     if (audio.state === 'suspended') void audio.resume();
+    loadSounds();
+    const sample = buffers.get(kind);
+    if (sample) {
+      const source = audio.createBufferSource();
+      source.buffer = sample;
+      source.connect(audio.destination);
+      source.start();
+      return;
+    }
     const start = audio.currentTime + 0.02;
     for (const [type, from, to, offset, length, volume] of CHAT_TONES[kind]) {
       const tone = audio.createOscillator();
@@ -114,11 +144,12 @@
       M().store.set(CHAT_SOUND_KEY, box.checked ? '1' : '0');
       if (box.checked) chatSound('sent', true);
     };
-    label.append(box, el('span', '', 'เสียงตอนส่งข้อความและตอนตอบเสร็จ'));
+    label.append(box, el('span', '', 'เสียงตอนส่งข้อความ ตอนตอบเสร็จ และตอนขออนุญาต'));
     wrap.append(
       label,
       button('btn ghost', '🔊 ส่ง', () => chatSound('sent', true)),
       button('btn ghost', '🔊 ตอบเสร็จ', () => chatSound('done', true)),
+      button('btn ghost', '🔊 ขออนุญาต', () => chatSound('ask', true)),
     );
     return wrap;
   }

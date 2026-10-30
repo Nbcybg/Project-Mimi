@@ -396,10 +396,22 @@ async function mapLimit<T, R>(items: readonly T[], limit: number, run: (item: T)
   return results;
 }
 
+/** Pins a transcript to the language of the app, so a model does not guess (and answer in Chinese). */
+export function audioPrompt(language: string | undefined, retry = false): string {
+  const name = language === 'th' ? 'Thai' : language === 'en' ? 'English' : '';
+  if (!name) return retry ? RETRY_PROMPTS.audio : PROMPTS.audio;
+  const script = language === 'th' ? ' in Thai script' : '';
+  return retry
+    ? `What is said in this recording? The speaker speaks ${name}. Write the words only${script}; never translate and never answer in Chinese.`
+    : `Transcribe this recording word for word. The speaker speaks ${name}, so write the transcript in ${name}${script}; do not translate it and do not write it in any other language (never Chinese). Output only the transcript. If nothing intelligible is said, output "(no speech)".`;
+}
+
 export interface IngestDeps {
   store: AttachmentStore;
   models: ModelService;
   usage: UsageLogger;
+  /** The language of the app ('th' / 'en'); recordings are transcribed in it. */
+  language?: () => string | undefined;
 }
 
 /**
@@ -507,10 +519,11 @@ async function readAttachment(
   };
 
   const key = isPdf ? 'pdf' : (attachment.kind as 'image' | 'audio' | 'video');
-  let answer = await ask(PROMPTS[key]);
+  const language = deps.language?.();
+  let answer = await ask(key === 'audio' ? audioPrompt(language) : PROMPTS[key]);
   // Some models answer a long instruction with nothing at all (or spend their budget thinking):
   // one more try with the shortest possible question before giving up.
-  if (!answer.text) answer = await ask(RETRY_PROMPTS[key]);
+  if (!answer.text) answer = await ask(key === 'audio' ? audioPrompt(language, true) : RETRY_PROMPTS[key]);
   if (!answer.text) throw new Error(`the model returned nothing (${info.ref.provider}/${info.ref.model}, finish: ${answer.finish})`);
   return answer.text;
 }

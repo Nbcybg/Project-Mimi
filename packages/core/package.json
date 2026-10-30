@@ -1,6 +1,6 @@
 {
   "name": "@mimi/core",
-  "version": "0.7.3-prototype",
+  "version": "0.7.4-prototype",
   "private": true,
   "type": "module",
   "dependencies": {

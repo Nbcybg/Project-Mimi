@@ -122,6 +122,7 @@ public class MainActivity extends Activity {
         else web.restoreState(savedInstanceState);
         askAtStart();
         SyncJob.schedule(this);
+        PushService.start(this);
     }
 
     /** The launch page, or the chat a widget row / link points at. */
@@ -145,6 +146,7 @@ public class MainActivity extends Activity {
         super.onResume();
         visible = true;
         web.onResume();
+        PushService.start(this); // after signing in, the token is there for the first time
         // The page treats the app as on screen again (its own visibility may lag behind the activity).
         web.evaluateJavascript("window.__mimiSetVisible&&window.__mimiSetVisible(true)", null);
         // The screen was off or the app folded away: the socket inside the page may be dead

@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### 0.7.4-prototype
+
+- The header and the chat list say "กำลังตอบ…" (was "กำลังพิมพ์…") while an agent answers.
+- Voice messages: the transcript is written in the language of the app (Thai or
+  English) instead of whatever the model guesses (it had answered in Chinese), and
+  while a recording is being turned into text the header and chat list show
+  "กำลังถอดเสียง…".
+- The night scene (moon and stars) behind the one-to-one chat is gone: a plain
+  background until backdrops come back.
+- Typing Thai on a phone: the message box no longer lays its whole text out again
+  on every key (it measures its height after a pause), breaks Thai lines without the
+  browser's word dictionary, and the 3D character holds still for a moment after each key.
+- Switching chats and coming back from the background is lighter: a chat opens with
+  its newest 40 messages ("ดูข้อความก่อนหน้า" loads more), and the catch-up after the
+  app wakes only adds what is new.
+- Android: the widget is dark and headed "ข้อความที่ยังไม่ได้อ่าน" with the total of
+  unread replies. A small foreground service (silent status-bar entry "รอข้อความใหม่จาก
+  agent") asks the server every 30 seconds, so a reply arrives as a notification with
+  its text even while the app is folded away.
+- The mail-watch screen script (feature-mail.js) is served again (it returned 404).
+- Sounds: chat_1 when you send, chat_2 when an agent finishes answering, chat_3 when
+  an agent asks for permission (same on/off switch and quiet hours as before).
+
 ### 0.7.3-prototype
 
 - Auto-update works again: the apps look at GitHub's "latest release", which skips

@@ -1,26 +1,71 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The widget: a rounded card with the newest chats. -->
-<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<!-- The widget: a dark rounded card headed "unread messages", with the newest chats under it. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@drawable/widget_bg"
+    android:orientation="vertical"
     android:padding="6dp">
 
-    <ListView
-        android:id="@+id/widgetList"
+    <LinearLayout
+        android:id="@+id/widgetHeader"
         android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:divider="@null"
-        android:dividerHeight="0dp"
-        android:scrollbars="none" />
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="10dp"
+        android:paddingTop="6dp"
+        android:paddingEnd="10dp"
+        android:paddingBottom="4dp">
 
-    <TextView
-        android:id="@+id/widgetEmpty"
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:text="@string/widgetTitle"
+            android:textColor="#9AA1AB"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/widgetTotal"
+            android:layout_width="wrap_content"
+            android:layout_height="20dp"
+            android:layout_marginStart="8dp"
+            android:background="@drawable/badge_bg"
+            android:gravity="center"
+            android:minWidth="20dp"
+            android:paddingStart="6dp"
+            android:paddingEnd="6dp"
+            android:textColor="#FFFFFF"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:visibility="gone" />
+    </LinearLayout>
+
+    <FrameLayout
         android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:gravity="center"
-        android:padding="12dp"
-        android:text="@string/widgetEmpty"
-        android:textColor="#6B7078"
-        android:textSize="14sp" />
-</FrameLayout>
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <ListView
+            android:id="@+id/widgetList"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:divider="@null"
+            android:dividerHeight="0dp"
+            android:scrollbars="none" />
+
+        <TextView
+            android:id="@+id/widgetEmpty"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:gravity="center"
+            android:padding="12dp"
+            android:text="@string/widgetEmpty"
+            android:textColor="#8A919C"
+            android:textSize="14sp" />
+    </FrameLayout>
+</LinearLayout>

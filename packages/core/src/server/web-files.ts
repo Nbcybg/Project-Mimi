@@ -43,8 +43,13 @@ const WEB_FILES: Record<string, [string, string]> = {
   '/feature-canvas.js': ['feature-canvas.js', 'text/javascript; charset=utf-8'],
   '/feature-profile.js': ['feature-profile.js', 'text/javascript; charset=utf-8'],
   '/feature-notify.js': ['feature-notify.js', 'text/javascript; charset=utf-8'],
+  '/feature-mail.js': ['feature-mail.js', 'text/javascript; charset=utf-8'],
   '/feature-update.js': ['feature-update.js', 'text/javascript; charset=utf-8'],
   '/feature-vrm.js': ['feature-vrm.js', 'text/javascript; charset=utf-8'],
+  // The chat sounds: sent, reply finished, asking for permission.
+  '/sounds/chat_1.mp3': ['sounds/chat_1.mp3', 'audio/mpeg'],
+  '/sounds/chat_2.mp3': ['sounds/chat_2.mp3', 'audio/mpeg'],
+  '/sounds/chat_3.mp3': ['sounds/chat_3.mp3', 'audio/mpeg'],
 };
 
 /** The 3D libraries (three.js, three-vrm) served from node_modules, so the client works offline. */

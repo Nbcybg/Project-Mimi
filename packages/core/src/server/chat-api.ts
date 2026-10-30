@@ -54,7 +54,9 @@ export interface ChatApiContext {
 
 type Reply = (message: ServerMessage) => void;
 
-const PAGE_SIZE = 120;
+/** Opening a chat draws only the newest messages (a phone is slow at drawing a long log); "older" fetches more. */
+const FIRST_PAGE = 40;
+const OLDER_PAGE = 60;
 const PREVIEW_LENGTH = 90;
 const SNIPPET_RADIUS = 70;
 const PRESET_NAME = /^[a-z0-9][a-z0-9_-]*$/;
@@ -172,8 +174,9 @@ export function createChatApi(context: ChatApiContext) {
     const sessions = chats.sessions(chat.id, 200);
     const session = sessionId === undefined ? sessions[0] : sessions.find((entry) => entry.id === sessionId);
     if (sessionId !== undefined && !session) throw new Error(`Session #${sessionId} does not exist.`);
-    const rows = session ? messages.timeline(session.thread, beforeId, PAGE_SIZE + 1) : [];
-    const hasMore = rows.length > PAGE_SIZE;
+    const pageSize = beforeId === undefined ? FIRST_PAGE : OLDER_PAGE;
+    const rows = session ? messages.timeline(session.thread, beforeId, pageSize + 1) : [];
+    const hasMore = rows.length > pageSize;
     // Opening (not just fetching older pages) means the user is reading this session now.
     if (beforeId === undefined && session) {
       chats.markRead(session.id);
@@ -243,6 +246,8 @@ export function createChatApi(context: ChatApiContext) {
             },
           });
           markStored();
+        } else if (item.type === 'transcribing') {
+          broadcast({ type: 'chat-transcribing', chatId, on: item.on });
         } else {
           broadcast({ type: 'chat-event', chatId, sessionId, agent: item.agent, event: item.event });
           context.liveEvent?.(chatId, sessionId, item.agent, item.event);
@@ -255,6 +260,7 @@ export function createChatApi(context: ChatApiContext) {
     } catch (error) {
       broadcast({ type: 'error', message: (error as Error).message, chatId });
     }
+    broadcast({ type: 'chat-transcribing', chatId, on: false });
     markStored();
     // The session may have been given its title during the turn.
     const session = chats.getSession(sessionId);

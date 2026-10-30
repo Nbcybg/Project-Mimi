@@ -1341,6 +1341,7 @@ export async function createCore(
     attachments,
     models,
     usage,
+    language: () => options.app?.ui['mimi.lang'],
     get idleMs() {
       return sessionIdleMs();
     },

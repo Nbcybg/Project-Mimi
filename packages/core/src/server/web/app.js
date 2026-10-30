@@ -261,6 +261,8 @@
     busyChats: new Set(),
     /** Per chat: the agent that is answering there. */
     typingByChat: new Map(),
+    /** Chats whose recordings are being turned into text before the agent answers. */
+    transcribing: new Set(),
     /** Per chat: a handoff that just happened, so the header can name the agent taking over. */
     handoffByChat: new Map(),
     /** Per chat: the agent or skill a working agent delegated a part of the turn to. */
@@ -469,7 +471,9 @@
       const middle = el('div');
       middle.style.minWidth = '0';
       const fallback = chat.kind === 'group' ? `กลุ่ม ${chat.agents.length} คน` : 'ยังไม่มีข้อความ';
-      const active = handoff
+      const active = state.transcribing.has(chat.id)
+        ? 'กำลังถอดเสียง…'
+        : handoff
         ? `${nameOf(handoff.from)} → ${nameOf(handoff.to)}`
         : sub
           ? `${nameOf(sub.main)} → ${nameOf(sub.sub)}`
@@ -956,8 +960,8 @@
    * The same conversation is already on screen: only the messages that arrived since join it,
    * instead of rebuilding the whole log (which made the screen flash when a turn finished).
    */
-  function mergeHistory(message, key, ids) {
-    const fresh = message.messages.slice(state.historyIds.length);
+  function mergeHistory(message, key, ids, from) {
+    const fresh = message.messages.slice(from);
     if (liveFrame) {
       cancelAnimationFrame(liveFrame);
       liveFrame = null;
@@ -974,7 +978,7 @@
       note.remove();
     }
     state.historyKey = key;
-    state.historyIds = ids;
+    state.historyIds = [...state.historyIds, ...ids.slice(from)];
     let block = null;
     for (const entry of fresh) block = appendStored(logInner, entry, block);
     state.pendingEchoes = [];
@@ -1178,6 +1182,7 @@
         state.pendingPerms.set(event.request.id, event.request);
         think(false);
         permissionCard(event.request);
+        window.MimiHooks?.notify?.chatSound('ask');
         break;
       case 'permission-decision':
         resolveCard(event.requestId, event.decision);
@@ -1325,13 +1330,16 @@
     const typingHere = chat ? state.typingByChat.get(chat.id) : null;
     const handoffHere = chat ? state.handoffByChat.get(chat.id) : null;
     const subHere = chat ? state.subByChat.get(chat.id) : null;
-    sub.className = `sub${typingHere || handoffHere || subHere ? ' typing' : ''}`;
-    const active = handoffHere
+    const transcribingHere = chat ? state.transcribing.has(chat.id) : false;
+    sub.className = `sub${typingHere || handoffHere || subHere || transcribingHere ? ' typing' : ''}`;
+    const active = transcribingHere
+      ? 'กำลังถอดเสียง…'
+      : handoffHere
       ? `${nameOf(handoffHere.from)} กำลังส่งต่อให้ ${nameOf(handoffHere.to)}…`
       : subHere
         ? `${nameOf(subHere.main)} → ${nameOf(subHere.sub)} กำลังทำงาน…`
         : typingHere
-          ? `${nameOf(typingHere)} กำลังพิมพ์…`
+          ? `${nameOf(typingHere)} กำลังตอบ…`
           : '';
     sub.textContent = !chat
       ? ''
@@ -1643,10 +1651,13 @@
 
   // ---------- composer ----------
   const input = $('input');
-  /** Chrome grows the box itself; where it cannot, the height is measured after a typing pause. */
-  const nativeFieldSizing = Boolean(window.CSS && window.CSS.supports && window.CSS.supports('field-sizing', 'content'));
+  /**
+   * The height is measured after a typing pause, never per key: Chrome's own growing box
+   * (field-sizing) lays the whole text out again on every key, which Thai - where the browser
+   * looks every word break up in a dictionary - cannot do fast on a phone.
+   */
+  const THAI = /[฀-๿]/;
   function autosize() {
-    if (nativeFieldSizing) return;
     input.style.height = 'auto';
     input.style.height = `${Math.min(input.scrollHeight, 180)}px`;
   }
@@ -1661,6 +1672,7 @@
     if (composerTimer) clearTimeout(composerTimer);
     composerTimer = setTimeout(() => {
       composerTimer = 0;
+      input.classList.toggle('th', THAI.test(input.value));
       autosize();
       renderMention();
     }, 90);
@@ -1914,6 +1926,9 @@
     $('box').classList.toggle('empty', !input.value.trim() && state.staged.length === 0);
   }
   input.addEventListener('input', (event) => {
+    // A Thai text breaks its lines between any two letters (no dictionary lookup per key); set at the first Thai letter.
+    window.__mimiKeyAt = performance.now();
+    if (!input.classList.contains('th') && event.data && THAI.test(event.data)) input.classList.add('th');
     // Thai (and other) IMEs fire input for every syllable while composing; drawing the
     // composer mid-composition is what makes typing feel like it stutters.
     if (composing || event.isComposing) return;
@@ -3350,14 +3365,18 @@
         requestContext();
         const key = message.session ? `${message.chat.id}:${message.session.id}` : `${message.chat.id}:`;
         const ids = message.messages.map((entry) => entry.id);
+        // The page holds only the newest messages, so as the chat grows its start moves on: what is
+        // on screen only has to end where the page has it (the messages after that join).
+        const shown = state.historyIds;
+        const lastAt = shown.length > 0 ? ids.lastIndexOf(shown[shown.length - 1]) : -1;
+        const overlap = Math.min(shown.length, lastAt + 1);
         const prefix =
           state.historyKey === key &&
-          state.historyIds.length > 0 &&
-          state.historyIds.length <= ids.length &&
-          state.historyIds.every((id, index) => ids[index] === id);
+          lastAt >= 0 &&
+          shown.slice(shown.length - overlap).every((id, index) => ids[lastAt + 1 - overlap + index] === id);
         if (prefix) {
           // Same conversation as on screen: only the new messages join, so the screen does not flash.
-          mergeHistory(message, key, ids);
+          mergeHistory(message, key, ids, lastAt + 1);
         } else {
           renderLog(message);
           renderLiveSnapshot(message.live, message.chat.id);
@@ -3432,11 +3451,18 @@
       case 'chat-event':
         if (showing(message.chatId, message.sessionId)) handleEvent(message.event, null, message.chatId);
         break;
+      case 'chat-transcribing':
+        if (message.on) state.transcribing.add(message.chatId);
+        else state.transcribing.delete(message.chatId);
+        renderHeader();
+        renderChatList();
+        break;
       case 'busy': {
         if (message.chatId === null) {
           state.busyChats.clear();
         } else if (message.done) {
           state.busyChats.delete(message.chatId);
+          state.transcribing.delete(message.chatId);
           state.typingByChat.delete(message.chatId);
           state.handoffByChat.delete(message.chatId);
           state.subByChat.delete(message.chatId);

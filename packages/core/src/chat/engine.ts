@@ -46,6 +46,8 @@ export type ChatTurnEvent =
       replyTo?: { id: number; role: MessageRole; agent: string; text: string } | null;
       forwardedFrom?: { from: string; chat: string } | null;
     }
+  /** Recordings are being turned into text (`on`), or that is done. */
+  | { type: 'transcribing'; on: boolean }
   /** Something the answering agent did. */
   | { type: 'agent-event'; agent: string; event: AgentEvent };
 
@@ -56,6 +58,8 @@ export interface ChatEngineDeps {
   attachments: AttachmentStore;
   models: ModelService;
   usage: UsageLogger;
+  /** The language of the app, so recordings are transcribed in it. */
+  language?: () => string | undefined;
   /** A new session starts by itself after this much silence. */
   idleMs: number;
   /** ... or once a session's conversation is this long (0 = no limit). */
@@ -152,10 +156,17 @@ export class ChatEngine {
     const attachmentIds = (input.attachments ?? []).map((id) =>
       input.forward ? (deps.attachments.clone(id) ?? id) : id,
     );
+    // A recording not yet read takes a while: the screens say so instead of looking idle.
+    const toTranscribe = attachmentIds.some((id) => {
+      const known = deps.attachments.get(id);
+      return known?.kind === 'audio' && !known.text;
+    });
+    if (toTranscribe) yield { type: 'transcribing', on: true };
     const files = await ingestAttachments(
-      { store: deps.attachments, models: deps.models, usage: deps.usage },
+      { store: deps.attachments, models: deps.models, usage: deps.usage, language: deps.language },
       { ids: attachmentIds, agent: first, traceId, signal: input.signal },
     );
+    if (toTranscribe) yield { type: 'transcribing', on: false };
     const userText = [quoted, input.text.trim(), ...renderAttachments(files)].filter(Boolean).join('\n\n');
 
     const roster = members.map((member) => ({

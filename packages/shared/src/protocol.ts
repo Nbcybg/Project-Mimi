@@ -815,6 +815,8 @@ export type ServerMessage =
   | { type: 'session-context'; chatId: number; sessionId: number; context: SessionContextView }
   | { type: 'chat-message'; chatId: number; sessionId: number; message: ChatMessageView }
   | { type: 'chat-event'; chatId: number; sessionId: number; agent: string; event: AgentEvent }
+  /** Recordings in this chat are being transcribed (`on`) or that finished. */
+  | { type: 'chat-transcribing'; chatId: number; on: boolean }
   /** A turn started (`done` unset) or finished (`done: true`) in this chat; turns in different chats run in parallel. */
   | { type: 'busy'; chatId: number | null; done?: boolean }
   /** Answer to a client `ping`. */

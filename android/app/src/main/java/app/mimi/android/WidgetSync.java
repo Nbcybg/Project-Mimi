@@ -50,6 +50,7 @@ final class WidgetSync {
     static void setToken(Context context, String token) {
         String old = prefs(context).getString("token", "");
         if (old.equals(token)) return;
+        if (token.isEmpty()) PushService.stop(context);
         prefs(context).edit().putString("token", token).remove("chats").remove("notifId").apply();
         refreshAsync(context);
     }
@@ -170,7 +171,8 @@ final class WidgetSync {
             int unread = chat.optInt("unread");
             int known = prefs.getInt("unread:" + id, 0);
             edit.putInt("unread:" + id, unread);
-            if (unread > known && !MainActivity.visible) {
+            // With the push service running, the reply itself arrives with its full text; this is only the fallback.
+            if (unread > known && !MainActivity.visible && !PushService.live) {
                 Intent open = new Intent(context, MainActivity.class).putExtra("chat", id).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                 PendingIntent tap = PendingIntent.getActivity(context, (int) id, open, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
                 String title = chat.optString("title");
@@ -229,7 +231,8 @@ final class WidgetSync {
         NotificationManager manager = notifManager(context);
         if (manager == null) return;
         String icon = "message".equals(kind) ? "💬 " : "reminder".equals(kind) ? "⏰ " : "approval".equals(kind) ? "✋ " : "";
-        int id = (int) (System.currentTimeMillis() & 0x7fffffff);
+        // The same text of the same chat is the same notification, whoever posts it first (page or service).
+        int id = (kind + "|" + chatId + "|" + (body == null ? "" : body.trim())).hashCode() & 0x7fffffff;
         Intent open = new Intent(context, MainActivity.class);
         if (chatId > 0) open.putExtra("chat", chatId);
         open.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
@@ -268,6 +271,8 @@ final class WidgetSync {
         try {
             byte[] body = get("/api/notifications", token);
             JSONArray items = new JSONArray(new String(body, "UTF-8"));
+            // The first look only notes where the inbox is; what was already there is not news.
+            boolean firstLook = !prefs.contains("notifId");
             long known = prefs.getLong("notifId", 0);
             long newest = known;
             for (int i = 0; i < items.length(); i++) {
@@ -275,10 +280,10 @@ final class WidgetSync {
                 if (item == null) continue;
                 long id = item.optLong("id");
                 newest = Math.max(newest, id);
-                if (id <= known) continue;
+                if (id <= known || firstLook) continue;
                 notifyNative(context, item.optString("title"), item.optString("body"), item.optString("kind"), item.optLong("chatId"));
             }
-            if (newest != known) prefs.edit().putLong("notifId", newest).apply();
+            if (newest != known || firstLook) prefs.edit().putLong("notifId", newest).apply();
         } catch (Exception ignored) {
             // offline or signed out: try again next round
         }

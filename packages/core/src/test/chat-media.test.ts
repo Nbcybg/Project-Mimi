@@ -5,7 +5,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import type { WorkflowView } from '@mimi/shared';
 import { MockLanguageModelV4 } from 'ai/test';
-import { AttachmentStore } from '../chat/attachments.ts';
+import { AttachmentStore, audioPrompt, PROMPTS } from '../chat/attachments.ts';
 import { filesMatch } from '../core.ts';
 import { openDb } from '../db/db.ts';
 import { makeTestCore, type TestCore } from './core-helpers.ts';
@@ -388,4 +388,12 @@ test('a recording with no sound is "(no speech)" without asking a model, and an 
   assert.equal(second.core.attachments.get(spoken.id)!.text, 'สวัสดีค่ะ');
   assert.equal(hesitant.doGenerateCalls.length, 2);
   await second.cleanup();
+});
+
+test('a recording is transcribed in the language of the app', () => {
+  assert.match(audioPrompt('th'), /Thai script/);
+  assert.match(audioPrompt('th'), /never Chinese/);
+  assert.match(audioPrompt('en', true), /English/);
+  // No language known: the plain prompt, as before.
+  assert.equal(audioPrompt(undefined), PROMPTS.audio);
 });

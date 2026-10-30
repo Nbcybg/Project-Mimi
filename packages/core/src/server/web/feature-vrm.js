@@ -766,7 +766,9 @@ function liveStart() {
     // While a text field has the keyboard the character redraws at ~15 fps: typing (and
     // holding Backspace) stays smooth on a phone, which cannot do both at full rate.
     const field = document.activeElement;
-    if (field && (field.tagName === 'TEXTAREA' || field.tagName === 'INPUT') && now - lastDraw < 66) return;
+    const typing = field && (field.tagName === 'TEXTAREA' || field.tagName === 'INPUT');
+    if (typing && now - (window.__mimiKeyAt || 0) < 350) return; // a key just went in: leave the frame to the keyboard
+    if (typing && now - lastDraw < 66) return;
     lastDraw = now;
     live.clock.update();
     const delta = Math.min(live.clock.getDelta(), 0.1);

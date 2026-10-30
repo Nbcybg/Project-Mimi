@@ -208,7 +208,7 @@ export function createChatApi(context: ChatApiContext) {
 
   const runTurn = async (
     chatId: number,
-    turn: { text: string; attachments: string[]; replyTo?: number; forward?: { from: string; chat: string } },
+    turn: { text: string; attachments: string[]; replyTo?: number; clientId?: string; forward?: { from: string; chat: string } },
     signal: AbortSignal,
     /** Runs once the user's message is stored (or the turn ends without storing it). */
     afterStored?: () => void,
@@ -243,11 +243,14 @@ export function createChatApi(context: ChatApiContext) {
               tools: [],
               replyTo: item.replyTo ?? null,
               forwardedFrom: item.forwardedFrom ?? null,
+              ...(item.clientId ? { clientId: item.clientId } : {}),
             },
           });
           markStored();
         } else if (item.type === 'transcribing') {
           broadcast({ type: 'chat-transcribing', chatId, on: item.on });
+        } else if (item.type === 'viewing') {
+          broadcast({ type: 'chat-viewing', chatId, on: item.on });
         } else {
           broadcast({ type: 'chat-event', chatId, sessionId, agent: item.agent, event: item.event });
           context.liveEvent?.(chatId, sessionId, item.agent, item.event);
@@ -258,7 +261,7 @@ export function createChatApi(context: ChatApiContext) {
         }
       }
     } catch (error) {
-      broadcast({ type: 'error', message: (error as Error).message, chatId });
+      broadcast({ type: 'error', message: (error as Error).message, chatId, ...(turn.clientId ? { clientId: turn.clientId } : {}) });
     }
     broadcast({ type: 'chat-transcribing', chatId, on: false });
     markStored();
@@ -435,6 +438,7 @@ export function createChatApi(context: ChatApiContext) {
         if (!text && attachments.length === 0) return true;
         if (!chats.getChat(chatId)) throw new Error(`Chat #${chatId} does not exist.`);
         const replyTo = message.replyTo === undefined ? undefined : Number(message.replyTo);
+        const clientId = typeof message.clientId === 'string' && /^[\w.:-]{1,120}$/.test(message.clientId) ? message.clientId : undefined;
         const forward = message.forward ? { from: String(message.forward.from), chat: String(message.forward.chat) } : undefined;
         // A workflow with a chat trigger may take the message; then the agent stays quiet.
         const triggered = !forward ? core.chatTriggers(chatId, text, attachments) : null;
@@ -450,14 +454,14 @@ export function createChatApi(context: ChatApiContext) {
             type: 'chat-message',
             chatId,
             sessionId: posted.sessionId,
-            message: { id: posted.id, role: 'user', agent: '', text, createdAt: posted.createdAt, attachments: sent.map(toAttachmentView), tools: [], replyTo: null, forwardedFrom: null },
+            message: { id: posted.id, role: 'user', agent: '', text, createdAt: posted.createdAt, attachments: sent.map(toAttachmentView), tools: [], replyTo: null, forwardedFrom: null, ...(clientId ? { clientId } : {}) },
           });
           broadcast(chatsMessage());
           triggered.run();
           return true;
         }
         // Workflows that let the agent answer too start after the message is stored, so their replies come after it.
-        context.enqueue(chatId, (signal) => runTurn(chatId, { text, attachments, replyTo, forward }, signal, triggered?.run));
+        context.enqueue(chatId, (signal) => runTurn(chatId, { text, attachments, replyTo, clientId, forward }, signal, triggered?.run));
         return true;
       }
       case 'session-new': {

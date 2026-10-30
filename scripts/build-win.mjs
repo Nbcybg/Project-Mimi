@@ -44,7 +44,7 @@ log(`Electron ${path.basename(electron)} copied`);
 
 // 2. The app: the desktop shell, and the PC agent with what it imports. Tests stay behind.
 fs.mkdirSync(APP, { recursive: true });
-for (const file of ['remote.cjs', 'remote-lib.cjs', 'updater.cjs', 'preload.cjs', 'connect.html']) {
+for (const file of ['remote.cjs', 'remote-lib.cjs', 'updater.cjs', 'preload.cjs', 'connect.html', 'browser-shell.cjs', 'browser-prompt-preload.cjs', 'browser-prompt.html', 'workspace.cjs', 'workspace-preload.cjs', 'workspace.html', 'workspace.css', 'workspace.js']) {
   fs.copyFileSync(path.join(ROOT, 'packages', 'desktop', file), path.join(APP, file));
 }
 // updateRepo: where the app looks for newer releases (updater.cjs).

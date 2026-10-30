@@ -76,7 +76,8 @@ function vendorFile(request: string): string | undefined {
  * Headers for the client's own files. Pages may not be framed by another site (a framed app
  * could be clicked through by a page the person does not see), and the app page may run
  * only scripts from this server: if a message ever smuggled markup into the page, it could
- * not read the session token. The one inline script, the import map, is allowed by its hash.
+ * not read the session token. Inline scripts (the import map and the boot-time theme) are
+ * allowed by their hashes.
  */
 function securityHeaders(file: string, body: Buffer): Record<string, string> {
   const common = { 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer' };
@@ -85,7 +86,7 @@ function securityHeaders(file: string, body: Buffer): Record<string, string> {
   if (file === 'offline.html') {
     return { ...common, ...frames, 'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; frame-ancestors 'none'" };
   }
-  const inline = [...body.toString('utf8').matchAll(/<script type="importmap">([\s\S]*?)<\/script>/g)].map(
+  const inline = [...body.toString('utf8').matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)].map(
     (match) => `'sha256-${crypto.createHash('sha256').update(match[1]!).digest('base64')}'`,
   );
   const policy = [

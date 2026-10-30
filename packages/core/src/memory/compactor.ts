@@ -260,17 +260,19 @@ export class Compactor {
     input: string,
   ): Promise<string> {
     const { models, usage } = this.deps;
-    const info = models.info(models.resolve('summarize', agent.models));
+    const ref = models.resolve('summarize', agent.models);
+    const info = models.info(ref);
     const target = Math.min(
       MAX_SUMMARY_TOKENS,
       Math.max(MIN_SUMMARY_TOKENS, Math.round(estimateTokens(input) / 8)),
     );
     const startedAt = Date.now();
     const result = await generateText({
-      model: await models.languageModel(info.ref),
+      model: await models.languageModel(ref),
       instructions: `${instructions}\n- Aim for at most about ${Math.round(target * 0.6)} words.`,
       prompt: input,
       providerOptions: providerOptionsFor(info),
+      ...ref.params,
     });
     usage.logCall({
       runId: null,

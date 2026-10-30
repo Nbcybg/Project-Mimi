@@ -372,11 +372,25 @@ export const PROMPTS: Record<'image' | 'audio' | 'video' | 'pdf', string> = {
   image:
     'Describe this image for an assistant that cannot see it. Say what it shows, and copy any visible text exactly (keep its language). Be complete but compact. Output only the description.',
   audio:
-    'Transcribe this recording word for word in the language spoken. Output only the transcript. If nothing intelligible is said, output "(no speech)".',
+    'Transcribe this recording word for word in the language spoken, keeping its own script. Never translate it and never switch to another language (do not write Chinese unless the speech is Chinese). Output only the transcript. If nothing intelligible is said, output "(no speech)".',
   video:
     'Describe this video for an assistant that cannot watch it: what happens, in order, with rough timestamps; copy any visible text exactly (keep its language); and transcribe what is said word for word in the language spoken. Be complete but compact. Output only the description.',
   pdf: 'Extract the content of this document as plain text, keeping its structure (headings, lists, tables as rows). Output only the content.',
 };
+
+/**
+ * The answer of a reading model. Some reasoning models (MiMo v2.6 Flash answers audio
+ * this way through OpenAI-compatible gateways) put the whole transcript in the reasoning
+ * channel and leave `text` empty; for audio that reasoning text is the answer.
+ */
+export function modelAnswer(
+  result: { text: string; finalStep: { reasoningText: string | undefined } },
+  allowReasoning = false,
+): string {
+  const text = result.text.trim();
+  if (text || !allowReasoning) return text;
+  return (result.finalStep.reasoningText ?? '').trim();
+}
 
 /** Attachments being read right now, by id. */
 const reading = new Map<string, Promise<string>>();
@@ -404,6 +418,19 @@ export function audioPrompt(language: string | undefined, retry = false): string
   return retry
     ? `What is said in this recording? The speaker speaks ${name}. Write the words only${script}; never translate and never answer in Chinese.`
     : `Transcribe this recording word for word. The speaker speaks ${name}, so write the transcript in ${name}${script}; do not translate it and do not write it in any other language (never Chinese). Output only the transcript. If nothing intelligible is said, output "(no speech)".`;
+}
+
+/**
+ * The system instruction for a recording. The language is stated before the file is seen,
+ * so a model biased to another language (MiMo and Chinese) has already been told which
+ * language the app speaks; the user message repeats it for gateways that drop instructions.
+ */
+export function audioInstructions(language: string | undefined): string {
+  const name = language === 'th' ? 'Thai' : language === 'en' ? 'English' : '';
+  const spoken = name
+    ? `The speaker speaks ${name}, so write the transcript in ${name}${language === 'th' ? ' in Thai script' : ''}.`
+    : 'Write the transcript in the language actually spoken, with its own script.';
+  return `You transcribe recordings word for word. ${spoken} Never translate it and never write it in another language (never Chinese unless the speech is Chinese). Output only the transcript; if nothing intelligible is said, output "(no speech)".`;
 }
 
 export interface IngestDeps {
@@ -487,10 +514,13 @@ async function readAttachment(
   const ref = deps.models.resolve(capability, input.agent.models);
   const info = deps.models.info(ref);
   const model = await deps.models.languageModel(ref);
+  const key = isPdf ? 'pdf' : (attachment.kind as 'image' | 'audio' | 'video');
+  const language = key === 'audio' ? deps.language?.() : undefined;
   const ask = async (prompt: string) => {
     const startedAt = Date.now();
     const result = await generateText({
       model,
+      ...(key === 'audio' ? { instructions: audioInstructions(language) } : {}),
       messages: [
         {
           role: 'user',
@@ -501,6 +531,7 @@ async function readAttachment(
         },
       ],
       providerOptions: providerOptionsFor(info),
+      ...ref.params,
       abortSignal: input.signal,
     });
     deps.usage.logCall({
@@ -515,11 +546,9 @@ async function readAttachment(
       cacheWriteTokens: result.usage.inputTokenDetails.cacheWriteTokens ?? 0,
       durationMs: Date.now() - startedAt,
     });
-    return { text: result.text.trim(), finish: result.finishReason };
+    return { text: modelAnswer(result, capability === 'transcript'), finish: result.finishReason };
   };
 
-  const key = isPdf ? 'pdf' : (attachment.kind as 'image' | 'audio' | 'video');
-  const language = deps.language?.();
   let answer = await ask(key === 'audio' ? audioPrompt(language) : PROMPTS[key]);
   // Some models answer a long instruction with nothing at all (or spend their budget thinking):
   // one more try with the shortest possible question before giving up.
@@ -559,7 +588,7 @@ export function wavIsSilent(data: Buffer): boolean {
 
 const RETRY_PROMPTS: Record<'image' | 'audio' | 'video' | 'pdf', string> = {
   image: 'What is in this image? Answer in a few sentences.',
-  audio: 'What is said in this recording? Write the words only, in the language spoken.',
+  audio: 'What is said in this recording? Write the words only, in the language spoken, with its own script; never translate and never write Chinese unless the speech is Chinese.',
   video: 'What happens in this video? Answer in a few sentences.',
   pdf: 'Write out the text of this document.',
 };

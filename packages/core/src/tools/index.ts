@@ -11,6 +11,7 @@ import type { GalleryStore } from '../gallery/gallery-store.ts';
 import { createGalleryTools } from '../gallery/gallery-tools.ts';
 import { createProfileTools } from '../profile/tools.ts';
 import type { UserProfileStore } from '../profile/user-profile.ts';
+import type { TimeZoneSource } from '../timezone.ts';
 import type { GoogleAuth } from '../google/auth.ts';
 import { createSheetTools } from '../google/sheets.ts';
 import { createGoogleTools } from '../google/tools.ts';
@@ -18,6 +19,8 @@ import type { MemoryStore } from '../memory/store.ts';
 import type { MicrosoftAuth } from '../microsoft/auth.ts';
 import { createDriveTools } from '../microsoft/drive.ts';
 import { createMicrosoftTools } from '../microsoft/tools.ts';
+import type { MailWatch } from '../notify/mail-watch.ts';
+import { createMailTools } from '../mail/tools.ts';
 import { createTriggerTools } from '../scheduler/trigger-tools.ts';
 import type { TriggerStore } from '../scheduler/triggers.ts';
 import { createSkillTool, type Skill } from '../skills/skills.ts';
@@ -40,6 +43,8 @@ export interface ToolServices {
   /** Picks the auth of an OAuth account by id (`undefined` = the default account); without it the single `google` auth is used. */
   googleFor?: (account?: string) => GoogleAuth;
   microsoftFor?: (account?: string) => MicrosoftAuth;
+  /** IMAP / POP3 / SMTP accounts from Hub → Mail; without it those tools are not offered. */
+  mail?: () => MailWatch;
   /** API keys of the web tools, by environment variable name; read at call time. */
   key?: (name: string) => string | undefined;
   /** A function is asked on every call, so skills added in the app are found without a restart. */
@@ -47,7 +52,7 @@ export interface ToolServices {
   chats: ChatStore;
   status: StatusStore;
   memos: MemoStore;
-  timezone: string;
+  timezone: TimeZoneSource;
   /** Knowledge bases; without one the knowledge_search tool is not offered. */
   knowledge?: KnowledgeStore;
   /** Situation galleries; without one the gallery tools are not offered. */
@@ -77,6 +82,7 @@ export function createToolRegistry(services: ToolServices): ToolRegistry {
     ...createMicrosoftTools(services.microsoftFor ?? services.microsoft, services.timezone),
     ...createDriveTools(services.microsoftFor ?? services.microsoft),
     ...createMailAttachmentTools(services.googleFor ?? services.google, services.microsoftFor ?? services.microsoft),
+    ...(services.mail ? createMailTools(services.mail) : []),
     ...(services.readDocument ? createDocumentTools(services.readDocument) : []),
     ...(services.media ? createMediaTools(services.media) : []),
     ...(services.gallery && services.media ? createGalleryTools(services.gallery, services.status, services.media.attachments) : []),

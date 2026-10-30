@@ -202,7 +202,15 @@
     }
   };
   const guess = () => ((navigator.language || 'th').toLowerCase().startsWith('th') ? 'th' : 'en');
-  let language = LANGUAGES[read()] ? read() : guess();
+  const saved = read();
+  const language = LANGUAGES[saved] ? saved : guess();
+  // Remember the guess too: the server reads `mimi.lang` to transcribe recordings in the
+  // app's language, and the first connection hands it up with the other shared settings.
+  try {
+    localStorage.setItem(KEY, language);
+  } catch {
+    // a private window keeps it in memory only
+  }
   document.documentElement.lang = language;
 
   window.t = (key, vars) => {

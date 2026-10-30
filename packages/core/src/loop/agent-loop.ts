@@ -29,6 +29,7 @@ import type { ModelService } from '../providers/routing.ts';
 import type { ToolExecutor } from '../tools/executor.ts';
 import type { ToolContext, ToolDefinition, ToolSource } from '../tools/registry.ts';
 import type { UsageLogger } from '../usage/logger.ts';
+import { timeZoneName, type TimeZoneSource } from '../timezone.ts';
 import type { PromptVars } from './prompt-vars.ts';
 import {
   buildHistory,
@@ -55,7 +56,7 @@ export interface AgentLoopDeps {
   executor: ToolExecutor;
   gate: PermissionGate;
   allowedDirs: string[];
-  timezone: string;
+  timezone: TimeZoneSource;
   mesh?: MeshToolProvider;
   /** Folder shown to the model as its working folder; defaults to the first allowed folder. */
   workingDir?: () => string | undefined;
@@ -240,9 +241,7 @@ export async function* runAgent(deps: AgentLoopDeps, input: RunInput): AsyncGene
   const overBudget = deps.budgetCheck?.();
   if (overBudget) throw new Error(overBudget);
   // Config errors (unknown tool or model, missing API key) surface before anything is stored.
-  const resolved = deps.models.resolve('chat', agent.models);
-  // An effort set on the agent wins over the preset's.
-  const modelRef = agent.effort ? { ...resolved, params: { ...resolved.params, reasoning: agent.effort } } : resolved;
+  const modelRef = deps.models.resolve('chat', agent.models);
   const modelInfo = deps.models.info(modelRef);
   const tools = [
     ...deps.tools.select(agent.tools),
@@ -297,7 +296,7 @@ export async function* runAgent(deps: AgentLoopDeps, input: RunInput): AsyncGene
     input.userText ?? '',
     volatileContext(
       deps.now?.() ?? new Date(),
-      deps.timezone,
+      timeZoneName(deps.timezone),
       [deps.contextExtras?.(agent), input.context].filter(Boolean).join('\n'),
     ),
   );

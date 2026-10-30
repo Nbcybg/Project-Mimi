@@ -3,7 +3,7 @@ import { presetSecretKey, type SecretStore } from '../app/secrets.ts';
 import type { McpHub } from '../mcp/hub.ts';
 import { buildCustomTool } from './custom-tools.ts';
 import type { PcRunner } from './executor.ts';
-import { type ToolDefinition, ToolRegistry, type ToolSource } from './registry.ts';
+import { type ToolDefinition, ToolRegistry, shellConflict, type ToolSource } from './registry.ts';
 import { ToolStore } from './tool-store.ts';
 
 /** Connector tools carry grouping metadata that ToolSpec does not declare yet. */
@@ -83,11 +83,10 @@ export class ToolPool implements ToolSource {
       if (!tool) throw new Error(`Unknown tool "${name}". Available: ${this.names().join(', ')}`);
       return tool;
     });
-    const untrusted = selected.find((tool) => tool.untrustedInput);
-    const shell = selected.find((tool) => tool.risk === 'shell');
-    if (untrusted && shell) {
+    const conflict = shellConflict(selected);
+    if (conflict) {
       throw new Error(
-        `An agent cannot have both "${untrusted.name}" (reads third-party content) and "${shell.name}" (shell). Give them to different agents.`,
+        `An agent cannot have both "${conflict.untrusted.name}" (reads third-party content) and "${conflict.shell.name}" (shell). Give them to different agents.`,
       );
     }
     return selected;

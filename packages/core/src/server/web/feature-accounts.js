@@ -97,8 +97,39 @@
     const wrap = el('div');
     const split = el('div', 'split');
     split.append(listPanel(), adding || selected ? editorPanel() : introPanel());
-    wrap.append(split, toolKeysPanel(), connectionsPanel());
+    wrap.append(split, mailProvidersPanel(), toolKeysPanel(), connectionsPanel());
     return wrap;
+  }
+
+  /** Gmail/Outlook live above; IMAP/POP3/SMTP are mail providers with their own detailed form. */
+  function mailProvidersPanel() {
+    const panel = el('div', 'panel');
+    panel.append(
+      el('h3', '', 'Mail providers (IMAP / POP3 / SMTP)'),
+      el('p', 'hint', 'บัญชีเมลทั่วไป ตั้งค่าเซิร์ฟเวอร์รับ-ส่งละเอียดได้ที่ Hub → Mail · เครื่องมือ imap_*, pop3_*, smtp_* และ trigger อีเมลเลือกบัญชีจากที่นี่'),
+    );
+    const mail = ((M().state.settings || {}).mailAccounts || []).filter((entry) => entry.kind === 'imap' || entry.kind === 'pop3');
+    if (mail.length === 0) panel.append(el('p', 'hint', '— ยังไม่มี mail provider —'));
+    const list = el('div', 'list');
+    for (const entry of mail) {
+      const item = el('div', 'item');
+      const text = el('div');
+      text.append(
+        el('b', '', `${entry.name || entry.id}${entry.default ? ' ★' : ''}`),
+        el('small', 'muted', ` · ${entry.kind.toUpperCase()} · ${entry.email || entry.incoming.user} · ${entry.connected ? '● พร้อมใช้' : '○ ยังไม่ครบ'}${entry.outgoing ? ' · SMTP' : ''}`),
+      );
+      item.append(text);
+      list.append(item);
+    }
+    panel.append(list);
+    const row = el('div', 'btns');
+    row.style.marginTop = '10px';
+    row.append(button('btn', 'ไปที่ Hub → Mail', () => {
+      M().ui.hubTab = 'mail';
+      M().setView?.('hub');
+    }));
+    panel.append(row);
+    return panel;
   }
 
   // Keys of the lookup tools. One dropdown of services, like the accounts above and the

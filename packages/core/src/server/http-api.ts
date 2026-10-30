@@ -366,6 +366,23 @@ export async function handleHttpApi(
       } else {
         throw new HttpError(405, 'Method not allowed.');
       }
+    } else if (resource === 'chat-background' && rest.length === 0 && request.method === 'POST') {
+      // A chat's own upload: one store item no Hub choice names, so it stays out of the scene list.
+      const chatId = Number(url.searchParams.get('chat'));
+      if (!Number.isInteger(chatId) || chatId <= 0) throw new HttpError(400, 'A chat id is required.');
+      const mime = String(request.headers['content-type'] ?? '').split(';')[0]!.trim();
+      const data = await readBody(request, 12 * 1024 * 1024);
+      checkMedia(data.length);
+      const id = `chatbg-${chatId}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
+      deps.backgrounds.save({ id, name: url.searchParams.get('name') ?? 'Chat background' });
+      try {
+        deps.backgrounds.saveImage(id, mime, data);
+      } catch (error) {
+        deps.backgrounds.remove(id);
+        throw error;
+      }
+      deps.backgroundsChanged();
+      sendJson(response, 200, { id });
     } else if (resource === 'background-image' && rest.length === 1) {
       const id = rest[0]!;
       if (request.method === 'GET') {

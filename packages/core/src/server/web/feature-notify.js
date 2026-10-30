@@ -24,7 +24,10 @@
   // the app is open. Per device; on unless turned off. Pushes to a closed app use the
   // system's own notification sound.
   const SOUND_KEY = 'mimi.notifySound';
+  /** Every app sound plays at 30% (70% quieter than before), through this one output gain. */
+  const SOUND_LEVEL = 0.3;
   let audio = null;
+  let output = null;
   const soundOn = () => {
     try {
       return localStorage.getItem(SOUND_KEY) !== '0';
@@ -34,8 +37,18 @@
   };
   /** Browsers start audio only after a tap or key press: the context is made on the first one. */
   const unlockAudio = () => {
-    if (audio || !(window.AudioContext || window.webkitAudioContext)) return;
-    audio = new (window.AudioContext || window.webkitAudioContext)();
+    if (!audio && (window.AudioContext || window.webkitAudioContext)) {
+      audio = new (window.AudioContext || window.webkitAudioContext)();
+      output = audio.createGain();
+      output.gain.value = SOUND_LEVEL;
+      output.connect(audio.destination);
+    }
+    return audio;
+  };
+  /** Waits for the context to run: a sound scheduled while it is suspended only plays later. */
+  const resumeAudio = () => {
+    if (!audio || audio.state === 'running') return Promise.resolve();
+    return audio.resume().catch(() => {});
   };
   document.addEventListener('pointerdown', unlockAudio, { once: true, capture: true });
   document.addEventListener('keydown', unlockAudio, { once: true, capture: true });
@@ -52,22 +65,30 @@
   }
   function chime(force = false) {
     if (!force && (!soundOn() || quietNow())) return;
-    unlockAudio();
-    if (!audio) return;
-    if (audio.state === 'suspended') void audio.resume();
-    const start = audio.currentTime + 0.02;
-    for (const [frequency, offset] of [[880, 0], [1318.5, 0.14]]) {
-      const tone = audio.createOscillator();
-      const gain = audio.createGain();
-      tone.type = 'sine';
-      tone.frequency.value = frequency;
-      gain.gain.setValueAtTime(0.0001, start + offset);
-      gain.gain.exponentialRampToValueAtTime(0.18, start + offset + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.0001, start + offset + 0.45);
-      tone.connect(gain).connect(audio.destination);
-      tone.start(start + offset);
-      tone.stop(start + offset + 0.5);
+    // The Android app posts a native notification which already uses the system
+    // notification stream. Only the explicit test button plays through the bridge.
+    if (window.MimiAndroid?.playSound) {
+      if (force) window.MimiAndroid.playSound('chime');
+      return;
     }
+    unlockAudio();
+    if (!audio || !output) return;
+    void resumeAudio().then(() => {
+      if (!audio || !output) return;
+      const start = audio.currentTime + 0.02;
+      for (const [frequency, offset] of [[880, 0], [1318.5, 0.14]]) {
+        const tone = audio.createOscillator();
+        const gain = audio.createGain();
+        tone.type = 'sine';
+        tone.frequency.value = frequency;
+        gain.gain.setValueAtTime(0.0001, start + offset);
+        gain.gain.exponentialRampToValueAtTime(0.18, start + offset + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, start + offset + 0.45);
+        tone.connect(gain).connect(output);
+        tone.start(start + offset);
+        tone.stop(start + offset + 0.5);
+      }
+    });
   }
   // Chat sounds: a soft rising "pop" when a message goes out, two falling notes when the
   // agent finishes its reply. On unless turned off (shared by the user's devices); quiet hours mute them too.
@@ -81,58 +102,88 @@
   };
   const CHAT_TONES = {
     // [type, from Hz, to Hz, start s, length s, volume]
-    sent: [['triangle', 520, 880, 0, 0.12, 0.14]],
+    sent: [['triangle', 520, 880, 0, 0.12, 0.112]],
     done: [['sine', 1046.5, 1046.5, 0, 0.28, 0.13], ['sine', 784, 784, 0.12, 0.42, 0.13]],
     ask: [['sine', 784, 784, 0, 0.2, 0.13], ['sine', 988, 988, 0.16, 0.3, 0.13]],
   };
   // The real sounds: chat_1 when the user sends, chat_2 when an agent finishes answering,
-  // chat_3 when an agent asks for permission. Decoded once; the tones above stand in until then.
+  // chat_3 when an agent asks for permission. Fetched at load time (no gesture needed) and
+  // decoded on the first gesture, so the first send already has the file ready.
   const CHAT_FILES = { sent: '/sounds/chat_1.mp3', done: '/sounds/chat_2.mp3', ask: '/sounds/chat_3.mp3' };
+  const soundData = new Map();
   const buffers = new Map();
   const loading = new Set();
+  const decoding = new Set();
+  function fetchSound(kind, url) {
+    if (soundData.has(kind) || loading.has(kind)) return;
+    loading.add(kind);
+    fetch(url)
+      .then((response) => (response.ok ? response.arrayBuffer() : Promise.reject(new Error(String(response.status)))))
+      .then((data) => {
+        soundData.set(kind, data);
+        loadSounds();
+      })
+      .catch(() => {})
+      .finally(() => loading.delete(kind));
+  }
   function loadSounds() {
     if (!audio) return;
     for (const [kind, url] of Object.entries(CHAT_FILES)) {
-      if (buffers.has(kind) || loading.has(kind)) continue;
-      loading.add(kind);
-      fetch(url)
-        .then((response) => (response.ok ? response.arrayBuffer() : Promise.reject(new Error(String(response.status)))))
-        .then((data) => audio.decodeAudioData(data))
+      if (buffers.has(kind) || decoding.has(kind)) continue;
+      const data = soundData.get(kind);
+      if (!data) {
+        fetchSound(kind, url);
+        continue;
+      }
+      decoding.add(kind);
+      audio
+        .decodeAudioData(data.slice(0))
         .then((decoded) => buffers.set(kind, decoded))
         .catch(() => {})
-        .finally(() => loading.delete(kind));
+        .finally(() => decoding.delete(kind));
     }
   }
+  for (const [kind, url] of Object.entries(CHAT_FILES)) fetchSound(kind, url);
   document.addEventListener('pointerdown', () => setTimeout(loadSounds, 0), { once: true, capture: true });
   document.addEventListener('keydown', () => setTimeout(loadSounds, 0), { once: true, capture: true });
   function chatSound(kind, force = false) {
     if (!force && (!chatSoundOn() || quietNow())) return;
-    unlockAudio();
-    if (!audio || !CHAT_TONES[kind]) return;
-    if (audio.state === 'suspended') void audio.resume();
-    loadSounds();
-    const sample = buffers.get(kind);
-    if (sample) {
-      const source = audio.createBufferSource();
-      source.buffer = sample;
-      source.connect(audio.destination);
-      source.start();
+    // Android routes these through AudioAttributes.USAGE_NOTIFICATION, so the phone's
+    // notification volume (not media volume) controls them.
+    if (window.MimiAndroid?.playSound) {
+      window.MimiAndroid.playSound(kind);
       return;
     }
-    const start = audio.currentTime + 0.02;
-    for (const [type, from, to, offset, length, volume] of CHAT_TONES[kind]) {
-      const tone = audio.createOscillator();
-      const gain = audio.createGain();
-      tone.type = type;
-      tone.frequency.setValueAtTime(from, start + offset);
-      if (to !== from) tone.frequency.exponentialRampToValueAtTime(to, start + offset + length * 0.8);
-      gain.gain.setValueAtTime(0.0001, start + offset);
-      gain.gain.exponentialRampToValueAtTime(volume, start + offset + 0.015);
-      gain.gain.exponentialRampToValueAtTime(0.0001, start + offset + length);
-      tone.connect(gain).connect(audio.destination);
-      tone.start(start + offset);
-      tone.stop(start + offset + length + 0.05);
-    }
+    unlockAudio();
+    if (!audio || !output || !CHAT_TONES[kind]) return;
+    loadSounds();
+    const play = () => {
+      if (!audio || !output) return;
+      const sample = buffers.get(kind);
+      if (sample) {
+        const source = audio.createBufferSource();
+        source.buffer = sample;
+        source.connect(output);
+        source.start();
+        return;
+      }
+      const start = audio.currentTime + 0.02;
+      for (const [type, from, to, offset, length, volume] of CHAT_TONES[kind]) {
+        const tone = audio.createOscillator();
+        const gain = audio.createGain();
+        tone.type = type;
+        tone.frequency.setValueAtTime(from, start + offset);
+        if (to !== from) tone.frequency.exponentialRampToValueAtTime(to, start + offset + length * 0.8);
+        gain.gain.setValueAtTime(0.0001, start + offset);
+        gain.gain.exponentialRampToValueAtTime(volume, start + offset + 0.015);
+        gain.gain.exponentialRampToValueAtTime(0.0001, start + offset + length);
+        tone.connect(gain).connect(output);
+        tone.start(start + offset);
+        tone.stop(start + offset + length + 0.05);
+      }
+    };
+    if (audio.state === 'running') play();
+    else void resumeAudio().then(play);
   }
   function chatSoundToggle() {
     const wrap = el('div', 'hstack');

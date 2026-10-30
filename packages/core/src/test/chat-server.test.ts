@@ -120,12 +120,12 @@ test('chats over the socket: create, send with a file, search, go back', async (
   assert.equal((await app.api(`/api/files/${file.id}`, {}, null)).status, 401);
   assert.equal((await app.api('/api/files/00000000-0000-0000-0000-000000000000')).status, 404);
 
-  await app.finished({ type: 'chat-send', chatId, text: 'จำรายการนี้ไว้', attachments: [file.id] });
+  await app.finished({ type: 'chat-send', chatId, text: 'จำรายการนี้ไว้', attachments: [file.id], clientId: 'pending-test-1' });
   const session = await app.ask(null, 'chat-session');
   const echoed = await app.ask(null, 'chat-message');
   assert.deepEqual(
-    [session.started, echoed.message.text, echoed.message.attachments.map((entry) => entry.name)],
-    [true, 'จำรายการนี้ไว้', ['list.txt']],
+    [session.started, echoed.message.text, echoed.message.attachments.map((entry) => entry.name), echoed.message.clientId],
+    [true, 'จำรายการนี้ไว้', ['list.txt'], 'pending-test-1'],
   );
   assert.ok(app.inbox.some((message) => message.type === 'busy' && message.chatId === chatId));
   await app.ask(null, 'busy', (reply) => reply.chatId === null);
@@ -316,6 +316,16 @@ test('backgrounds over the socket and HTTP', async () => {
   const fetched = await app.api('/api/background-image/cafe');
   assert.deepEqual([fetched.headers.get('content-type'), Buffer.from(await fetched.arrayBuffer()).equals(png)], ['image/png', true]);
 
+  // A chat's own upload is created and served atomically, and stays out of the Hub choices.
+  const chatUpload = await upload('/api/chat-background?chat=7&name=room.png');
+  assert.equal(chatUpload.status, 200);
+  const chatBg = (await chatUpload.json()) as { id: string };
+  assert.match(chatBg.id, /^chatbg-7-/);
+  const withChat = await app.ask({ type: 'backgrounds-list' }, 'backgrounds');
+  assert.ok(withChat.items.some((item) => item.id === chatBg.id && item.image));
+  assert.equal((await app.api(`/api/background-image/${chatBg.id}`)).status, 200);
+  assert.equal((await upload('/api/chat-background')).status, 400);
+
   const chosen = await app.ask({ type: 'background-select', agent: 'mimi', choice: 'cafe' }, 'backgrounds', (reply) => reply.settings.agents.mimi === 'cafe');
   assert.deepEqual(chosen.settings, { default: '', agents: { mimi: 'cafe' } });
   const error = await app.ask({ type: 'background-select', choice: 'ghost' }, 'error');
@@ -327,7 +337,9 @@ test('backgrounds over the socket and HTTP', async () => {
   await app.ask({ type: 'agent-save', renameFrom: 'mimi', agent: { ...mimi, name: 'mimi2', models: {} } }, 'agents');
   assert.deepEqual((await app.ask({ type: 'backgrounds-list' }, 'backgrounds')).settings.agents, { mimi2: 'cafe' });
   const gone = await app.ask({ type: 'background-delete', id: 'cafe' }, 'backgrounds');
-  assert.deepEqual([gone.items, gone.settings.agents], [[], {}]);
+  assert.deepEqual([gone.items.map((item) => item.id), gone.settings.agents], [[chatBg.id], {}]);
+  const cleaned = await app.ask({ type: 'background-delete', id: chatBg.id }, 'backgrounds');
+  assert.deepEqual([cleaned.items, cleaned.settings.agents], [[], {}]);
   await app.stop();
 });
 

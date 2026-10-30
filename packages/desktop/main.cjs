@@ -16,6 +16,13 @@ const { app, BrowserWindow, Menu, Notification, Tray, nativeImage, nativeTheme, 
 const fs = require('node:fs');
 const path = require('node:path');
 
+// Started by the PC agent as the agents' built-in browser: one Chromium window of its own
+// with a persistent profile, controlled over the DevTools protocol (browser-shell.cjs).
+if (process.argv.includes('--mimi-browser')) {
+  require('./browser-shell.cjs').runBrowserShell();
+  return;
+}
+
 const CORE = process.env.MIMI_CORE_URL;
 const TOKEN = process.env.MIMI_TOKEN || '';
 const STATE_FILE = path.join(process.env.MIMI_STATE_DIR || app.getPath('userData'), 'window-state.json');
@@ -137,6 +144,19 @@ function showWindow(view) {
   }
 }
 
+/** Opens the built-in browser by hand (an agent opens it the same way with browser_open). */
+function openBuiltInBrowser() {
+  const profile = process.env.MIMI_BROWSER_PROFILE || path.join(require('node:os').homedir(), '.mimi', 'browser-profile');
+  require('./browser-shell.cjs').launchBuiltInBrowser(profile, { appScript: __filename });
+}
+
+function openWorkspace() {
+  require('./workspace.cjs').openWorkspace({
+    icon: ICON,
+    defaultRoot: process.env.MIMI_WORKSPACE || path.join(require('node:os').homedir(), 'Mimi-Workspace'),
+  });
+}
+
 // ---------- the tray ----------
 let tray = null;
 
@@ -144,6 +164,8 @@ function buildMenu() {
   const template = [
     { label: LABELS.open, click: () => showWindow('chat') },
     ...['agents', 'hub', 'settings'].map((view) => ({ label: LABELS[view], click: () => showWindow(view) })),
+    { label: 'เปิดเบราว์เซอร์ของ Mimi', click: () => openBuiltInBrowser() },
+    { label: 'เปิด Mimi Workspace', click: () => openWorkspace() },
     { type: 'separator' },
     { label: LABELS.hide, type: 'checkbox', checked: state.hideOnBlur, click: (item) => ((state.hideOnBlur = item.checked), saveState()) },
     {
@@ -182,6 +204,7 @@ function quit() {
 function listen() {
   process.on('message', (message) => {
     if (message.type === 'show') showWindow(message.view);
+    else if (message.type === 'workspace') openWorkspace();
     else if (message.type === 'quit') quit();
     else if (message.type === 'balloon' && Notification.isSupported()) {
       const notice = new Notification({ title: message.title || 'Mimi', body: message.body || '', icon: ICON });

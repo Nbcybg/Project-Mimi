@@ -148,12 +148,14 @@
         const empty = el('option', '', field.type === 'account' ? '— บัญชีเริ่มต้น —' : '— connection เริ่มต้น —');
         empty.value = '';
         select.append(empty);
+        const settings = M().state.settings || {};
+        const mailAccounts = (settings.mailAccounts || []).map((account) => ({ ...account, service: 'mail' }));
         const entries =
           field.type === 'account'
-            ? (M().state.settings && M().state.settings.accounts) || []
+            ? [...(settings.accounts || []), ...mailAccounts]
             : (M().state.connections || []).filter((entry) => entry.connector === field.connector);
         for (const entry of entries.filter((account) => field.type !== 'account' || !field.service || account.service === field.service)) {
-          const option = el('option', '', `${entry.name}${entry.default ? ' ★' : ''}${entry.connected ? '' : ' (ยังไม่เชื่อมต่อ)'}`);
+          const option = el('option', '', `${entry.name || entry.id}${entry.default ? ' ★' : ''}${entry.connected ? '' : ' (ยังไม่เชื่อมต่อ)'}`);
           option.value = entry.id;
           select.append(option);
         }

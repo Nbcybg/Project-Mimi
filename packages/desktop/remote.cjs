@@ -36,6 +36,13 @@ const { pathToFileURL } = require('node:url');
 const lib = require('./remote-lib.cjs');
 const updater = require('./updater.cjs');
 
+// Started by the PC agent as the agents' built-in browser: one Chromium window of its own
+// with a persistent profile, controlled over the DevTools protocol (browser-shell.cjs).
+if (process.argv.includes('--mimi-browser')) {
+  require('./browser-shell.cjs').runBrowserShell();
+  return;
+}
+
 const home = os.homedir();
 app.setName('Mimi');
 // Windows: the agent's browser profile belongs in Local AppData, which does not roam with the account.
@@ -162,6 +169,28 @@ function pcAgentEntry() {
   return path.join(path.dirname(require.resolve('@mimi/pc-agent')), 'main.ts');
 }
 
+/** Where the PC agent finds the built-in browser: this same program, in browser mode. */
+function builtInBrowserEnv() {
+  return {
+    MIMI_BROWSER_PATH: process.execPath,
+    ...(app.isPackaged ? { MIMI_BROWSER_SELF: '1' } : { MIMI_BROWSER_APP: __filename }),
+  };
+}
+
+function agentBrowserProfile() {
+  if (!current || !config.server) return path.join(where.cache, 'browser-profile');
+  return lib.agentBrowserDir(where.cache, config.server, current.username);
+}
+
+/** Opens the built-in browser by hand (an agent opens it the same way with browser_open). */
+function openBuiltInBrowser() {
+  require('./browser-shell.cjs').launchBuiltInBrowser(agentBrowserProfile(), { appScript: __filename });
+}
+
+function openWorkspace() {
+  require('./workspace.cjs').openWorkspace({ icon: ICON, defaultRoot: config.pcAgent.folders[0] || home });
+}
+
 function startPcAgent() {
   if (pc || !current || !config.server || !config.pcAgent.enabled) return;
   const folders = config.pcAgent.folders.filter((dir) => lib.folderProblem(dir, home) === null);
@@ -186,6 +215,7 @@ function startPcAgent() {
     MIMI_CORE_URL: lib.wsUrl(config.server),
     ALLOWED_DIRS: folders.join(';'),
     MIMI_BROWSER_PROFILE: lib.agentBrowserDir(where.cache, config.server, current.username),
+    ...builtInBrowserEnv(),
     MIMI_PC_NAME: `${os.userInfo().username}@${os.hostname()}`,
   };
   const child = spawn(process.execPath, [pcAgentEntry()], { env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
@@ -479,6 +509,8 @@ function buildMenu() {
     ...(update ? [{ label: updating ? `กำลังอัปเดตเป็น ${update.version}…` : `⬆ อัปเดตเป็น ${update.version}`, enabled: !updating, click: () => void installUpdate() }, { type: 'separator' }] : []),
     { label: 'เปิด Mimi', click: () => showWindow('chat') },
     ...(signedIn ? [['agents', 'Agent'], ['hub', 'Hub'], ['settings', 'ตั้งค่า']].map(([view, label]) => ({ label, click: () => showWindow(view) })) : []),
+    ...(signedIn ? [{ label: 'เปิดเบราว์เซอร์ของ Mimi', click: () => openBuiltInBrowser() }] : []),
+    ...(signedIn ? [{ label: 'เปิด Mimi Workspace', click: () => openWorkspace() }] : []),
     { type: 'separator' },
     {
       label: 'ให้ Mimi ใช้เครื่องนี้ (PC agent)',
@@ -560,6 +592,18 @@ ipcMain.handle('mimi:signed-out', (event, reason) => {
 });
 
 ipcMain.handle('mimi:server', (event) => (isConnectPage(event.senderFrame?.url) ? config.server : ''));
+
+ipcMain.handle('mimi:open-browser', (event) => {
+  if (!current || !isServerUrl(event.senderFrame?.url)) return false;
+  openBuiltInBrowser();
+  return true;
+});
+
+ipcMain.handle('mimi:open-workspace', (event) => {
+  if (!current || !isServerUrl(event.senderFrame?.url)) return false;
+  openWorkspace();
+  return true;
+});
 
 ipcMain.handle('mimi:set-server', async (event, raw) => {
   if (!isConnectPage(event.senderFrame?.url)) return { ok: false, error: 'ไม่อนุญาต' };

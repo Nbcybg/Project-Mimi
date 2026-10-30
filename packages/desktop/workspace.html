@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mimi Workspace</title>
+<link rel="stylesheet" href="workspace.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="mark">M</span><b>Mimi Workspace</b></div>
+  <button class="ghost" id="choose-root" type="button">เลือกโฟลเดอร์</button>
+  <div class="root" id="root" title=""></div>
+</header>
+
+<div class="layout">
+  <aside class="files pane">
+    <div class="pane-head">
+      <span>Files</span>
+      <div class="head-actions">
+        <input class="filter" id="filter" placeholder="กรองชื่อไฟล์…" spellcheck="false">
+        <button class="icon" id="refresh-files" type="button" title="โหลดใหม่">↻</button>
+      </div>
+    </div>
+    <div class="tree" id="tree"></div>
+    <div class="preview">
+      <div class="preview-head">
+        <span id="file-name">Open files appear here</span>
+        <div class="head-actions">
+          <span class="saved" id="saved"></span>
+          <button class="mini" id="save-file" type="button" hidden>บันทึก</button>
+          <button class="icon" id="close-file" type="button" hidden title="ปิดไฟล์">×</button>
+        </div>
+      </div>
+      <div class="preview-empty" id="preview-empty">Pick a file in the tree.</div>
+      <textarea id="file-text" spellcheck="false" hidden></textarea>
+    </div>
+  </aside>
+
+  <main class="browser pane">
+    <div class="browser-bar">
+      <button class="icon" id="back" type="button" title="ย้อนกลับ">←</button>
+      <button class="icon" id="forward" type="button" title="ถัดไป">→</button>
+      <button class="icon" id="reload" type="button" title="โหลดใหม่">⟳</button>
+      <input id="url" placeholder="Type a URL" spellcheck="false" autocomplete="off">
+      <button class="mini" id="go" type="button">ไป</button>
+    </div>
+    <div class="browser-body">
+      <webview id="view" partition="persist:mimi-workspace" src="about:blank"></webview>
+      <div class="browse-empty" id="browse-empty">
+        <div class="globe">◍</div>
+        <b>Browse the web</b>
+        <span>Type a URL above to open a site.</span>
+      </div>
+    </div>
+  </main>
+
+  <aside class="terminal pane">
+    <div class="pane-head">
+      <span>Terminal <small id="term-status"></small></span>
+      <div class="head-actions">
+        <button class="mini" id="term-clear" type="button">Clear</button>
+        <button class="mini" id="term-restart" type="button">Restart</button>
+      </div>
+    </div>
+    <pre id="term-out"></pre>
+    <div class="term-line">
+      <span class="ps" id="term-prompt">PS&gt;</span>
+      <input id="term-in" spellcheck="false" autocomplete="off">
+    </div>
+  </aside>
+</div>
+<script src="workspace.js"></script>
+</body>
+</html>

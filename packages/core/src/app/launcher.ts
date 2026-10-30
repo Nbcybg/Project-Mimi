@@ -66,10 +66,41 @@ process.on('uncaughtException', (error) => {
 });
 log(`user data: ${config.userDir}`);
 
+// ---------- the built-in browser ----------
+// The desktop app carries its own browser: the Electron it already uses, in browser mode
+// (packages/desktop/browser-shell.cjs). The PC tools then launch it instead of looking for
+// Chrome or Edge, and its profile keeps the sites the person signed in to.
+function configureBuiltInBrowser(): void {
+  if (process.env.MIMI_BROWSER_PATH || process.env.MIMI_BROWSER_APP) return;
+  try {
+    const electron = createRequire(import.meta.url)('electron') as string;
+    if (!fs.existsSync(electron)) return;
+    process.env.MIMI_BROWSER_PATH = electron;
+    process.env.MIMI_BROWSER_APP = path.join(config.rootDir, 'packages/desktop/main.cjs');
+  } catch {
+    // no Electron: the browser tools fall back to an installed Chrome or Edge
+  }
+}
+configureBuiltInBrowser();
+
+async function openBuiltInBrowser(): Promise<void> {
+  try {
+    const { browserSession } = await import('@mimi/pc-agent');
+    // tabs() connects (and starts the browser when needed); activating one brings its window up.
+    await browserSession().run(async () => {
+      const tabs = await browserSession().tabs();
+      if (tabs.length > 0) await browserSession().switchTab(1);
+    });
+  } catch (error) {
+    log(`the built-in browser could not open: ${(error as Error).message}`);
+  }
+}
+
 // ---------- the native window ----------
 
 interface NativeShell {
   show(view?: string): void;
+  workspace(): void;
   balloon(title: string, body: string): void;
   stop(): void;
 }
@@ -99,6 +130,7 @@ function startShell(port: number, onQuit: () => void): Promise<NativeShell | nul
         ready = true;
         resolve({
           show: (view) => send({ type: 'show', view }),
+          workspace: () => send({ type: 'workspace' }),
           balloon: (title, body) => send({ type: 'balloon', title, body }),
           stop: () => send({ type: 'quit' }),
         });
@@ -160,10 +192,15 @@ shell = await startShell(server.port, () => void shutdown());
 if (!shell) {
   log('no native window (Electron is missing): opening the default browser');
   openInDefaultBrowser(`http://127.0.0.1:${server.port}/#token=${settings.token}`);
-  server.onAppAction = () => openInDefaultBrowser(`http://127.0.0.1:${server.port}/#token=${settings.token}`);
+  server.onAppAction = (action) =>
+    action === 'browser' ? void openBuiltInBrowser() : openInDefaultBrowser(`http://127.0.0.1:${server.port}/#token=${settings.token}`);
 } else {
   // "show" raises the window; "desktop" (Settings from a link) opens it on that screen.
-  server.onAppAction = (action) => shell?.show(action === 'desktop' ? 'settings' : undefined);
+  server.onAppAction = (action) => {
+    if (action === 'browser') return void openBuiltInBrowser();
+    if (action === 'workspace') return shell?.workspace();
+    shell?.show(action === 'desktop' ? 'settings' : undefined);
+  };
   // Agent messages and reminders reach the user as Windows notifications while no window is on screen.
   const previous = server.core.listeners.notification;
   server.core.listeners.notification = (notification) => {

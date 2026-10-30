@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import type { TriggerInfo } from '@mimi/shared';
 import { Cron } from 'croner';
+import { timeZoneName, type TimeZoneSource } from '../timezone.ts';
 import type { Db } from '../db/db.ts';
 
 export interface Trigger extends TriggerInfo {
@@ -109,13 +110,13 @@ function parseFireAt(value: string, timezone: string, now: Date): Date {
 /** Persistent triggers. Scheduling state lives in the database, never only in memory. */
 export class TriggerStore {
   private readonly db: Db;
-  private readonly timezone: string;
+  private readonly timezone: TimeZoneSource;
   private readonly now: () => Date;
   /** Called after every change, so the file mirror under `triggers/` stays in step. */
   onChange: ((trigger: Trigger) => void) | undefined;
   onDelete: ((id: number) => void) | undefined;
 
-  constructor(db: Db, timezone: string, now: () => Date = () => new Date()) {
+  constructor(db: Db, timezone: TimeZoneSource, now: () => Date = () => new Date()) {
     this.db = db;
     this.timezone = timezone;
     this.now = now;
@@ -127,10 +128,10 @@ export class TriggerStore {
     }
     const now = this.now();
     if (fireAt !== undefined) {
-      const date = parseFireAt(fireAt, this.timezone, now).toISOString();
+      const date = parseFireAt(fireAt, timeZoneName(this.timezone), now).toISOString();
       return { fireAt: date, cron: null, next: date };
     }
-    const next = nextRun(cron!, this.timezone, now);
+    const next = nextRun(cron!, timeZoneName(this.timezone), now);
     if (!next) throw new TriggerError(`Schedule "${cron}" never fires.`);
     return { fireAt: null, cron: cron!, next: next.toISOString() };
   }
@@ -270,7 +271,7 @@ export class TriggerStore {
    */
   advance(trigger: Trigger): void {
     const now = this.now();
-    const next = trigger.cron && trigger.repeat ? nextRun(trigger.cron, this.timezone, now) : null;
+    const next = trigger.cron && trigger.repeat ? nextRun(trigger.cron, timeZoneName(this.timezone), now) : null;
     this.db
       .prepare(
         `UPDATE triggers
@@ -335,7 +336,7 @@ export class TriggerStore {
     if (trigger.webhookKey) {
       // Webhooks are always ready to fire.
     } else if (trigger.cron) {
-      const when = nextRun(trigger.cron, this.timezone, now);
+      const when = nextRun(trigger.cron, timeZoneName(this.timezone), now);
       next = when?.toISOString() ?? null;
       if (!next && status === 'active') status = 'fired';
     } else if (trigger.fireAt) {

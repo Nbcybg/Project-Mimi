@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { accountOf, accountSetting } from '../oauth/settings.ts';
 import { defineTool, type ToolDefinition } from '../tools/registry.ts';
+import { timeZoneName, type TimeZoneSource } from '../timezone.ts';
 import { microsoftAuthResolver, type MicrosoftAuth, type MicrosoftAuthSource } from './auth.ts';
 
 const BODY_LIMIT = 8000;
@@ -75,10 +76,10 @@ function taskLine(task: TodoTask): string {
  * invitations are written by other people, so the reading tools are marked as untrusted
  * input: an agent that has them cannot have a shell.
  */
-export function createMicrosoftTools(source: MicrosoftAuthSource, timezone: string): ToolDefinition<any>[] {
+export function createMicrosoftTools(source: MicrosoftAuthSource, timezone: TimeZoneSource): ToolDefinition<any>[] {
   const resolve = microsoftAuthResolver(source);
   const client = (settings?: { account?: unknown }) => resolve(accountOf(settings));
-  const zone = { Prefer: `outlook.timezone="${timezone}"` };
+  const zone = () => ({ Prefer: `outlook.timezone="${timeZoneName(timezone)}"` });
 
   /** The id of a To Do list: the one given, else the account's default list. */
   const listId = async (auth: MicrosoftAuth, given: string | undefined): Promise<string> => {
@@ -200,7 +201,7 @@ export function createMicrosoftTools(source: MicrosoftAuthSource, timezone: stri
 
   const calendarList = defineTool({
     name: 'outlook_calendar_list',
-    description: `List events of the user's Outlook calendar between two times, in order. Times are in ${timezone}.`,
+    description: `List events of the user's Outlook calendar between two times, in order. Times are in ${timeZoneName(timezone)}.`,
     risk: 'read',
     target: 'core',
     untrustedInput: true,
@@ -215,7 +216,7 @@ export function createMicrosoftTools(source: MicrosoftAuthSource, timezone: stri
       const auth = client(settings);
       const found = await auth.request<{ value: OutlookEvent[] }>(
         `/me/calendarView?startDateTime=${encodeURIComponent(input.from)}&endDateTime=${encodeURIComponent(input.to)}&$orderby=start/dateTime&$top=${input.max_results ?? 20}&$select=id,subject,start,end,location,bodyPreview,isAllDay`,
-        { headers: zone },
+        { headers: zone() },
       );
       return found.value.length > 0 ? found.value.map(eventLine).join('\n') : 'No events in that period.';
     },
@@ -223,7 +224,7 @@ export function createMicrosoftTools(source: MicrosoftAuthSource, timezone: stri
 
   const calendarCreate = defineTool({
     name: 'outlook_calendar_create',
-    description: `Create an event in the user's Outlook calendar. Times are wall-clock times in ${timezone}, e.g. 2026-10-13T14:00:00.`,
+    description: `Create an event in the user's Outlook calendar. Times are wall-clock times in ${timeZoneName(timezone)}, e.g. 2026-10-13T14:00:00.`,
     risk: 'write',
     target: 'core',
     settings: [accountSetting('microsoft')],
@@ -240,11 +241,11 @@ export function createMicrosoftTools(source: MicrosoftAuthSource, timezone: stri
       const auth = client(settings);
       const event = await auth.request<OutlookEvent>('/me/events', {
         method: 'POST',
-        headers: zone,
+        headers: zone(),
         body: {
           subject: input.title,
-          start: wallClock(input.start, timezone),
-          end: wallClock(input.end, timezone),
+          start: wallClock(input.start, timeZoneName(timezone)),
+          end: wallClock(input.end, timeZoneName(timezone)),
           ...(input.location ? { location: { displayName: input.location } } : {}),
           ...(input.description ? { body: { contentType: 'Text', content: input.description } } : {}),
           ...(input.attendees
@@ -275,12 +276,12 @@ export function createMicrosoftTools(source: MicrosoftAuthSource, timezone: stri
       const auth = client(settings);
       const change: Record<string, unknown> = {};
       if (input.title !== undefined) change.subject = input.title;
-      if (input.start !== undefined) change.start = wallClock(input.start, timezone);
-      if (input.end !== undefined) change.end = wallClock(input.end, timezone);
+      if (input.start !== undefined) change.start = wallClock(input.start, timeZoneName(timezone));
+      if (input.end !== undefined) change.end = wallClock(input.end, timeZoneName(timezone));
       if (input.location !== undefined) change.location = { displayName: input.location };
       if (input.description !== undefined) change.body = { contentType: 'Text', content: input.description };
       if (Object.keys(change).length === 0) throw new Error('Nothing to change: give at least one field.');
-      const event = await auth.request<OutlookEvent>(`/me/events/${id(input.id)}`, { method: 'PATCH', headers: zone, body: change });
+      const event = await auth.request<OutlookEvent>(`/me/events/${id(input.id)}`, { method: 'PATCH', headers: zone(), body: change });
       return `Updated: ${eventLine(event)}`;
     },
   });
@@ -355,7 +356,7 @@ export function createMicrosoftTools(source: MicrosoftAuthSource, timezone: stri
         method: 'POST',
         body: {
           title: input.title,
-          ...(input.due ? { dueDateTime: wallClock(input.due.length <= 10 ? `${input.due}T00:00:00` : input.due, timezone) } : {}),
+          ...(input.due ? { dueDateTime: wallClock(input.due.length <= 10 ? `${input.due}T00:00:00` : input.due, timeZoneName(timezone)) } : {}),
           ...(input.note ? { body: { content: input.note, contentType: 'text' } } : {}),
         },
       });
@@ -384,7 +385,7 @@ export function createMicrosoftTools(source: MicrosoftAuthSource, timezone: stri
       const change: Record<string, unknown> = {};
       if (input.title !== undefined) change.title = input.title;
       if (input.completed !== undefined) change.status = input.completed ? 'completed' : 'notStarted';
-      if (input.due !== undefined) change.dueDateTime = wallClock(input.due.length <= 10 ? `${input.due}T00:00:00` : input.due, timezone);
+      if (input.due !== undefined) change.dueDateTime = wallClock(input.due.length <= 10 ? `${input.due}T00:00:00` : input.due, timeZoneName(timezone));
       if (input.note !== undefined) change.body = { content: input.note, contentType: 'text' };
       if (Object.keys(change).length === 0) throw new Error('Nothing to change: give at least one field.');
       const list = await listId(auth, input.list_id);

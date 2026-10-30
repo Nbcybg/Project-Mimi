@@ -170,7 +170,7 @@
     const target = M().logInner.querySelector(`[data-id="${entry.id}"]`);
     if (target) {
       target.scrollIntoView({ block: 'center', behavior: 'smooth' });
-      target.animate([{ outline: '2px solid #e08a5b' }, { outline: '2px solid transparent' }], { duration: 1800 });
+      target.animate([{ outline: '2px solid #e08aa7' }, { outline: '2px solid transparent' }], { duration: 1800 });
       return;
     }
     // Pinned in another session: open it at that message.

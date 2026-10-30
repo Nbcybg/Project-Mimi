@@ -8,6 +8,13 @@ export interface ToolSource {
   select(names: string[]): ToolDefinition[];
 }
 
+/** The untrusted-source/shell pair that may not share an agent, if there is one. */
+export function shellConflict(tools: ToolDefinition[]): { untrusted: ToolDefinition; shell: ToolDefinition } | null {
+  const untrusted = tools.find((tool) => tool.untrustedInput && !tool.allowWithShell);
+  const shell = tools.find((tool) => tool.risk === 'shell');
+  return untrusted && shell ? { untrusted, shell } : null;
+}
+
 export class ToolRegistry {
   private readonly tools = new Map<string, ToolDefinition>();
 
@@ -30,7 +37,9 @@ export class ToolRegistry {
   /**
    * The tools an agent declared in its frontmatter. Unknown names are a config error,
    * and so is combining a tool that reads third-party content with a shell tool:
-   * injected text must never be one step away from running commands.
+   * injected text must never be one step away from running commands. The assistant's
+   * own browser is the exception: it is a window the user watches, and shell calls
+   * still ask for permission.
    */
   select(names: string[]): ToolDefinition[] {
     const selected = names.map((name) => {
@@ -40,11 +49,10 @@ export class ToolRegistry {
       }
       return tool;
     });
-    const untrusted = selected.find((tool) => tool.untrustedInput);
-    const shell = selected.find((tool) => tool.risk === 'shell');
-    if (untrusted && shell) {
+    const conflict = shellConflict(selected);
+    if (conflict) {
       throw new Error(
-        `An agent cannot have both "${untrusted.name}" (reads third-party content) and "${shell.name}" (shell). Give them to different agents.`,
+        `An agent cannot have both "${conflict.untrusted.name}" (reads third-party content) and "${conflict.shell.name}" (shell). Give them to different agents.`,
       );
     }
     return selected;

@@ -18,6 +18,8 @@ export interface WorkflowAuthorDeps {
   triggerPool: TriggerPool;
   hasAgent(name: string): boolean;
   hasTool(name: string): boolean;
+  /** Names of the user's custom nodes (the "plugin" node). */
+  customNodes?(): string[];
   agentNames(): string[];
   tools(): Array<{ name: string; description: string; risk: string }>;
   run(name: string, input?: JsonValue): Promise<WorkflowRunResult>;
@@ -127,6 +129,7 @@ export function createWorkflowAuthorTools(deps: WorkflowAuthorDeps): ToolDefinit
         {
           triggers,
           nodeTypes: nodes,
+          customNodes: deps.customNodes?.() ?? [],
           agents: deps.agentNames(),
           tools: deps.tools().map((tool) => ({
             name: tool.name,

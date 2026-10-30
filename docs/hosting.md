@@ -377,9 +377,11 @@ ALLOWED_DIRS=C:\Users\<ชื่อ>\Documents
 ### Browser, ไฟล์ และการควบคุมเครื่อง
 
 เครื่องมือ `browser_*`, `list_dir`/`move_path`/`delete_path`, `power` ฯลฯ ทำงานที่ PC agent เช่นกัน ·
+แอปเดสก์ท็อปใช้ Chromium (Electron) ที่มากับแอปเป็นเบราว์เซอร์ในตัว ไม่ต้องติดตั้ง Chrome เพิ่ม ·
 เบราว์เซอร์ของ agent ใช้โปรไฟล์แยกที่ `~/.mimi/browser-profile` (ปรับได้ด้วย `MIMI_BROWSER_PROFILE`,
 เลือกโปรแกรมด้วย `MIMI_BROWSER_PATH`, ซ่อนหน้าต่างด้วย `MIMI_BROWSER_HEADLESS=1`,
-อนุญาต localhost/LAN ด้วย `MIMI_BROWSER_ALLOW_LOCAL=1`) · ภาพหน้าจอเก็บใน `browser-screenshots/` ของโฟลเดอร์แรกที่อนุญาต ·
+อนุญาต localhost/LAN ด้วย `MIMI_BROWSER_ALLOW_LOCAL=1`) · โปรไฟล์นี้เก็บคุกกี้ไว้หลังจากปิดแอป
+(ในแอปเดสก์ท็อปที่ล็อกอินบัญชี โปรไฟล์จะถูกลบตอนออกจากระบบ) · ภาพหน้าจอเก็บใน `browser-screenshots/` ของโฟลเดอร์แรกที่อนุญาต ·
 `wake_pc` (ปลุกเครื่องด้วย Wake-on-LAN) ส่งจาก core จึงต้องมี core ที่เปิดอยู่ตลอดในวง LAN เดียวกับเครื่องที่จะปลุก
 
 ## เช็กลิสต์หลังย้าย

@@ -10,30 +10,28 @@ import { createKnowledgeTools } from '../knowledge/tools.ts';
 import { runAgent } from '../loop/agent-loop.ts';
 import { createProfileTools } from '../profile/tools.ts';
 import { UserProfileStore } from '../profile/user-profile.ts';
-import { collect, makeAgent, makeHarness, scriptedModel, textStep } from './helpers.ts';
+import { collect, makeHarness, scriptedModel, textStep } from './helpers.ts';
 import { makeTestCore } from './core-helpers.ts';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mimi-agentf-'));
 after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
-test('agent file: intro card and effort round-trip; a bad effort is refused', () => {
+test('agent file: intro card round-trips; old effort is accepted but no longer stored', () => {
   const agent = parseAgentFile('---\nname: karen\ndescription: การเงิน\nintro: ละเอียดเรื่องตัวเลข ถามกลับก่อนทำ\neffort: high\n---\nคุณคือคาเรน');
   assert.equal(agent.intro, 'ละเอียดเรื่องตัวเลข ถามกลับก่อนทำ');
-  assert.equal(agent.effort, 'high');
+  assert.equal('effort' in agent, false, 'effort belongs to the model preset now');
   const again = parseAgentFile(serializeAgent(agent));
-  assert.deepEqual([again.intro, again.effort], [agent.intro, agent.effort]);
+  assert.equal(again.intro, agent.intro);
+  assert.doesNotMatch(serializeAgent(agent), /^effort:/m);
   assert.equal(parseAgentFile('---\nname: tim\n---\nทิม').intro, undefined);
   assert.throws(() => parseAgentFile('---\nname: tim\neffort: insane\n---\nทิม'), /effort/);
 });
 
-test('agent effort: reaches the model call and wins over the preset', async () => {
+test('old agent effort no longer overrides the model preset', async () => {
+  const legacy = parseAgentFile('---\nname: karen\nmodel: test/chat\neffort: high\n---\nคุณคือคาเรน');
   const model = scriptedModel([textStep('ok')]);
-  const harness = makeHarness(model);
-  await collect(runAgent(harness.deps, { agent: makeAgent({ effort: 'max' }), userText: 'คิดหนัก ๆ' }));
-  assert.equal(model.doStreamCalls[0]!.reasoning, 'max');
-  const plain = scriptedModel([textStep('ok')]);
-  await collect(runAgent(makeHarness(plain).deps, { agent: makeAgent(), userText: 'ปกติ' }));
-  assert.equal(plain.doStreamCalls[0]!.reasoning, undefined);
+  await collect(runAgent(makeHarness(model).deps, { agent: legacy, userText: 'คิดหนัก ๆ' }));
+  assert.equal(model.doStreamCalls[0]!.reasoning, undefined);
 });
 
 test('intro card: other agents see it in send_to and in group chats', async () => {

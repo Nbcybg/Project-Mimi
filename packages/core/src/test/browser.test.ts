@@ -135,6 +135,13 @@ test('launching: which browser, its flags, and where the profile address is read
   for (const flag of ['--remote-debugging-port=0', '--user-data-dir=/p', '--disable-sync', '--no-first-run']) assert.ok(flags.includes(flag), flag);
   assert.equal(flags.includes('--headless=new'), false);
   assert.ok(browserArguments('/p', true).includes('--headless=new'));
+  // The desktop app's own Electron in browser mode: the app script (or the executable
+  // itself, once packaged) is passed after the switches, never a blank Chrome tab.
+  const desktop = browserArguments('/p', false, { MIMI_BROWSER_APP: path.resolve('/app/main.cjs') });
+  assert.equal(desktop.at(-2), path.resolve('/app/main.cjs'));
+  assert.equal(desktop.at(-1), '--mimi-browser');
+  assert.equal(desktop.includes('about:blank'), false);
+  assert.deepEqual(browserArguments('/p', false, { MIMI_BROWSER_SELF: '1' }).slice(-1), ['--mimi-browser']);
 
   const profile = path.join(tmp, 'profile');
   assert.equal(readDevToolsAddress(profile), undefined);
@@ -277,7 +284,8 @@ test('tools: what the model sees, and the rules around them', async () => {
   assert.equal(await run('browser_close', {}), 'The browser is closed.');
   assert.ok(fake.calls.some((call) => call.method === 'Browser.close'));
 
-  // Reading the web is untrusted, so an agent with browser tools may not also have a shell tool.
+  // Reading the web is untrusted, but the assistant's own browser may share an agent with
+  // a shell tool (a window the user watches, and shell calls still ask for permission).
   const risks = Object.fromEntries(browserTools.map((entry) => [entry.name, entry.risk]));
   assert.equal(risks.browser_open, 'network');
   assert.equal(risks.browser_click, 'write');
@@ -285,8 +293,8 @@ test('tools: what the model sees, and the rules around them', async () => {
   assert.equal(risks.browser_snapshot, 'read');
   assert.equal(tool('browser_snapshot').untrustedInput, true);
   const target = await makeTestCore({});
-  assert.throws(() => target.core.tools.select(['browser_open', 'run_shell']), /cannot have both/);
-  assert.throws(() => target.core.tools.select(['browser_snapshot', 'power']), /cannot have both/);
+  assert.equal(target.core.tools.select(['browser_open', 'run_shell']).length, 2);
+  assert.equal(target.core.tools.select(['browser_snapshot', 'power']).length, 2);
   assert.equal(target.core.tools.select(['browser_open', 'browser_click', 'send_file']).length, 3);
   await target.cleanup();
 });

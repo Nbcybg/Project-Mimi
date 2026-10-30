@@ -24,7 +24,7 @@ export interface PcLink {
 }
 
 export const PC_OFFLINE =
-  'PC offline: the PC agent is not connected, so files and commands on the user\'s computer are unavailable right now.';
+  'PC offline: the PC agent is not connected, so files and commands on the user\'s computer are unavailable right now. Turn on "ให้ Mimi ใช้เครื่องนี้ (PC agent)" from the Mimi tray menu, then try again.';
 
 /**
  * Where work meant for the user's machine goes: down the PC agent's socket when one is

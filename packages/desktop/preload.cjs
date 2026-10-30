@@ -19,4 +19,8 @@ contextBridge.exposeInMainWorld('MimiDesktop', {
   /** Connect page: checks a server address and opens it. */
   setServer: (url) => ipcRenderer.invoke('mimi:set-server', String(url ?? '')),
   server: () => ipcRenderer.invoke('mimi:server'),
+  /** Opens the built-in browser window (its own profile keeps sites signed in). */
+  openBrowser: () => ipcRenderer.invoke('mimi:open-browser'),
+  /** Opens the separate Workspace window with browser, files and terminal. */
+  openWorkspace: () => ipcRenderer.invoke('mimi:open-workspace'),
 });

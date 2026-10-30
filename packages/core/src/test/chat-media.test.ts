@@ -5,11 +5,12 @@ import path from 'node:path';
 import { test } from 'node:test';
 import type { WorkflowView } from '@mimi/shared';
 import { MockLanguageModelV4 } from 'ai/test';
-import { AttachmentStore, audioPrompt, PROMPTS } from '../chat/attachments.ts';
+import { AttachmentStore, audioInstructions, audioPrompt, ingestAttachments, modelAnswer, PROMPTS } from '../chat/attachments.ts';
 import { filesMatch } from '../core.ts';
 import { openDb } from '../db/db.ts';
+import { UsageLogger } from '../usage/logger.ts';
 import { makeTestCore, type TestCore } from './core-helpers.ts';
-import { replyingModel, scriptedModel, textStep } from './helpers.ts';
+import { makeAgent, replyingModel, scriptedModel, textStep } from './helpers.ts';
 
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
 
@@ -51,6 +52,110 @@ const reader = () =>
           : { text: 'nothing' },
   ]);
 
+test('a transcript that arrives as reasoning is still used', () => {
+  const reasoningOnly = { text: '', finalStep: { reasoningText: 'สวัสดีครับ นี่คือข้อความเสียง' } };
+  assert.equal(modelAnswer(reasoningOnly, true), 'สวัสดีครับ นี่คือข้อความเสียง');
+  assert.equal(modelAnswer(reasoningOnly, false), '', 'ordinary readings never take reasoning as the answer');
+  assert.equal(modelAnswer({ text: ' มีข้อความ ', finalStep: { reasoningText: 'คิดอยู่' } }, true), 'มีข้อความ');
+});
+
+test('a model preset sampling params reach the transcript call', async () => {
+  const seen: Array<{ reasoning?: unknown; temperature?: unknown }> = [];
+  const model = new MockLanguageModelV4({
+    doGenerate: async (options) => {
+      seen.push({ reasoning: (options as { reasoning?: unknown }).reasoning, temperature: options.temperature });
+      return {
+        content: [{ type: 'text', text: 'สวัสดีครับ' }],
+        finishReason: { unified: 'stop', raw: undefined },
+        usage: {
+          inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: undefined },
+          outputTokens: { total: 1, text: 1, reasoning: undefined },
+        },
+        warnings: [],
+      };
+    },
+  });
+  const db = openDb(':memory:');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mimi-preset-'));
+  const store = new AttachmentStore(db, dir);
+  const ref = { provider: 'test', model: 'ear', params: { reasoning: 'none' as const, temperature: 0.2 } };
+  const models = {
+    resolve: () => ref,
+    info: () => ({
+      ref,
+      name: 'ear',
+      npm: '@ai-sdk/test',
+      baseURL: undefined,
+      contextLimit: 1000,
+      outputLimit: undefined,
+      cost: null,
+      imageInput: false,
+      toolCall: true,
+      textOutput: true,
+      options: {},
+    }),
+    languageModel: async () => model,
+  };
+  const audio = store.save({ name: 'voice.wav', mime: 'audio/wav', data: wav(1600, 3000) });
+  const [read] = await ingestAttachments(
+    { store, models, usage: new UsageLogger(db) },
+    { ids: [audio.id], agent: makeAgent(), traceId: 't' },
+  );
+  assert.equal(read!.text, 'สวัสดีครับ');
+  assert.deepEqual(seen[0], { reasoning: 'none', temperature: 0.2 });
+  db.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('a recording is transcribed with the app language in the system instruction too', async () => {
+  const seen: string[] = [];
+  const model = new MockLanguageModelV4({
+    doGenerate: async (options) => {
+      seen.push(JSON.stringify(options.prompt));
+      return {
+        content: [{ type: 'text', text: 'สวัสดีครับ' }],
+        finishReason: { unified: 'stop', raw: undefined },
+        usage: {
+          inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: undefined },
+          outputTokens: { total: 1, text: 1, reasoning: undefined },
+        },
+        warnings: [],
+      };
+    },
+  });
+  const db = openDb(':memory:');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mimi-language-'));
+  const store = new AttachmentStore(db, dir);
+  const ref = { provider: 'test', model: 'ear' };
+  const models = {
+    resolve: () => ref,
+    info: () => ({
+      ref,
+      name: 'ear',
+      npm: '@ai-sdk/test',
+      baseURL: undefined,
+      contextLimit: 1000,
+      outputLimit: undefined,
+      cost: null,
+      imageInput: false,
+      toolCall: true,
+      textOutput: true,
+      options: {},
+    }),
+    languageModel: async () => model,
+  };
+  const audio = store.save({ name: 'voice.wav', mime: 'audio/wav', data: wav(1600, 3000) });
+  await ingestAttachments(
+    { store, models, usage: new UsageLogger(db), language: () => 'th' },
+    { ids: [audio.id], agent: makeAgent(), traceId: 't' },
+  );
+  assert.match(seen[0]!, /"role":"system"/);
+  assert.match(seen[0]!, /The speaker speaks Thai/);
+  assert.match(seen[0]!, /never Chinese/);
+  db.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('attachments: a video is its own kind and the vision model describes it once', async () => {
   const mimi = scriptedModel([textStep('ดูแล้วค่ะ')]);
   const small = reader();
@@ -73,11 +178,11 @@ test('schema v14 keeps the attachments that were there and accepts videos', () =
   const first = openDb(file);
   first.prepare(`INSERT INTO attachments (id, kind, name, mime, size, text) VALUES ('a', 'image', 'cat.png', 'image/png', 7, 'แมว')`).run();
   // Back to how a v13 file looks: the columns of v16 do not exist yet.
-  first.exec('ALTER TABLE messages DROP COLUMN pinned_at; ALTER TABLE messages DROP COLUMN reactions; ALTER TABLE messages DROP COLUMN speech; ALTER TABLE sessions DROP COLUMN read_at;');
+  first.exec('ALTER TABLE messages DROP COLUMN pinned_at; ALTER TABLE messages DROP COLUMN reactions; ALTER TABLE messages DROP COLUMN speech; ALTER TABLE sessions DROP COLUMN read_at; ALTER TABLE notifications DROP COLUMN agent;');
   first.pragma('user_version = 13');
   first.close();
   const again = openDb(file);
-  assert.equal(again.pragma('user_version', { simple: true }), 20);
+  assert.equal(again.pragma('user_version', { simple: true }), 21);
   assert.deepEqual(again.prepare(`SELECT id, kind, text FROM attachments`).all(), [{ id: 'a', kind: 'image', text: 'แมว' }]);
   assert.equal((again.prepare(`SELECT hash FROM attachments`).get() as { hash: string | null }).hash, null);
   again.prepare(`INSERT INTO attachments (id, kind, name, mime, size) VALUES ('b', 'video', 'x.mp4', 'video/mp4', 1)`).run();
@@ -394,6 +499,10 @@ test('a recording is transcribed in the language of the app', () => {
   assert.match(audioPrompt('th'), /Thai script/);
   assert.match(audioPrompt('th'), /never Chinese/);
   assert.match(audioPrompt('en', true), /English/);
-  // No language known: the plain prompt, as before.
+  // No language known: the plain prompt, as before, but still never Chinese by guessing.
   assert.equal(audioPrompt(undefined), PROMPTS.audio);
+  assert.match(PROMPTS.audio, /never switch to another language/);
+  assert.match(audioInstructions('th'), /Thai script/);
+  assert.match(audioInstructions('th'), /never Chinese/);
+  assert.match(audioInstructions(undefined), /language actually spoken/);
 });

@@ -77,6 +77,7 @@ const openTool = defineTool({
   risk: 'network',
   target: 'pc',
   untrustedInput: true,
+  allowWithShell: true,
   inputSchema: z.object({
     url: z.string().min(1).describe('Address, e.g. https://example.com'),
     new_tab: z.boolean().optional().describe('Open in a new tab instead of the current one'),
@@ -94,6 +95,7 @@ const snapshotTool = defineTool({
   risk: 'read',
   target: 'pc',
   untrustedInput: true,
+  allowWithShell: true,
   inputSchema: z.object({}),
   summarize: () => 'Read the browser page',
   execute: () => withPage(async () => 'Current page:'),
@@ -105,6 +107,7 @@ const clickTool = defineTool({
   risk: 'write',
   target: 'pc',
   untrustedInput: true,
+  allowWithShell: true,
   inputSchema: z.object({ ref: z.string().min(2).describe('Element ref such as e12') }),
   summarize: (input) => `Click ${input.ref} in the browser`,
   execute: (input) => withPage(async (browser) => {
@@ -119,6 +122,7 @@ const typeTool = defineTool({
   risk: 'write',
   target: 'pc',
   untrustedInput: true,
+  allowWithShell: true,
   inputSchema: z.object({
     ref: z.string().min(2),
     text: z.string(),
@@ -138,6 +142,7 @@ const selectTool = defineTool({
   risk: 'write',
   target: 'pc',
   untrustedInput: true,
+  allowWithShell: true,
   inputSchema: z.object({ ref: z.string().min(2), value: z.string().min(1) }),
   summarize: (input) => `Choose "${input.value}" in ${input.ref}`,
   execute: (input) => withPage(async (browser) => {
@@ -152,6 +157,7 @@ const pressTool = defineTool({
   risk: 'write',
   target: 'pc',
   untrustedInput: true,
+  allowWithShell: true,
   inputSchema: z.object({ key: z.string().min(1) }),
   summarize: (input) => `Press ${input.key} in the browser`,
   execute: (input) => withPage(async (browser) => {
@@ -183,6 +189,7 @@ const backTool = defineTool({
   risk: 'read',
   target: 'pc',
   untrustedInput: true,
+  allowWithShell: true,
   inputSchema: z.object({ action: z.enum(['back', 'forward', 'reload']) }),
   summarize: (input) => `Browser ${input.action}`,
   execute: (input) => withPage(async (browser) => {
@@ -197,6 +204,7 @@ const tabsTool = defineTool({
   risk: 'read',
   target: 'pc',
   untrustedInput: true,
+  allowWithShell: true,
   inputSchema: z.object({
     action: z.enum(['list', 'switch', 'close']).optional().describe('Default list'),
     index: z.number().int().min(1).optional().describe('Tab number for switch or close'),

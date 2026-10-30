@@ -2,6 +2,49 @@
 
 ## Unreleased
 
+### 0.7.7-prototype
+
+- Themes: a warm rose / plum palette with light and dark modes (Settings → หน้าตา), and
+  each chat can keep its own theme. The status chip is centred, the composer's blurred
+  glass is back on Android, and the message box no longer shows a scrollbar.
+- Desktop: a separate Mimi Workspace window with the built-in browser, a project file
+  tree and text editor, and a PowerShell terminal. Open it from the tray or Settings.
+- Browser tools may share an agent with a shell tool (the user watches that window; shell
+  calls still ask for permission), and the PC-offline message says how to connect the PC
+  agent. chat_1 is 20 % quieter.
+- Voice messages and `read_document` recordings get the app's language as a system
+  instruction, not only in the question, so MiMo and other Chinese-biased models keep the
+  transcript in Thai/English. The web client also remembers the language it guessed on the
+  first load and hands it to the server, which is what was missing on existing installs.
+- Typing Thai on a phone is smoother: the character stops drawing (and drops its shadow)
+  while the message box has focus, the glass buttons stop blurring over it, the box stays at
+  16px so Android no longer zooms on focus, the Thai line-break rule is set at load, and
+  messages far off screen are only laid out when they scroll into view.
+
+### 0.7.6-prototype
+
+- Sounds: every app sound plays at 30 % volume. On Android the three chat sounds are bundled
+  in the app and loaded once, so they start at once instead of being fetched per tap; on the
+  web they are fetched at load and decoded on the first gesture.
+- Reasoning effort / temperature / top_p belong to the model preset only; the per-agent
+  `effort` field is gone (old agent files with it still load) and the presets' parameters now
+  also reach summaries and attachment reading.
+- Audio transcription: models that put the transcript in the reasoning channel (MiMo v2.6
+  Flash via OpenAI-compatible gateways) no longer give an empty transcript.
+- A sent message no longer disappears when its stored echo arrives (it was wrongly kept
+  marked as pending).
+
+### 0.7.5-prototype
+
+- Mail: besides Gmail / Outlook, any IMAP or POP3 mailbox can be watched, with optional SMTP
+  sending; passwords are typed in Hub → Mail but kept only in the machine's vault.
+- Workflows: custom nodes (defined from files) appear in the editor; trigger pool, sandbox
+  and runner updates.
+- Notifications remember which agent raised them, so Settings can mute chosen agents.
+- The app's time zone is a setting that takes effect on the next message, no restart.
+- Desktop: a built-in browser window with its own profile, driven by the PC agent.
+- Android: notification icon and push-service / widget fixes.
+
 ### 0.7.4-prototype
 
 - The header and the chat list say "กำลังตอบ…" (was "กำลังพิมพ์…") while an agent answers.

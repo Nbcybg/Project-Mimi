@@ -11,6 +11,7 @@ import { applyOperator, contextFor, resolveString } from '../workflows/expressio
 import { normalizeItems, runWorkflow, runWorkflowNode, triggerItems, type WorkflowRunnerDeps, WorkflowState } from '../workflows/runner.ts';
 import { TriggerPool } from '../workflows/trigger-pool.ts';
 import { WorkflowStore } from '../workflows/workflow-store.ts';
+import { CustomNodeStore } from '../workflows/custom-nodes.ts';
 import { makeTestCore } from './core-helpers.ts';
 import { scriptedModel, textStep } from './helpers.ts';
 
@@ -203,6 +204,35 @@ test('runner: a trigger node passes its items to the next node', async () => {
   assert.deepEqual(run.nodes.map((node) => node.id), ['t', 'n1']);
   assert.deepEqual(run.nodes[0]!.output[0]!.json, { text: 'hello' });
   assert.deepEqual(calls, ['chat:mimi:hello']);
+});
+
+test('custom nodes: stored under user/nodes and run through the plugin node with $config', async () => {
+  const dir = path.join(tmp, 'custom-nodes');
+  const store = new CustomNodeStore(dir);
+  const saved = store.save({
+    name: 'tag-item',
+    label: 'Tag item',
+    description: 'Adds a tag from the node config',
+    fields: [{ key: 'tag', label: 'Tag', type: 'string' }],
+    code: 'return items.map((json) => ({ ...json, tag: String($config.tag || "none") }));',
+  });
+  assert.equal(store.get(saved.name)?.label, 'Tag item');
+  assert.ok(fs.readFileSync(path.join(dir, `${saved.name}.json`), 'utf8').includes('$config.tag'));
+
+  const workflow = stored(
+    workflowView({
+      nodes: [
+        { id: 'p', type: 'plugin', title: 'Tag', config: { plugin: 'tag-item', config: { tag: '{{ $json.kind }}' } }, links: { main: [] } },
+      ],
+    }),
+  );
+  const deps: WorkflowRunnerDeps = {
+    ...fakeDeps([]),
+    customNode: (name) => store.get(name),
+  };
+  const run = await runWorkflow(workflow, [{ json: { kind: 'invoice', subject: 'บิล' } }], deps);
+  assert.equal(run.ok, true);
+  assert.deepEqual(run.nodes[0]!.output[0]!.json, { kind: 'invoice', subject: 'บิล', tag: 'invoice' });
 });
 
 function fakeDeps(calls: string[], runAgent?: (agent: string) => Promise<string>): WorkflowRunnerDeps {
@@ -509,6 +539,30 @@ test('trigger items: manual input, schedule timestamp, poll response, webhook bo
   const webhook = stored(workflowView({ trigger: { pool: 'webhook', config: {} } }));
   assert.deepEqual((await triggerItems(webhook, pool, deps, { body: { event: 'x' } }))[0]!.json, { event: 'x' });
   assert.deepEqual(normalizeItems('plain text'), [{ json: { value: 'plain text' } }]);
+});
+
+test('mail trigger: IMAP / POP3 sources pass folder and query options to the mail reader', async () => {
+  const pool = new TriggerPool(path.join(tmp, 'trigger-pool-mail'));
+  const workflow = stored(
+    workflowView({
+      trigger: { pool: 'mail', config: { source: 'imap', account: 'mail-work', folder: 'INBOX', query: 'invoice', unseenOnly: true, sinceDays: 3, maxMessages: 7 } },
+      nodes: [{ id: 't', type: 'trigger_mail', title: 'mail', config: {}, links: { main: [] } }],
+    }),
+  );
+  const seen: unknown[] = [];
+  const deps: WorkflowRunnerDeps = {
+    ...fakeDeps([]),
+    mail: {
+      list: async (source, query, max, account, options) => {
+        seen.push({ source, query, max, account, options });
+        return [{ id: '42', from: 'a@b.c', to: 'me@b.c', subject: 'Invoice', content: 'total 100', folder: 'INBOX', seen: false }];
+      },
+      markRead: async () => {},
+    },
+  };
+  const items = await triggerItems(workflow, pool, deps);
+  assert.deepEqual(seen, [{ source: 'imap', query: 'invoice', max: 7, account: 'mail-work', options: { folder: 'INBOX', unseenOnly: true, sinceDays: 3 } }]);
+  assert.deepEqual(items[0]!.json, { Id: '42', From: 'a@b.c', To: 'me@b.c', Date: '', Subject: 'Invoice', Content: 'total 100', Folder: 'INBOX', Seen: false });
 });
 
 test('single-node test: sample input in, per-output items out, errors reported', async () => {

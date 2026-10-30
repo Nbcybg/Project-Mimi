@@ -12,7 +12,7 @@ after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
 test('a fresh database is created at the latest schema version', () => {
   const db = openDb(path.join(tmp, 'nested', 'fresh.db'));
-  assert.equal(db.pragma('user_version', { simple: true }), 20);
+  assert.equal(db.pragma('user_version', { simple: true }), 21);
   const tables = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name`).all() as { name: string }[];
   for (const name of ['agent_messages', 'agent_runs', 'memories', 'messages', 'summaries', 'thread_state', 'triggers', 'usage_log']) {
     assert.ok(tables.some((table) => table.name === name), `missing table ${name}`);
@@ -30,7 +30,7 @@ test('a phase-1 database is upgraded in place and keeps its messages', () => {
   v1.close();
 
   const db = openDb(file);
-  assert.equal(db.pragma('user_version', { simple: true }), 20);
+  assert.equal(db.pragma('user_version', { simple: true }), 21);
   const [message] = new MessagesRepo(db).after('main', 0);
   assert.deepEqual(
     { text: message!.text, content: message!.content, context: message!.context },

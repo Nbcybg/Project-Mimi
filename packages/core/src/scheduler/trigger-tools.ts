@@ -1,24 +1,51 @@
 import { z } from 'zod';
 import type { AgentCatalog } from '../agents/loader.ts';
+import { timeZoneName, type TimeZoneSource } from '../timezone.ts';
 import { defineTool, type ToolDefinition } from '../tools/registry.ts';
 import type { Trigger, TriggerStore } from './triggers.ts';
 
 const SCHEDULE_HELP =
-  'Give exactly one of fire_at (one-shot local date-time like 2026-10-13T09:00:00), cron (recurring, e.g. "0 8 * * 1-5" for weekdays at 08:00), or webhook: true for a trigger that fires when an HTTP service calls its URL.';
+  'Give exactly one of fire_at (one-shot local date-time in the configured time zone, like 2026-10-13T09:00:00), cron (recurring, e.g. "0 8 * * 1-5" for weekdays at 08:00), or webhook: true for a trigger that fires when an HTTP service calls its URL. Results show times in that same local zone with its UTC offset.';
 
-function describe(trigger: Trigger): string {
+/** An ISO instant as local date-time, offset and zone name, e.g. 2026-10-31T00:30:00+07:00 (Asia/Bangkok). */
+function localStamp(iso: string | null, timezone: string): string | null {
+  if (!iso) return null;
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date);
+  const get = (type: string) => Number(parts.find((part) => part.type === type)?.value ?? 0);
+  const wallClock = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'), get('second'));
+  const offsetMinutes = Math.round((wallClock - date.getTime()) / 60_000);
+  const sign = offsetMinutes < 0 ? '-' : '+';
+  const absolute = Math.abs(offsetMinutes);
+  const offset = `${sign}${String(Math.floor(absolute / 60)).padStart(2, '0')}:${String(absolute % 60).padStart(2, '0')}`;
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${get('year')}-${pad(get('month'))}-${pad(get('day'))}T${pad(get('hour'))}:${pad(get('minute'))}:${pad(get('second'))}${offset} (${timezone})`;
+}
+
+function describe(trigger: Trigger, timezone: string): string {
   const when = trigger.webhook
     ? `on webhook ${trigger.webhook}`
     : trigger.cron
       ? `cron "${trigger.cron}"${trigger.repeat ? '' : ' (once)'}`
-      : `at ${trigger.fireAt}`;
-  const next = trigger.nextFireAt ? `, next ${trigger.nextFireAt}` : '';
+      : `at ${localStamp(trigger.fireAt, timezone)}`;
+  const next = trigger.nextFireAt ? `, next ${localStamp(trigger.nextFireAt, timezone)}` : '';
   const who = trigger.kind === 'agent_task' ? ` [agent ${trigger.agent}]` : '';
   return `#${trigger.id} ${trigger.kind} "${trigger.title}" ${when}${next} (${trigger.status})${who}: ${trigger.text}`;
 }
 
-/** The four scheduling tools. Times are stored in UTC and returned in UTC. */
-export function createTriggerTools(store: TriggerStore, agents: AgentCatalog): ToolDefinition<any>[] {
+/** The four scheduling tools. Times are stored in UTC and shown in the user's local zone. */
+export function createTriggerTools(store: TriggerStore, agents: AgentCatalog, timezone: TimeZoneSource): ToolDefinition<any>[] {
+  const zone = () => timeZoneName(timezone);
   const createTrigger = defineTool({
     name: 'create_trigger',
     description: `Schedule a reminder for the user, or an agent task that runs unattended at that time. ${SCHEDULE_HELP} The current time is in the context block of the user's message.`,
@@ -49,7 +76,7 @@ export function createTriggerTools(store: TriggerStore, agents: AgentCatalog): T
         repeat: input.repeat,
         agent,
       });
-      return `Created ${describe(trigger)}`;
+      return `Created ${describe(trigger, zone())}`;
     },
   });
 
@@ -63,7 +90,7 @@ export function createTriggerTools(store: TriggerStore, agents: AgentCatalog): T
     async execute(input) {
       const status = input.status ?? 'active';
       const triggers = store.list(status === 'all' ? undefined : status);
-      return triggers.length > 0 ? triggers.map(describe).join('\n') : `No ${status === 'all' ? '' : `${status} `}triggers.`;
+      return triggers.length > 0 ? triggers.map((trigger) => describe(trigger, zone())).join('\n') : `No ${status === 'all' ? '' : `${status} `}triggers.`;
     },
   });
 
@@ -83,7 +110,7 @@ export function createTriggerTools(store: TriggerStore, agents: AgentCatalog): T
     summarize: (input) => `Update trigger #${input.id}`,
     async execute(input) {
       const { id, fire_at: fireAt, ...rest } = input;
-      return `Updated ${describe(store.update(id, { ...rest, fireAt }))}`;
+      return `Updated ${describe(store.update(id, { ...rest, fireAt }), zone())}`;
     },
   });
 
@@ -95,7 +122,7 @@ export function createTriggerTools(store: TriggerStore, agents: AgentCatalog): T
     inputSchema: z.object({ id: z.number().int().positive() }),
     summarize: (input) => `Cancel trigger #${input.id}`,
     async execute(input) {
-      return `Cancelled ${describe(store.cancel(input.id))}`;
+      return `Cancelled ${describe(store.cancel(input.id), zone())}`;
     },
   });
 

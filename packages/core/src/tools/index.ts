@@ -71,7 +71,7 @@ export function createToolRegistry(services: ToolServices): ToolRegistry {
     ),
     ...createSessionTools(services.chats, services.messages),
     ...createStateTools(services.status, services.memos),
-    ...createTriggerTools(services.triggers, services.agents),
+    ...createTriggerTools(services.triggers, services.agents, services.timezone),
     ...createGoogleTools(services.googleFor ?? services.google, services.timezone),
     ...createSheetTools(services.googleFor ?? services.google),
     ...createMicrosoftTools(services.microsoftFor ?? services.microsoft, services.timezone),

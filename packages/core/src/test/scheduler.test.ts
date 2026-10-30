@@ -152,7 +152,7 @@ test('trigger tools: create, list, update, cancel', async () => {
   const { store } = setup();
   const root = makeTestRoot();
   const tools = Object.fromEntries(
-    createTriggerTools(store, new AgentCatalog(path.join(root, 'user', 'agents'))).map((tool) => [tool.name, tool]),
+    createTriggerTools(store, new AgentCatalog(path.join(root, 'user', 'agents')), 'Asia/Bangkok').map((tool) => [tool.name, tool]),
   ) as Record<string, ToolDefinition<any>>;
   const context = { traceId: 't', thread: 'main', agent: 'mimi', allowedDirs: [] };
   assert.deepEqual(
@@ -179,6 +179,24 @@ test('trigger tools: create, list, update, cancel', async () => {
   assert.match(await tools.cancel_trigger!.execute({ id: 1 }, context), /Cancelled #1 .*\(cancelled\)/);
   assert.equal(await tools.list_triggers!.execute({}, context), 'No active triggers.');
   assert.match(await tools.list_triggers!.execute({ status: 'all' }, context), /#1 /);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('trigger tool results show times in the local zone, not UTC', async () => {
+  const { store } = setup();
+  const root = makeTestRoot();
+  const tools = Object.fromEntries(
+    createTriggerTools(store, new AgentCatalog(path.join(root, 'user', 'agents')), 'Asia/Bangkok').map((tool) => [tool.name, tool]),
+  ) as Record<string, ToolDefinition<any>>;
+  const context = { traceId: 't', thread: 'main', agent: 'mimi', allowedDirs: [] };
+
+  const created = await tools.create_trigger!.execute(
+    { kind: 'agent_task', title: 'Report', text: 'Send it', fire_at: '2026-10-31T00:30:00' },
+    context,
+  );
+  // 00:30 Bangkok on the 31st is 17:30 UTC on the 30th; the reply must still name the 31st.
+  assert.match(created, /at 2026-10-31T00:30:00\+07:00 \(Asia\/Bangkok\)/);
+  assert.match(await tools.list_triggers!.execute({}, context), /at 2026-10-31T00:30:00\+07:00 \(Asia\/Bangkok\)/);
   fs.rmSync(root, { recursive: true, force: true });
 });
 

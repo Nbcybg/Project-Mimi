@@ -1,4 +1,4 @@
-import { NODE_TYPES, REASONING_EFFORTS, type CustomToolSpec, type ToolPreset } from '@mimi/shared';
+import { NODE_TYPES, type CustomToolSpec, type ToolPreset } from '@mimi/shared';
 import { z } from 'zod';
 import { MODEL_KEYS } from '../app/app-settings.ts';
 import type { AgentCatalog, AgentDefinition } from '../agents/loader.ts';
@@ -46,7 +46,6 @@ const agentInput = z.object({
   displayName: z.string().optional(),
   description: z.string().optional(),
   intro: z.string().optional().describe('What other agents are told about this one'),
-  effort: z.enum(REASONING_EFFORTS).nullable().optional().describe('Reasoning effort; null clears it'),
   systemPrompt: z.string().optional().describe('The full system prompt; omit to keep the current one'),
   models: modelChoice.optional().describe('Merged into the current models; an empty string clears one'),
   tools: z.array(z.string()).optional().describe('The full tool list; replaces the current list'),
@@ -253,7 +252,6 @@ export function createOverseerTools(deps: OverseerToolDeps): ToolDefinition<any>
           displayName: 'shown in chats',
           description: 'one line for the agent list',
           intro: 'what the other agents are told about this one',
-          effort: 'low | medium | high',
           models: 'one model/preset per capability; unset ones fall back to the global default',
           tools: 'tool or preset names from the pool',
           skills: 'skill names from the skill hub',
@@ -349,7 +347,6 @@ export function createOverseerTools(deps: OverseerToolDeps): ToolDefinition<any>
         displayName: input.displayName ?? current?.displayName ?? '',
         description: input.description ?? current?.description ?? '',
         intro: input.intro ?? current?.intro,
-        effort: input.effort === null ? undefined : (input.effort ?? current?.effort),
         models,
         tools,
         skills,

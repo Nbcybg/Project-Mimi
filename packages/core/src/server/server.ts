@@ -38,7 +38,6 @@ import { verifyConnectorWebhook } from '../workflows/connector-triggers.ts';
 import { webhookEventId, webhookIdempotencyKey } from '../workflows/idempotency.ts';
 import { contextFor, resolveString } from '../workflows/expressions.ts';
 import { validateWorkflowNode, validateWorkflowView, type WorkflowValidationContext } from '../workflows/validate.ts';
-import { REASONING_EFFORTS, type ReasoningEffort } from '@mimi/shared';
 import { AuthLimiter, clientAddress } from './auth-limiter.ts';
 import { APP_VERSION, serveWebFile } from './web-files.ts';
 import { createBackup, listBackups } from '../backup/backup.ts';
@@ -200,14 +199,13 @@ export async function startServer(
   const agentsMessage = (saved?: string): ServerMessage => ({
     type: 'agents',
     agents: core.agents.names().map((name) => {
-      const { displayName, description, intro, effort, systemPrompt, models, tools, skills, canMessage, budgets, character, idleMotion } =
+      const { displayName, description, intro, systemPrompt, models, tools, skills, canMessage, budgets, character, idleMotion } =
         core.agents.get(name);
       return {
         name,
         displayName,
         description,
         intro,
-        ...(effort ? { effort } : {}),
         systemPrompt,
         models,
         tools,
@@ -315,7 +313,6 @@ export async function startServer(
       displayName: String(view.displayName ?? '').trim(),
       description: String(view.description ?? '').trim(),
       intro: String(view.intro ?? '').trim(),
-      ...((REASONING_EFFORTS as readonly string[]).includes(String(view.effort)) ? { effort: view.effort as ReasoningEffort } : {}),
       systemPrompt: String(view.systemPrompt ?? ''),
       models,
       tools,

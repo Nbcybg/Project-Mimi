@@ -241,9 +241,7 @@ export async function* runAgent(deps: AgentLoopDeps, input: RunInput): AsyncGene
   const overBudget = deps.budgetCheck?.();
   if (overBudget) throw new Error(overBudget);
   // Config errors (unknown tool or model, missing API key) surface before anything is stored.
-  const resolved = deps.models.resolve('chat', agent.models);
-  // An effort set on the agent wins over the preset's.
-  const modelRef = agent.effort ? { ...resolved, params: { ...resolved.params, reasoning: agent.effort } } : resolved;
+  const modelRef = deps.models.resolve('chat', agent.models);
   const modelInfo = deps.models.info(modelRef);
   const tools = [
     ...deps.tools.select(agent.tools),

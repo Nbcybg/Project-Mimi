@@ -6,7 +6,7 @@ import type { AgentEvent, ConnectorRuntime, HistoryMessage, Notification, Workfl
 import { AgentCatalog } from './agents/loader.ts';
 import type { AppSettings } from './app/app-settings.ts';
 import { SecretStore } from './app/secrets.ts';
-import { type AttachmentKind, AttachmentStore, ingestAttachments, MAX_ATTACHMENT_BYTES, PROMPTS } from './chat/attachments.ts';
+import { type AttachmentKind, AttachmentStore, ingestAttachments, MAX_ATTACHMENT_BYTES, modelAnswer, PROMPTS } from './chat/attachments.ts';
 import { ToolFileExecutor } from './chat/tool-files.ts';
 import { ChatStore } from './chat/chat-store.ts';
 import { ChatEngine } from './chat/engine.ts';
@@ -818,6 +818,7 @@ export async function createCore(
         model: await models.languageModel(ref),
         messages: [{ role: 'user', content: [{ type: 'text', text: prompt }, { type: 'file', mediaType: mime, data, filename: name }] }],
         providerOptions: providerOptionsFor(info),
+        ...ref.params,
         abortSignal: signal,
       });
       usage.logCall({
@@ -832,7 +833,7 @@ export async function createCore(
         cacheWriteTokens: result.usage.inputTokenDetails.cacheWriteTokens ?? 0,
         durationMs: Date.now() - startedAt,
       });
-      const text = result.text.trim();
+      const text = modelAnswer(result, audio);
       if (!text) throw new Error(`the model returned nothing for "${name}"`);
       return text;
     },

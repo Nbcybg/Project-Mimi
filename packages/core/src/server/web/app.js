@@ -881,7 +881,9 @@
   function userRow(message) {
     const row = el('div', 'row-user');
     row.dataset.id = message.id;
-    if (message.clientId) row.dataset.pending = '1';
+    // Only the local placeholder is pending: a stored echo carries the same clientId,
+    // and marking it pending made renderPendingEchoes remove the real message.
+    if (message.pendingStatus) row.dataset.pending = '1';
     row.dataset.role = 'user';
     const actions = el('div', 'acts');
     if (typeof message.id === 'number') {
@@ -2006,8 +2008,9 @@
     const row = logInner.querySelector(`[data-id="${pending.clientId}"]`);
     if (row) {
       row.dataset.id = message.id;
-      row.removeAttribute('data-pending');
-      row.replaceWith(userRow(message));
+      const stored = userRow(message);
+      stored.removeAttribute('data-pending');
+      row.replaceWith(stored);
     }
     for (const url of pendingUrls(pending)) URL.revokeObjectURL(url);
     messageStore.delete(pending.clientId);
@@ -2729,14 +2732,7 @@
     intro.placeholder = 'เช่น ใจเย็น ละเอียดเรื่องตัวเลข ชอบถามกลับให้ชัดก่อนทำ · ส่งงานบัญชี รายรับรายจ่าย มาที่ตัวนี้';
     intro.style.minHeight = '60px';
     form.append(labelled('การ์ดแนะนำตัว (agent ตัวอื่นเห็น: นิสัย จุดเด่น วิธีทำงานด้วย)', intro));
-    const effort = el('select');
-    for (const [value, text] of REASONING_CHOICES) {
-      const option = el('option', '', value ? text : 'ตาม preset / ค่าเริ่มต้น');
-      option.value = value;
-      effort.append(option);
-    }
-    effort.value = (agent && agent.effort) || '';
-    form.append(labelled('effort ของโมเดลคุย (คิดก่อนตอบ)', effort));
+    form.append(el('p', 'hint', 'effort / temperature / top_p ของโมเดล ตั้งที่ preset ใน Hub → Models แล้วเลือก preset นั้นในช่องโมเดล'));
     const systemPrompt = el('textarea', 'tall');
     systemPrompt.value = agent ? agent.systemPrompt : '';
     systemPrompt.placeholder = 'System prompt: บุคลิก กฎ และวิธีทำงานของ agent นี้';
@@ -2889,7 +2885,6 @@
             displayName: displayName.value.trim(),
             description: description.value.trim(),
             intro: intro.value.trim(),
-            effort: effort.value || undefined,
             systemPrompt: systemPrompt.value,
             models: chosen,
             tools: toolGrid ? toolGrid.names() : picked(tools),

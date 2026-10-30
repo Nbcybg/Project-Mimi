@@ -128,17 +128,19 @@ export class MemoryWriter {
       .map((message) => `[${message.role === 'user' ? 'user' : 'assistant'}]\n${message.text}`);
     if (!turn.some((message) => message.role === 'user' && message.text.trim())) return result;
 
-    const info = models.info(models.resolve('summarize', agent.models));
+    const ref = models.resolve('summarize', agent.models);
+    const info = models.info(ref);
     const today = new Intl.DateTimeFormat('en-CA', { timeZone: timeZoneName(this.deps.timezone) }).format(
       this.deps.now?.() ?? new Date(),
     );
     const startedAt = Date.now();
     const response = await generateText({
-      model: await models.languageModel(info.ref),
+      model: await models.languageModel(ref),
       instructions: instructions(this.deps.profileMaxChars, today),
       prompt: `Current memory:\n${this.renderMemory()}\n\nLatest exchange:\n${said.join('\n\n')}`,
       tools: WRITER_TOOLS,
       providerOptions: providerOptionsFor(info),
+      ...ref.params,
     });
     usage.logCall({
       runId: null,

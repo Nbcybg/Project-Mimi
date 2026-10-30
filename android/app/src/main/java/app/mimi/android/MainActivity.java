@@ -9,9 +9,9 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.media.AudioAttributes;
-import android.media.MediaPlayer;
 import android.media.Ringtone;
 import android.media.RingtoneManager;
+import android.media.SoundPool;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -50,6 +50,8 @@ public class MainActivity extends Activity {
     private static final int ASK_FOR_PAGE = 2;
     private static final int PICK_FILE = 3;
     private static final int ASK_NOTIFICATIONS = 4;
+    /** The same 30% level the web client uses (70% quieter than before). */
+    private static final float SOUND_VOLUME = 0.3f;
     private static final String TOKEN_JS =
         "(function(){try{return sessionStorage.getItem('mimi-token')||localStorage.getItem('mimi-token')||''}catch(e){return ''}})()";
 
@@ -64,7 +66,10 @@ public class MainActivity extends Activity {
     private PermissionRequest pendingRequest;
     private ValueCallback<Uri[]> pendingFiles;
     private Uri photoUri;
-    private MediaPlayer soundPlayer;
+    private SoundPool soundPool;
+    private int soundSent;
+    private int soundDone;
+    private int soundAsk;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -72,6 +77,13 @@ public class MainActivity extends Activity {
         web = new WebView(this);
         web.setBackgroundColor(Color.parseColor("#141618"));
         setContentView(web);
+
+        // Bundled sounds load once: the old remote mp3 fetch made every tone arrive late.
+        AudioAttributes soundAttributes = notificationAttributes();
+        soundPool = new SoundPool.Builder().setMaxStreams(3).setAudioAttributes(soundAttributes).build();
+        soundSent = soundPool.load(this, R.raw.chat_1, 1);
+        soundDone = soundPool.load(this, R.raw.chat_2, 1);
+        soundAsk = soundPool.load(this, R.raw.chat_3, 1);
 
         WebSettings settings = web.getSettings();
         settings.setJavaScriptEnabled(true);
@@ -184,6 +196,15 @@ public class MainActivity extends Activity {
     public void onBackPressed() {
         if (web.canGoBack()) web.goBack();
         else super.onBackPressed();
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (soundPool != null) {
+            soundPool.release();
+            soundPool = null;
+        }
+        super.onDestroy();
     }
 
     /** The widget asks the server with the same token the page signed in with. */
@@ -382,49 +403,27 @@ public class MainActivity extends Activity {
         pendingFiles = null;
     }
 
-    /**
-     * Play a short app sound on the notification stream. Android keeps media and
-     * notification volumes apart: a page's AudioContext would follow media volume,
-     * so the app plays these natively with USAGE_NOTIFICATION instead.
-     */
-    private void playNativeSound(String kind) {
-        if (soundPlayer != null) {
-            try {
-                soundPlayer.release();
-            } catch (Exception ignored) {
-                // already released
-            }
-            soundPlayer = null;
-        }
-        String file = "chime".equals(kind) ? null
-            : "sent".equals(kind) ? "/sounds/chat_1.mp3"
-            : "done".equals(kind) ? "/sounds/chat_2.mp3"
-            : "ask".equals(kind) ? "/sounds/chat_3.mp3"
-            : null;
-        AudioAttributes attributes = new AudioAttributes.Builder()
+    private static AudioAttributes notificationAttributes() {
+        return new AudioAttributes.Builder()
             .setUsage(AudioAttributes.USAGE_NOTIFICATION)
             .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
             .build();
-        if (file != null) {
-            try {
-                MediaPlayer player = new MediaPlayer();
-                player.setAudioAttributes(attributes);
-                player.setDataSource("https://" + BuildConfig.MIMI_HOST + file);
-                player.setOnPreparedListener(MediaPlayer::start);
-                player.setOnCompletionListener((done) -> done.release());
-                player.setOnErrorListener((failed, what, extra) -> {
-                    failed.release();
-                    playSystemTone(attributes);
-                    return true;
-                });
-                soundPlayer = player;
-                player.prepareAsync();
-                return;
-            } catch (Exception ignored) {
-                // fall through to the system notification tone
-            }
-        }
-        playSystemTone(attributes);
+    }
+
+    /**
+     * Play a short app sound on the notification stream. Android keeps media and
+     * notification volumes apart: a page's AudioContext would follow media volume,
+     * so the app plays these natively with USAGE_NOTIFICATION instead. The files are
+     * bundled in res/raw and loaded once, so they start at once instead of being
+     * downloaded from the server for every tap.
+     */
+    private void playNativeSound(String kind) {
+        int sound = "sent".equals(kind) ? soundSent
+            : "done".equals(kind) ? soundDone
+            : "ask".equals(kind) ? soundAsk
+            : 0;
+        if (sound != 0 && soundPool != null && soundPool.play(sound, SOUND_VOLUME, SOUND_VOLUME, 1, 0, 1f) != 0) return;
+        playSystemTone(notificationAttributes());
     }
 
     private void playSystemTone(AudioAttributes attributes) {

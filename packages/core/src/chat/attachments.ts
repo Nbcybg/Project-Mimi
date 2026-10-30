@@ -378,6 +378,20 @@ export const PROMPTS: Record<'image' | 'audio' | 'video' | 'pdf', string> = {
   pdf: 'Extract the content of this document as plain text, keeping its structure (headings, lists, tables as rows). Output only the content.',
 };
 
+/**
+ * The answer of a reading model. Some reasoning models (MiMo v2.6 Flash answers audio
+ * this way through OpenAI-compatible gateways) put the whole transcript in the reasoning
+ * channel and leave `text` empty; for audio that reasoning text is the answer.
+ */
+export function modelAnswer(
+  result: { text: string; finalStep: { reasoningText: string | undefined } },
+  allowReasoning = false,
+): string {
+  const text = result.text.trim();
+  if (text || !allowReasoning) return text;
+  return (result.finalStep.reasoningText ?? '').trim();
+}
+
 /** Attachments being read right now, by id. */
 const reading = new Map<string, Promise<string>>();
 /** Files read at once: enough to hide latency, few enough to stay under provider limits. */
@@ -501,6 +515,7 @@ async function readAttachment(
         },
       ],
       providerOptions: providerOptionsFor(info),
+      ...ref.params,
       abortSignal: input.signal,
     });
     deps.usage.logCall({
@@ -515,7 +530,7 @@ async function readAttachment(
       cacheWriteTokens: result.usage.inputTokenDetails.cacheWriteTokens ?? 0,
       durationMs: Date.now() - startedAt,
     });
-    return { text: result.text.trim(), finish: result.finishReason };
+    return { text: modelAnswer(result, capability === 'transcript'), finish: result.finishReason };
   };
 
   const key = isPdf ? 'pdf' : (attachment.kind as 'image' | 'audio' | 'video');

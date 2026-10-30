@@ -322,8 +322,6 @@ export interface AgentView {
   description: string;
   /** Card the other agents see. */
   intro?: string;
-  /** Reasoning effort of its chat model. */
-  effort?: ReasoningEffort;
   systemPrompt: string;
   models: ModelChoice;
   tools: string[];

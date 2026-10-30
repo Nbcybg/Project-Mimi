@@ -5,11 +5,12 @@ import path from 'node:path';
 import { test } from 'node:test';
 import type { WorkflowView } from '@mimi/shared';
 import { MockLanguageModelV4 } from 'ai/test';
-import { AttachmentStore, audioPrompt, PROMPTS } from '../chat/attachments.ts';
+import { AttachmentStore, audioPrompt, ingestAttachments, modelAnswer, PROMPTS } from '../chat/attachments.ts';
 import { filesMatch } from '../core.ts';
 import { openDb } from '../db/db.ts';
+import { UsageLogger } from '../usage/logger.ts';
 import { makeTestCore, type TestCore } from './core-helpers.ts';
-import { replyingModel, scriptedModel, textStep } from './helpers.ts';
+import { makeAgent, replyingModel, scriptedModel, textStep } from './helpers.ts';
 
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
 
@@ -50,6 +51,61 @@ const reader = () =>
           ? { text: 'แมวสีส้มนอนบนโซฟา' }
           : { text: 'nothing' },
   ]);
+
+test('a transcript that arrives as reasoning is still used', () => {
+  const reasoningOnly = { text: '', finalStep: { reasoningText: 'สวัสดีครับ นี่คือข้อความเสียง' } };
+  assert.equal(modelAnswer(reasoningOnly, true), 'สวัสดีครับ นี่คือข้อความเสียง');
+  assert.equal(modelAnswer(reasoningOnly, false), '', 'ordinary readings never take reasoning as the answer');
+  assert.equal(modelAnswer({ text: ' มีข้อความ ', finalStep: { reasoningText: 'คิดอยู่' } }, true), 'มีข้อความ');
+});
+
+test('a model preset sampling params reach the transcript call', async () => {
+  const seen: Array<{ reasoning?: unknown; temperature?: unknown }> = [];
+  const model = new MockLanguageModelV4({
+    doGenerate: async (options) => {
+      seen.push({ reasoning: (options as { reasoning?: unknown }).reasoning, temperature: options.temperature });
+      return {
+        content: [{ type: 'text', text: 'สวัสดีครับ' }],
+        finishReason: { unified: 'stop', raw: undefined },
+        usage: {
+          inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: undefined },
+          outputTokens: { total: 1, text: 1, reasoning: undefined },
+        },
+        warnings: [],
+      };
+    },
+  });
+  const db = openDb(':memory:');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mimi-preset-'));
+  const store = new AttachmentStore(db, dir);
+  const ref = { provider: 'test', model: 'ear', params: { reasoning: 'none' as const, temperature: 0.2 } };
+  const models = {
+    resolve: () => ref,
+    info: () => ({
+      ref,
+      name: 'ear',
+      npm: '@ai-sdk/test',
+      baseURL: undefined,
+      contextLimit: 1000,
+      outputLimit: undefined,
+      cost: null,
+      imageInput: false,
+      toolCall: true,
+      textOutput: true,
+      options: {},
+    }),
+    languageModel: async () => model,
+  };
+  const audio = store.save({ name: 'voice.wav', mime: 'audio/wav', data: wav(1600, 3000) });
+  const [read] = await ingestAttachments(
+    { store, models, usage: new UsageLogger(db) },
+    { ids: [audio.id], agent: makeAgent(), traceId: 't' },
+  );
+  assert.equal(read!.text, 'สวัสดีครับ');
+  assert.deepEqual(seen[0], { reasoning: 'none', temperature: 0.2 });
+  db.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
 
 test('attachments: a video is its own kind and the vision model describes it once', async () => {
   const mimi = scriptedModel([textStep('ดูแล้วค่ะ')]);

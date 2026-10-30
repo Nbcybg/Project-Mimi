@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### 0.7.6-prototype
+
+- Sounds: every app sound plays at 30 % volume. On Android the three chat sounds are bundled
+  in the app and loaded once, so they start at once instead of being fetched per tap; on the
+  web they are fetched at load and decoded on the first gesture.
+- Reasoning effort / temperature / top_p belong to the model preset only; the per-agent
+  `effort` field is gone (old agent files with it still load) and the presets' parameters now
+  also reach summaries and attachment reading.
+- Audio transcription: models that put the transcript in the reasoning channel (MiMo v2.6
+  Flash via OpenAI-compatible gateways) no longer give an empty transcript.
+- A sent message no longer disappears when its stored echo arrives (it was wrongly kept
+  marked as pending).
+
 ### 0.7.5-prototype
 
 - Mail: besides Gmail / Outlook, any IMAP or POP3 mailbox can be watched, with optional SMTP

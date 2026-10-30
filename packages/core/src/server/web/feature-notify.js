@@ -52,6 +52,12 @@
   }
   function chime(force = false) {
     if (!force && (!soundOn() || quietNow())) return;
+    // The Android app posts a native notification which already uses the system
+    // notification stream. Only the explicit test button plays through the bridge.
+    if (window.MimiAndroid?.playSound) {
+      if (force) window.MimiAndroid.playSound('chime');
+      return;
+    }
     unlockAudio();
     if (!audio) return;
     if (audio.state === 'suspended') void audio.resume();
@@ -107,6 +113,12 @@
   document.addEventListener('keydown', () => setTimeout(loadSounds, 0), { once: true, capture: true });
   function chatSound(kind, force = false) {
     if (!force && (!chatSoundOn() || quietNow())) return;
+    // Android routes these through AudioAttributes.USAGE_NOTIFICATION, so the phone's
+    // notification volume (not media volume) controls them.
+    if (window.MimiAndroid?.playSound) {
+      window.MimiAndroid.playSound(kind);
+      return;
+    }
     unlockAudio();
     if (!audio || !CHAT_TONES[kind]) return;
     if (audio.state === 'suspended') void audio.resume();

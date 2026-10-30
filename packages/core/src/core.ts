@@ -90,6 +90,7 @@ import {
   pollConnectorTrigger,
 } from './workflows/connector-triggers.ts';
 import { type StoredWorkflow, WorkflowStore } from './workflows/workflow-store.ts';
+import { CustomNodeStore } from './workflows/custom-nodes.ts';
 import { IdempotencyStore, webhookIdempotencyKey } from './workflows/idempotency.ts';
 import { RunQueue } from './workflows/run-queue.ts';
 import type { FlowItem, JsonValue, WorkflowNode, WorkflowNodeTestResult, WorkflowView } from '@mimi/shared';
@@ -116,6 +117,8 @@ export interface CoreListeners {
   agentsChanged?: (name?: string) => void;
   /** A custom tool or preset was added, changed or removed. */
   toolsChanged?: () => void;
+  /** A custom workflow node was added, changed or removed. */
+  nodesChanged?: () => void;
   /** A skill file was added, changed or removed. */
   skillsChanged?: () => void;
 }
@@ -165,6 +168,8 @@ export interface Core {
   secrets: SecretStore;
   /** Workflows and their schedules. */
   workflows: WorkflowStore;
+  /** Custom workflow nodes made by the user or the AI Overseer (`user/nodes`). */
+  customNodes: CustomNodeStore;
   /** Trigger types a workflow can pick from; user-defined ones live under triggers/pool. */
   triggerPool: TriggerPool;
   /** Past runs of every workflow, with node input/output. */
@@ -375,7 +380,7 @@ export async function createCore(
   });
   const googleFor = (account?: string) => oauth.google(account);
   const microsoftFor = (account?: string) => oauth.microsoft(account);
-  const triggers = new TriggerStore(db, config.timezone);
+  const triggers = new TriggerStore(db, () => config.timezone);
   // The database schedules; the files under `triggers/` mirror it so a synced folder
   // carries reminders and webhooks to another machine.
   const triggerFiles = new TriggerFiles(config.triggersDir);
@@ -474,11 +479,15 @@ export async function createCore(
   };
   const connectors = new ConnectorRuntimeImpl({ registry: connectorRegistry, auth: connectorAuth, retries: 1 });
 
+  // Assigned just below; tool calls only happen after this core is built.
+  let mailWatch: MailWatch;
+
   const tools = createToolRegistry({
+    mail: () => mailWatch,
     notifyUser: (agent, message, title) => {
       const { chatId } = postAs(agent, message, `notify:${randomUUID()}`);
       const name = agents.names().includes(agent) ? agents.get(agent).displayName || agent : agent;
-      notify({ kind: 'message', title: title ?? name, body: message, ...(chatId !== undefined ? { chatId } : {}) });
+      notify({ kind: 'message', title: title ?? name, body: message, agent, ...(chatId !== undefined ? { chatId } : {}) });
       if (chatId !== undefined) listeners.chatChanged?.(chatId);
       return { chatId };
     },
@@ -509,7 +518,7 @@ export async function createCore(
     chats,
     status,
     memos,
-    timezone: config.timezone,
+    timezone: () => config.timezone,
   }).register(
     ...connectorTools(connectorRegistry, connectors),
     // Word / PDF export of the agent's answers, into the working folder.
@@ -525,6 +534,7 @@ export async function createCore(
   });
   const toolPool = new ToolPool(tools, toolStore, secrets, mcp, pcRunner);
   const workflows = new WorkflowStore(config.workflowsDir);
+  const customNodes = new CustomNodeStore(config.nodesDir);
   const triggerPool = new TriggerPool(path.join(config.triggersDir, 'pool'), () => connectorRegistry.list());
   const workflowState = new WorkflowState(config.workflowStatePath);
   const workflowRuns = new WorkflowRunStore(db);
@@ -543,26 +553,36 @@ export async function createCore(
     vapid: () => (vapid ??= loadOrCreateVapid(config.pushKeysPath)),
     subject: config.pushContact,
     preferences: () => options.app?.preferences ?? {},
-    timezone: config.timezone,
+    timezone: () => config.timezone,
     log: (message) => console.error(message),
   });
   /** Every notification is kept (inbox) and pushed, then handed to whoever shows it live. */
   const notify = (notification: Notification) => {
     const item = notifications.add(notification);
-    listeners.notification?.({ ...notification, id: item.id });
+    // A muted agent still lands in the inbox, but no live toast, chime or push.
+    if (!notifications.muted(notification.agent)) listeners.notification?.({ ...notification, id: item.id });
   };
   /** New mail in the watched accounts arrives as inbox notifications (push mail). */
-  const mailWatch = new MailWatch({
+  mailWatch = new MailWatch({
     dir: config.dataDir,
-    password: (accountId) => secrets.get(`mail-watch.${accountId}`),
+    // `mail-watch.<id>` is the name earlier versions used; it stays readable.
+    password: (accountId) => secrets.get(`mail.${accountId}.password`) ?? secrets.get(`mail-watch.${accountId}`),
     setPassword: (accountId, value) => {
-      if (value) secrets.set(`mail-watch.${accountId}`, value);
-      else secrets.remove(`mail-watch.${accountId}`);
+      if (value) secrets.set(`mail.${accountId}.password`, value);
+      else {
+        secrets.remove(`mail.${accountId}.password`);
+        secrets.remove(`mail-watch.${accountId}`);
+      }
+    },
+    smtpPassword: (accountId) => secrets.get(`mail.${accountId}.smtp_password`),
+    setSmtpPassword: (accountId, value) => {
+      if (value) secrets.set(`mail.${accountId}.smtp_password`, value);
+      else secrets.remove(`mail.${accountId}.smtp_password`);
     },
     google: () => oauth.google(),
     microsoft: () => oauth.microsoft(),
     notify: (_kind, title, body) => notify({ kind: 'message', title, body }),
-    timezone: config.timezone,
+    timezone: () => config.timezone,
   });
   const parkedRuns = new ParkedRuns(db);
   const approvals = new Approvals(db, {
@@ -588,7 +608,7 @@ export async function createCore(
     models,
     usage,
     profileMaxChars: settings.memory.profile_max_chars,
-    timezone: config.timezone,
+    timezone: () => config.timezone,
   });
   const jobs = new PostTurnJobs(writer, compactor, settings.memory.auto_write);
   // Mirrors that carried state the database did not know (a synced folder on a fresh
@@ -619,7 +639,7 @@ export async function createCore(
       overrides: settings.permission,
     }),
     allowedDirs: config.allowedDirs,
-    timezone: config.timezone,
+    timezone: () => config.timezone,
     mesh,
     workingDir: () => (options.pc?.online ? options.pc.allowedDirs[0] : config.allowedDirs[0]),
     promptExtras: (agent) => {
@@ -666,6 +686,7 @@ export async function createCore(
               tools: toolPool,
               skills: currentSkills,
               workflows,
+              nodes: customNodes,
               models,
               secrets,
               defaultModel: () => options.app?.defaults.model ?? settings.model,
@@ -673,6 +694,7 @@ export async function createCore(
                 agent: (name) => listeners.agentsChanged?.(name),
                 tools: () => listeners.toolsChanged?.(),
                 skills: () => listeners.skillsChanged?.(),
+                nodes: () => listeners.nodesChanged?.(),
               },
             })
           : [];
@@ -700,6 +722,7 @@ export async function createCore(
         triggerPool,
         hasAgent: (name) => agents.names().includes(name),
         hasTool: (name) => toolPool.get(name) !== undefined,
+        customNodes: () => customNodes.names(),
         agentNames: () => agents.names(),
         tools: () =>
           toolPool.names().map((name) => {
@@ -759,7 +782,7 @@ export async function createCore(
     requestApproval: async (request) => {
       const decision = approvals.request(request);
       const chatId = agents.names().includes(request.agent) ? chats.directChat(request.agent).id : undefined;
-      notify({ kind: 'approval', title: 'รออนุมัติ', body: request.text, ...(chatId !== undefined ? { chatId } : {}) });
+      notify({ kind: 'approval', title: 'รออนุมัติ', body: request.text, agent: request.agent, ...(chatId !== undefined ? { chatId } : {}) });
       return decision;
     },
     secret: (name) => secrets.get(name),
@@ -768,7 +791,7 @@ export async function createCore(
       const id = parkedRuns.add(parked);
       if (parked.wait.kind === 'approval') {
         const { chatId } = approvals.requestParked({ workflow: `${parked.workflow.agent}/${parked.workflow.name}`, agent: parked.wait.agent, text: parked.wait.text, timeoutMs: parked.wait.timeoutMs, runId: id });
-        notify({ kind: 'approval', title: 'รออนุมัติ', body: parked.wait.text, ...(chatId !== undefined ? { chatId } : {}) });
+        notify({ kind: 'approval', title: 'รออนุมัติ', body: parked.wait.text, agent: parked.wait.agent, ...(chatId !== undefined ? { chatId } : {}) });
       }
       return id;
     },
@@ -814,12 +837,43 @@ export async function createCore(
       return text;
     },
     mail: {
-      list: (source, query, max, account) => (source === 'google' ? gmailListUnread(googleFor(account), query, max) : outlookListUnread(microsoftFor(account), query, max)),
-      markRead: (source, ids, account) => (source === 'google' ? gmailMarkRead(googleFor(account), ids) : outlookMarkRead(microsoftFor(account), ids)),
+      list: async (source, query, max, account, options) => {
+        if (source === 'google') return gmailListUnread(googleFor(account), query, max);
+        if (source === 'microsoft') return outlookListUnread(microsoftFor(account), query, max);
+        const found = await mailWatch.search(account, {
+          ...(query ? { query } : {}),
+          max,
+          ...(options?.folder ? { folder: options.folder } : {}),
+          ...(options?.unseenOnly ? { unseenOnly: true } : {}),
+          ...(options?.sinceDays ? { sinceDays: options.sinceDays } : {}),
+        }, source);
+        const items = [];
+        for (const message of found.messages) {
+          const full = await mailWatch.read(account, message.id, source).catch(() => undefined);
+          items.push({
+            id: message.id,
+            from: message.from,
+            to: message.to,
+            date: message.date,
+            subject: message.subject,
+            content: full?.message.text || message.preview,
+            ...(full?.message.cc ? { cc: full.message.cc } : {}),
+            ...(message.folder ? { folder: message.folder } : {}),
+            seen: message.seen,
+          });
+        }
+        return items;
+      },
+      markRead: async (source, ids, account, folder) => {
+        if (source === 'google') return gmailMarkRead(googleFor(account), ids);
+        if (source === 'microsoft') return outlookMarkRead(microsoftFor(account), ids);
+        return mailWatch.markRead(account, ids, source, folder);
+      },
     },
+    customNode: (name) => customNodes.get(name),
     state: workflowState,
     allowedDirs: config.allowedDirs,
-    timezone: config.timezone,
+    timezone: () => config.timezone,
     ...(workflowNodeTimeoutMs ? { nodeTimeoutMs: workflowNodeTimeoutMs } : {}),
     ...(workflowRunTimeoutMs ? { runTimeoutMs: workflowRunTimeoutMs } : {}),
     runSubWorkflow: async (agent, name, subItems, depth) => {
@@ -1232,7 +1286,7 @@ export async function createCore(
       const extra = payload ? `\n${payload}` : '';
       const text = `⏰ ${trigger.title}: ${trigger.text}${extra}`;
       const chatId = speakAs(speaker, text, `trigger:${trigger.id}`);
-      notify({ kind: 'reminder', title: trigger.title, body: `${trigger.text}${extra}`, triggerId: trigger.id, chatId });
+      notify({ kind: 'reminder', title: trigger.title, body: `${trigger.text}${extra}`, triggerId: trigger.id, chatId, ...(trigger.agent ? { agent: trigger.agent } : {}) });
       return 'notified';
     }
 
@@ -1270,7 +1324,7 @@ export async function createCore(
     if (notifiedItself) {
       if (chatId !== undefined) listeners.chatChanged?.(chatId);
     } else {
-      notify({ kind: 'task-result', title: trigger.title, body: result, triggerId: trigger.id, chatId });
+      notify({ kind: 'task-result', title: trigger.title, body: result, triggerId: trigger.id, chatId, ...(trigger.agent ? { agent: trigger.agent } : {}) });
     }
     return result;
   }
@@ -1318,9 +1372,11 @@ export async function createCore(
       }
       if (asBoolean(workflow.trigger.config.markRead, true)) {
         try {
-          const source = String(workflow.trigger.config.source ?? '') === 'microsoft' ? 'microsoft' : 'google';
+          const rawSource = String(workflow.trigger.config.source ?? '');
+          const source = rawSource === 'microsoft' || rawSource === 'imap' || rawSource === 'pop3' ? rawSource : 'google';
           const account = String(workflow.trigger.config.account ?? '').trim() || undefined;
-          await workflowRunner.mail.markRead(source, fresh.map((item) => String(item.json.Id ?? '')), account);
+          const folder = String(workflow.trigger.config.folder ?? '').trim() || undefined;
+          await workflowRunner.mail.markRead(source, fresh.map((item) => String(item.json.Id ?? '')), account, folder);
         } catch {
           // leaving them unread is fine: seen() keeps them from being handled twice
         }
@@ -1409,6 +1465,7 @@ export async function createCore(
     connectors,
     secrets,
     workflows,
+    customNodes,
     triggerPool,
     workflowRuns,
     workflowQueue,

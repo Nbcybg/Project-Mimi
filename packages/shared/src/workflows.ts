@@ -39,6 +39,7 @@ export type NodeTypeName =
   | 'extract_file'
   | 'knowledge'
   | 'sheets'
+  | 'plugin'
   | 'trigger_manual'
   | 'trigger_schedule'
   | 'trigger_webhook'
@@ -218,8 +219,8 @@ export interface NodeTypeField {
   key: string;
   label: string;
   type: NodeFieldType;
-  /** For `account` fields: which OAuth accounts the dropdown offers; missing = every service. */
-  service?: import('./oauth.ts').OAuthService;
+  /** For `account` fields: which accounts the dropdown offers; missing = every service. */
+  service?: import('./tools.ts').AccountService;
   placeholder?: string;
   required?: boolean;
   description?: string;
@@ -682,6 +683,17 @@ export const NODE_TYPES: NodeTypeView[] = [
     outputs: [{ key: 'main', label: 'main' }],
   },
   {
+    type: 'plugin',
+    label: 'Custom node (plugin)',
+    description:
+      'node ที่ AI Overseer หรือผู้ใช้สร้างเอง เก็บไว้ในโฟลเดอร์ user/nodes · รันโค้ดใน sandbox แยก process เห็น items และ $config แล้ว return items ใหม่',
+    fields: [
+      { key: 'plugin', label: 'plugin', type: 'string', required: true, placeholder: 'ชื่อ plugin', description: 'รายการมาจาก user/nodes · Overseer สร้างให้ได้ด้วย node_save' },
+      { key: 'config', label: 'config (JSON + expression)', type: 'json', placeholder: '{"key": "{{ $json.Subject }}"}' },
+    ],
+    outputs: [{ key: 'main', label: 'main' }],
+  },
+  {
     type: 'trigger_custom',
     label: 'ทริกเกอร์จาก pool',
     description: 'จุดเริ่มของ workflow จาก trigger ที่ผู้ใช้สร้างเองใน Hub → Trigger · เลือก trigger แล้วกรอกค่าตามที่ trigger นั้นกำหนด',
@@ -782,18 +794,22 @@ export const BUILTIN_TRIGGERS: TriggerPoolView[] = [
   },
   {
     name: 'mail',
-    label: 'อีเมลใหม่ (Gmail / Outlook)',
-    description: 'เช็คอีเมลใหม่เป็นรอบ แล้วรันทีละฉบับ',
+    label: 'อีเมลใหม่ (Gmail / Outlook / IMAP / POP3)',
+    description: 'เช็คอีเมลใหม่เป็นรอบ แล้วรันทีละฉบับ · IMAP/POP3 ใช้บัญชีที่ตั้งไว้ที่ Hub → Mail',
     kind: 'mail',
     builtin: true,
     fields: [
-      { key: 'source', label: 'เจ้า (google | microsoft)', type: 'string', placeholder: 'google | microsoft' },
-      { key: 'account', label: 'บัญชี (เว้นว่าง = บัญชีเริ่มต้นของเจ้านั้น)', type: 'account' },
-      { key: 'query', label: 'ค้นหา (Gmail query)', type: 'string', placeholder: 'เว้นว่าง = is:unread' },
+      { key: 'source', label: 'แหล่งเมล', type: 'string', options: ['google', 'microsoft', 'imap', 'pop3'], required: true },
+      { key: 'account', label: 'บัญชี (เว้นว่าง = บัญชีเริ่มต้นของแหล่งนั้น)', type: 'account' },
+      { key: 'query', label: 'ค้นหา (Gmail query / IMAP criteria / คำในเมล)', type: 'string', placeholder: 'เว้นว่าง = is:unread / unseen' },
+      { key: 'folder', label: 'โฟลเดอร์ IMAP (เว้นว่าง = INBOX)', type: 'string', placeholder: 'INBOX' },
+      { key: 'unseenOnly', label: 'เอาเฉพาะที่ยังไม่เปิดอ่าน', type: 'boolean' },
+      { key: 'sinceDays', label: 'ย้อนหลังกี่วัน (0 = ไม่จำกัด)', type: 'number', placeholder: '7' },
+      { key: 'maxMessages', label: 'จำนวนสูงสุดต่อรอบ (1-100)', type: 'number', placeholder: '10' },
       { key: 'everyMinutes', label: 'เช็คทุก (นาที)', type: 'number', placeholder: '15' },
-      { key: 'markRead', label: 'มาร์คอ่านแล้ว', type: 'boolean' },
+      { key: 'markRead', label: 'มาร์คอ่านแล้วหลังประมวลผล', type: 'boolean' },
     ],
-    sample: { Id: '18c...', From: 'somchai@example.com', To: 'me@example.com', Date: '2026-10-13', Subject: 'ใบแจ้งหนี้', Content: 'กรุณาชำระภายในสิ้นเดือน' },
+    sample: { Id: '18c...', From: 'somchai@example.com', To: 'me@example.com', Cc: '', Date: '2026-10-13', Subject: 'ใบแจ้งหนี้', Content: 'กรุณาชำระภายในสิ้นเดือน', Folder: 'INBOX', Seen: false },
   },
   {
     name: 'poll',

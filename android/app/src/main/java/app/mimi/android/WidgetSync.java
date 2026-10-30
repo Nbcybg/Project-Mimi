@@ -1,5 +1,6 @@
 package app.mimi.android;
 
+import android.Manifest;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -9,6 +10,7 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
@@ -39,7 +41,9 @@ import java.util.TimeZone;
  */
 final class WidgetSync {
     static final String PREFS = "widget";
-    private static final String CHANNEL = "replies";
+    // High importance is what makes Android show the reply as a card over the screen.
+    // A new id also makes sure a channel made with the old, quiet importance is not reused.
+    private static final String CHANNEL = "replies_high";
 
     private WidgetSync() {}
 
@@ -155,14 +159,32 @@ final class WidgetSync {
         return out;
     }
 
+    private static NotificationManager channelManager(Context context, String id, String name) {
+        NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+        if (manager == null) return null;
+        if (Build.VERSION.SDK_INT >= 26 && manager.getNotificationChannel(id) == null) {
+            NotificationChannel channel = new NotificationChannel(id, name, NotificationManager.IMPORTANCE_HIGH);
+            channel.setDescription(name);
+            channel.enableVibration(true);
+            channel.setShowBadge(true);
+            manager.createNotificationChannel(channel);
+        }
+        return manager;
+    }
+
+    /** True when Android will actually show a notification (permission on 13+, not switched off). */
+    private static boolean allowed(Context context) {
+        if (Build.VERSION.SDK_INT >= 33 && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return false;
+        NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+        return manager == null || Build.VERSION.SDK_INT < 24 || manager.areNotificationsEnabled();
+    }
+
     /** One notification per chat whose unread count went up since the last look. */
     private static void notifyNew(Context context, JSONArray chats) {
         SharedPreferences prefs = prefs(context);
-        NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+        NotificationManager manager = channelManager(context, CHANNEL, context.getString(R.string.channelReplies));
         if (manager == null) return;
-        if (Build.VERSION.SDK_INT >= 26 && manager.getNotificationChannel(CHANNEL) == null) {
-            manager.createNotificationChannel(new NotificationChannel(CHANNEL, context.getString(R.string.channelReplies), NotificationManager.IMPORTANCE_DEFAULT));
-        }
+        boolean canNotify = allowed(context);
         SharedPreferences.Editor edit = prefs.edit();
         for (int i = 0; i < chats.length(); i++) {
             JSONObject chat = chats.optJSONObject(i);
@@ -172,7 +194,7 @@ final class WidgetSync {
             int known = prefs.getInt("unread:" + id, 0);
             edit.putInt("unread:" + id, unread);
             // With the push service running, the reply itself arrives with its full text; this is only the fallback.
-            if (unread > known && !MainActivity.visible && !PushService.live) {
+            if (unread > known && canNotify && !MainActivity.visible && !PushService.live) {
                 Intent open = new Intent(context, MainActivity.class).putExtra("chat", id).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                 PendingIntent tap = PendingIntent.getActivity(context, (int) id, open, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
                 String title = chat.optString("title");
@@ -181,15 +203,19 @@ final class WidgetSync {
                 if (preview.isEmpty()) preview = context.getString(R.string.newMessage);
                 Notification.Builder builder = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(context, CHANNEL) : new Notification.Builder(context);
                 builder
-                    .setSmallIcon(R.mipmap.ic_launcher)
+                    .setSmallIcon(R.drawable.ic_notification)
+                    .setColor(0xFFE08A5B)
                     .setContentTitle(title)
                     .setContentText(preview)
                     .setStyle(new Notification.BigTextStyle().bigText(preview))
                     .setNumber(unread)
                     .setWhen(System.currentTimeMillis())
                     .setShowWhen(true)
+                    .setTicker(preview)
                     .setCategory(Notification.CATEGORY_MESSAGE)
-                    .setPriority(Notification.PRIORITY_DEFAULT)
+                    .setVisibility(Notification.VISIBILITY_PUBLIC)
+                    .setPriority(Notification.PRIORITY_HIGH)
+                    .setDefaults(Notification.DEFAULT_ALL)
                     .setAutoCancel(true)
                     .setContentIntent(tap);
                 File avatar = avatarFile(context, chat.optString("agent", ""));
@@ -214,22 +240,23 @@ final class WidgetSync {
 
     // ---------- the notification inbox (while the app page is closed) ----------
 
-    private static final String NOTIF_CHANNEL = "notifications";
+    private static final String NOTIF_CHANNEL = "notifications_high";
 
     private static NotificationManager notifManager(Context context) {
-        NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
-        if (manager == null) return null;
-        if (Build.VERSION.SDK_INT >= 26 && manager.getNotificationChannel(NOTIF_CHANNEL) == null) {
-            manager.createNotificationChannel(new NotificationChannel(NOTIF_CHANNEL, context.getString(R.string.channelReplies), NotificationManager.IMPORTANCE_DEFAULT));
-        }
-        return manager;
+        return channelManager(context, NOTIF_CHANNEL, context.getString(R.string.channelNotifications));
     }
 
     /** Posts one native notification; `kind` gets the same emoji the web app uses. */
-    static void notifyNative(Context context, String title, String body, String kind, long chatId) {
-        if (MainActivity.visible) return; // the page itself shows it
+    static boolean notifyNative(Context context, String title, String body, String kind, long chatId) {
+        return notifyNative(context, title, body, kind, chatId, false);
+    }
+
+    /** `force` posts even while the page is on screen (used to confirm a newly granted permission). */
+    static boolean notifyNative(Context context, String title, String body, String kind, long chatId, boolean force) {
+        if (MainActivity.visible && !force) return false; // the page itself shows it
+        if (!allowed(context)) return false;
         NotificationManager manager = notifManager(context);
-        if (manager == null) return;
+        if (manager == null) return false;
         String icon = "message".equals(kind) ? "💬 " : "reminder".equals(kind) ? "⏰ " : "approval".equals(kind) ? "✋ " : "";
         // The same text of the same chat is the same notification, whoever posts it first (page or service).
         int id = (kind + "|" + chatId + "|" + (body == null ? "" : body.trim())).hashCode() & 0x7fffffff;
@@ -242,21 +269,32 @@ final class WidgetSync {
         if (safeBody.isEmpty()) safeBody = context.getString(R.string.newMessage);
         Notification.Builder builder = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(context, NOTIF_CHANNEL) : new Notification.Builder(context);
         builder
-            .setSmallIcon(R.mipmap.ic_launcher)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setColor(0xFFE08A5B)
             .setContentTitle(icon + safeTitle)
             .setContentText(safeBody)
             .setStyle(new Notification.BigTextStyle().bigText(safeBody))
             .setWhen(System.currentTimeMillis())
             .setShowWhen(true)
+            .setTicker(icon + safeTitle)
             .setCategory("message".equals(kind) ? Notification.CATEGORY_MESSAGE : Notification.CATEGORY_REMINDER)
-            .setPriority(Notification.PRIORITY_DEFAULT)
+            .setVisibility(Notification.VISIBILITY_PUBLIC)
+            .setPriority(Notification.PRIORITY_HIGH)
+            .setDefaults(Notification.DEFAULT_ALL)
             .setAutoCancel(true)
             .setContentIntent(tap);
         try {
             manager.notify(id, builder.build());
+            return true;
         } catch (SecurityException ignored) {
             // notifications not allowed
+            return false;
         }
+    }
+
+    /** Confirms that notifications now work, both while the app is open and after leaving it. */
+    static void notifyPermissionGranted(Context context) {
+        notifyNative(context, context.getString(R.string.notificationsOnTitle), context.getString(R.string.notificationsOnText), "info", 0, true);
     }
 
     /**
@@ -264,10 +302,11 @@ final class WidgetSync {
      * for reminders and approvals while the app is closed. Polled by the same job as the
      * widget (about every 15 minutes, the shortest Android allows).
      */
-    static synchronized void syncNotifications(Context context) {
+    static synchronized int syncNotifications(Context context) {
         SharedPreferences prefs = prefs(context);
         String token = prefs.getString("token", "");
-        if (token.isEmpty()) return;
+        if (token.isEmpty()) return 0;
+        int posted = 0;
         try {
             byte[] body = get("/api/notifications", token);
             JSONArray items = new JSONArray(new String(body, "UTF-8"));
@@ -281,12 +320,13 @@ final class WidgetSync {
                 long id = item.optLong("id");
                 newest = Math.max(newest, id);
                 if (id <= known || firstLook) continue;
-                notifyNative(context, item.optString("title"), item.optString("body"), item.optString("kind"), item.optLong("chatId"));
+                if (notifyNative(context, item.optString("title"), item.optString("body"), item.optString("kind"), item.optLong("chatId"))) posted++;
             }
             if (newest != known || firstLook) prefs.edit().putLong("notifId", newest).apply();
         } catch (Exception ignored) {
             // offline or signed out: try again next round
         }
+        return posted;
     }
 
     static Date parse(String iso) {

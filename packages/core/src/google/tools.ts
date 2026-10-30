@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { accountOf, accountSetting } from '../oauth/settings.ts';
 import { defineTool, type ToolDefinition } from '../tools/registry.ts';
+import { timeZoneName, type TimeZoneSource } from '../timezone.ts';
 import { googleAuthResolver, type GoogleAuth, type GoogleAuthSource } from './auth.ts';
 
 const GMAIL = 'https://gmail.googleapis.com/gmail/v1/users/me';
@@ -83,7 +84,7 @@ function eventLine(event: CalendarEvent): string {
  * Gmail and Google Calendar tools. Mail and invitations are written by other people, so
  * the reading tools are marked as untrusted input: an agent that has them cannot have a shell.
  */
-export function createGoogleTools(source: GoogleAuthSource, timezone: string): ToolDefinition<any>[] {
+export function createGoogleTools(source: GoogleAuthSource, timezone: TimeZoneSource): ToolDefinition<any>[] {
   const resolve = googleAuthResolver(source);
   const client = (settings?: { account?: unknown }) => resolve(accountOf(settings));
 
@@ -237,7 +238,7 @@ export function createGoogleTools(source: GoogleAuthSource, timezone: string): T
 
   const calendarCreate = defineTool({
     name: 'calendar_create',
-    description: `Create an event on the user's primary Google Calendar. Date-times need an offset (e.g. 2026-10-20T12:00:00+07:00); the calendar time zone is ${timezone}.`,
+    description: `Create an event on the user's primary Google Calendar. Date-times need an offset (e.g. 2026-10-20T12:00:00+07:00); the calendar time zone is ${timeZoneName(timezone)}.`,
     risk: 'write',
     target: 'core',
     settings: [accountSetting('google')],
@@ -256,8 +257,8 @@ export function createGoogleTools(source: GoogleAuthSource, timezone: string): T
           summary: input.summary,
           location: input.location,
           description: input.description,
-          start: { dateTime: input.start, timeZone: timezone },
-          end: { dateTime: input.end, timeZone: timezone },
+          start: { dateTime: input.start, timeZone: timeZoneName(timezone) },
+          end: { dateTime: input.end, timeZone: timeZoneName(timezone) },
         },
       });
       return `Created: ${eventLine(event)}${event.htmlLink ? `\n${event.htmlLink}` : ''}`;

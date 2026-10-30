@@ -43,6 +43,13 @@ test('app settings: token is created once; providers, models and Google client p
   reloaded.removeProvider('my-llm');
   assert.deepEqual(reloaded.defaults, { vision_model: 'other/x' }, 'defaults on a removed provider are cleared');
   assert.deepEqual(AppSettings.load(file).providers, {});
+
+  assert.equal(AppSettings.load(file).timezone, '', 'no zone chosen yet');
+  reloaded.setTimezone('Asia/Singapore');
+  assert.equal(AppSettings.load(file).timezone, 'Asia/Singapore');
+  assert.throws(() => reloaded.setTimezone('Mars/Olympus'), /Unknown time zone/);
+  reloaded.clearTimezone();
+  assert.equal(AppSettings.load(file).timezone, '');
 });
 
 test('credentials are stored like opencode auth.json', () => {
@@ -419,10 +426,17 @@ test('settings screen: folders and the Google client can be changed', async () =
   assert.ok(fs.existsSync(workDir));
   assert.deepEqual(server.core.deps.allowedDirs, [workDir], 'tools see the new folder list immediately');
 
+  const zone = await client.ask({ type: 'settings-save', timezone: 'Asia/Singapore' }, 'settings');
+  assert.equal(zone.settings.timezone, 'Asia/Singapore');
+  assert.equal(typeof server.core.deps.timezone === 'function' ? server.core.deps.timezone() : server.core.deps.timezone, 'Asia/Singapore', 'the agent sees the new zone at once');
+  const badZone = await client.ask({ type: 'settings-save', timezone: 'Not/AZone' }, 'error');
+  assert.match(badZone.message, /Unknown time zone/);
+
   client.close();
   delete process.env.GOOGLE_OAUTH_CLIENT_ID;
   delete process.env.GOOGLE_OAUTH_CLIENT_SECRET;
   await server.close();
+  delete process.env.MIMI_TIMEZONE;
   fs.rmSync(parts.root, { recursive: true, force: true });
 });
 

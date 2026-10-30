@@ -96,6 +96,8 @@ export interface ChatMessageView {
   tools: Array<{ name: string; summary: string }>;
   /** The message this one answers, as a small quote. */
   replyTo?: { id: number; role: MessageRole; agent: string; text: string } | null;
+  /** The client's provisional id, so a placeholder is replaced by exactly this message. */
+  clientId?: string;
   /** Set when this message was forwarded from elsewhere. */
   forwardedFrom?: { from: string; chat: string } | null;
   /** Set when a workflow asks the user to approve something with this message. */
@@ -245,6 +247,8 @@ export interface Notification {
   triggerId?: number;
   /** The chat the message was posted in, when there is one. */
   chatId?: number;
+  /** The agent that caused it, so per-agent notification choices apply. */
+  agent?: string;
   /** Row in the notification inbox, once stored. */
   id?: number;
 }
@@ -260,6 +264,8 @@ export interface PreferencesView {
   pushKinds?: Array<Notification['kind']>;
   /** Approvals still push during quiet hours. */
   urgentApprovals?: boolean;
+  /** Agents whose notifications stay in the inbox but are not pushed or shown live. */
+  mutedAgents?: string[];
 }
 
 /** A stored notification, as the inbox shows it. */
@@ -502,6 +508,8 @@ export interface SettingsView {
   oauthRedirectUri?: string;
   /** Every OAuth account (Google / Microsoft) with its own client and token. */
   accounts: OAuthAccountView[];
+  /** IMAP / POP3 / SMTP accounts, without any password. */
+  mailAccounts: MailAccountView[];
   /** Spending limit and notification choices, plus what was spent today. */
   preferences: PreferencesView;
   spentTodayUsd: number;
@@ -509,6 +517,8 @@ export interface SettingsView {
   storage: StorageView;
   /** Which API keys of the web tools are set (never the keys themselves). */
   toolKeys: { serper: boolean; openweather: boolean };
+  /** The IANA zone agents use for the current time, reminders and quiet hours. */
+  timezone: string;
   /** A chat that stays silent this long starts a new session with its next message. */
   sessionIdleMinutes: number;
   /** A session this long (tokens of conversation) is followed by a new one; 0 = no limit. */
@@ -547,6 +557,8 @@ export interface SettingsChange {
   storage?: { mediaQuotaMb?: number; userMediaQuotaMb?: number; chatQuotaMb?: number };
   /** Session rollover: minutes of silence, and tokens of conversation (0 = no limit). */
   session?: { idleMinutes?: number; maxTokens?: number };
+  /** IANA time zone for agent times and schedules; an empty value restores MIMI_TIMEZONE. */
+  timezone?: string;
 }
 
 export interface MemoryView {
@@ -614,7 +626,7 @@ export type ClientMessage =
   /** Asks for a session of a chat (the latest one by default) and its messages. */
   | { type: 'chat-open'; chatId: number; sessionId?: number; beforeId?: number }
   /** Sends a message to a chat. `attachments` are ids returned by `POST /api/upload`. */
-  | { type: 'chat-send'; chatId: number; text: string; attachments?: string[]; replyTo?: number; forward?: { from: string; chat: string } }
+  | { type: 'chat-send'; chatId: number; text: string; attachments?: string[]; replyTo?: number; clientId?: string; forward?: { from: string; chat: string } }
   /** Starts a new session by hand; the next message goes there. */
   | { type: 'session-new'; chatId: number }
   /** Asks for the size, cache hit and cost of a session (the latest by default). */
@@ -735,9 +747,10 @@ export type ClientMessage =
   | { type: 'trigger-cancel'; id: number }
   /** The push-mail watcher: list, save (with an optional new password), remove, check now. */
   | { type: 'mail-watch' }
-  | { type: 'mail-watch-save'; account: MailWatchAccount; password?: string }
+  | { type: 'mail-watch-save'; account: MailWatchAccount; password?: string; smtpPassword?: string }
   | { type: 'mail-watch-delete'; id: string }
-  | { type: 'mail-watch-check' };
+  | { type: 'mail-watch-check' }
+  | { type: 'mail-account-test'; id: string };
 
 /** Sent by the PC agent. */
 export type PcMessage =
@@ -817,6 +830,8 @@ export type ServerMessage =
   | { type: 'chat-event'; chatId: number; sessionId: number; agent: string; event: AgentEvent }
   /** Recordings in this chat are being transcribed (`on`) or that finished. */
   | { type: 'chat-transcribing'; chatId: number; on: boolean }
+  /** The agent is looking at pictures in this chat (`on`) or that finished. */
+  | { type: 'chat-viewing'; chatId: number; on: boolean }
   /** A turn started (`done` unset) or finished (`done: true`) in this chat; turns in different chats run in parallel. */
   | { type: 'busy'; chatId: number | null; done?: boolean }
   /** Answer to a client `ping`. */
@@ -832,7 +847,15 @@ export type ServerMessage =
   | { type: 'workflow-expr-preview'; reqId: number; ok: boolean; value?: string; error?: string }
   /** Secret names stored in this machine's vault (values are never sent). */
   | { type: 'secrets'; names: string[] }
-  | { type: 'workflows'; workflows: WorkflowView[]; pool: TriggerPoolView[]; nodeTypes: NodeTypeView[]; saved?: string }
+  | {
+      type: 'workflows';
+      workflows: WorkflowView[];
+      pool: TriggerPoolView[];
+      nodeTypes: NodeTypeView[];
+      /** Names of the custom nodes under user/nodes (the "plugin" node). */
+      customNodes?: string[];
+      saved?: string;
+    }
   /** Answer to a manual `workflow-run`, with every node's input and output. */
   | { type: 'workflow-result'; result: WorkflowRunResult }
   /** Answer to `workflow-test-node`: the tested node's input and per-output items. */
@@ -866,22 +889,94 @@ export type ServerMessage =
   | { type: 'knowledge-embedded'; collection: string; count: number }
   | { type: 'workflow-run-record'; run: WorkflowRunRecord }
   | { type: 'status'; agent: string; status: AgentStatusView }
-  | { type: 'error'; message: string; chatId?: number }
+  | { type: 'error'; message: string; chatId?: number; clientId?: string }
   /** The push-mail watcher: watched accounts and when they were last checked. */
   | {
       type: 'mail-watch';
-      accounts: MailWatchAccount[];
+      accounts: MailAccountView[];
       lastCheckedAt: string | null;
       /** Set when this answers a manual `mail-watch-check`. */
       checked?: { found: number; at: string };
+      /** Set when this answers a connection test. */
+      test?: { id: string; ok: boolean; error?: string; message?: string };
     };
 
-/** A mailbox the push-mail watcher looks at. Passwords never travel over the socket. */
+/** How a mail client opens its connection: implicit TLS, STARTTLS, or plain (never for passwords). */
+export type MailSecurityMode = 'tls' | 'starttls' | 'none';
+
+/** Receiving side of an IMAP / POP3 mailbox. Passwords live in the vault, never here. */
+export interface MailIncomingSettings {
+  protocol: 'imap' | 'pop3';
+  host: string;
+  /** 993/143 for IMAP, 995/110 for POP3; 0 picks the right one from security and protocol. */
+  port: number;
+  security: MailSecurityMode;
+  /** Reject a certificate that does not match the host; keep true unless the server is trusted on a LAN. */
+  rejectUnauthorized: boolean;
+  /** Login name; usually the full address. */
+  user: string;
+  /** IMAP only; defaults to INBOX. */
+  folder?: string;
+  /** Provider search text: IMAP criteria or a simple word search. Empty = newest messages. */
+  query?: string;
+  /** Only messages without the Seen flag. */
+  unseenOnly?: boolean;
+  /** Look back this many days; 0 = no limit. */
+  sinceDays?: number;
+  /** Maximum messages one search returns (1-100). */
+  maxMessages?: number;
+  /** Mark a message seen when it is read by an agent or handled by a mail trigger. */
+  markRead?: boolean;
+  /** POP3: delete messages after they have been handled. */
+  deleteAfterFetch?: boolean;
+  /** How often the push-mail watcher checks this mailbox; 0 = use the global interval. */
+  pollMinutes?: number;
+  /** Socket inactivity limit in milliseconds. */
+  timeoutMs?: number;
+}
+
+/** Sending side (SMTP) of an IMAP / POP3 mail account. */
+export interface MailOutgoingSettings {
+  host: string;
+  /** 465/587/25; 0 picks the right one from security. */
+  port: number;
+  security: MailSecurityMode;
+  rejectUnauthorized: boolean;
+  /** SMTP login; empty means the incoming user. */
+  user?: string;
+  /** Use the receiving password for SMTP too (the usual case). */
+  useIncomingPassword?: boolean;
+  fromEmail: string;
+  fromName?: string;
+  replyTo?: string;
+  timeoutMs?: number;
+}
+
+/** One mail account the hub and the core tools can use. Secrets are never part of this object. */
 export type MailWatchAccount =
-  | { id: string; kind: 'google'; query: string }
-  | { id: string; kind: 'microsoft'; query: string }
-  | { id: string; kind: 'imap'; host: string; port: number; tls: boolean; user: string; query?: string }
-  | { id: string; kind: 'pop3'; host: string; port: number; tls: boolean; user: string };
+  | { id: string; kind: 'google'; name?: string; email?: string; query: string }
+  | { id: string; kind: 'microsoft'; name?: string; email?: string; query: string }
+  | {
+      id: string;
+      kind: 'imap' | 'pop3';
+      name: string;
+      email?: string;
+      incoming: MailIncomingSettings;
+      outgoing?: MailOutgoingSettings;
+      default?: boolean;
+    };
+
+/** A mail account as the hub shows it: the settings plus which secrets are already stored. */
+export type MailAccountView = MailWatchAccount & {
+  /** An incoming password (or OAuth token) is stored in this machine's vault. */
+  hasPassword?: boolean;
+  /** An SMTP password is stored separately when it differs from the incoming one. */
+  hasOutgoingPassword?: boolean;
+  /** Everything needed to receive and (when configured) send is present. */
+  connected?: boolean;
+  createdAt?: string;
+  lastCheckedAt?: string | null;
+};
 
 /** Sent by the core to the PC agent. */
 export type PcRequest = {

@@ -75,6 +75,7 @@ function evaluate(request) {
 const NODE_PRELUDE = '(() => {' +
   'const items = globalThis.items;' +
   'globalThis.$json = items[0] ?? {}; globalThis.$items = items;' +
+  'globalThis.$config = globalThis.__config || {}; delete globalThis.__config;' +
   'globalThis.$input = { all: () => items.map((json) => ({ json })), first: () => ({ json: items[0] ?? {} }),' +
   ' last: () => ({ json: items.at(-1) ?? {} }), item: { json: items[0] ?? {} } };' +
   '})()';
@@ -84,7 +85,9 @@ async function code(request) {
   const logs = [];
   const log = (...parts) => logs.push(parts.map((part) => (typeof part === 'string' ? part : JSON.stringify(part))).join(' ').slice(0, 2000));
   // Not ECMAScript built-ins, so they come from this process: harmless here, nothing beyond it.
-  const variables = node ? { items: Array.isArray(request.items) ? request.items : [] } : { input: request.input ?? null, settings: request.settings ?? {} };
+  const variables = node
+    ? { items: Array.isArray(request.items) ? request.items : [], __config: request.config ?? {} }
+    : { input: request.input ?? null, settings: request.settings ?? {} };
   const context = fresh(variables, (target) => {
     target.__log = log;
     target.URL = Url; target.URLSearchParams = UrlSearchParams; target.TextEncoder = Encoder; target.TextDecoder = Decoder;
@@ -289,10 +292,14 @@ export class Sandbox {
   async runNode(
     code: string,
     items: JsonValue[],
-    options: { timeoutMs?: number; signal?: AbortSignal } = {},
+    options: { timeoutMs?: number; signal?: AbortSignal; config?: Record<string, JsonValue> } = {},
   ): Promise<{ value: SandboxValue; logs: string[] }> {
     const timeoutMs = options.timeoutMs ?? 15_000;
-    const reply = await this.request({ op: 'node', code, items, timeoutMs }, timeoutMs + 3000, options.signal);
+    const reply = await this.request(
+      { op: 'node', code, items, config: options.config ?? {}, timeoutMs },
+      timeoutMs + 3000,
+      options.signal,
+    );
     if (reply.ok !== true) throw new Error(String(reply.error ?? 'the code failed'));
     return { value: decode(reply.value), logs: (reply.logs as string[] | undefined) ?? [] };
   }

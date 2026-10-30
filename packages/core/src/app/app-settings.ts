@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { ModelPreset } from '../providers/routing.ts';
 import type { ProviderDef } from '../providers/settings.ts';
+import { cleanTimeZone } from '../timezone.ts';
 
 /** Environment variables the settings screen may write. Nothing else is accepted from a client. */
 export const SETTABLE_KEYS = [
@@ -44,6 +45,8 @@ interface StoredSettings {
   storage: StorageQuotas;
   /** Session rollover set in the app; unset keeps what mimi.json says. */
   session: SessionPolicy;
+  /** IANA zone chosen in the app; unset keeps MIMI_TIMEZONE / Asia/Bangkok. */
+  timezone: string;
   preferences: PreferencesView;
   /** Screen settings every device of the user shares (character position, sounds, …), key → value. */
   ui: Record<string, string>;
@@ -130,6 +133,7 @@ export class AppSettings {
         chatQuotaBytes: savedQuotaBytes(stored.storage?.chatQuotaBytes, DEFAULT_CHAT_QUOTA_MB),
       },
       session: sessionPolicy(stored.session),
+      timezone: cleanTimeZone(stored.timezone),
       preferences: { ...stored.preferences },
       ui: stored.ui && typeof stored.ui === 'object' ? { ...stored.ui } : {},
     });
@@ -161,6 +165,25 @@ export class AppSettings {
   /** Values as typed on the settings screen; a bad one goes back to the mimi.json default. */
   setSession(change: { idleMinutes?: number; maxTokens?: number }): void {
     this.data.session = sessionPolicy({ ...this.data.session, ...change });
+    this.save();
+  }
+
+  get timezone(): string {
+    return this.data.timezone;
+  }
+
+  /** Sets the zone agents use for times and reminders; throws on an unknown name. */
+  setTimezone(value: string): string {
+    const zone = cleanTimeZone(value);
+    if (!zone) throw new Error(`Unknown time zone "${value}". Use an IANA name such as Asia/Bangkok.`);
+    this.data.timezone = zone;
+    this.save();
+    return zone;
+  }
+
+  /** Forgets the app's choice, so MIMI_TIMEZONE (or the default) applies again. */
+  clearTimezone(): void {
+    this.data.timezone = '';
     this.save();
   }
 

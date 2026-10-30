@@ -242,7 +242,7 @@ test('core: an agent task runs unattended in its own thread; only the report joi
   // Each one is also stored in the inbox; its row id comes along.
   assert.ok(notifications.every((entry) => typeof entry.id === 'number'));
   assert.deepEqual(notifications.map(({ id: _id, ...rest }) => rest), [
-    { kind: 'task-result', title: 'Mail brief', body: '3 new mails, nothing urgent.', triggerId: 1, chatId: log.chat.id },
+    { kind: 'task-result', title: 'Mail brief', body: '3 new mails, nothing urgent.', triggerId: 1, chatId: log.chat.id, agent: 'tim' },
   ]);
   assert.deepEqual(
     log.messages.map((message) => [message.agent, message.text]),

@@ -14,7 +14,7 @@ const fieldSchema = z.strictObject({
   key: z.string().regex(/^[a-zA-Z][a-zA-Z0-9_]*$/),
   label: z.string().min(1),
   type: z.enum(['string', 'number', 'boolean', 'text', 'json', 'expression', 'account']),
-  service: z.enum(['google', 'microsoft']).optional(),
+  service: z.enum(['google', 'microsoft', 'mail']).optional(),
   placeholder: z.string().optional(),
   required: z.boolean().optional(),
   description: z.string().optional(),

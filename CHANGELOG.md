@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### 0.7.5-prototype
+
+- Mail: besides Gmail / Outlook, any IMAP or POP3 mailbox can be watched, with optional SMTP
+  sending; passwords are typed in Hub → Mail but kept only in the machine's vault.
+- Workflows: custom nodes (defined from files) appear in the editor; trigger pool, sandbox
+  and runner updates.
+- Notifications remember which agent raised them, so Settings can mute chosen agents.
+- The app's time zone is a setting that takes effect on the next message, no restart.
+- Desktop: a built-in browser window with its own profile, driven by the PC agent.
+- Android: notification icon and push-service / widget fixes.
+
 ### 0.7.4-prototype
 
 - The header and the chat list say "กำลังตอบ…" (was "กำลังพิมพ์…") while an agent answers.

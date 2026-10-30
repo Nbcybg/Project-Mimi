@@ -26,6 +26,7 @@ const MIGRATIONS = [
   '018-session-read.sql',
   '019-attachment-caption.sql',
   '020-attachment-expiry.sql',
+  '021-notification-agent.sql',
 ];
 
 function migrate(db: Db): void {

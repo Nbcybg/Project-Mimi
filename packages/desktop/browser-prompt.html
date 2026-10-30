@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>เปิดที่อยู่</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 18px; background: #141618; color: #e7e9ec; font: 13px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  h1 { margin: 0 0 12px; font-size: 15px; font-weight: 600; }
+  .row { display: flex; gap: 8px; }
+  input { flex: 1; min-width: 0; padding: 9px 11px; border-radius: 9px; border: 1px solid #3a3f46; background: #0f1113; color: inherit; font: inherit; outline: none; }
+  input:focus { border-color: #e08a5b; }
+  button { padding: 9px 14px; border-radius: 9px; border: 1px solid #3a3f46; background: #23272c; color: inherit; font: inherit; cursor: pointer; }
+  button.primary { background: #e08a5b; border-color: #e08a5b; color: #20130c; font-weight: 600; }
+  p { margin: 10px 0 0; color: #9aa1a9; font-size: 12px; }
+</style>
+</head>
+<body>
+<h1>เปิดที่อยู่</h1>
+<form id="form">
+  <div class="row">
+    <input id="url" autocomplete="off" spellcheck="false" placeholder="https:// หรือคำค้นหา">
+    <button class="primary" type="submit">เปิด</button>
+  </div>
+</form>
+<p>Enter เพื่อเปิด · Esc เพื่อปิด</p>
+<script>
+  const field = document.getElementById('url');
+  field.value = new URLSearchParams(location.search).get('url') || '';
+  field.focus();
+  field.select();
+  document.getElementById('form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    const value = field.value.trim();
+    if (value) window.MimiAddress.submit(value);
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') window.MimiAddress.cancel();
+  });
+</script>
+</body>
+</html>

@@ -30,7 +30,7 @@
     },
     { label: 'AI', types: ['agent', 'llm', 'classify', 'extract', 'knowledge'] },
     { label: 'ทางแยก', types: ['if', 'switch', 'filter', 'merge'] },
-    { label: 'ข้อมูล', types: ['set', 'datetime', 'split_out', 'sort', 'limit', 'aggregate', 'remove_duplicates', 'code'] },
+    { label: 'ข้อมูล', types: ['set', 'datetime', 'split_out', 'sort', 'limit', 'aggregate', 'remove_duplicates', 'code', 'plugin'] },
     { label: 'ไฟล์', types: ['file', 'extract_file', 'sheets'] },
     { label: 'วน / รอ', types: ['loop', 'workflow', 'wait', 'stop', 'approval'] },
     { label: 'เชื่อมต่อ', types: ['connector', 'http', 'tool', 'chat', 'telegram', 'respond'] },
@@ -517,13 +517,15 @@
       node_.type = 'checkbox';
       node_.checked = value === true || value === 'true';
     } else if (field.type === 'account') {
-      const accounts = ((M().state.settings || {}).accounts || []).filter(
+      const settings = M().state.settings || {};
+      const mailAccounts = (settings.mailAccounts || []).map((account) => ({ ...account, service: 'mail' }));
+      const accounts = [...(settings.accounts || []), ...mailAccounts].filter(
         (account) => !field.service || account.service === field.service,
       );
       node_ = selectOf(
         accounts.map((account) => [
           account.id,
-          `${account.name}${account.default ? ' ★' : ''}${field.service ? '' : ` · ${account.service}`}${account.connected ? '' : ' (ยังไม่เชื่อมต่อ)'}`,
+          `${account.name || account.id}${account.default ? ' ★' : ''}${field.service ? '' : ` · ${account.service}`}${account.connected ? '' : ' (ยังไม่เชื่อมต่อ)'}`,
         ]),
         String(value ?? ''),
         '— บัญชีเริ่มต้น —',
@@ -1851,6 +1853,8 @@
         });
       }
     }
+    if (type === 'trigger_mail') Object.assign(config, { source: 'google', maxMessages: 5, markRead: true });
+    if (type === 'plugin') Object.assign(config, { plugin: (M().state.nodeTypes || []).find((spec) => spec.type === 'plugin')?.fields?.find((field) => field.key === 'plugin')?.options?.[0] || '', config: {} });
     if (type === 'llm') Object.assign(config, { format: 'text', name: 'text', prompt: '{{ $json.text }}' });
     if (type === 'classify') Object.assign(config, { input: '{{ $json.text }}', categories: [] });
     if (type === 'extract') Object.assign(config, { input: '{{ $json.text }}', attributes: [] });
@@ -1993,6 +1997,10 @@
       node.title = entry.slice('tool@'.length);
     } else if (entry.startsWith('trigger_custom@')) {
       node = createNode('trigger_custom', canvasApi?.center() || null, null, entry.slice('trigger_custom@'.length));
+    } else if (entry.startsWith('plugin@')) {
+      node = createNode('plugin', canvasApi?.center() || null, null);
+      node.config.plugin = entry.slice('plugin@'.length);
+      node.title = `Node: ${node.config.plugin}`;
     } else {
       node = createNode(entry, canvasApi?.center() || null, null);
     }
@@ -2051,6 +2059,14 @@
         const label = NODE_GROUPS[0].label;
         if (!groups.has(label)) groups.set(label, []);
         groups.get(label).push(...customTriggers);
+      }
+      const customNodes = (M().state.customNodes || [])
+        .filter((name) => match(`custom node ${name}`))
+        .map((name) => libraryEntry(`plugin@${name}`, `Node: ${name}`, `Custom node จาก user/nodes (${name})`));
+      if (customNodes.length > 0) {
+        const label = 'ข้อมูล';
+        if (!groups.has(label)) groups.set(label, []);
+        groups.get(label).push(...customNodes);
       }
       const items = M().toolItems ? M().toolItems() : M().state.tools || [];
       const tools = items

@@ -9,7 +9,11 @@
     <string name="channelConnection">การเชื่อมต่อ</string>
     <string name="connectionText">รอข้อความใหม่จาก agent</string>
     <string name="channelReplies">คำตอบใหม่</string>
+    <string name="channelNotifications">การแจ้งเตือน</string>
     <string name="newMessage">มีข้อความใหม่</string>
+    <string name="notificationsOnTitle">เปิดการแจ้งเตือนแล้ว</string>
+    <string name="notificationsOnText">Mimi จะแจ้งเตือนเมื่อ agent ตอบ หรือถึงเวลาที่ตั้งไว้ — แม้แอปจะปิดอยู่</string>
+    <string name="notificationsOffHint">ยังไม่ได้อนุญาตการแจ้งเตือน: เปิดได้ที่ ตั้งค่า &gt; แอป &gt; Mimi &gt; สิทธิ์</string>
     <string name="permissionHint">ยังไม่ได้อนุญาตไมค์/กล้อง: เปิดได้ที่ ตั้งค่า &gt; แอป &gt; Mimi &gt; สิทธิ์</string>
     <string name="saved">บันทึกแล้ว: %1$s</string>
     <color name="background">#141618</color>

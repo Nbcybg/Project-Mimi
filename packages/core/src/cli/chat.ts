@@ -164,6 +164,7 @@ async function main(): Promise<void> {
   const appSettings = AppSettings.load(loadConfig().appSettingsPath);
   appSettings.applyToEnv(process.env);
   const config = loadConfig();
+  if (appSettings.timezone) config.timezone = appSettings.timezone;
   fs.mkdirSync(config.allowedDirs[0]!, { recursive: true });
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });

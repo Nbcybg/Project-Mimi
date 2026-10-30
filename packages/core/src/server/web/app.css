@@ -228,8 +228,10 @@ html[data-mode="mobile"] .solo #back[data-unread]::after { top: -2px; right: -2p
 .ic.send { background: var(--accent); color: var(--accent-ink); }
 .ic.stop { background: var(--bad); color: #1a1010; }
 .ic.rec { background: rgba(238,128,121,.18); color: var(--bad); }
-#input { flex: 1; resize: none; border: 0; outline: 0; background: transparent; padding: 7px 4px; min-height: 34px; max-height: 180px; min-width: 0; font-size: var(--chat-fs); line-height: var(--chat-lh); }
-#input.th { line-break: anywhere; }
+#input { flex: 1; resize: none; border: 0; outline: 0; background: transparent; padding: 7px 4px; min-height: 34px; max-height: 180px; min-width: 0; font-size: var(--chat-fs); line-height: var(--chat-lh); text-rendering: optimizeSpeed; -webkit-text-size-adjust: 100%; }
+/* Thai has no spaces between words: breaking anywhere keeps WebView from running its
+   dictionary on every keystroke. word-break is much faster than line-break on Android. */
+#input.th { word-break: break-all; overflow-wrap: anywhere; }
 .hints { display: flex; gap: 14px; font-size: 11.5px; color: var(--faint); padding: 5px 4px 0; flex-wrap: wrap; }
 .hints .rec { color: var(--bad); }
 .banner { display: flex; gap: 12px; align-items: center; justify-content: center; padding: 10px; border: 1px dashed var(--line); border-radius: 12px; color: var(--muted); font-size: 13px; }
@@ -623,11 +625,19 @@ html[data-mode="mobile"] .solo #back[data-unread]::after { top: -2px; right: -2p
 .ri .d { font: 11px var(--mono); color: var(--faint); white-space: nowrap; }
 .dialog { width: min(460px, 100%); background: var(--raised); border: 1px solid #3a3f46; border-radius: 15px; box-shadow: 0 30px 80px rgba(0,0,0,.6); padding: 16px 18px; }
 .dialog h3 { margin: 0 0 4px; font-size: 16px; }
+.credits { width: min(430px, 100%); }
+.credit-group { display: grid; grid-template-columns: 118px 1fr; gap: 10px; padding: 9px 0; border-top: 1px solid var(--line-soft); font-size: 13px; }
+.credit-group:first-of-type { border-top: 0; }
+.credit-group b { color: var(--muted); font-weight: 500; }
+.credit-group span { color: var(--ink); overflow-wrap: anywhere; }
+.credit-foot { display: flex; align-items: center; gap: 10px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12.5px; }
+.credit-foot .btn { margin-left: auto; }
 .seg { display: grid; grid-template-columns: 1fr 1fr; background: var(--bg); border: 1px solid var(--line); border-radius: 9px; padding: 3px; font-size: 12.5px; margin: 10px 0; }
 .seg button { text-align: center; padding: 5px 0; border-radius: 7px; color: var(--muted); }
 .seg button.on { background: var(--raised); color: var(--ink); }
 .lightbox { position: fixed; inset: 0; background: rgba(0,0,0,.86); z-index: 30; display: grid; place-items: center; cursor: zoom-out; }
 .lightbox img { max-width: 94vw; max-height: 94vh; border-radius: 8px; }
+.lightbox-close { position: fixed; top: 12px; right: 12px; z-index: 2; background: rgba(20,22,28,.8); }
 #toasts { position: fixed; right: 14px; top: 14px; display: flex; flex-direction: column; gap: 8px; width: min(340px, calc(100% - 28px)); z-index: 40; }
 .toast { background: var(--raised); border: 1px solid rgba(224,138,91,.5); border-radius: 10px; padding: 10px 12px; box-shadow: 0 10px 28px rgba(0,0,0,.45); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; }
 .toast.bad { border-color: rgba(238,128,121,.6); }
@@ -714,13 +724,14 @@ html[data-mode="mobile"] .solo #back[data-unread]::after { top: -2px; right: -2p
 .spinput { max-width: 200px; }
 
 .stage .bgwrap { position: absolute; inset: 0; pointer-events: none; }
-.stage .bgwrap img.bgimg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
-.stage .bgwrap img.bg-first { animation: bg-dissolve .6s ease-out both; }
-.stage .bgwrap img.bg-in { animation: bg-dissolve .9s ease-in-out both; }
-.stage .bgwrap img.bg-out { animation: bg-dissolve-out .9s ease-in-out both; }
+.stage .bgwrap .bgimg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.stage .bgwrap .bgfill { display: block; }
+.stage .bgwrap .bg-first { animation: bg-dissolve .6s ease-out both; }
+.stage .bgwrap .bg-in { animation: bg-dissolve .9s ease-in-out both; }
+.stage .bgwrap .bg-out { animation: bg-dissolve-out .9s ease-in-out both; }
 @keyframes bg-dissolve { from { opacity: 0; } to { opacity: 1; } }
 @keyframes bg-dissolve-out { from { opacity: 1; } to { opacity: 0; } }
-@media (prefers-reduced-motion: reduce) { .stage .bgwrap img.bgimg { animation: none !important; } }
+@media (prefers-reduced-motion: reduce) { .stage .bgwrap .bgimg { animation: none !important; } }
 .wthumb.wide { width: 240px; height: 135px; }
 
 .stage .cg { position: absolute; inset: 0; background: rgba(8,9,12,.62); display: grid; place-items: center; pointer-events: none; }
@@ -793,8 +804,35 @@ html[data-mode="mobile"] .solo #back[data-unread]::after { top: -2px; right: -2p
 .solo .divider { font-size: 11px; opacity: .75; }
 
 /* the character switched off: the plain chat, all of it readable */
-.char-off .stage .bgwrap, .char-off .stage .fade { display: none; }
+.char-off .stage .fade { display: none; }
 .char-off .stage.has-bg { background: none; }
+
+/* ---------- Chat setting → หน้าตา: this chat's background ---------- */
+.bgpanel { display: flex; flex-direction: column; gap: 8px; }
+.bgpreview { position: relative; width: 100%; aspect-ratio: 16 / 9; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: #141618; }
+.bgpreview-fill, .bgpreview img { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.bgpreview img { object-fit: cover; }
+.bgtabs { flex-wrap: wrap; }
+.bgtabs button { flex: 1 1 auto; }
+.bgedit { display: flex; flex-direction: column; gap: 6px; }
+.bgedit.grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.bgedit input[type="color"] { width: 100%; height: 32px; padding: 0; border: 1px solid var(--line); border-radius: 8px; background: none; }
+.bgpresets { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.bgpreset { display: flex; flex-direction: column; gap: 4px; padding: 4px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); font-size: 11.5px; }
+.bgpreset.on { border-color: var(--accent); }
+.bgpreset img { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 7px; display: block; }
+.bguploadlist { display: flex; flex-direction: column; gap: 6px; }
+.bgupload { display: flex; align-items: center; gap: 6px; }
+.bgupload-pick { flex: 1; display: flex; align-items: center; gap: 8px; min-width: 0; padding: 4px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); text-align: left; }
+.bgupload-pick.on { border-color: var(--accent); }
+.bgupload-pick > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.bgupload-del { width: 26px; height: 26px; flex: none; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--muted); }
+.bgschedule { margin-top: 4px; }
+.bgrules { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 6px; }
+.bgrule { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.bgrule input[type="time"] { width: 92px; font-size: 11px; padding: 4px; }
+.bgrule select { flex: 1 1 130px; min-width: 0; font-size: 11.5px; padding: 4px; }
+.bgdash { color: var(--muted); }
 
 /* ---------- mobile mode (a window up to 820px wide) ---------- */
 html[data-mode="mobile"] .top .btn.icon, html[data-mode="mobile"] #toggle-rail, html[data-mode="mobile"] #toggle-char { border: 0; background: none; font-size: 18px; padding: 4px 8px; color: var(--ink-2); }
@@ -831,14 +869,15 @@ html[data-mode="mobile"] .top .btn.icon { display: inline-block; }
 .mrow .react:hover { border-color: rgba(238,128,121,.6); }
 .mrow .pinmark { font-size: 11px; }
 .hasbar { position: relative; }
-.msgbar { position: absolute; top: -17px; right: 8px; z-index: 6; display: none; gap: 1px; padding: 2px; border-radius: 999px; background: var(--raised); border: 1px solid #3a3f46; box-shadow: 0 6px 18px rgba(0,0,0,.45); }
+.msgbar { position: absolute; top: calc(100% + 2px); right: 8px; z-index: 7; display: none; gap: 1px; padding: 2px; border-radius: 999px; background: var(--raised); border: 1px solid #3a3f46; box-shadow: 0 6px 18px rgba(0,0,0,.45); }
+.tx > .msgbar { top: calc(100% + 19px); }
 .row-user .msgbar { right: auto; left: 8px; }
 .hasbar:hover > .msgbar, .hasbar:focus-within > .msgbar, .hasbar.sel > .msgbar { display: flex; }
 .hasbar:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 16px; }
 .msgbar .b { width: 26px; height: 24px; border-radius: 999px; font-size: 13px; line-height: 1; color: var(--ink-2); display: grid; place-items: center; }
 .msgbar .b:hover { background: var(--hover); color: var(--ink); }
 .msgbar .b.on { background: var(--accent-soft); }
-.reactpick { position: absolute; top: 30px; left: 0; display: flex; gap: 2px; padding: 4px; border-radius: 12px; background: var(--raised); border: 1px solid #3a3f46; box-shadow: 0 10px 26px rgba(0,0,0,.5); }
+.reactpick { position: absolute; bottom: 30px; top: auto; left: 0; display: flex; gap: 2px; padding: 4px; border-radius: 12px; background: var(--raised); border: 1px solid #3a3f46; box-shadow: 0 10px 26px rgba(0,0,0,.5); }
 .reactpick button { width: 28px; height: 28px; border-radius: 8px; font-size: 16px; }
 .reactpick button:hover { background: var(--hover); }
 .pinbar { display: flex; gap: 8px; align-items: center; padding: 5px 18px; border-bottom: 1px solid var(--line); background: var(--panel); flex: none; }
@@ -982,3 +1021,43 @@ button, select, summary, label { cursor: default; }
 input, textarea, .tx, .user, .tr, .tool .b, .perm .kv, pre, code, .quote span, .hint, .note { -webkit-user-select: text; user-select: text; }
 input, textarea { cursor: text; }
 img, a { -webkit-user-drag: none; }
+
+/* ---------- activity line above the composer ---------- */
+/* It used to float at the top of the stage; now it sits with the message box so a
+   phone user sees "answering / transcribing / looking at pictures" where they look. */
+.typing-chip.bottom {
+  position: static; top: auto; left: auto; transform: none;
+  margin: 0 auto 8px; width: fit-content; max-width: min(92%, 520px);
+  display: flex; align-items: center; justify-content: center; text-align: center;
+}
+html[data-mode="mobile"] .solo .typing-chip.bottom { margin: 0 auto 6px; }
+.note.pending-status { color: var(--muted); font-size: 11.5px; margin-top: 4px; }
+.album-cap { grid-column: 1 / -1; padding: 7px 9px 8px; background: var(--raised); color: var(--ink); font-size: 12px; line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* ---------- picture caption sheet ---------- */
+.photo-scrim { position: fixed; inset: 0; z-index: 45; display: grid; place-items: center; padding: 14px; background: rgba(5,6,8,.82); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
+.photo-review { width: min(760px, 100%); max-height: calc(100vh - 28px); max-height: calc(100dvh - 28px); display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid rgba(255,255,255,.13); border-radius: 18px; background: var(--panel); box-shadow: 0 30px 90px rgba(0,0,0,.65); }
+.pr-head { display: flex; align-items: center; gap: 8px; }
+.pr-head b { flex: 1; font-size: 13px; color: var(--ink-2); }
+.pr-stage { position: relative; flex: 1; min-height: 0; display: grid; place-items: center; overflow: hidden; border-radius: 13px; background: #111317; touch-action: pan-y; }
+.pr-stage img { max-width: 100%; max-height: min(62vh, 620px); max-height: min(62dvh, 620px); object-fit: contain; display: block; }
+.pr-prev, .pr-next { position: absolute; top: 50%; transform: translateY(-50%); width: 42px; height: 52px; font-size: 28px; line-height: 1; background: rgba(20,22,28,.62); }
+.pr-tick { position: absolute; top: 9px; right: 9px; width: 38px; height: 38px; border-radius: 50%; border: 2px solid rgba(255,255,255,.7); background: rgba(20,22,28,.48); color: #fff; font: 700 19px/1 var(--ui); display: grid; place-items: center; -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
+.pr-tick.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.pr-prev { left: 8px; } .pr-next { right: 8px; }
+.pr-thumbs { display: flex; gap: 7px; overflow-x: auto; padding: 2px 1px 4px; }
+.pr-thumb { position: relative; width: 54px; height: 54px; flex: none; border-radius: 9px; overflow: hidden; border: 2px solid transparent; background: #23262b; padding: 0; }
+.pr-thumb.on { border-color: var(--accent); }
+.pr-thumb.pick .pr-check { opacity: 1; }
+.pr-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.pr-check { position: absolute; top: 2px; right: 2px; min-width: 17px; height: 17px; border-radius: 50%; background: var(--accent); color: var(--accent-ink); font: 700 11px/17px var(--ui); text-align: center; opacity: 0; }
+.pr-foot { display: grid; gap: 7px; }
+.pr-caption { width: 100%; resize: none; min-height: 52px; max-height: 130px; border: 1px solid var(--line); border-radius: 11px; background: var(--bg); color: var(--ink); padding: 9px 11px; font: inherit; font-size: 13px; line-height: 1.45; outline: 0; }
+.pr-caption:focus { border-color: rgba(224,138,91,.6); }
+.pr-foot .hstack { justify-content: flex-end; flex-wrap: wrap; }
+@media (max-width: 640px) {
+  .photo-scrim { padding: 0; }
+  .photo-review { width: 100%; height: 100%; max-height: none; border-radius: 0; border: 0; padding: 12px; }
+  .pr-stage { border-radius: 10px; }
+  .pr-stage img { max-height: 52vh; max-height: 52dvh; }
+}

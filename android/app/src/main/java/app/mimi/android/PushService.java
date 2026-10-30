@@ -53,8 +53,10 @@ public class PushService extends Service {
                 int round = 0;
                 while (!Thread.currentThread().isInterrupted()) {
                     if (WidgetSync.prefs(app).getString("token", "").isEmpty()) break; // signed out
-                    WidgetSync.syncNotifications(app);
-                    if (round++ % 4 == 0) WidgetSync.refresh(app); // the widget about every two minutes
+                    int posted = WidgetSync.syncNotifications(app);
+                    // A reply just arrived: bring the widget up to date now, not at the next round.
+                    if (posted > 0 || round % 4 == 0) WidgetSync.refresh(app);
+                    round++;
                     try {
                         Thread.sleep(EVERY_MS);
                     } catch (InterruptedException stopped) {
@@ -79,7 +81,7 @@ public class PushService extends Service {
         PendingIntent tap = PendingIntent.getActivity(this, 3, new Intent(this, MainActivity.class), PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         Notification.Builder builder = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(this, CHANNEL) : new Notification.Builder(this);
         builder
-            .setSmallIcon(R.mipmap.ic_launcher)
+            .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(getString(R.string.appName))
             .setContentText(getString(R.string.connectionText))
             .setOngoing(true)

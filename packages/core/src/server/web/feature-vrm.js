@@ -763,12 +763,15 @@ function liveStart() {
   const tick = (now = performance.now()) => {
     requestAnimationFrame(tick);
     if (!canvas.isConnected || document.hidden || !live.vrm) return;
-    // While a text field has the keyboard the character redraws at ~15 fps: typing (and
+    // While a text field has the keyboard the character redraws at ~8 fps: typing (and
     // holding Backspace) stays smooth on a phone, which cannot do both at full rate.
     const field = document.activeElement;
     const typing = field && (field.tagName === 'TEXTAREA' || field.tagName === 'INPUT');
-    if (typing && now - (window.__mimiKeyAt || 0) < 350) return; // a key just went in: leave the frame to the keyboard
-    if (typing && now - lastDraw < 66) return;
+    // While an IME is composing (Thai sends several events per syllable) the character
+    // stops drawing at all; just after a key it leaves the next frames to the keyboard.
+    if (typing && window.__mimiComposing) return;
+    if (typing && now - (window.__mimiKeyAt || 0) < 500) return;
+    if (typing && now - lastDraw < 120) return;
     lastDraw = now;
     live.clock.update();
     const delta = Math.min(live.clock.getDelta(), 0.1);

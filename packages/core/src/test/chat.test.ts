@@ -286,6 +286,7 @@ test('attachments are read once when they arrive: documents as text, images by t
   assert.match(prompt, /kind=\\"file\\" name=\\"note.txt\\">\\nซื้อนม 2 ขวด\\n<\/attachment>/);
   assert.match(prompt, /kind=\\"image\\" name=\\"cat.png\\">\\nแมวสีส้มนอนบนโซฟา/);
   assert.ok(result.userMessage?.type === 'user-message');
+  assert.deepEqual(result.items.filter((item) => item.type === 'viewing').map((item) => item.on), [true, false]);
   assert.equal(result.userMessage.text, 'ดูนี่');
   assert.deepEqual(result.userMessage.attachments.map((file) => file.name), ['note.txt', 'cat.png']);
 

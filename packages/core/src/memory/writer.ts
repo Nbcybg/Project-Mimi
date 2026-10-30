@@ -5,6 +5,7 @@ import type { MessagesRepo } from '../db/messages-repo.ts';
 import { providerOptionsFor } from '../providers/registry.ts';
 import type { ModelService } from '../providers/routing.ts';
 import type { UsageLogger } from '../usage/logger.ts';
+import { timeZoneName, type TimeZoneSource } from '../timezone.ts';
 import { LAYER1_PATHS, MemoryError, type MemoryStore } from './store.ts';
 
 export interface WriterResult {
@@ -20,7 +21,7 @@ export interface MemoryWriterDeps {
   models: ModelService;
   usage: UsageLogger;
   profileMaxChars: number;
-  timezone: string;
+  timezone: TimeZoneSource;
   now?: () => Date;
 }
 
@@ -128,7 +129,7 @@ export class MemoryWriter {
     if (!turn.some((message) => message.role === 'user' && message.text.trim())) return result;
 
     const info = models.info(models.resolve('summarize', agent.models));
-    const today = new Intl.DateTimeFormat('en-CA', { timeZone: this.deps.timezone }).format(
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: timeZoneName(this.deps.timezone) }).format(
       this.deps.now?.() ?? new Date(),
     );
     const startedAt = Date.now();

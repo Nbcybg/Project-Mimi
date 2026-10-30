@@ -30,6 +30,8 @@ export interface CoreConfig {
   backgroundsDir: string;
   /** One file per tool (`tools/<name>.json`) and tool presets (`tools/presets/<name>.json`). */
   toolsDir: string;
+  /** Custom workflow nodes made by the user / the AI Overseer (`nodes/<name>.json`). */
+  nodesDir: string;
   /** Trigger definitions mirrored as `triggers/<id>.json` for syncing. */
   triggersDir: string;
   /** Always-on persona file, injected into every agent's prompt. */
@@ -144,6 +146,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
     wardrobeDir: path.join(userDir, 'wardrobe'),
     backgroundsDir: path.join(userDir, 'backgrounds'),
     toolsDir: path.join(userDir, 'tools'),
+    nodesDir: path.join(userDir, 'nodes'),
     triggersDir: path.join(userDir, 'triggers'),
     personaPath: path.join(userDir, 'persona.md'),
     googleTokenPath: path.join(dataDir, 'google-token.json'),

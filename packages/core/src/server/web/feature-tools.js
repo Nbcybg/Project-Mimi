@@ -386,6 +386,22 @@
       }
     }
 
+    const customNodes = M().state.customNodes || [];
+    if (customNodes.length > 0) {
+      panel.append(el('h4', '', 'Custom nodes (user/nodes)'));
+      const customRows = el('div', 'tbl poolrows');
+      for (const name of customNodes) {
+        const row = el('button');
+        row.type = 'button';
+        const title = el('span', 'nm2');
+        title.append(el('b', '', name), el('small', 'badge', 'plugin'));
+        row.append(title, el('span', 'muted', 'สร้างโดย Overseer / ผู้ใช้'), el('span', 'faint', 'ดู'));
+        row.onclick = () => go({ mode: 'node', type: 'plugin' });
+        customRows.append(row);
+      }
+      panel.append(customRows);
+    }
+
     panel.append(el('h4', '', 'เครื่องมือ'));
     const rows = el('div', 'tbl poolrows');
     const head = el('div', 'hd');

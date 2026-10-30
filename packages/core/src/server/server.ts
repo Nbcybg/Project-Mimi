@@ -8,7 +8,6 @@ import type {
   AgentView,
   AttachmentView,
   LiveTurnView,
-  MailWatchAccount,
   ModelChoice,
   ClientMessage,
   JsonValue,
@@ -45,6 +44,7 @@ import { APP_VERSION, serveWebFile } from './web-files.ts';
 import { createBackup, listBackups } from '../backup/backup.ts';
 import { AppSettings, MODEL_KEYS } from '../app/app-settings.ts';
 import { presetSecretKey } from '../app/secrets.ts';
+import { normalizeMailAccount } from '../notify/mail-watch.ts';
 import { AgentImages } from '../chat/agent-images.ts';
 import { AgentAssets } from '../chat/agent-assets.ts';
 import { MEDIA_RETENTION_DAYS } from '../chat/attachments.ts';
@@ -126,11 +126,25 @@ export async function startServer(
   const broker = new WsBroker();
   const pc = new PcHub((online, name) => broadcast({ type: 'pc-status', online, name }));
   const appSettings = AppSettings.load(config.appSettingsPath);
+  // The zone chosen in the app wins over MIMI_TIMEZONE; every part of the core reads it
+  // through config, so changing it in Settings needs no restart.
+  const baseTimezone = config.timezone;
+  if (appSettings.timezone) config.timezone = appSettings.timezone;
+  if (appSettings.timezone) process.env.MIMI_TIMEZONE = appSettings.timezone;
   const core = await createCore(config, broker, {
     app: appSettings,
     ...coreOptions,
     pc,
   });
+  /** Node types as the editor sees them: the plugin node names the user's custom nodes. */
+  const nodeTypesView = () => {
+    const names = core.customNodes.names();
+    return NODE_TYPES.map((spec) =>
+      spec.type === 'plugin'
+        ? { ...spec, fields: spec.fields.map((field) => (field.key === 'plugin' ? { ...field, options: names } : field)) }
+        : spec,
+    );
+  };
   // Providers used to live in user/data/app-settings.json; copy them into syncable files once.
   core.providers.migrate(
     Object.fromEntries(Object.entries(appSettings.providers).map(([id, entry]) => [id, { def: entry.def, models: entry.models }])),
@@ -418,6 +432,7 @@ export async function startServer(
         hasSecret: core.oauth.views().some((account) => account.service === 'microsoft' && account.default && account.hasSecret) || Boolean(process.env.MICROSOFT_CLIENT_SECRET),
       },
       accounts: core.oauth.views(),
+      mailAccounts: core.mailWatch.views(),
       ...(hostedCallbacks ? { oauthRedirectUri: hostedCallbacks.redirectUri } : {}),
       preferences: appSettings.preferences,
       spentTodayUsd: core.spentToday(),
@@ -432,6 +447,7 @@ export async function startServer(
         retentionDays: MEDIA_RETENTION_DAYS,
       },
       toolKeys: { serper: Boolean(process.env.SERPER_API_KEY), openweather: Boolean(process.env.OPENWEATHER_API_KEY) },
+      timezone: config.timezone,
       sessionIdleMinutes: appSettings.session.idleMinutes ?? core.settings.session.idle_minutes,
       sessionMaxTokens: appSettings.session.maxTokens ?? core.settings.session.max_tokens,
       compactAt: core.settings.compaction.threshold,
@@ -566,6 +582,15 @@ export async function startServer(
     if (change.session) {
       appSettings.setSession(change.session);
     }
+    if (change.timezone !== undefined) {
+      const zone = String(change.timezone ?? '').trim();
+      if (zone) config.timezone = appSettings.setTimezone(zone);
+      else {
+        appSettings.clearTimezone();
+        config.timezone = baseTimezone;
+      }
+      process.env.MIMI_TIMEZONE = config.timezone;
+    }
     if (change.allowedDirs) {
       const dirs = change.allowedDirs
         .map((dir) => String(dir).trim())
@@ -587,20 +612,6 @@ export async function startServer(
       updatedAt,
     }));
 
-  /** The watch account the client sent, cleaned into a usable shape. */
-  const sanitizeMailAccount = (raw: MailWatchAccount): MailWatchAccount => {
-    const id = String(raw.id ?? '').trim();
-    if (raw.kind === 'google') return { id, kind: 'google', query: String(raw.query ?? '') };
-    if (raw.kind === 'microsoft') return { id, kind: 'microsoft', query: String(raw.query ?? '') };
-    if (raw.kind === 'imap') {
-      return { id, kind: 'imap', host: String(raw.host ?? '').trim(), port: Number(raw.port) || (raw.tls !== false ? 993 : 143), tls: raw.tls !== false, user: String(raw.user ?? '').trim(), query: raw.query ? String(raw.query) : undefined };
-    }
-    if (raw.kind === 'pop3') {
-      return { id, kind: 'pop3', host: String(raw.host ?? '').trim(), port: Number(raw.port) || (raw.tls !== false ? 995 : 110), tls: raw.tls !== false, user: String(raw.user ?? '').trim() };
-    }
-    throw new Error('Mail watch: pick google, microsoft, imap or pop3.');
-  };
-
   const forward = (event: AgentEvent) => {
     broadcast({ type: 'event', event });
     for (const decided of decisionsIn(event)) {
@@ -620,7 +631,7 @@ export async function startServer(
     const name = core.agents.names().includes(agent) ? core.agents.get(agent).displayName || agent : agent;
     const chat = core.chats.getChat(chatId);
     const title = chat && chat.kind === 'group' ? `${name} · ${chat.title}` : name;
-    core.notify({ kind: 'message', title, body: body.length > 300 ? `${body.slice(0, 300)}…` : body, chatId });
+    core.notify({ kind: 'message', title, body: body.length > 300 ? `${body.slice(0, 300)}…` : body, chatId, agent });
   };
   core.listeners.agentPosted = agentSpoke;
   core.listeners.backgroundEvent = forward;
@@ -794,7 +805,7 @@ export async function startServer(
   };
   // Workflows written by an agent show up in every open editor at once.
   core.listeners.workflowChanged = () => {
-    broadcast({ type: 'workflows', workflows: core.workflows.list(), pool: core.triggerPool.list(), nodeTypes: NODE_TYPES });
+    broadcast({ type: 'workflows', workflows: core.workflows.list(), pool: core.triggerPool.list(), nodeTypes: nodeTypesView(), customNodes: core.customNodes.names() });
     broadcast(triggersMessage());
   };
   // The Overseer can change the setup while the user watches: refresh every open screen.
@@ -806,6 +817,9 @@ export async function startServer(
   core.listeners.toolsChanged = () => {
     broadcast(toolsMessage());
     broadcast(agentsMessage());
+  };
+  core.listeners.nodesChanged = () => {
+    broadcast({ type: 'workflows', workflows: core.workflows.list(), pool: core.triggerPool.list(), nodeTypes: nodeTypesView(), customNodes: core.customNodes.names() });
   };
   core.listeners.skillsChanged = () => {
     broadcast({
@@ -1197,7 +1211,7 @@ export async function startServer(
         broadcast({ type: 'secrets', names: core.secrets.names() });
         break;
       case 'workflows-list':
-        reply({ type: 'workflows', workflows: core.workflows.list(message.agent), pool: core.triggerPool.list(), nodeTypes: NODE_TYPES });
+        reply({ type: 'workflows', workflows: core.workflows.list(message.agent), pool: core.triggerPool.list(), nodeTypes: nodeTypesView(), customNodes: core.customNodes.names() });
         break;
       case 'workflow-save': {
         validateWorkflow(message.workflow);
@@ -1210,7 +1224,7 @@ export async function startServer(
           type: 'workflows',
           workflows: core.workflows.list(),
           pool: core.triggerPool.list(),
-          nodeTypes: NODE_TYPES,
+          nodeTypes: nodeTypesView(), customNodes: core.customNodes.names(),
           saved: `${saved.agent}/${saved.name}`,
         });
         broadcast(triggersMessage());
@@ -1222,7 +1236,7 @@ export async function startServer(
         core.clearWorkflowSchedule(id);
         core.workflowRuns.forget(id);
         core.parkedRuns.forget(id);
-        broadcast({ type: 'workflows', workflows: core.workflows.list(), pool: core.triggerPool.list(), nodeTypes: NODE_TYPES });
+        broadcast({ type: 'workflows', workflows: core.workflows.list(), pool: core.triggerPool.list(), nodeTypes: nodeTypesView(), customNodes: core.customNodes.names() });
         broadcast(triggersMessage());
         break;
       }
@@ -1295,7 +1309,7 @@ export async function startServer(
               errors.push(`${workflow.name}: ${(error as Error).message}`);
             }
           }
-          broadcast({ type: 'workflows', workflows: core.workflows.list(), pool: core.triggerPool.list(), nodeTypes: NODE_TYPES });
+          broadcast({ type: 'workflows', workflows: core.workflows.list(), pool: core.triggerPool.list(), nodeTypes: nodeTypesView(), customNodes: core.customNodes.names() });
         }
         reply({ type: 'workflow-import', agent, source, reqId: Number(message.reqId) || 0, saved: Boolean(message.save), workflows, report, errors });
         break;
@@ -1305,10 +1319,15 @@ export async function startServer(
         const time = (value: unknown) => (typeof value === 'string' && /^\d{1,2}:\d{2}$/.test(value) ? value : undefined);
         const budget = Number(input.dailyBudgetUsd);
         const kinds = Array.isArray(input.pushKinds) ? input.pushKinds.filter((kind) => ['reminder', 'task-result', 'approval', 'info', 'message'].includes(kind)) : undefined;
+        const known = new Set(core.agents.names());
+        const mutedAgents = Array.isArray(input.mutedAgents)
+          ? [...new Set(input.mutedAgents.map(String).filter((name) => known.has(name)))]
+          : undefined;
         appSettings.setPreferences({
           ...(Number.isFinite(budget) && budget > 0 ? { dailyBudgetUsd: Math.round(budget * 100) / 100 } : {}),
           ...(time(input.quietFrom) && time(input.quietTo) ? { quietFrom: time(input.quietFrom), quietTo: time(input.quietTo) } : {}),
           ...(kinds ? { pushKinds: kinds } : {}),
+          ...(mutedAgents ? { mutedAgents } : {}),
           urgentApprovals: input.urgentApprovals !== false,
         });
         broadcast({ type: 'settings', settings: settingsView(), saved: true });
@@ -1511,12 +1530,12 @@ export async function startServer(
       }
       case 'trigger-pool-save': {
         core.triggerPool.save(message.entry);
-        broadcast({ type: 'workflows', workflows: core.workflows.list(), pool: core.triggerPool.list(), nodeTypes: NODE_TYPES, saved: message.entry.name });
+        broadcast({ type: 'workflows', workflows: core.workflows.list(), pool: core.triggerPool.list(), nodeTypes: nodeTypesView(), customNodes: core.customNodes.names(), saved: message.entry.name });
         break;
       }
       case 'trigger-pool-delete': {
         core.triggerPool.remove(String(message.name));
-        broadcast({ type: 'workflows', workflows: core.workflows.list(), pool: core.triggerPool.list(), nodeTypes: NODE_TYPES });
+        broadcast({ type: 'workflows', workflows: core.workflows.list(), pool: core.triggerPool.list(), nodeTypes: nodeTypesView(), customNodes: core.customNodes.names() });
         break;
       }
       case 'agent-save': {
@@ -1560,26 +1579,34 @@ export async function startServer(
         break;
       case 'mail-watch': {
         const view = core.mailWatch.list();
-        reply({ type: 'mail-watch', accounts: view.accounts, lastCheckedAt: view.lastCheckedAt });
+        reply({ type: 'mail-watch', accounts: core.mailWatch.views(), lastCheckedAt: view.lastCheckedAt });
         break;
       }
       case 'mail-watch-save': {
         const raw = message.account;
-        const id = String(raw.id ?? '').trim();
-        if (!id) throw new Error('Mail watch: an account needs an id.');
-        const account = sanitizeMailAccount(raw);
-        core.mailWatch.saveAccount(account, message.password);
-        reply({ type: 'mail-watch', accounts: core.mailWatch.list().accounts, lastCheckedAt: core.mailWatch.list().lastCheckedAt });
+        if (!raw || !String(raw.id ?? '').trim()) throw new Error('Mail: an account needs an id.');
+        const account = normalizeMailAccount(raw);
+        if (!account) throw new Error('Mail: ต้องมี id, kind, โฮสต์ และผู้ใช้ (id ใช้ a-z 0-9 _ - อย่างน้อย 3 ตัว)');
+        core.mailWatch.saveAccount(account, message.password, message.smtpPassword);
+        const view = core.mailWatch.list();
+        reply({ type: 'mail-watch', accounts: core.mailWatch.views(), lastCheckedAt: view.lastCheckedAt });
         break;
       }
       case 'mail-watch-delete':
         core.mailWatch.removeAccount(String(message.id));
-        reply({ type: 'mail-watch', accounts: core.mailWatch.list().accounts, lastCheckedAt: core.mailWatch.list().lastCheckedAt });
+        reply({ type: 'mail-watch', accounts: core.mailWatch.views(), lastCheckedAt: core.mailWatch.list().lastCheckedAt });
         break;
       case 'mail-watch-check': {
         void core.mailWatch.tick().then(
-          (found) => reply({ type: 'mail-watch', accounts: core.mailWatch.list().accounts, lastCheckedAt: core.mailWatch.list().lastCheckedAt, checked: { found, at: new Date().toISOString() } }),
+          (found) => reply({ type: 'mail-watch', accounts: core.mailWatch.views(), lastCheckedAt: core.mailWatch.list().lastCheckedAt, checked: { found, at: new Date().toISOString() } }),
           (error: Error) => reply({ type: 'error', message: (error as Error).message }),
+        );
+        break;
+      }
+      case 'mail-account-test': {
+        void core.mailWatch.test(String(message.id)).then(
+          (result) => reply({ type: 'mail-watch', accounts: core.mailWatch.views(), lastCheckedAt: core.mailWatch.list().lastCheckedAt, test: { id: String(message.id), ok: true, message: result } }),
+          (error: Error) => reply({ type: 'mail-watch', accounts: core.mailWatch.views(), lastCheckedAt: core.mailWatch.list().lastCheckedAt, test: { id: String(message.id), ok: false, error: error.message } }),
         );
         break;
       }
@@ -1839,7 +1866,8 @@ export async function startServer(
         handleClient(socket, message as ClientMessage);
       } catch (error) {
         // A rejected setting or memory write is the client's to show, not a reason to drop it.
-        socket.send(JSON.stringify({ type: 'error', message: (error as Error).message } satisfies ServerMessage));
+        const clientId = message.type === 'chat-send' && typeof message.clientId === 'string' ? message.clientId : undefined;
+        socket.send(JSON.stringify({ type: 'error', message: (error as Error).message, ...(clientId ? { clientId } : {}) } satisfies ServerMessage));
       }
     });
 

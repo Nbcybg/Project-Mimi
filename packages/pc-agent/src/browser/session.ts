@@ -414,9 +414,10 @@ export class BrowserSession {
   }
 
   async close(): Promise<void> {
-    if (this.cdp) {
-      await this.cdp.send('Browser.close').catch(() => {});
-      this.cdp.close();
+    const cdp = this.cdp;
+    if (cdp) {
+      await cdp.send('Browser.close').catch(() => {});
+      cdp.close();
     }
     this.reset();
   }

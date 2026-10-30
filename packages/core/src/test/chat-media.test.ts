@@ -73,11 +73,11 @@ test('schema v14 keeps the attachments that were there and accepts videos', () =
   const first = openDb(file);
   first.prepare(`INSERT INTO attachments (id, kind, name, mime, size, text) VALUES ('a', 'image', 'cat.png', 'image/png', 7, 'แมว')`).run();
   // Back to how a v13 file looks: the columns of v16 do not exist yet.
-  first.exec('ALTER TABLE messages DROP COLUMN pinned_at; ALTER TABLE messages DROP COLUMN reactions; ALTER TABLE messages DROP COLUMN speech; ALTER TABLE sessions DROP COLUMN read_at;');
+  first.exec('ALTER TABLE messages DROP COLUMN pinned_at; ALTER TABLE messages DROP COLUMN reactions; ALTER TABLE messages DROP COLUMN speech; ALTER TABLE sessions DROP COLUMN read_at; ALTER TABLE notifications DROP COLUMN agent;');
   first.pragma('user_version = 13');
   first.close();
   const again = openDb(file);
-  assert.equal(again.pragma('user_version', { simple: true }), 20);
+  assert.equal(again.pragma('user_version', { simple: true }), 21);
   assert.deepEqual(again.prepare(`SELECT id, kind, text FROM attachments`).all(), [{ id: 'a', kind: 'image', text: 'แมว' }]);
   assert.equal((again.prepare(`SELECT hash FROM attachments`).get() as { hash: string | null }).hash, null);
   again.prepare(`INSERT INTO attachments (id, kind, name, mime, size) VALUES ('b', 'video', 'x.mp4', 'video/mp4', 1)`).run();

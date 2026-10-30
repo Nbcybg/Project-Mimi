@@ -276,6 +276,23 @@
     const urgentLabel = el('label', 'wcheck');
     urgentLabel.append(urgent, el('span', '', 'ขออนุมัติยังเด้งในช่วงห้ามรบกวน'));
     panel.append(urgentLabel);
+
+    // Notifications from chosen agents stay in the inbox but do not pop, chime or push.
+    const muted = new Set(prefs.mutedAgents || []);
+    const agentBox = el('div', 'hstack pfagents');
+    for (const agent of (M().state.agents || [])) {
+      const wrap = el('label', 'wcheck');
+      const check = el('input');
+      check.type = 'checkbox';
+      check.checked = muted.has(agent.name);
+      check.onchange = () => (check.checked ? muted.add(agent.name) : muted.delete(agent.name));
+      wrap.append(check, el('span', '', M().nameOf(agent.name)));
+      agentBox.append(wrap);
+    }
+    panel.append(
+      M().labelled('agent ที่ไม่ต้องเด้งแจ้งเตือน (ข้อความยังอยู่ในกล่อง 🔔)', agentBox),
+      el('p', 'hint', 'เลือก agent ที่ไม่อยากให้รบกวน · ยังเข้ากล่องการแจ้งเตือนและแชตตามปกติ'),
+    );
     // Read-aloud, like the sounds below, is shared by the user's devices (M().store syncs it).
     const speakBox = el('input');
     speakBox.type = 'checkbox';
@@ -305,11 +322,13 @@
           quietFrom: quietFrom.value || undefined,
           quietTo: quietTo.value || undefined,
           pushKinds: [...kinds],
+          mutedAgents: [...muted],
           urgentApprovals: urgent.checked,
         },
       });
     for (const field of [budget, quietFrom, quietTo, urgent]) field.addEventListener('change', save);
     kindBox.addEventListener('change', save);
+    agentBox.addEventListener('change', save);
     panel.append(el('p', 'hint', 'บันทึกอัตโนมัติเมื่อแก้ไข'));
   }
 

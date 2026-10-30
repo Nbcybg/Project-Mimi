@@ -10,6 +10,7 @@ import type { SecretStore } from '../app/secrets.ts';
 import type { ToolPool } from '../tools/pool.ts';
 import { defineTool, type ToolDefinition } from '../tools/registry.ts';
 import type { WorkflowStore } from '../workflows/workflow-store.ts';
+import { type CustomNodeSpec, type CustomNodeStore } from '../workflows/custom-nodes.ts';
 import { OVERSEER_NAME } from './overseer.ts';
 
 export interface OverseerToolDeps {
@@ -19,6 +20,7 @@ export interface OverseerToolDeps {
   tools: ToolPool;
   skills(): Skill[];
   workflows: WorkflowStore;
+  nodes: CustomNodeStore;
   models: ModelService;
   secrets: SecretStore;
   /** The model a new agent gets when the request does not name one. */
@@ -27,6 +29,7 @@ export interface OverseerToolDeps {
     agent(name: string): void;
     tools(): void;
     skills(): void;
+    nodes?(): void;
   };
 }
 
@@ -87,6 +90,30 @@ const customToolInput = z.object({
   config: z
     .record(z.string(), z.unknown())
     .describe('code: {code,timeoutMs}; http: {method,url,headers,query,body,bodyType,timeoutMs}; shell: {command,cwd,runsOn,timeoutMs}'),
+});
+
+const customNodeInput = z.object({
+  name: z.string().regex(/^[a-z][a-z0-9_-]{1,60}$/, 'lowercase letters, digits, "-" or "_"'),
+  label: z.string().min(1),
+  description: z.string().min(1).describe('What the node does; the user sees this in the editor'),
+  code: z
+    .string()
+    .min(1)
+    .describe('JavaScript body run in the workflow sandbox: items (JSON array) and $config are in scope; return new items, e.g. items.map((json) => ({...json, upper: String(json.text).toUpperCase()}))'),
+  timeoutMs: z.number().int().min(1000).max(120000).optional(),
+  fields: z
+    .array(
+      z.object({
+        key: z.string().regex(/^[a-zA-Z][a-zA-Z0-9_]*$/),
+        label: z.string().min(1),
+        type: z.enum(['string', 'number', 'boolean', 'text', 'json', 'expression']),
+        required: z.boolean().optional(),
+        placeholder: z.string().optional(),
+        description: z.string().optional(),
+      }),
+    )
+    .optional()
+    .describe('Optional form fields for the plugin config (documentation for the user)'),
 });
 
 const presetInput = z.object({
@@ -184,13 +211,14 @@ export function createOverseerTools(deps: OverseerToolDeps): ToolDefinition<any>
           nodes: workflow.nodes.length,
         })),
         nodeTypes: NODE_TYPES.map((node) => ({ type: node.type, label: node.label })),
+        customNodes: deps.nodes.list().map((node) => ({ name: node.name, label: node.label, description: node.description })),
         secrets: deps.secrets.names(),
         rules: {
           reservedAgent: OVERSEER_NAME,
           drive: 'Google Drive is read-only here (drive_search). Writing/uploading needs a new OAuth scope and the user\'s consent.',
           workflows: 'Workflows are always saved disabled; the user enables them.',
           secrets: 'Only names are shown. Put values in the vault; use {{secret.NAME}} in tools.',
-          nodes: 'The Node Hub adds tools, not new workflow node types. A JavaScript tool can be called from a workflow "tool" node; workflows also have an inline "code" node.',
+          nodes: 'Custom nodes are files under user/nodes and run in the workflow sandbox via the "plugin" node. Create them with node_save; they may read items and $config and must return items. Never put secrets in a custom node.',
         },
         // Names are enough here; tool_get has the full settings and templates.
         tools: deps.tools.views().map((tool) => ({
@@ -394,7 +422,8 @@ export function createOverseerTools(deps: OverseerToolDeps): ToolDefinition<any>
           'Code tools run in a sandbox without filesystem, child processes or network; use an http tool for network calls.',
           'Shell tools are high risk and cannot be combined with untrusted-content tools on one agent.',
           'Do not put secrets in params, settings defaults or code. Use a secret-type setting or {{secret.NAME}}.',
-          'A JavaScript tool is not a new workflow node type. Add it to the agent (or a preset), then call it from a workflow "tool" node; workflows also have an inline "code" node.',
+          'A JavaScript tool is not a workflow node type. Add it to the agent (or a preset), then call it from a workflow "tool" node; workflows also have an inline "code" node.',
+          'For a reusable workflow node, create a custom node with node_save; it appears as the "plugin" node and its code runs in the sandbox with items and $config.',
         ],
         nodeTypes: NODE_TYPES.map((node) => ({ type: node.type, label: node.label, description: node.description })),
       });
@@ -643,6 +672,99 @@ export function createOverseerTools(deps: OverseerToolDeps): ToolDefinition<any>
     },
   });
 
+  const nodeSchema: ToolDefinition<any> = defineTool({
+    name: 'node_schema',
+    description:
+      'Show the custom workflow node format. Call this before node_save. Custom nodes live under user/nodes and run in the workflow sandbox as the "plugin" node.',
+    risk: 'read',
+    target: 'core',
+    inputSchema: z.object({}),
+    summarize: () => 'Read the custom node schema',
+    async execute() {
+      return pretty({
+        storage: 'user/nodes/<name>.json; the workflow editor lists it in the "plugin" node',
+        fields: {
+          name: 'lowercase letters, digits, "-" or "_"',
+          label: 'shown in the workflow editor',
+          description: 'what it does; the model and the user read it',
+          code: 'JavaScript body; items and $config are in scope; return an array of JSON objects or one object',
+          timeoutMs: 'optional, 1000-120000',
+          fields: 'optional form documentation: [{key,label,type,required,placeholder,description}]',
+        },
+        example: {
+          name: 'uppercase-subject',
+          label: 'Uppercase subject',
+          description: 'Turn each item’s Subject into upper case',
+          code: 'return items.map((json) => ({ ...json, Subject: String(json.Subject || "").toUpperCase() }));',
+          fields: [{ key: 'suffix', label: 'Suffix', type: 'string', required: false }],
+        },
+        rules: [
+          'The sandbox has no files, child processes, network or secrets; it only gets items and config as JSON.',
+          'Never put API keys or passwords in a custom node. Use a tool or connector for authenticated work.',
+          'Use a workflow "plugin" node and choose this custom node by name.',
+          'A custom node cannot run shell commands or read files; use the built-in file/tool nodes for that.',
+        ],
+      });
+    },
+  });
+
+  const nodeList: ToolDefinition<any> = defineTool({
+    name: 'node_list',
+    description: 'List the custom workflow nodes under user/nodes.',
+    risk: 'read',
+    target: 'core',
+    inputSchema: z.object({}),
+    summarize: () => 'List custom nodes',
+    async execute() {
+      const nodes = deps.nodes.list();
+      return nodes.length === 0 ? 'No custom nodes yet.' : pretty(nodes.map((node) => ({ name: node.name, label: node.label, description: node.description })));
+    },
+  });
+
+  const nodeGet: ToolDefinition<any> = defineTool({
+    name: 'node_get',
+    description: 'Read one custom node in full, including its code.',
+    risk: 'read',
+    target: 'core',
+    inputSchema: z.object({ name: z.string().min(1) }),
+    summarize: (input) => `Read custom node ${input.name}`,
+    async execute(input) {
+      const node = deps.nodes.get(input.name.trim());
+      if (!node) throw new Error(`Unknown custom node "${input.name}".`);
+      return pretty(node);
+    },
+  });
+
+  const nodeSave: ToolDefinition<any> = defineTool({
+    name: 'node_save',
+    description:
+      'Create or replace a custom workflow node under user/nodes. The plugin node then offers it by name. Never put secrets in the code or config.',
+    risk: 'write',
+    target: 'core',
+    inputSchema: z.object({ node: customNodeInput, renameFrom: z.string().optional() }),
+    summarize: (input) => `Save custom node ${input.node.name}`,
+    async execute(input) {
+      const saved = deps.nodes.save(input.node as CustomNodeSpec, input.renameFrom);
+      deps.changed.nodes?.();
+      return `Saved custom node "${saved.name}" (${saved.label}). Add a workflow "plugin" node and choose "${saved.name}".`;
+    },
+  });
+
+  const nodeDelete: ToolDefinition<any> = defineTool({
+    name: 'node_delete',
+    description: 'Delete a custom workflow node. Workflows that still use it will fail until it is removed or recreated.',
+    risk: 'write',
+    target: 'core',
+    inputSchema: z.object({ name: z.string().min(1) }),
+    summarize: (input) => `Delete custom node ${input.name}`,
+    async execute(input) {
+      const name = input.name.trim();
+      if (!deps.nodes.remove(name)) throw new Error(`Unknown custom node "${name}".`);
+      deps.changed.nodes?.();
+      return `Deleted custom node "${name}".`;
+    },
+  });
+
   return [
     state,
     agentSchema,
@@ -656,6 +778,11 @@ export function createOverseerTools(deps: OverseerToolDeps): ToolDefinition<any>
     toolDelete,
     presetSave,
     presetDelete,
+    nodeSchema,
+    nodeList,
+    nodeGet,
+    nodeSave,
+    nodeDelete,
     skillSchema,
     skillList,
     skillGet,

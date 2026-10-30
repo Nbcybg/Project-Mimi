@@ -2,11 +2,16 @@ package app.mimi.android;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.NotificationManager;
 import android.content.ActivityNotFoundException;
 import android.content.ContentValues;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.media.AudioAttributes;
+import android.media.MediaPlayer;
+import android.media.Ringtone;
+import android.media.RingtoneManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -44,6 +49,7 @@ public class MainActivity extends Activity {
     private static final int ASK_AT_START = 1;
     private static final int ASK_FOR_PAGE = 2;
     private static final int PICK_FILE = 3;
+    private static final int ASK_NOTIFICATIONS = 4;
     private static final String TOKEN_JS =
         "(function(){try{return sessionStorage.getItem('mimi-token')||localStorage.getItem('mimi-token')||''}catch(e){return ''}})()";
 
@@ -58,6 +64,7 @@ public class MainActivity extends Activity {
     private PermissionRequest pendingRequest;
     private ValueCallback<Uri[]> pendingFiles;
     private Uri photoUri;
+    private MediaPlayer soundPlayer;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -121,6 +128,7 @@ public class MainActivity extends Activity {
         if (savedInstanceState == null) web.loadUrl(startUrl(getIntent()));
         else web.restoreState(savedInstanceState);
         askAtStart();
+        askNotificationsOnce();
         SyncJob.schedule(this);
         PushService.start(this);
     }
@@ -214,10 +222,45 @@ public class MainActivity extends Activity {
         List<String> wanted = new ArrayList<>();
         wanted.add(Manifest.permission.RECORD_AUDIO);
         wanted.add(Manifest.permission.CAMERA);
-        if (Build.VERSION.SDK_INT >= 33) wanted.add(Manifest.permission.POST_NOTIFICATIONS);
+        if (Build.VERSION.SDK_INT >= 33) {
+            wanted.add(Manifest.permission.POST_NOTIFICATIONS);
+            getPreferences(MODE_PRIVATE).edit().putBoolean("askedNotif", true).apply();
+        }
         List<String> missing = new ArrayList<>();
         for (String permission : wanted) if (!granted(permission)) missing.add(permission);
         if (!missing.isEmpty()) requestPermissions(missing.toArray(new String[0]), ASK_AT_START);
+    }
+
+    /** An install from before Android 13 support asks for notifications once after the update too. */
+    private void askNotificationsOnce() {
+        if (Build.VERSION.SDK_INT < 33) return;
+        if (getPreferences(MODE_PRIVATE).getBoolean("askedNotif", false)) return;
+        getPreferences(MODE_PRIVATE).edit().putBoolean("askedNotif", true).apply();
+        if (!granted(Manifest.permission.POST_NOTIFICATIONS)) requestPermissions(new String[] {Manifest.permission.POST_NOTIFICATIONS}, ASK_NOTIFICATIONS);
+        else confirmNotifications();
+    }
+
+    private boolean notificationsAllowed() {
+        if (Build.VERSION.SDK_INT >= 33 && !granted(Manifest.permission.POST_NOTIFICATIONS)) return false;
+        NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        return manager == null || Build.VERSION.SDK_INT < 24 || manager.areNotificationsEnabled();
+    }
+
+    /** Shows the test card once, so the user can see notifications actually work. */
+    private void confirmNotifications() {
+        if (getPreferences(MODE_PRIVATE).getBoolean("notifConfirmed", false)) return;
+        getPreferences(MODE_PRIVATE).edit().putBoolean("notifConfirmed", true).apply();
+        WidgetSync.notifyPermissionGranted(this);
+    }
+
+    /** Asked from the page (on send) or when the user opens the notification settings. */
+    private void askNotifications() {
+        if (Build.VERSION.SDK_INT >= 33 && !granted(Manifest.permission.POST_NOTIFICATIONS)) {
+            requestPermissions(new String[] {Manifest.permission.POST_NOTIFICATIONS}, ASK_NOTIFICATIONS);
+            return;
+        }
+        if (notificationsAllowed()) confirmNotifications();
+        else Toast.makeText(this, R.string.notificationsOffHint, Toast.LENGTH_LONG).show();
     }
 
     /** The page wants the microphone or the camera (getUserMedia). */
@@ -262,6 +305,18 @@ public class MainActivity extends Activity {
             grantKnown(request);
             if (!granted(Manifest.permission.RECORD_AUDIO) || !granted(Manifest.permission.CAMERA)) {
                 Toast.makeText(this, R.string.permissionHint, Toast.LENGTH_LONG).show();
+            }
+        }
+        if (code == ASK_AT_START || code == ASK_NOTIFICATIONS) {
+            boolean askedNotifications = code == ASK_NOTIFICATIONS;
+            for (String permission : permissions) if (Manifest.permission.POST_NOTIFICATIONS.equals(permission)) askedNotifications = true;
+            if (askedNotifications) {
+                if (granted(Manifest.permission.POST_NOTIFICATIONS)) {
+                    confirmNotifications();
+                    WidgetSync.refreshAsync(this);
+                } else {
+                    Toast.makeText(this, R.string.notificationsOffHint, Toast.LENGTH_LONG).show();
+                }
             }
         }
     }
@@ -327,6 +382,64 @@ public class MainActivity extends Activity {
         pendingFiles = null;
     }
 
+    /**
+     * Play a short app sound on the notification stream. Android keeps media and
+     * notification volumes apart: a page's AudioContext would follow media volume,
+     * so the app plays these natively with USAGE_NOTIFICATION instead.
+     */
+    private void playNativeSound(String kind) {
+        if (soundPlayer != null) {
+            try {
+                soundPlayer.release();
+            } catch (Exception ignored) {
+                // already released
+            }
+            soundPlayer = null;
+        }
+        String file = "chime".equals(kind) ? null
+            : "sent".equals(kind) ? "/sounds/chat_1.mp3"
+            : "done".equals(kind) ? "/sounds/chat_2.mp3"
+            : "ask".equals(kind) ? "/sounds/chat_3.mp3"
+            : null;
+        AudioAttributes attributes = new AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .build();
+        if (file != null) {
+            try {
+                MediaPlayer player = new MediaPlayer();
+                player.setAudioAttributes(attributes);
+                player.setDataSource("https://" + BuildConfig.MIMI_HOST + file);
+                player.setOnPreparedListener(MediaPlayer::start);
+                player.setOnCompletionListener((done) -> done.release());
+                player.setOnErrorListener((failed, what, extra) -> {
+                    failed.release();
+                    playSystemTone(attributes);
+                    return true;
+                });
+                soundPlayer = player;
+                player.prepareAsync();
+                return;
+            } catch (Exception ignored) {
+                // fall through to the system notification tone
+            }
+        }
+        playSystemTone(attributes);
+    }
+
+    private void playSystemTone(AudioAttributes attributes) {
+        try {
+            Uri uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
+            Ringtone tone = RingtoneManager.getRingtone(this, uri);
+            if (tone != null) {
+                tone.setAudioAttributes(attributes);
+                tone.play();
+            }
+        } catch (Exception ignored) {
+            // the phone may have no notification tone
+        }
+    }
+
     /** What the page calls as window.MimiAndroid. */
     private class Bridge {
         @JavascriptInterface
@@ -364,10 +477,28 @@ public class MainActivity extends Activity {
             WidgetSync.setToken(MainActivity.this, token == null ? "" : token);
         }
 
-        /** The page got a notification while the app sat in the background: show it natively. */
+        /** The page got a notification: show it natively, on screen or in the background. */
         @JavascriptInterface
         public void notify(String title, String body, String kind, long chatId) {
-            WidgetSync.notifyNative(MainActivity.this, title, body, kind, chatId);
+            WidgetSync.notifyNative(MainActivity.this, title, body, kind, chatId, true);
+        }
+
+        /** Play chat / notification tones on the notification stream, not the media stream. */
+        @JavascriptInterface
+        public void playSound(String kind) {
+            runOnUiThread(() -> playNativeSound(kind == null ? "chime" : kind));
+        }
+
+        /** A turn ended (or the page learned of a new reply): redraw the widget now. */
+        @JavascriptInterface
+        public void refreshWidget() {
+            WidgetSync.refreshAsync(MainActivity.this);
+        }
+
+        /** The page asks on send, so a denied permission can be granted later. */
+        @JavascriptInterface
+        public void requestNotifications() {
+            runOnUiThread(() -> askNotifications());
         }
     }
 }

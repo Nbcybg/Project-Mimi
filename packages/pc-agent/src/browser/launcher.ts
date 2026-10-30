@@ -41,8 +41,8 @@ export function browserProfileDir(env: NodeJS.ProcessEnv = process.env): string 
   return env.MIMI_BROWSER_PROFILE ? path.resolve(env.MIMI_BROWSER_PROFILE) : path.join(os.homedir(), '.mimi', 'browser-profile');
 }
 
-export function browserArguments(profileDir: string, headless: boolean): string[] {
-  return [
+export function browserArguments(profileDir: string, headless: boolean, env: NodeJS.ProcessEnv = process.env): string[] {
+  const args = [
     '--remote-debugging-port=0',
     '--remote-allow-origins=*',
     `--user-data-dir=${profileDir}`,
@@ -51,8 +51,14 @@ export function browserArguments(profileDir: string, headless: boolean): string[
     '--disable-sync',
     '--window-size=1280,900',
     ...(headless ? ['--headless=new'] : []),
-    'about:blank',
   ];
+  // The desktop app's own Electron, in browser mode: a real window with a profile that is
+  // kept, so sites stay signed in between launches. With a normal Chrome or Edge there is
+  // no app to start: the browser opens a blank tab itself.
+  if (env.MIMI_BROWSER_APP) args.push(path.resolve(env.MIMI_BROWSER_APP), '--mimi-browser');
+  else if (env.MIMI_BROWSER_SELF === '1') args.push('--mimi-browser');
+  else args.push('about:blank');
+  return args;
 }
 
 /** Reads the DevTools address the browser writes into its profile folder when it starts. */
@@ -79,10 +85,15 @@ export async function startBrowser(env: NodeJS.ProcessEnv = process.env): Promis
   fs.mkdirSync(profileDir, { recursive: true });
   // A leftover file from an earlier run would point at a dead port.
   fs.rmSync(path.join(profileDir, 'DevToolsActivePort'), { force: true });
-  const child = spawn(executable, browserArguments(profileDir, env.MIMI_BROWSER_HEADLESS === '1'), {
+  // The PC agent runs inside Electron (ELECTRON_RUN_AS_NODE=1); the browser it starts must
+  // be a real window, not another Node process.
+  const childEnv = { ...env };
+  delete childEnv.ELECTRON_RUN_AS_NODE;
+  const child = spawn(executable, browserArguments(profileDir, env.MIMI_BROWSER_HEADLESS === '1', env), {
     detached: true,
     stdio: 'ignore',
     windowsHide: false,
+    env: childEnv,
   });
   child.on('error', () => {});
   child.unref();

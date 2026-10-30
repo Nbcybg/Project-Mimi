@@ -263,6 +263,8 @@
     typingByChat: new Map(),
     /** Chats whose recordings are being turned into text before the agent answers. */
     transcribing: new Set(),
+    /** Chats where the agent is looking at pictures before it answers. */
+    viewing: new Set(),
     /** Per chat: a handoff that just happened, so the header can name the agent taking over. */
     handoffByChat: new Map(),
     /** Per chat: the agent or skill a working agent delegated a part of the turn to. */
@@ -272,12 +274,14 @@
     /** The conversation currently on screen, to merge updates instead of re-rendering (no flash). */
     historyKey: null,
     historyIds: [],
+    /** The session on screen has older pages the top of the log fetches as it is reached. */
+    hasOlder: false,
+    loadingOlder: false,
     staged: [],
     /** True while staged files are being uploaded on send. */
     sending: false,
     pendingPerms: new Map(),
     highlight: null,
-    lastSent: null,
     booted: false,
   };
   const ui = { agent: null, agentDirty: false, hubTab: 'models', railTab: 'status', settingsTab: 'profile', preset: null, presetDirty: false, skill: null, skillDirty: false, toolDirty: false, providerDirty: false, triggerDirty: false, workflowDirty: false, memory: null, overseerDirty: false };
@@ -444,9 +448,13 @@
     if (voice) utterance.voice = voice;
     window.speechSynthesis.speak(utterance);
   }
+  /**
+   * The small speaker on a bubble only exists once read-aloud is enabled in Settings:
+   * without that switch there is no configured voice, so the button would go nowhere.
+   */
   function speakButton(text, speech) {
-    const control = button('speak', '🔊', () => speak(text, speech), 'อ่านออกเสียง');
-    return control;
+    if (!autoSpeak() || !('speechSynthesis' in window)) return null;
+    return button('speak', '🔊', () => speak(text, speech), 'อ่านออกเสียง');
   }
 
   function renderText(node, text, speech) {
@@ -465,6 +473,7 @@
     const nodes = state.chats.map((chat) => {
       const busy = state.busyChats.has(chat.id);
       const typing = state.typingByChat.get(chat.id);
+      const viewing = state.viewing.has(chat.id);
       const handoff = state.handoffByChat.get(chat.id);
       const sub = state.subByChat.get(chat.id);
       const row = button(`chat${state.chat && state.chat.id === chat.id ? ' on' : ''}`, null, () => openChat(chat.id));
@@ -473,7 +482,9 @@
       const fallback = chat.kind === 'group' ? `กลุ่ม ${chat.agents.length} คน` : 'ยังไม่มีข้อความ';
       const active = state.transcribing.has(chat.id)
         ? 'กำลังถอดเสียง…'
-        : handoff
+        : viewing
+          ? 'กำลังดูรูป…'
+          : handoff
         ? `${nameOf(handoff.from)} → ${nameOf(handoff.to)}`
         : sub
           ? `${nameOf(sub.main)} → ${nameOf(sub.sub)}`
@@ -528,9 +539,49 @@
   }
   function openChat(chatId, sessionId, highlight) {
     state.highlight = highlight || null;
+    state.loadingOlder = false;
+    state.hasOlder = false;
     startChat({ type: 'chat-open', chatId, sessionId });
     localStorage.setItem(CHAT_KEY, String(chatId));
   }
+  // ---------- swiping between direct chats ----------
+  // A horizontal swipe over the chat goes to the previous / next direct chat in the
+  // order of the chat list; a vertical drag still scrolls and controls still click.
+  let swipeStart = null;
+  const SWIPE_IGNORE = 'a, button, input, textarea, select, audio, video, .msgbar, .reactpick, .menu, .mention, .staged, .perm, .approval, .tool, .filechip, .speak, .quote';
+  function swipeToChat(step) {
+    if (!state.chat) return;
+    const direct = state.chats.filter((chat) => chat.kind === 'direct');
+    const at = direct.findIndex((chat) => chat.id === state.chat.id);
+    if (at < 0 || direct.length < 2) return;
+    const target = direct[(at + step + direct.length) % direct.length];
+    if (!target || target.id === state.chat.id) return;
+    openChat(target.id);
+  }
+  $('stage').addEventListener('touchstart', (event) => {
+    if (event.touches.length !== 1) {
+      swipeStart = null;
+      return;
+    }
+    const touch = event.touches[0];
+    swipeStart = event.target.closest(SWIPE_IGNORE) ? null : { x: touch.clientX, y: touch.clientY, at: Date.now() };
+  }, { passive: true });
+  $('stage').addEventListener('touchend', (event) => {
+    if (!swipeStart) return;
+    const touch = event.changedTouches[0];
+    const start = swipeStart;
+    swipeStart = null;
+    if (!touch) return;
+    const dx = touch.clientX - start.x;
+    const dy = touch.clientY - start.y;
+    if (Date.now() - start.at > 800) return;
+    if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.4) return;
+    swipeToChat(dx < 0 ? 1 : -1);
+  }, { passive: true });
+  $('stage').addEventListener('touchcancel', () => {
+    swipeStart = null;
+  }, { passive: true });
+
   function emptyState() {
     const empty = el('div', 'welcome');
     empty.append(el('b', '', 'Mimi'), state.agents.length ? 'เลือกแชตทางซ้าย หรือกด "+ ใหม่" เพื่อเริ่มคุย' : 'เริ่มจากเชื่อมต่อผู้ให้บริการโมเดลที่ "ตั้งค่า" แล้วสร้าง agent ตัวแรกที่แท็บ "Agent"');
@@ -563,6 +614,8 @@
   logBox.addEventListener('scroll', () => {
     followLog = pinned();
     updateLogFade();
+    // Lazy history: reaching the top asks for the next older page by itself.
+    if (logBox.scrollTop < 80) loadOlder();
   }, { passive: true });
   function add(node) {
     const stick = pinned();
@@ -711,8 +764,18 @@
     const box = el('div', 'lightbox');
     const image = el('img');
     image.src = url;
-    box.append(image);
-    box.onclick = () => box.remove();
+    image.alt = '';
+    const close = () => {
+      document.removeEventListener('keydown', onKey);
+      box.remove();
+    };
+    const onKey = (event) => {
+      if (event.key === 'Escape') close();
+    };
+    box.append(button('btn ghost lightbox-close', '✕', close, 'ปิด'), image);
+    box.onclick = close;
+    image.onerror = close;
+    document.addEventListener('keydown', onKey);
     document.body.append(box);
   }
   function attachmentNodes(files) {
@@ -720,12 +783,17 @@
     const images = files.filter((file) => file.kind === 'image' && !file.deletedAt);
     if (images.length > 0) {
       const album = el('div', `album${images.length === 1 ? ' one' : ''}`);
+      // Telegram-style albums show one caption for the whole set when every picture has it.
+      const shared = images.length > 1 && images[0].caption && images.every((file) => file.caption === images[0].caption)
+        ? images[0].caption
+        : '';
       for (const file of images) {
         const shot = el('div', 'shot');
         const image = el('img');
         image.alt = file.name;
         image.title = file.text ? `AI อธิบายรูป: ${file.text.slice(0, 500)}` : file.name;
-        blobUrl(`/api/files/${file.id}`)
+        if (file.url) image.src = file.url;
+        else blobUrl(`/api/files/${file.id}`)
           .then((url) => {
             image.src = url;
           })
@@ -736,9 +804,10 @@
           if (logBox.scrollHeight - logBox.scrollTop - logBox.clientHeight < image.height + 220) scrollDown();
         };
         shot.append(image);
-        if (file.caption) shot.append(el('div', 'cap', file.caption));
+        if (file.caption && !shared) shot.append(el('div', 'cap', file.caption));
         album.append(shot);
       }
+      if (shared) album.append(el('div', 'album-cap', shared));
       nodes.push(album);
     }
     for (const file of files.filter((entry) => entry.kind === 'audio' && !entry.deletedAt)) {
@@ -749,7 +818,7 @@
         try {
           const audio = el('audio');
           audio.controls = true;
-          audio.src = await blobUrl(`/api/files/${file.id}`);
+          audio.src = file.url || await blobUrl(`/api/files/${file.id}`);
           play.replaceWith(audio);
           audio.play().catch(() => {});
         } catch {
@@ -774,7 +843,7 @@
           const video = el('video');
           video.controls = true;
           video.playsInline = true;
-          video.src = await blobUrl(`/api/files/${file.id}`);
+          video.src = file.url || await blobUrl(`/api/files/${file.id}`);
           play.replaceWith(video);
           video.play().catch(() => {});
         } catch {
@@ -812,6 +881,7 @@
   function userRow(message) {
     const row = el('div', 'row-user');
     row.dataset.id = message.id;
+    if (message.clientId) row.dataset.pending = '1';
     row.dataset.role = 'user';
     const actions = el('div', 'acts');
     if (typeof message.id === 'number') {
@@ -831,6 +901,7 @@
       renderText(bubble, message.text);
       column.append(bubble);
     }
+    if (message.pendingStatus) column.append(el('div', 'note pending-status', message.pendingStatus));
     column.append(metaRow(message));
     window.MimiHooks?.chat?.decorate?.(column, message);
     row.append(actions, column);
@@ -856,7 +927,8 @@
       bubble.dataset.role = 'assistant';
       bubble.dataset.agent = message.agent;
       renderText(bubble, message.text, message.speech);
-      bubble.append(speakButton(message.text, message.speech));
+      const speakControl = speakButton(message.text, message.speech);
+      if (speakControl) bubble.append(speakControl);
       window.MimiHooks?.chat?.decorate?.(bubble, message);
       target.body.append(bubble, metaRow(message));
     }
@@ -908,10 +980,11 @@
     lastDay = null;
     logInner.replaceChildren();
     if (!state.chat) return emptyState();
-    state.pendingEchoes = [];
     state.historyKey = state.session ? `${state.chat.id}:${state.session.id}` : `${state.chat.id}:`;
     state.historyIds = history.messages.map((message) => message.id);
-    if (history.hasMore) logInner.append(olderButton(history.messages[0]));
+    state.hasOlder = Boolean(history.hasMore);
+    state.loadingOlder = false;
+    if (history.hasMore) logInner.append(olderLoader());
     else if (state.session) logInner.append(sessionDivider(state.session));
     if (history.messages.length === 0 && !history.hasMore) {
       const empty = el('div', 'welcome');
@@ -920,6 +993,7 @@
     }
     let block = null;
     for (const message of history.messages) block = appendStored(logInner, message, block);
+    pruneConfirmed(history.messages);
     for (const request of state.pendingPerms.values()) permissionCard(request);
     const target = state.highlight && logInner.querySelector(`[data-id="${state.highlight}"]`);
     if (target) {
@@ -931,18 +1005,36 @@
     state.highlight = null;
     window.MimiHooks?.stage?.reset(history.messages);
   }
-  function olderButton(first) {
-    const node = el('div', 'divider');
-    node.append(
-      button('', 'ดูข้อความก่อนหน้า', () => {
-        send({ type: 'chat-open', chatId: state.chat.id, sessionId: state.session.id, beforeId: first.id });
-      }),
-    );
+  /** The top of the log: a hint at first, then the "loading" line while the page is on its way. */
+  function olderLoader() {
+    const node = el('div', 'divider older-load');
+    node.append(el('span', '', state.loadingOlder ? 'กำลังโหลดข้อความก่อนหน้า…' : 'เลื่อนขึ้นเพื่อดูข้อความก่อนหน้า'));
     return node;
   }
+  /** Asks for the page before the oldest message on screen; the scroll handler calls this at the top. */
+  function loadOlder() {
+    if (!state.chat || !state.session || !state.hasOlder || state.loadingOlder) return;
+    const first = state.historyIds[0];
+    if (!first) return;
+    state.loadingOlder = true;
+    const loader = logInner.firstElementChild;
+    if (loader && loader.classList.contains('older-load')) loader.replaceWith(olderLoader());
+    send({ type: 'chat-open', chatId: state.chat.id, sessionId: state.session.id, beforeId: first });
+    // A dropped answer must not leave the log stuck on "loading" forever.
+    setTimeout(() => {
+      if (!state.loadingOlder) return;
+      state.loadingOlder = false;
+      const stuck = logInner.firstElementChild;
+      if (stuck && stuck.classList.contains('older-load')) stuck.replaceWith(olderLoader());
+    }, 12_000);
+  }
   function prependOlder(history) {
+    state.loadingOlder = false;
+    state.hasOlder = Boolean(history.hasMore);
+    // The next page starts before the oldest message now on screen.
+    state.historyIds = [...history.messages.map((message) => message.id), ...state.historyIds];
     const fragment = document.createDocumentFragment();
-    if (history.hasMore) fragment.append(olderButton(history.messages[0]));
+    if (history.hasMore) fragment.append(olderLoader());
     else if (state.session) fragment.append(sessionDivider(state.session));
     let block = null;
     // The older page starts a new stretch: reuse the day the current first divider shows,
@@ -981,8 +1073,9 @@
     state.historyIds = [...state.historyIds, ...ids.slice(from)];
     let block = null;
     for (const entry of fresh) block = appendStored(logInner, entry, block);
-    state.pendingEchoes = [];
+    pruneConfirmed(message.messages);
     renderLiveSnapshot(message.live, message.chat.id);
+    renderPendingEchoes();
     if (followLog) scrollDown();
   }
 
@@ -1227,6 +1320,7 @@
           state.typingByChat.delete(chatId);
         }
         live = null;
+        window.MimiAndroid?.refreshWidget?.();
         if (state.chat && state.chat.id === chatId) requestContext();
         renderHeader();
         renderChatList();
@@ -1251,15 +1345,16 @@
     ['current_task', 'กำลังทำ'],
     ['mood', 'อารมณ์'],
   ];
-  /** On a phone with the character on, the header is hidden: this chip keeps the typing / handoff visible. */
+  /** A status line just above the composer: answering, transcribing, looking at pictures. */
   function typingChip() {
     let node = $('typing-chip');
     if (!node) {
-      node = el('div', 'typing-chip');
+      node = el('div', 'typing-chip bottom');
       node.id = 'typing-chip';
       node.setAttribute('role', 'status');
       node.hidden = true;
-      $('stage').append(node);
+      const wrap = document.querySelector('.composer .wrap');
+      wrap.insertBefore(node, $('box'));
     }
     return node;
   }
@@ -1331,24 +1426,25 @@
     const handoffHere = chat ? state.handoffByChat.get(chat.id) : null;
     const subHere = chat ? state.subByChat.get(chat.id) : null;
     const transcribingHere = chat ? state.transcribing.has(chat.id) : false;
-    sub.className = `sub${typingHere || handoffHere || subHere || transcribingHere ? ' typing' : ''}`;
-    const active = transcribingHere
-      ? 'กำลังถอดเสียง…'
+    const viewingHere = chat ? state.viewing.has(chat.id) : false;
+    const looks = [viewingHere ? 'กำลังดูรูป…' : '', transcribingHere ? 'กำลังถอดเสียง…' : ''].filter(Boolean);
+    const active = looks.length > 0
+      ? looks.join(' · ')
       : handoffHere
-      ? `${nameOf(handoffHere.from)} กำลังส่งต่อให้ ${nameOf(handoffHere.to)}…`
-      : subHere
-        ? `${nameOf(subHere.main)} → ${nameOf(subHere.sub)} กำลังทำงาน…`
-        : typingHere
-          ? `${nameOf(typingHere)} กำลังตอบ…`
-          : '';
+        ? `${nameOf(handoffHere.from)} กำลังส่งต่อให้ ${nameOf(handoffHere.to)}…`
+        : subHere
+          ? `${nameOf(subHere.main)} → ${nameOf(subHere.sub)} กำลังทำงาน…`
+          : typingHere
+            ? `${nameOf(typingHere)} กำลังตอบ…`
+            : '';
+    sub.className = 'sub';
     sub.textContent = !chat
       ? ''
-      : active ||
-        (chat.kind === 'group'
-          ? `กลุ่ม · ${chat.agents.map(nameOf).join(', ')}`
-          : (direct && direct.description) || '');
+      : chat.kind === 'group'
+        ? `กลุ่ม · ${chat.agents.map(nameOf).join(', ')}`
+        : (direct && direct.description) || '';
     const chip = typingChip();
-    chip.hidden = !chat || !active || !($('app').classList.contains('solo') && modeNow() === 'mobile');
+    chip.hidden = !chat || !active;
     chip.textContent = active;
 
     const bar = $('statusbar');
@@ -1566,15 +1662,8 @@
           const placing = window.MimiHooks?.stage?.viewControls?.();
           if (placing) nodes.push(placing);
         }
-        const hooks = window.MimiHooks && window.MimiHooks.backgrounds;
-        // The stage backdrop is temporarily off (see feature-backgrounds.js); the Hub still keeps the pictures.
-        if (hooks && window.MimiHooks.backgrounds?.stageEnabled?.()) {
-          const backdrop = el('div');
-          backdrop.append(el('h3', '', 'ฉากหลัง'));
-          const settings = (state.backgrounds && state.backgrounds.settings) || { agents: {} };
-          backdrop.append(hooks.choiceSelect(settings.agents[chat.agents[0]] || '', true, (choice) => send({ type: 'background-select', agent: chat.agents[0], choice })));
-          nodes.push(backdrop);
-        }
+        const backgroundPanel = window.MimiHooks?.backgrounds?.chatPanel?.(chat);
+        if (backgroundPanel) nodes.push(backgroundPanel);
       } else {
         nodes.push(el('p', 'hint', 'แชตกลุ่มไม่มีตัวละคร — ตั้งค่าหน้าตาของตัวละครได้ในแชตตัวต่อตัวของแต่ละคน'));
       }
@@ -1663,19 +1752,22 @@
   }
   let composing = false;
   let composerTimer = 0;
+  window.__mimiComposing = false;
   /**
-   * Typing must not fight the IME. The empty/send button state is cheap and immediate;
-   * measuring the box and the @-list wait until a short pause, never mid-composition.
+   * Typing must not fight the IME. The empty/send button state is O(1); measuring the
+   * box, choosing the Thai line-break rule and the @-list wait until a real pause. Thai
+   * keyboards send several input events per syllable, so nothing here runs per event.
    */
   function refreshComposer() {
     markEmpty();
     if (composerTimer) clearTimeout(composerTimer);
     composerTimer = setTimeout(() => {
       composerTimer = 0;
+      if (composing) return;
       input.classList.toggle('th', THAI.test(input.value));
       autosize();
       renderMention();
-    }, 90);
+    }, 260);
   }
   function renderHints() {
     const hints = $('hints');
@@ -1686,7 +1778,6 @@
     }
     const parts = ['Enter ส่ง · Shift+Enter ขึ้นบรรทัดใหม่'];
     if (state.chat && state.chat.kind === 'group') parts.push('@ชื่อ เพื่อเรียกคนตอบ');
-    if (state.chat && state.busyChats.has(state.chat.id)) parts.push('กำลังตอบอยู่ ข้อความนี้จะเข้าคิวหลังคำตอบนี้');
     hints.replaceChildren(...parts.map((part) => el('span', '', part)));
   }
   function renderStaged() {
@@ -1811,51 +1902,157 @@
   }
   /** Your message as sent; shown right away so the input "confirms" itself on screen, even before the server echoes it. */
   let echoSeq = 0;
-  function echoUserMessage(chatId, text, staged) {
-    const attachments = staged
-      .filter((entry) => entry.id)
-      .map((entry) => ({
-        id: entry.id,
-        name: entry.file.name,
-        kind: entry.file.type.startsWith('image/') ? 'image' : entry.file.type.startsWith('audio/') ? 'audio' : entry.file.type.startsWith('video/') ? 'video' : 'file',
-        mime: entry.file.type,
-        size: entry.file.size,
-        text: '',
-        caption: (entry.caption || '').trim(),
-      }));
+  const fileKind = (file) =>
+    file.type.startsWith('image/') ? 'image' : file.type.startsWith('audio/') ? 'audio' : file.type.startsWith('video/') ? 'video' : 'file';
+  /** The picture/audio/video of a file on this device, before it has an attachment id. */
+  const pendingAttachment = (entry) => ({
+    id: entry.id || `local-${entry.file.name}-${entry.file.size}-${entry.file.lastModified || 0}`,
+    kind: fileKind(entry.file),
+    name: entry.file.name,
+    mime: entry.file.type || 'application/octet-stream',
+    size: entry.file.size,
+    text: '',
+    caption: (entry.caption || '').trim(),
+    deletedAt: null,
+    ...(entry.url ? { url: entry.url } : {}),
+  });
+  function pendingUrls(pending) {
+    return [...new Set(pending.entries.map((entry) => entry.url).filter(Boolean))];
+  }
+  function releasePending(pending, revoke = true) {
+    if (revoke) for (const url of pendingUrls(pending)) URL.revokeObjectURL(url);
+    state.pendingEchoes = state.pendingEchoes.filter((entry) => entry !== pending);
+    const row = logInner.querySelector(`[data-id="${pending.clientId}"]`);
+    if (row) row.remove();
+    messageStore.delete(pending.clientId);
+  }
+  function setPendingStatus(pending, text) {
+    pending.message.pendingStatus = text;
+    const row = logInner.querySelector(`[data-id="${pending.clientId}"] .pending-status`);
+    if (row) row.textContent = text;
+  }
+  function createPending(chatId, text, entries, reply) {
+    const clientId = `pending-${Date.now().toString(36)}-${++echoSeq}`;
     const message = {
-      id: `pending-${++echoSeq}`,
+      id: clientId,
+      clientId,
       role: 'user',
       agent: '',
       text,
       createdAt: new Date().toISOString(),
-      attachments,
+      attachments: entries.map(pendingAttachment),
       tools: [],
-      replyTo: compose.replyTo ? { id: compose.replyTo.id, role: 'user', agent: '', text: compose.replyTo.text } : null,
+      replyTo: reply ? { id: reply.id, role: 'user', agent: '', text: reply.text } : null,
+      pendingStatus: 'กำลังอัปโหลด…',
     };
-    state.pendingEchoes.push(message);
+    const pending = { clientId, chatId, text, entries, reply, message };
+    state.pendingEchoes.push(pending);
     if (state.chat && state.chat.id === chatId) {
       ensureDay(logInner, message.createdAt);
       messageStore.set(message.id, message);
       add(userRow(message));
       scrollDown();
     }
+    return pending;
+  }
+  /** Re-draws the provisional bubbles of the chat on screen after a history render or merge. */
+  function renderPendingEchoes() {
+    if (!state.chat) return;
+    for (const row of logInner.querySelectorAll('[data-pending="1"]')) row.remove();
+    const mine = state.pendingEchoes.filter((entry) => entry.chatId === state.chat.id);
+    if (mine.length > 0) logInner.querySelector('.welcome')?.remove();
+    for (const pending of mine) {
+      messageStore.set(pending.message.id, pending.message);
+      logInner.append(userRow(pending.message));
+    }
+    if (mine.length > 0 && followLog) scrollDown();
+  }
+  /** A stored message carries the client id of its placeholder: that one has arrived. */
+  function pruneConfirmed(messages) {
+    const arrived = new Set(messages.map((entry) => entry.clientId).filter(Boolean));
+    for (const pending of [...state.pendingEchoes]) {
+      if (arrived.has(pending.clientId)) {
+        releasePending(pending);
+        continue;
+      }
+      // After a reconnect the client id is gone from history: the same words and files,
+      // stored just after the placeholder was made, are that message.
+      const at = new Date(pending.message.createdAt).getTime();
+      const shape = (message) => message.attachments.map((file) => `${file.name}\n${file.caption || ''}`).join('|');
+      const pendingShape = shape(pending.message);
+      const same = messages.some(
+        (entry) =>
+          entry.role === 'user' &&
+          entry.text === pending.text &&
+          entry.attachments.length === pending.message.attachments.length &&
+          shape(entry) === pendingShape &&
+          new Date(entry.createdAt).getTime() >= at - 10_000,
+      );
+      if (same) releasePending(pending);
+    }
   }
   /** The server stored (and echoed) your message: the provisional bubble makes way for the real one. */
-  function confirmEcho(message) {
-    const index = state.pendingEchoes.findIndex((entry) => entry.text === message.text && entry.attachments.length === message.attachments.length);
+  function confirmEcho(message, chatId) {
+    const index = message.clientId
+      ? state.pendingEchoes.findIndex((entry) => entry.clientId === message.clientId)
+      : state.pendingEchoes.findIndex(
+          (entry) =>
+            entry.chatId === chatId &&
+            entry.text === message.text &&
+            entry.message.attachments.length === message.attachments.length,
+        );
     if (index < 0) return false;
     const [pending] = state.pendingEchoes.splice(index, 1);
-    const row = logInner.querySelector(`[data-id="${pending.id}"]`);
+    const row = logInner.querySelector(`[data-id="${pending.clientId}"]`);
     if (row) {
       row.dataset.id = message.id;
+      row.removeAttribute('data-pending');
       row.replaceWith(userRow(message));
     }
-    messageStore.delete(pending.id);
+    for (const url of pendingUrls(pending)) URL.revokeObjectURL(url);
+    messageStore.delete(pending.clientId);
     messageStore.set(message.id, message);
     // Now part of the stored conversation: the next merge skips it.
     if (state.historyKey && !state.historyIds.includes(message.id)) state.historyIds.push(message.id);
     return true;
+  }
+  /** Uploads the pictures/files, then asks the server to store the message. The bubble is already on screen. */
+  async function sendPending(pending) {
+    setPendingStatus(pending, 'กำลังอัปโหลด…');
+    const failures = await uploadStaged(pending.entries);
+    if (failures.length > 0) {
+      releasePending(pending, false);
+      return failures;
+    }
+    const attachments = pending.entries.filter((entry) => entry.id).map((entry) => entry.id);
+    if (!pending.text && attachments.length === 0) {
+      releasePending(pending, false);
+      return ['ไม่มีไฟล์ที่อัปโหลดสำเร็จ'];
+    }
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      releasePending(pending, false);
+      return ['ยังไม่ได้เชื่อมต่อ'];
+    }
+    setPendingStatus(pending, 'กำลังส่ง…');
+    send({
+      type: 'chat-send',
+      chatId: pending.chatId,
+      text: pending.text,
+      attachments,
+      clientId: pending.clientId,
+      ...(pending.reply ? { replyTo: pending.reply.id } : {}),
+    });
+    return [];
+  }
+  function restoreEntries(entries, text) {
+    if (text && !input.value) {
+      input.value = text;
+      autosize();
+    }
+    for (const entry of entries) {
+      if (!state.staged.includes(entry)) state.staged.push(entry);
+    }
+    renderStaged();
   }
   async function sendMessage() {
     if (!state.chat || !state.latest || state.sending) return;
@@ -1863,33 +2060,218 @@
     const staged = [...state.staged];
     if (!text && staged.length === 0) return;
     if (!socket || socket.readyState !== WebSocket.OPEN) return toast('ยังไม่ได้เชื่อมต่อ', 'ข้อความยังอยู่ในช่องพิมพ์ ลองส่งอีกครั้ง', true);
+    const reply = compose.replyTo;
+    const pending = createPending(state.chat.id, text, staged, reply);
     state.sending = true;
+    // The placeholder confirms the send at once; typing and the caption can carry on.
+    input.value = '';
+    compose.replyTo = null;
+    if (window.MimiHooks && window.MimiHooks.chat) window.MimiHooks.chat.onSent();
+    window.MimiHooks?.notify?.chatSound('sent');
+    autosize();
+    state.staged = [];
+    renderStaged();
+    markEmpty();
+    $('mention').hidden = true;
     try {
-      // Nothing reached the server until now: send is what uploads, caption and all.
-      const failures = await uploadStaged(staged);
-      if (failures.length > 0) return toast('อัปโหลดไม่สำเร็จ', failures[0], true);
-      const attachments = staged.filter((entry) => entry.id).map((entry) => entry.id);
-      if (!text && attachments.length === 0) return;
-      if (!socket || socket.readyState !== WebSocket.OPEN) return toast('ยังไม่ได้เชื่อมต่อ', 'ข้อความยังอยู่ในช่องพิมพ์ ลองส่งอีกครั้ง', true);
-      send({ type: 'chat-send', chatId: state.chat.id, text, attachments, ...(compose.replyTo ? { replyTo: compose.replyTo.id } : {}) });
-      state.lastSent = text;
-      echoUserMessage(state.chat.id, text, staged);
-      input.value = '';
-      compose.replyTo = null;
-      if (window.MimiHooks && window.MimiHooks.chat) window.MimiHooks.chat.onSent();
-      window.MimiHooks?.notify?.chatSound('sent');
-      autosize();
-      const sent = new Set(staged);
-      for (const entry of staged) if (entry.url) URL.revokeObjectURL(entry.url);
-      state.staged = state.staged.filter((entry) => !sent.has(entry));
-      renderStaged();
-      markEmpty();
-      $('mention').hidden = true;
-      if (window.Notification && Notification.permission === 'default') Notification.requestPermission();
+      const failures = await sendPending(pending);
+      if (failures.length > 0) {
+        toast('อัปโหลดไม่สำเร็จ', failures[0], true);
+        if (state.chat && state.chat.id === pending.chatId) restoreEntries(staged, text);
+      }
     } finally {
       state.sending = false;
     }
+    window.MimiAndroid?.refreshWidget?.();
+    // In the Android app the permission is the app's own; the page cannot ask for it.
+    if (window.MimiAndroid?.requestNotifications) window.MimiAndroid.requestNotifications();
+    else if (window.Notification && Notification.permission === 'default') Notification.requestPermission();
   }
+  // ---------- picture caption sheet (Telegram-style) ----------
+  const isImageFile = (file) => file.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|heic|heif|avif)$/i.test(file.name);
+  let photoReview = null;
+  function closePhotoReview(revoke = true) {
+    if (!photoReview) return;
+    if (revoke) for (const entry of photoReview.entries) if (entry.url) URL.revokeObjectURL(entry.url);
+    photoReview.scrim.remove();
+    photoReview = null;
+  }
+  function openPhotoReview(images, options = {}) {
+    const entries = images.map((image) =>
+      image.file
+        ? { file: image.file, url: image.url || URL.createObjectURL(image.file), caption: image.caption || '', selected: image.selected !== false }
+        : image,
+    );
+    if (photoReview) {
+      // More pictures picked while the sheet is open join it; the first caption sheet stays.
+      for (const entry of entries) if (!photoReview.entries.some((known) => known.file === entry.file)) photoReview.entries.push(entry);
+      photoReview.index = Math.max(0, photoReview.entries.length - entries.length);
+      renderPhotoReview();
+      return;
+    }
+    photoReview = { chatId: state.chat && state.chat.id, entries, index: 0, separate: false, sharedCaption: '', scrim: null, refs: {} };
+    const scrim = el('div', 'photo-scrim');
+    const dialog = el('div', 'photo-review');
+    scrim.append(dialog);
+    scrim.onclick = (event) => {
+      if (event.target === scrim) closePhotoReview();
+    };
+    document.body.append(scrim);
+    photoReview.scrim = scrim;
+    photoReview.dialog = dialog;
+    renderPhotoReview();
+    requestAnimationFrame(() => photoReview && photoReview.refs.caption && photoReview.refs.caption.focus());
+  }
+  function renderPhotoReview() {
+    const review = photoReview;
+    if (!review) return;
+    const dialog = review.dialog;
+    dialog.replaceChildren();
+    const current = review.entries[review.index] || review.entries[0];
+    if (!current) return closePhotoReview();
+    const head = el('div', 'pr-head');
+    const title = el('b', '', `รูป ${review.index + 1}/${review.entries.length}`);
+    head.append(title, button('btn ghost', '✕', () => closePhotoReview(), 'ปิด'));
+    const stage = el('div', 'pr-stage');
+    const image = el('img');
+    image.src = current.url;
+    image.alt = current.file.name;
+    const tick = button(`pr-tick${current.selected ? ' on' : ''}`, current.selected ? '✓' : '', () => {
+      current.selected = !current.selected;
+      renderPhotoReview();
+    }, current.selected ? 'รูปนี้จะถูกส่ง — แตะเพื่อไม่ส่ง' : 'รูปนี้ไม่ถูกส่ง — แตะเพื่อเลือก');
+    stage.append(image, tick);
+    if (review.entries.length > 1) {
+      stage.append(
+        button('btn ghost pr-prev', '‹', () => {
+          review.index = (review.index - 1 + review.entries.length) % review.entries.length;
+          renderPhotoReview();
+        }),
+        button('btn ghost pr-next', '›', () => {
+          review.index = (review.index + 1) % review.entries.length;
+          renderPhotoReview();
+        }),
+      );
+      let start = null;
+      stage.addEventListener('touchstart', (event) => {
+        const touch = event.touches[0];
+        start = touch ? { x: touch.clientX, y: touch.clientY } : null;
+      }, { passive: true });
+      stage.addEventListener('touchend', (event) => {
+        const touch = event.changedTouches[0];
+        if (!start || !touch) return;
+        const dx = touch.clientX - start.x;
+        const dy = touch.clientY - start.y;
+        start = null;
+        if (Math.abs(dx) < 45 || Math.abs(dx) < Math.abs(dy)) return;
+        review.index = (review.index + (dx < 0 ? 1 : -1) + review.entries.length) % review.entries.length;
+        renderPhotoReview();
+      }, { passive: true });
+    }
+    const thumbs = el('div', 'pr-thumbs');
+    review.entries.forEach((entry, index) => {
+      const thumb = button(`pr-thumb${index === review.index ? ' on' : ''}${entry.selected ? ' pick' : ''}`, null, () => {
+        review.index = index;
+        renderPhotoReview();
+      });
+      const small = el('img');
+      small.src = entry.url;
+      small.alt = entry.file.name;
+      thumb.append(small, el('span', 'pr-check', entry.selected ? '✓' : ''));
+      thumbs.append(thumb);
+    });
+    const foot = el('div', 'pr-foot');
+    if (review.entries.length > 1) {
+      const modes = el('div', 'hstack');
+      modes.append(
+        button(`btn ${review.separate ? 'ghost' : 'pri'}`, 'รวมเป็นข้อความเดียว', () => {
+          review.separate = false;
+          renderPhotoReview();
+        }, 'ใช้คำบรรยายเดียวกับทุกรูปที่เลือก'),
+        button(`btn ${review.separate ? 'pri' : 'ghost'}`, 'แยกทีละรูป', () => {
+          review.separate = true;
+          renderPhotoReview();
+        }, 'แต่ละรูปมีคำบรรยายของตัวเอง และส่งเป็นคนละ turn'),
+      );
+      foot.append(modes);
+    }
+    const caption = el('textarea');
+    caption.className = 'pr-caption';
+    caption.rows = 2;
+    caption.maxLength = 500;
+    caption.placeholder = review.separate
+      ? 'คำบรรยายของรูปนี้ (ไม่ใส่ก็ได้)'
+      : review.entries.length > 1
+        ? 'คำบรรยายรวมของทุกรูปที่เลือก (ไม่ใส่ก็ได้)'
+        : 'คำบรรยายของรูปนี้ (ไม่ใส่ก็ได้)';
+    caption.value = review.separate ? current.caption || '' : review.sharedCaption || '';
+    caption.oninput = () => {
+      if (review.separate) current.caption = caption.value;
+      else review.sharedCaption = caption.value;
+    };
+    review.refs.caption = caption;
+    const selected = review.entries.filter((entry) => entry.selected);
+    const send = button('btn pri', review.separate && selected.length > 1 ? `ส่ง ${selected.length} ข้อความ` : 'ส่ง', () => {
+      const chosen = review.entries.filter((entry) => entry.selected);
+      if (chosen.length === 0) return toast('ยังไม่ได้เลือกรูป', 'แตะติ๊กมุมขวาบนของรูปก่อน', true);
+      if (!review.separate) {
+        const text = review.sharedCaption.trim();
+        for (const entry of chosen) entry.caption = text;
+        const pending = createPending(review.chatId, '', chosen, null);
+        pending.message.pendingStatus = 'กำลังอัปโหลด…';
+        closePhotoReview(false);
+        void sendPhotoPending([pending]);
+      } else {
+        const pendings = chosen.map((entry) => createPending(review.chatId, '', [entry], null));
+        closePhotoReview(false);
+        void sendPhotoPending(pendings);
+      }
+    });
+    const actions = el('div', 'hstack');
+    actions.append(button('btn ghost', 'ยกเลิก', () => closePhotoReview()), send);
+    foot.append(caption, actions);
+    dialog.append(head, stage, thumbs, foot);
+  }
+  async function sendPhotoPending(pendings) {
+    window.MimiHooks?.notify?.chatSound('sent');
+    for (const pending of pendings) {
+      const failures = await sendPending(pending);
+      if (failures.length > 0) {
+        toast('อัปโหลดไม่สำเร็จ', failures[0], true);
+        if (state.chat && state.chat.id === pending.chatId) restoreEntries(pending.entries, '');
+      }
+    }
+  }
+  /** Images picked together open the caption sheet; other files keep the compact staged chips. */
+  function stageFiles(files, options = {}) {
+    const list = [...files];
+    const images = list.filter(isImageFile);
+    const others = list.filter((file) => !isImageFile(file));
+    for (const file of others) void stageFile(file, options);
+    const known = photoReview ? photoReview.entries.length : 0;
+    let room = Math.max(0, 20 - known);
+    const accepted = [];
+    for (const file of images) {
+      if (room <= 0) {
+        toast('แนบรูปได้สูงสุด 20 ไฟล์', 'ส่งชุดนี้ก่อน แล้วค่อยเลือกชุดถัดไป', true);
+        break;
+      }
+      if (file.size > 25 * 1024 * 1024) {
+        toast('ไฟล์ใหญ่เกินไป', `${file.name} เกิน 25 MB`, true);
+        continue;
+      }
+      if (known + accepted.length === 6) {
+        toast('รูปเกิน 6 รูป', 'โมเดลจะเห็นรูปจริง 6 รูปสุดท้าย รูปที่เหลือจะถูกอธิบายด้วยข้อความ', true);
+      }
+      if (/^image\/(heic|heif|avif)$/i.test(file.type) || /\.(heic|heif|avif)$/i.test(file.name)) {
+        toast('รูปชนิดนี้อาจไม่แสดงโดยตรง', 'โมเดลอาจเห็นได้เพียงคำอธิบายของรูป ไม่ใช่ตัวรูป', true);
+      }
+      accepted.push({ file, url: URL.createObjectURL(file), caption: '', selected: true });
+      room--;
+    }
+    if (accepted.length > 0) openPhotoReview(accepted, options);
+  }
+
   /** In a group: offers the members while the user types "@na…". */
   function renderMention() {
     const box = $('mention');
@@ -1922,23 +2304,38 @@
   }
 
   /** An empty composer offers the microphone; once there is something to send, the send button. */
+  let lastEmpty = null;
   function markEmpty() {
-    $('box').classList.toggle('empty', !input.value.trim() && state.staged.length === 0);
+    const empty = input.value.length === 0 && state.staged.length === 0;
+    if (empty === lastEmpty) return;
+    lastEmpty = empty;
+    $('box').classList.toggle('empty', empty);
   }
   input.addEventListener('input', (event) => {
-    // A Thai text breaks its lines between any two letters (no dictionary lookup per key); set at the first Thai letter.
+    // The 3D character leaves the next frames to the keyboard (feature-vrm.js reads this).
     window.__mimiKeyAt = performance.now();
-    if (!input.classList.contains('th') && event.data && THAI.test(event.data)) input.classList.add('th');
-    // Thai (and other) IMEs fire input for every syllable while composing; drawing the
-    // composer mid-composition is what makes typing feel like it stutters.
+    // Thai has no spaces: break anywhere as soon as the first Thai letter appears, once,
+    // so WebView never runs its word dictionary while the user types.
+    if (!input.classList.contains('th') && THAI.test(event.data || input.value)) input.classList.add('th');
+    // Thai (and other) IMEs fire input for every syllable while composing. Do nothing at
+    // all then: no measuring, no re-render. compositionend catches up.
     if (composing || event.isComposing) return;
     refreshComposer();
   });
   input.addEventListener('compositionstart', () => {
     composing = true;
+    window.__mimiComposing = true;
   });
   input.addEventListener('compositionend', () => {
     composing = false;
+    window.__mimiComposing = false;
+    refreshComposer();
+  });
+  // A keyboard that loses focus mid-composition may never send compositionend.
+  input.addEventListener('blur', () => {
+    if (!composing) return;
+    composing = false;
+    window.__mimiComposing = false;
     refreshComposer();
   });
   // Search is in the chat list's side pane on desktop; in mobile mode it is a button at the top.
@@ -1963,7 +2360,7 @@
     const files = [...(event.clipboardData ? event.clipboardData.files : [])];
     if (files.length === 0) return;
     event.preventDefault();
-    files.forEach(stageFile);
+    stageFiles(files);
   });
   $('send').onclick = sendMessage;
   $('stop').onclick = () => send({ type: 'abort', chatId: state.chat && state.chat.id });
@@ -1976,7 +2373,7 @@
   cameraInput.hidden = true;
   $('file-input').after(cameraInput);
   cameraInput.onchange = (event) => {
-    [...event.target.files].forEach((file) => stageFile(file, { caption: true }));
+    stageFiles(event.target.files, { caption: true });
     event.target.value = '';
   };
   if (window.matchMedia('(pointer: coarse)').matches) $('attach').title = t('composer.attachTouch');
@@ -2013,7 +2410,7 @@
     };
   }
   $('file-input').onchange = (event) => {
-    [...event.target.files].forEach(stageFile);
+    stageFiles(event.target.files);
     event.target.value = '';
   };
   document.addEventListener('click', () => {
@@ -2032,7 +2429,7 @@
       box.classList.remove('drop');
     });
   }
-  box.addEventListener('drop', (event) => [...event.dataTransfer.files].forEach(stageFile));
+  box.addEventListener('drop', (event) => stageFiles(event.dataTransfer.files));
 
   $('back').onclick = () => $('app').classList.add('show-side');
   /** Up to 1180px wide the chat settings panel floats over the chat (a card in mobile mode) instead of sitting beside it. */
@@ -2518,7 +2915,7 @@
     ['nodes', 'Node'],
     ['accounts', 'บัญชี'],
     ['secrets', 'คีย์ลับ'],
-    ['mail', 'Mail push'],
+    ['mail', 'Mail'],
     ['triggers', 'Trigger'],
     ['knowledge', 'คลังความรู้'],
     ['wardrobe', 'ตู้เสื้อผ้า'],
@@ -2908,11 +3305,74 @@
     );
     return panel;
   }
+  /** Everything that made Mimi: the models, the voices, the pictures, and the people behind them. */
+  function creditsDialog() {
+    const dialog = el('div', 'dialog credits');
+    dialog.append(
+      el('h3', '', 'Credits'),
+      el('p', 'hint', 'Mimi เกิดขึ้นได้เพราะเครื่องมือและผู้คนเหล่านี้ — ขอบคุณจากใจ'),
+    );
+    const groups = [
+      ['Coding', ['DeepSeek', 'Claude', 'MiMo']],
+      ['Sound effects', ['ElevenLabs']],
+      ['Image', ['Anima', 'Krea 2']],
+      ['Built with', ['Node.js', 'TypeScript', 'Electron / Chromium', 'SQLite', 'Three.js + VRM', 'Vercel AI SDK', 'Zod']],
+      ['Special thanks', ['ทุกคนที่ทดสอบและให้ฟีดแบ็ก', 'ชุมชนโอเพนซอร์ส']],
+    ];
+    for (const [title, names] of groups) {
+      const group = el('div', 'credit-group');
+      group.append(el('b', '', title), el('span', '', names.join(' · ')));
+      dialog.append(group);
+    }
+    const links = el('div', 'credit-group');
+    links.append(el('b', '', 'Project'), el('span', '', 'Mimi · github.com/Nbcybg/Project-Mimi'));
+    dialog.append(links);
+    const foot = el('div', 'credit-foot');
+    foot.append(el('span', '', `© ${new Date().getFullYear()} Noobcyborg Studio`), button('btn pri', 'ปิด', () => closeOverlay()));
+    dialog.append(foot);
+    overlay(dialog);
+  }
+
+  /** Desktop only: the browser window that comes with the app, its profile kept between launches. */
+  function browserPanel() {
+    const panel = el('div', 'panel form');
+    panel.append(
+      el('h3', '', 'เบราว์เซอร์ของ Mimi'),
+      el(
+        'p',
+        'hint',
+        'Chromium ที่มากับแอปเดสก์ท็อป มีโปรไฟล์ของตัวเองและเก็บคุกกี้ไว้หลังจากปิดแอป — เว็บที่ล็อกอินไว้จึงยังอยู่ · agent สั่งเปิดหน้า คลิก พิมพ์ เลื่อนหน้า และอ่านเนื้อหาได้ผ่านเครื่องมือ browser_* · เปิดจากไอคอน Mimi ในถาดระบบก็ได้',
+      ),
+    );
+    const row = el('div', 'btns');
+    row.append(
+      button('btn', 'เปิดเบราว์เซอร์ของ Mimi', async () => {
+        try {
+          if (window.MimiDesktop?.openBrowser) {
+            if (await window.MimiDesktop.openBrowser()) return;
+          } else if (/Electron/i.test(navigator.userAgent)) {
+            const response = await api('/app/browser', { method: 'POST' });
+            if (response.ok) return;
+          }
+          throw new Error('not the desktop app');
+        } catch {
+          toast('เปิดเบราว์เซอร์ไม่ได้', 'ฟีเจอร์นี้มีในแอป Mimi สำหรับเดสก์ท็อป (Electron) เท่านั้น', true);
+        }
+      }),
+    );
+    panel.append(row);
+    return panel;
+  }
+
   function renderSettings() {
     const page = $('view-settings');
     const view = state.settings;
     if (!view) return page.replaceChildren(pageHead('ตั้งค่า', 'กำลังโหลด…'));
-    const nodes = [pageHead('ตั้งค่า', `แบ่งเป็น 3 หน้า ตั้งค่าไว้ครั้งเดียวใช้ได้ทุกที่${state.version ? ` · Mimi v${state.version}` : ''}`)];
+    const head = pageHead('ตั้งค่า', `แบ่งเป็น 3 หน้า ตั้งค่าไว้ครั้งเดียวใช้ได้ทุกที่${state.version ? ` · Mimi v${state.version}` : ''}`);
+    const creditsButton = button('btn ghost', 'Credits', creditsDialog, 'ดูเครดิตของ Mimi และทีมงาน');
+    creditsButton.style.marginLeft = 'auto';
+    head.firstElementChild.append(creditsButton);
+    const nodes = [head];
     if (!view.ready) {
       nodes.push(
         el(
@@ -2992,6 +3452,7 @@
       stack.append(providers);
 
       stack.append(storagePanel());
+      stack.append(browserPanel());
 
       const general = el('div', 'panel form');
       general.append(el('h3', '', 'โมเดลเริ่มต้น'), el('p', 'hint', view.models.length ? 'core เป็นตัวตอบเสมอ · รูปที่ core ดูได้จะถูกส่งให้ core ด้วย · vision / transcript ใช้แปลงไฟล์เป็นข้อความเก็บในประวัติ · แต่ละช่องแสดงเฉพาะโมเดลที่ทำได้' : 'เชื่อมต่อผู้ให้บริการก่อน แล้วรายชื่อโมเดลจะขึ้นให้เลือก'));
@@ -3023,6 +3484,28 @@
       maxField.dataset.session = 'maxTokens';
       sessionGrid.append(labelled('เงียบนานเกิน (นาที)', idleField), labelled('บทสนทนายาวเกิน (token)', maxField));
       general.append(sessionGrid);
+      general.append(
+        el('h4', '', 'เขตเวลา (Time zone)'),
+        el('p', 'hint', 'เวลาที่ agent เห็นในการคุย ปลุกเตือน และตั้งเวลา ใช้เขตเวลานี้เสมอ ไม่ขึ้นกับเวลาของเครื่องที่รันเซิร์ฟเวอร์ · เว้นว่างเพื่อใช้ค่า MIMI_TIMEZONE'),
+      );
+      const zoneField = textInput(view.timezone, 'Asia/Bangkok');
+      zoneField.dataset.timezone = '1';
+      const zoneList = el('datalist');
+      zoneList.id = 'mimi-timezones';
+      const zoneNames = (() => {
+        try {
+          return Intl.supportedValuesOf('timeZone');
+        } catch {
+          return ['Asia/Bangkok', 'Asia/Singapore', 'Asia/Tokyo', 'Asia/Jakarta', 'UTC', 'Europe/London', 'America/New_York', 'Australia/Sydney'];
+        }
+      })();
+      for (const zone of zoneNames) {
+        const option = el('option');
+        option.value = zone;
+        zoneList.append(option);
+      }
+      zoneField.setAttribute('list', zoneList.id);
+      general.append(labelled('เขตเวลาที่ใช้', zoneField), zoneList);
       general.append(el('h4', '', 'โฟลเดอร์ที่อนุญาตให้อ่าน/เขียนไฟล์และรันคำสั่ง'), el('p', 'hint', 'บรรทัดละหนึ่งโฟลเดอร์ บรรทัดแรกคือโฟลเดอร์ทำงานหลัก'));
       const dirs = el('textarea');
       dirs.value = view.allowedDirs.join('\n');
@@ -3060,6 +3543,7 @@
         if (idleField.value !== String(view.sessionIdleMinutes)) session.idleMinutes = Number(idleField.value) || 0;
         if (maxField.value !== String(view.sessionMaxTokens)) session.maxTokens = Number(maxField.value) || 0;
         if (Object.keys(session).length) change.session = session;
+        if (zoneField.value.trim() !== view.timezone) change.timezone = zoneField.value.trim();
         if (dirs.value !== dirs.dataset.initial) change.allowedDirs = dirs.value.split('\n').map((line) => line.trim()).filter(Boolean);
         if (Object.keys(change).length === 1) return;
         flash('กำลังบันทึก…');
@@ -3349,6 +3833,10 @@
       case 'chat-history': {
         if (message.beforeId !== undefined) {
           if (state.chat && state.chat.id === message.chat.id && message.messages.length > 0) prependOlder(message);
+          else {
+            state.loadingOlder = false;
+            state.hasOlder = false;
+          }
           break;
         }
         state.chat = message.chat;
@@ -3380,6 +3868,7 @@
         } else {
           renderLog(message);
           renderLiveSnapshot(message.live, message.chat.id);
+          renderPendingEchoes();
         }
         if (message.live) {
           state.typingByChat.set(message.chat.id, message.live.agent);
@@ -3428,13 +3917,12 @@
         break;
       }
       case 'chat-message': {
-        if (state.lastSent !== null && message.message.text === state.lastSent) state.lastSent = null;
         if (!showing(message.chatId, message.sessionId)) {
-          confirmEcho(message.message);
+          confirmEcho(message.message, message.chatId);
           break;
         }
         // The server's echo takes the provisional bubble's place; no duplicate.
-        if (confirmEcho(message.message)) {
+        if (confirmEcho(message.message, message.chatId)) {
           scrollDown();
           break;
         }
@@ -3454,6 +3942,18 @@
       case 'chat-transcribing':
         if (message.on) state.transcribing.add(message.chatId);
         else state.transcribing.delete(message.chatId);
+        for (const pending of state.pendingEchoes.filter((entry) => entry.chatId === message.chatId)) {
+          if (pending.message.attachments.some((file) => file.kind === 'audio')) setPendingStatus(pending, message.on ? 'กำลังถอดเสียง…' : 'กำลังตอบ…');
+        }
+        renderHeader();
+        renderChatList();
+        break;
+      case 'chat-viewing':
+        if (message.on) state.viewing.add(message.chatId);
+        else state.viewing.delete(message.chatId);
+        for (const pending of state.pendingEchoes.filter((entry) => entry.chatId === message.chatId)) {
+          if (pending.message.attachments.some((file) => file.kind === 'image')) setPendingStatus(pending, message.on ? 'AI กำลังดูรูป…' : 'กำลังตอบ…');
+        }
         renderHeader();
         renderChatList();
         break;
@@ -3463,6 +3963,7 @@
         } else if (message.done) {
           state.busyChats.delete(message.chatId);
           state.transcribing.delete(message.chatId);
+          state.viewing.delete(message.chatId);
           state.typingByChat.delete(message.chatId);
           state.handoffByChat.delete(message.chatId);
           state.subByChat.delete(message.chatId);
@@ -3521,9 +4022,10 @@
         toast(`${icon}${notice.title}`, notice.body.length > 220 ? `${notice.body.slice(0, 220)}…` : notice.body, false, goTo);
         if (window.MimiAndroid?.notify) {
           // The Android app posts native notifications itself (Web Push does not exist in a WebView).
-          // Always hand it over: a WebView can keep reporting "visible" while the app is in the
-          // background, and the native side already suppresses notifications on screen.
+          // Always hand it over, also while the page is on screen: the user wants the system card
+          // in the app and outside it, and the same text+chat replaces itself instead of stacking.
           window.MimiAndroid.notify(`${icon}${notice.title}`, notice.body, notice.kind, notice.chatId || 0);
+          window.MimiAndroid.refreshWidget?.();
         } else if (window.Notification && Notification.permission === 'granted' && (!pageVisible() || notice.kind !== 'message')) {
           const shown = new Notification(`${icon}${notice.title}`, { body: notice.body.slice(0, 300), tag: notice.id ? `mimi-${notice.id}` : undefined });
           shown.onclick = () => {
@@ -3645,6 +4147,7 @@
         state.workflows = message.workflows || [];
         state.workflowPool = message.pool || [];
         state.nodeTypes = message.nodeTypes || [];
+        state.customNodes = message.customNodes || [];
         if (window.MimiHooks && window.MimiHooks.agentWorkflows) window.MimiHooks.agentWorkflows.onMessage(message);
         if (state.view === 'agents' && !ui.agentDirty) renderAgents();
         if (state.view === 'hub' && ui.hubTab === 'triggers') renderHub();
@@ -3694,23 +4197,24 @@
         window.open(message.url, '_blank', 'noopener');
         break;
       }
-      case 'error':
+      case 'error': {
         flash('');
         toast('ผิดพลาด', message.message, true);
-        // A message that never reached the conversation leaves the log and goes back into the input box.
-        for (const pending of state.pendingEchoes.splice(0)) {
-          const row = logInner.querySelector(`[data-id="${pending.id}"]`);
-          if (row) row.remove();
+        // Only the send that failed goes back into the composer; other chats keep their bubbles.
+        const failed = message.clientId
+          ? state.pendingEchoes.filter((pending) => pending.clientId === message.clientId)
+          : [];
+        for (const pending of failed) {
+          const entries = pending.entries;
+          const text = pending.text;
+          releasePending(pending, false);
+          if (state.view === 'chat' && state.chat && message.chatId === state.chat.id) restoreEntries(entries, text);
         }
         if (state.view === 'chat' && state.chat && (message.chatId === undefined || message.chatId === state.chat.id)) {
           add(el('div', 'note bad', `ผิดพลาด: ${message.message}`));
-          if (state.lastSent && !input.value) {
-            input.value = state.lastSent;
-            autosize();
-          }
-          state.lastSent = null;
         }
         break;
+      }
     }
   }
 

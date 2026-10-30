@@ -40,6 +40,7 @@ const NODE_TYPES = [
   'extract_file',
   'knowledge',
   'sheets',
+  'plugin',
   'trigger_manual',
   'trigger_schedule',
   'trigger_webhook',

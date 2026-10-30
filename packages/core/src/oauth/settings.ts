@@ -1,14 +1,14 @@
-import type { OAuthService, ToolSettingField, ToolSettingValues } from '@mimi/shared';
+import type { AccountService, ToolSettingField, ToolSettingValues } from '@mimi/shared';
 
 /** The setting every account-aware tool carries; empty means "the default account of this service". */
-export function accountSetting(service: OAuthService, label?: string): ToolSettingField {
+export function accountSetting(service: AccountService, label?: string): ToolSettingField {
   return {
     key: 'account',
-    label: label ?? (service === 'google' ? 'บัญชี Google' : 'บัญชี Microsoft'),
+    label: label ?? (service === 'google' ? 'บัญชี Google' : service === 'microsoft' ? 'บัญชี Microsoft' : 'บัญชีเมล'),
     type: 'account',
     service,
     required: false,
-    description: 'เว้นว่าง = บัญชีเริ่มต้นของเจ้านี้ (ตั้งได้ที่ Hub → บัญชี)',
+    description: 'เว้นว่าง = บัญชีเริ่มต้นของเจ้านี้ (ตั้งได้ที่ Hub → บัญชี / Mail)',
   };
 }
 

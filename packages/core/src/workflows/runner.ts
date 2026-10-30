@@ -36,6 +36,7 @@ import {
 } from './expressions.ts';
 import type { TriggerPool } from './trigger-pool.ts';
 import { parseConnectorTriggerPool, pollConnectorTrigger } from './connector-triggers.ts';
+import { timeZoneName, type TimeZoneSource } from '../timezone.ts';
 
 export interface WorkflowMailItem {
   id: string;
@@ -44,6 +45,9 @@ export interface WorkflowMailItem {
   date?: string;
   subject: string;
   content: string;
+  cc?: string;
+  folder?: string;
+  seen?: boolean;
 }
 
 export interface WorkflowRunnerDeps {
@@ -51,6 +55,8 @@ export interface WorkflowRunnerDeps {
   runAgent(agentName: string, prompt: string, thread: string, signal?: AbortSignal): Promise<string>;
   /** A tool or preset from the pool, by name. */
   tool(name: string): ToolDefinition | undefined;
+  /** A custom node made by the user / the AI Overseer (the `plugin` node). */
+  customNode?(name: string): { code: string; timeoutMs?: number } | undefined;
   /** Native connector operations (the `connector` node); missing means the node is unavailable. */
   connector?: Pick<ConnectorRuntime, 'get' | 'execute'>;
   /** Posts a message into an agent's chat with the user. */
@@ -60,13 +66,19 @@ export interface WorkflowRunnerDeps {
    */
   speak(agentName: string | null, text: string, files?: string[]): void;
   mail: {
-    list(source: 'google' | 'microsoft', query: string, max: number, account?: string): Promise<WorkflowMailItem[]>;
-    markRead(source: 'google' | 'microsoft', ids: string[], account?: string): Promise<void>;
+    list(
+      source: 'google' | 'microsoft' | 'imap' | 'pop3',
+      query: string,
+      max: number,
+      account?: string,
+      options?: { folder?: string; unseenOnly?: boolean; sinceDays?: number },
+    ): Promise<WorkflowMailItem[]>;
+    markRead(source: 'google' | 'microsoft' | 'imap' | 'pop3', ids: string[], account?: string, folder?: string): Promise<void>;
   };
   state: WorkflowState;
   allowedDirs: string[];
   /** For `$today`; defaults to the machine's zone. */
-  timezone?: string;
+  timezone?: TimeZoneSource;
   /** Runs another workflow of the same agent (the `workflow` node). */
   runSubWorkflow?(agent: string, name: string, items: FlowItem[], depth: number): Promise<FlowItem[]>;
   /** Stores a paused run (approval / long wait) and returns its id; without it nodes wait in memory. */
@@ -274,9 +286,9 @@ async function withDeadline<T>(
   }
 }
 
-function todayIn(timezone: string | undefined): string {
+function todayIn(timezone: TimeZoneSource | undefined): string {
   try {
-    return new Intl.DateTimeFormat('en-CA', timezone ? { timeZone: timezone } : undefined).format(new Date());
+    return new Intl.DateTimeFormat('en-CA', { timeZone: timeZoneName(timezone) }).format(new Date());
   } catch {
     return new Date().toISOString().slice(0, 10);
   }
@@ -626,6 +638,31 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
       if (result === undefined) return { main: items };
       return { main: unwrapItems(result) };
     }
+    case 'plugin': {
+      const config = (await resolveValue(node.config, contextAt(ctx, items[0] ?? { json: {} }, 0, items))) as {
+        plugin?: JsonValue;
+        config?: JsonValue;
+      };
+      const name = asText(config.plugin).trim();
+      if (!name) throw new Error('plugin node: choose a plugin');
+      const spec = deps.customNode?.(name);
+      if (!spec) throw new Error(`plugin node: unknown custom node "${name}" (look in user/nodes)`);
+      const pluginConfig = config.config && typeof config.config === 'object' && !Array.isArray(config.config)
+        ? (config.config as Record<string, JsonValue>)
+        : {};
+      let result: JsonValue | undefined;
+      try {
+        ({ value: result } = await sandbox().runNode(spec.code, items.map((item) => item.json), {
+          ...(ctx.signal ? { signal: ctx.signal } : {}),
+          ...(spec.timeoutMs ? { timeoutMs: spec.timeoutMs } : {}),
+          config: pluginConfig,
+        }));
+      } catch (error) {
+        throw new Error(`plugin "${name}": ${(error as Error).message}`);
+      }
+      if (result === undefined) return { main: items };
+      return { main: unwrapItems(result) };
+    }
     case 'tool': {
       const out: FlowItem[] = [];
       for (const [index, item] of items.entries()) {
@@ -767,7 +804,7 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
       if (mode === 'until') {
         const until = asText(config.until).trim();
         if (!until) throw new Error('wait node: set a date/time to wait until');
-        const zone = deps.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+        const zone = timeZoneName(deps.timezone);
         wanted = Math.max(0, parseDate(until, zone).getTime() - Date.now());
       } else if (mode === 'duration') {
         const amount = Math.max(0, Number(config.amount ?? 0));
@@ -946,7 +983,7 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
       return { main: out };
     }
     case 'datetime': {
-      const timeZone = (zone: JsonValue | undefined) => asText(zone).trim() || deps.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const timeZone = (zone: JsonValue | undefined) => asText(zone).trim() || timeZoneName(deps.timezone);
       const out: FlowItem[] = [];
       for (const [index, item] of items.entries()) {
         const config = (await resolveValue(node.config, contextAt(ctx, item, index, items))) as Record<string, JsonValue>;
@@ -1720,12 +1757,31 @@ export async function resumeWorkflow(
       // Real messages (or an agent's call) arrive as payloads; a manual run uses the sample.
       return normalizeItems(entry.sample ?? {});
     case 'mail': {
-      const source = asText(config.source) === 'microsoft' ? 'microsoft' : 'google';
+      const rawSource = asText(config.source);
+      const source = rawSource === 'microsoft' || rawSource === 'imap' || rawSource === 'pop3' ? rawSource : 'google';
       const query = asText((await resolveValue(config.query ?? '', empty)));
       const account = asText((await resolveValue(config.account ?? '', empty))).trim() || undefined;
-      const items = await deps.mail.list(source, query, 5, account);
+      const folder = asText((await resolveValue(config.folder ?? '', empty))).trim() || undefined;
+      const unseenOnly = config.unseenOnly === true || (config.unseenOnly === undefined && (source === 'imap' || source === 'pop3'));
+      const sinceDays = Number(await resolveValue(config.sinceDays ?? 0, empty));
+      const max = Math.max(1, Math.min(100, Number(await resolveValue(config.maxMessages ?? 5, empty)) || 5));
+      const items = await deps.mail.list(source, query, max, account, {
+        ...(folder ? { folder } : {}),
+        ...(unseenOnly ? { unseenOnly: true } : {}),
+        ...(Number.isFinite(sinceDays) && sinceDays > 0 ? { sinceDays } : {}),
+      });
       return items.map((mail) => ({
-        json: { Id: mail.id, From: mail.from, To: mail.to, Date: mail.date ?? '', Subject: mail.subject, Content: mail.content },
+        json: {
+          Id: mail.id,
+          From: mail.from,
+          To: mail.to,
+          ...(mail.cc ? { Cc: mail.cc } : {}),
+          Date: mail.date ?? '',
+          Subject: mail.subject,
+          Content: mail.content,
+          ...(mail.folder ? { Folder: mail.folder } : {}),
+          ...(mail.seen !== undefined ? { Seen: mail.seen } : {}),
+        },
       }));
     }
     case 'poll': {

@@ -71,6 +71,28 @@ test('push: important kinds go to every device, dead ones are dropped, info stay
   assert.equal(notifications.unsubscribe('https://push.example.com/flaky'), true);
 });
 
+
+test('muted agents stay in the inbox but are not pushed', async () => {
+  const sent: unknown[] = [];
+  const notifications = new NotificationCenter(openDb(':memory:'), {
+    vapid: () => { throw new Error('not used'); },
+    subject: 'mailto:mimi@localhost',
+    preferences: () => ({ mutedAgents: ['tim'] }),
+    send: async (subscription, payload, urgency) => {
+      sent.push({ endpoint: subscription.endpoint, payload, urgency });
+      return { status: 201, gone: false };
+    },
+  });
+  notifications.subscribe({ endpoint: 'https://push.example.com/phone', p256dh: 'key', auth: 'secret' }, 'phone');
+  const muted = notifications.add({ kind: 'message', title: 'Tim', body: 'quiet', agent: 'tim' });
+  const normal = notifications.add({ kind: 'message', title: 'Mimi', body: 'hello', agent: 'mimi' });
+  await until(() => sent.length === 1);
+  assert.equal((sent[0] as { payload: { id: number } }).payload.id, normal.id);
+  assert.equal(notifications.list().items.some((item) => item.id === muted.id), true);
+  assert.equal(notifications.muted('tim'), true);
+  assert.equal(notifications.muted('mimi'), false);
+});
+
 test('core: approvals and reminders land in the inbox with their chat', async () => {
   const target = await makeTestCore({});
   const live: unknown[] = [];

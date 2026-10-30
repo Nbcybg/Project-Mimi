@@ -1,6 +1,9 @@
 export const RISK_LEVELS = ['read', 'write', 'shell', 'delete', 'network'] as const;
 export type RiskLevel = (typeof RISK_LEVELS)[number];
 
+/** Account dropdowns can show OAuth accounts or the hub's IMAP/POP3/SMTP accounts. */
+export type AccountService = import('./oauth.ts').OAuthService | 'mail';
+
 /** Where a tool physically runs. `pc` tools are routed to the PC agent once it exists. */
 export type ToolTarget = 'core' | 'pc';
 
@@ -24,8 +27,8 @@ export interface ToolSettingField {
   key: string;
   label: string;
   type: 'string' | 'number' | 'boolean' | 'secret' | 'text' | 'account' | 'connection' | 'select';
-  /** For `account` settings: which OAuth accounts the dropdown offers. */
-  service?: import('./oauth.ts').OAuthService;
+  /** For `account` settings: which accounts the dropdown offers (mail = IMAP/POP3/SMTP). */
+  service?: AccountService;
   /** For `connection` settings: which connector's stored connections the dropdown offers. */
   connector?: string;
   description?: string;

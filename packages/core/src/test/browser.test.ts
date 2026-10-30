@@ -135,6 +135,13 @@ test('launching: which browser, its flags, and where the profile address is read
   for (const flag of ['--remote-debugging-port=0', '--user-data-dir=/p', '--disable-sync', '--no-first-run']) assert.ok(flags.includes(flag), flag);
   assert.equal(flags.includes('--headless=new'), false);
   assert.ok(browserArguments('/p', true).includes('--headless=new'));
+  // The desktop app's own Electron in browser mode: the app script (or the executable
+  // itself, once packaged) is passed after the switches, never a blank Chrome tab.
+  const desktop = browserArguments('/p', false, { MIMI_BROWSER_APP: path.resolve('/app/main.cjs') });
+  assert.equal(desktop.at(-2), path.resolve('/app/main.cjs'));
+  assert.equal(desktop.at(-1), '--mimi-browser');
+  assert.equal(desktop.includes('about:blank'), false);
+  assert.deepEqual(browserArguments('/p', false, { MIMI_BROWSER_SELF: '1' }).slice(-1), ['--mimi-browser']);
 
   const profile = path.join(tmp, 'profile');
   assert.equal(readDevToolsAddress(profile), undefined);

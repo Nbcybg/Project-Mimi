@@ -704,6 +704,24 @@ export async function startServer(
     const text = (typeof input === 'string' ? input : JSON.stringify(input) || '').replace(/\s+/g, ' ').trim();
     return text.length > 220 ? `${text.slice(0, 220)}…` : text;
   };
+  /**
+   * A tool is waiting for the user's answer. The card is in the chat, but the phone may be in
+   * another chat or in the background: keep it in the notification inbox and push it, like an
+   * approval that comes from a workflow.
+   */
+  const permissionAsked = (chatId: number, request: PermissionRequest) => {
+    if (watching(chatId)) return;
+    const name = core.agents.names().includes(request.agent) ? core.agents.get(request.agent).displayName || request.agent : request.agent;
+    const chat = core.chats.getChat(chatId);
+    const title = chat && chat.kind === 'group' ? `${name} · ${chat.title}` : name;
+    const body = request.summary || `ขออนุญาตใช้ ${request.tool}`;
+    core.notify({ kind: 'approval', title: `ขออนุญาต: ${title}`, body: body.length > 300 ? `${body.slice(0, 300)}…` : body, agent: request.agent, chatId });
+  };
+  /** Permission requests also arrive inside a sub-agent's activity. */
+  const permissionsIn = (chatId: number, event: AgentEvent) => {
+    if (event.type === 'permission-request') permissionAsked(chatId, event.request);
+    else if (event.type === 'agent-activity') permissionsIn(chatId, event.event);
+  };
   const liveEvent = (chatId: number, sessionId: number, agent: string, event: AgentEvent) => {
     const live = liveTurns.get(chatId);
     switch (event.type) {
@@ -746,6 +764,7 @@ export async function startServer(
         break;
       case 'permission-request':
         if (live) live.perms.set(event.request.id, event.request);
+        permissionsIn(chatId, event);
         break;
       case 'permission-decision':
         if (live) live.perms.delete(event.requestId);
@@ -754,6 +773,7 @@ export async function startServer(
         liveTurns.delete(chatId);
         break;
       case 'agent-activity':
+        permissionsIn(chatId, event);
         break;
     }
   };

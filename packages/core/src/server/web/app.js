@@ -29,8 +29,11 @@
   document.documentElement.dataset.mode = modeNow();
   // Screen settings the user's devices share through the server (character position, chat
   // over the character, sounds, read-aloud, language); the rest stays on this device.
-  const SYNCED_KEYS = new Set(['mimi.chatSound', 'mimi.notifySound', 'mimi.autoSpeak', 'mimi.lang', 'mimi.theme']);
-  const synced = (key) => SYNCED_KEYS.has(key) || /^mimi\.(view|bubbles|character)\./.test(key);
+  const SYNCED_KEYS = new Set(['mimi.chatSound', 'mimi.notifySound', 'mimi.autoSpeak', 'mimi.lang', 'mimi.theme', 'mimi.textSize']);
+  // Per-chat screen settings (chat setting → หน้าตา) travel with the account, so a phone and a
+  // PC opening the same chat look the same. The pattern also covers pictures/backgrounds.
+  const CHAT_PREF_KEY = /^mimi\.chat\.-?\d+\.(textSize|bubbles|character|theme|background|backgroundRules)$/;
+  const synced = (key) => SYNCED_KEYS.has(key) || CHAT_PREF_KEY.test(key) || /^mimi\.(view|bubbles|character)\./.test(key);
   const store = {
     get(key) {
       try {
@@ -47,6 +50,14 @@
       }
       if (synced(key)) syncUi({ [key]: value });
     },
+    remove(key) {
+      try {
+        localStorage.removeItem(key);
+      } catch {
+        // private window: nothing to remove
+      }
+      if (synced(key)) syncUi({ [key]: null });
+    },
   };
   /** A per-chat override of a screen setting, with a global fallback. Chats remember their own look. */
   function chatPref(key, fallback) {
@@ -60,11 +71,7 @@
   const chatHasPref = (key) => Boolean(state.chat && store.get(`mimi.chat.${state.chat.id}.${key}`) !== null);
   const clearChatPref = (key) => {
     if (!state.chat) return;
-    try {
-      localStorage.removeItem(`mimi.chat.${state.chat.id}.${key}`);
-    } catch {
-      // not remembered, still cleared
-    }
+    store.remove(`mimi.chat.${state.chat.id}.${key}`);
     renderHeader();
     renderRail();
   };
@@ -110,12 +117,9 @@
   }
   function setChatTheme(theme) {
     if (!state.chat) return;
-    try {
-      if (theme === 'light' || theme === 'dark') localStorage.setItem(`mimi.chat.${state.chat.id}.theme`, theme);
-      else localStorage.removeItem(`mimi.chat.${state.chat.id}.theme`);
-    } catch {
-      // not remembered, still switched
-    }
+    const key = `mimi.chat.${state.chat.id}.theme`;
+    if (theme === 'light' || theme === 'dark') store.set(key, theme);
+    else store.remove(key);
     applyTheme();
     renderRail();
   }
@@ -618,11 +622,16 @@
     const empty = el('div', 'welcome');
     empty.append(el('b', '', 'Mimi'), state.agents.length ? 'เลือกแชตทางซ้าย หรือกด "+ ใหม่" เพื่อเริ่มคุย' : 'เริ่มจากเชื่อมต่อผู้ให้บริการโมเดลที่ "ตั้งค่า" แล้วสร้าง agent ตัวแรกที่แท็บ "Agent"');
     logInner.replaceChildren(empty);
+    updateJump();
   }
 
   // ---------- log ----------
   const logBox = $('log');
   const logInner = $('log-inner');
+  const jumpBottom = $('jump-bottom');
+  const jumpCount = $('jump-count');
+  /** Messages that arrived while the view was scrolled up (the badge on the go-to-bottom button). */
+  let unseen = 0;
   /** The assistant block being streamed into right now. */
   let live = null;
   /** The streaming block's DOM node; it stays on screen after `live` ends, until the stored messages replace it. */
@@ -634,9 +643,26 @@
   const cards = new Map();
 
   const pinned = () => logBox.scrollHeight - logBox.scrollTop - logBox.clientHeight < 140;
-  const scrollDown = () => {
+  /** Telegram-like: the arrow appears while the view is away from the newest message, with how many came in. */
+  function updateJump() {
+    const away = !pinned();
+    jumpBottom.hidden = !away;
+    jumpCount.hidden = unseen <= 0;
+    jumpCount.textContent = unseen > 99 ? '99+' : String(unseen);
+    jumpBottom.classList.toggle('has-new', unseen > 0);
+  }
+  function scrollDown() {
     logBox.scrollTop = logBox.scrollHeight;
+    unseen = 0;
     updateLogFade();
+    updateJump();
+  }
+  jumpBottom.onclick = () => {
+    followLog = true;
+    unseen = 0;
+    logBox.scrollTo({ top: logBox.scrollHeight, behavior: 'smooth' });
+    updateLogFade();
+    updateJump();
   };
   /** In character mode the top edge fades only after the view scrolled away from the first message. */
   function updateLogFade() {
@@ -645,7 +671,9 @@
   let followLog = true;
   logBox.addEventListener('scroll', () => {
     followLog = pinned();
+    if (followLog) unseen = 0;
     updateLogFade();
+    updateJump();
     // Lazy history: reaching the top asks for the next older page by itself.
     if (logBox.scrollTop < 80) loadOlder();
   }, { passive: true });
@@ -653,8 +681,24 @@
     const stick = pinned();
     logInner.append(node);
     if (stick) scrollDown();
+    else if (node.matches?.('.gmsg, .row-user, .perm, .approval')) {
+      unseen++;
+      updateJump();
+    }
     return node;
   }
+
+  // The composer floats over the stage in mobile character mode; its measured height keeps the
+  // log and the character cropped above it instead of running underneath the message box.
+  const composer = document.querySelector('.composer');
+  function measureComposer() {
+    document.documentElement.style.setProperty('--composer-h', `${composer.offsetHeight}px`);
+    // A taller box (more lines, a staged file) must not leave the newest bubble under it.
+    if (followLog) requestAnimationFrame(scrollDown);
+  }
+  if (window.ResizeObserver) new ResizeObserver(measureComposer).observe(composer);
+  else window.addEventListener('resize', measureComposer);
+  measureComposer();
 
   function sessionDivider(session, automatic) {
     const node = el('div', 'divider');
@@ -1012,6 +1056,7 @@
     cards.clear();
     messageStore.clear();
     lastDay = null;
+    unseen = 0;
     logInner.replaceChildren();
     if (!state.chat) return emptyState();
     state.historyKey = state.session ? `${state.chat.id}:${state.session.id}` : `${state.chat.id}:`;
@@ -1033,6 +1078,7 @@
     if (target) {
       target.scrollIntoView({ block: 'center' });
       target.animate([{ outline: '2px solid #e08aa7' }, { outline: '2px solid transparent' }], { duration: 2200 });
+      updateJump();
     } else {
       scrollDown();
     }
@@ -1566,9 +1612,10 @@
     const chat = state.chat;
     const nodes = [];
 
-    // A floating panel always has a way back; in mobile mode it also carries what the clean screen leaves out.
+    // The panel's way back is the top bar (the settings button turns into a back arrow); no
+    // second fold button here.
     const railHead = el('div', 'rail-head');
-    railHead.append(el('b', '', 'ตั้งค่าแชต'), button('btn ghost', t('setting.fold'), () => setRail(false), t('setting.foldHint')));
+    railHead.append(el('b', '', 'ตั้งค่าแชต'));
 
     // The chat settings are split into three pages, so each one stays short on a phone.
     const tabs = el('div', 'tabs');
@@ -1657,12 +1704,8 @@
       for (const level of [0, 1, 2]) {
         sizeRow.append(
           button(textSize() === level ? 'on' : '', SIZE_LABELS[level], () => {
-            try {
-              if (state.chat) localStorage.setItem(`mimi.chat.${chat.id}.textSize`, String(level));
-              else localStorage.setItem('mimi.textSize', String(level));
-            } catch {
-              // not remembered, still switched
-            }
+            if (state.chat) store.set(`mimi.chat.${chat.id}.textSize`, String(level));
+            else store.set('mimi.textSize', String(level));
             applyTextSize();
             renderRail();
           }, level === 0 ? 'ตัวอักษรเล็กลง เห็นข้อความมากกว่า' : level === 1 ? 'ขนาดมาตรฐาน' : 'ตัวอักษรใหญ่ขึ้น อ่านง่ายกว่า'),
@@ -1696,11 +1739,7 @@
           for (const level of [0, 1, 2]) {
             seg.append(
               button(bubbleLevel() === level ? 'on' : '', t(`bubbles.${level}`), () => {
-                try {
-                  localStorage.setItem(`mimi.chat.${chat.id}.bubbles`, String(level));
-                } catch {
-                  // not remembered, still switched
-                }
+                store.set(`mimi.chat.${chat.id}.bubbles`, String(level));
                 renderHeader();
                 renderRail();
               }, t(`bubbles.${level}.hint`)),
@@ -2503,11 +2542,7 @@
   });
   function toggleCharacter() {
     if (!state.chat) return;
-    try {
-      localStorage.setItem(`mimi.chat.${state.chat.id}.character`, characterOn() ? '0' : '1');
-    } catch {
-      // not remembered, still switched
-    }
+    store.set(`mimi.chat.${state.chat.id}.character`, characterOn() ? '0' : '1');
     renderHeader();
     renderRail();
   }
@@ -2517,6 +2552,7 @@
     const mode = modeNow();
     if (document.documentElement.dataset.mode === mode) {
       if (followLog) requestAnimationFrame(scrollDown);
+      else requestAnimationFrame(updateJump);
       return;
     }
     document.documentElement.dataset.mode = mode;

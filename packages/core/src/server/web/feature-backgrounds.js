@@ -78,18 +78,14 @@
 
   function storedJson(key) {
     try {
-      const raw = localStorage.getItem(key);
+      const raw = M().store.get(key);
       return raw ? JSON.parse(raw) : null;
     } catch {
       return null;
     }
   }
   function writeStored(key, value) {
-    try {
-      localStorage.setItem(key, JSON.stringify(value));
-    } catch {
-      // private window: the choice still works for this screen
-    }
+    M().store.set(key, JSON.stringify(value));
   }
   function cleanClock(value) {
     const match = /^(\d{1,2}):(\d{2})$/.exec(String(value || '').trim());

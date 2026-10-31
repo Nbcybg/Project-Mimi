@@ -17,6 +17,8 @@ export interface ExpressionContext {
   $items: Array<Record<string, JsonValue>>;
   /** Workflow variables (`vars` in the workflow file). */
   $vars?: Record<string, JsonValue>;
+  /** Vault values available to every node as `$secret.NAME` (never stored in a run). */
+  $secret?: Record<string, JsonValue>;
   /** Outputs of nodes that already ran, keyed by node title (and id). */
   $node?: Record<string, NodeOutput>;
   $workflow?: { name: string; title: string; agent: string };
@@ -41,7 +43,7 @@ const PURE = /^\s*\{\{((?:(?!\}\})[\s\S])+)\}\}\s*$/;
 const ANY = /\{\{([\s\S]*?)\}\}/g;
 
 /** The variables an expression may name; the helpers ($if, $item, …) are defined in the sandbox. */
-const VARIABLES = ['$json', '$index', '$now', '$today', '$items', '$vars', '$node', '$workflow', '$trigger', '$execution'] as const;
+const VARIABLES = ['$json', '$index', '$now', '$today', '$items', '$vars', '$secret', '$node', '$workflow', '$trigger', '$execution'] as const;
 
 /**
  * Only the variables the expressions mention travel to the sandbox: most use `$json` alone,

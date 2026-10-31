@@ -76,6 +76,7 @@ const NODE_PRELUDE = '(() => {' +
   'const items = globalThis.items;' +
   'globalThis.$json = items[0] ?? {}; globalThis.$items = items;' +
   'globalThis.$config = globalThis.__config || {}; delete globalThis.__config;' +
+  'globalThis.$secret = globalThis.__secret || {}; delete globalThis.__secret;' +
   'globalThis.$input = { all: () => items.map((json) => ({ json })), first: () => ({ json: items[0] ?? {} }),' +
   ' last: () => ({ json: items.at(-1) ?? {} }), item: { json: items[0] ?? {} } };' +
   '})()';
@@ -86,7 +87,7 @@ async function code(request) {
   const log = (...parts) => logs.push(parts.map((part) => (typeof part === 'string' ? part : JSON.stringify(part))).join(' ').slice(0, 2000));
   // Not ECMAScript built-ins, so they come from this process: harmless here, nothing beyond it.
   const variables = node
-    ? { items: Array.isArray(request.items) ? request.items : [], __config: request.config ?? {} }
+    ? { items: Array.isArray(request.items) ? request.items : [], __config: request.config ?? {}, __secret: request.secret ?? {} }
     : { input: request.input ?? null, settings: request.settings ?? {} };
   const context = fresh(variables, (target) => {
     target.__log = log;
@@ -292,11 +293,11 @@ export class Sandbox {
   async runNode(
     code: string,
     items: JsonValue[],
-    options: { timeoutMs?: number; signal?: AbortSignal; config?: Record<string, JsonValue> } = {},
+    options: { timeoutMs?: number; signal?: AbortSignal; config?: Record<string, JsonValue>; secret?: Record<string, JsonValue> } = {},
   ): Promise<{ value: SandboxValue; logs: string[] }> {
     const timeoutMs = options.timeoutMs ?? 15_000;
     const reply = await this.request(
-      { op: 'node', code, items, config: options.config ?? {}, timeoutMs },
+      { op: 'node', code, items, config: options.config ?? {}, secret: options.secret ?? {}, timeoutMs },
       timeoutMs + 3000,
       options.signal,
     );

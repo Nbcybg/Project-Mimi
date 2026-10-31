@@ -27,6 +27,7 @@ import type { TraceBudget } from '../mesh/budget.ts';
 import type { PermissionGate } from '../permissions/gate.ts';
 import { formatModelRef, providerOptionsFor } from '../providers/registry.ts';
 import type { ModelService } from '../providers/routing.ts';
+import { createToolSearchTool, TOOL_ACTIVATE_MARK, type SearchableTool } from '../tools/tool-search.ts';
 import type { ToolExecutor } from '../tools/executor.ts';
 import type { ToolContext, ToolDefinition, ToolSource } from '../tools/registry.ts';
 import type { UsageLogger } from '../usage/logger.ts';
@@ -56,7 +57,11 @@ export interface AgentLoopDeps {
   tools: ToolSource;
   executor: ToolExecutor;
   gate: PermissionGate;
+  /** The agent's own allow / ask / deny policy, read at call time so edits apply next turn. */
+  agentPermissions?: (agent: string) => Record<string, 'allow' | 'ask' | 'deny'> | undefined;
   allowedDirs: string[];
+  /** Approved project roots for shell commands; empty means any allowed folder. */
+  projectRoots?: string[];
   timezone: TimeZoneSource;
   mesh?: MeshToolProvider;
   /** Folder shown to the model as its working folder; defaults to the first allowed folder. */
@@ -201,12 +206,18 @@ async function* runToolCall(
     result = finish(false, `Invalid tool input:\n${z.prettifyError(parsed.error)}`);
   } else {
     let denial: string | null = null;
-    const mode = deps.gate.modeFor(definition.name, definition.risk, context.traceId);
+    const modeOptions = {
+      thread: context.thread,
+      agent: context.agent,
+      overrides: deps.agentPermissions?.(context.agent) ?? {},
+    };
+    const mode = deps.gate.modeFor(definition.name, definition.risk, context.traceId, modeOptions);
     if (mode === 'deny') {
       denial = DENIAL_TEXT.policy;
     } else if (mode === 'ask') {
       const request = deps.gate.createRequest({
         traceId: context.traceId,
+        thread: context.thread,
         agent: context.agent,
         tool: definition.name,
         risk: definition.risk,
@@ -214,7 +225,7 @@ async function* runToolCall(
         summary: definition.summarize(parsed.data),
       });
       yield { type: 'permission-request', request };
-      const decision = await deps.gate.decide(request, context.signal);
+      const decision = await deps.gate.decide(request, context.signal, modeOptions);
       yield { type: 'permission-decision', requestId: request.id, decision };
       if (!decision.allow) denial = DENIAL_TEXT[decision.reason];
     }
@@ -250,13 +261,45 @@ export async function* runAgent(deps: AgentLoopDeps, input: RunInput): AsyncGene
   // Config errors (unknown tool or model, missing API key) surface before anything is stored.
   const modelRef = deps.models.resolve('chat', agent.models);
   const modelInfo = deps.models.info(modelRef);
+  const declaredNames = [...new Set(agent.tools.flatMap((name) => deps.tools.expand?.(name) ?? [name]))];
+  const declaredTools = (names: string[]): ToolDefinition[] =>
+    names.map((name) => deps.tools.get(name)).filter((tool): tool is ToolDefinition => tool !== undefined);
+  const lazy = agent.lazyTools === true;
+  const toolSearch = lazy
+    ? createToolSearchTool(
+        declaredTools(declaredNames).map(
+          (tool): SearchableTool => ({
+            name: tool.name,
+            description: tool.description,
+            risk: tool.risk,
+            ...((tool as ToolDefinition & { connector?: string }).connector ? { connector: (tool as ToolDefinition & { connector: string }).connector } : {}),
+          }),
+        ),
+      )
+    : undefined;
   const tools = [
-    ...deps.tools.select(agent.tools),
+    ...(lazy ? (toolSearch ? [toolSearch] : []) : deps.tools.select(agent.tools)),
     ...(input.noMeshTools ? [] : (deps.mesh?.toolsFor(agent, input.mesh) ?? [])),
     ...(input.noExtraTools ? [] : (deps.extraTools?.(agent, input) ?? [])),
   ];
+  const loadSearchedTools = (output: string): void => {
+    if (!lazy || !output.includes(TOOL_ACTIVATE_MARK)) return;
+    const raw = output.slice(output.lastIndexOf(TOOL_ACTIVATE_MARK) + TOOL_ACTIVATE_MARK.length).trim();
+    let names: unknown;
+    try {
+      names = JSON.parse(raw);
+    } catch {
+      return;
+    }
+    if (!Array.isArray(names)) return;
+    const allowed = new Set(declaredNames);
+    for (const name of names) {
+      if (typeof name !== 'string' || !allowed.has(name) || tools.some((tool) => tool.name === name)) continue;
+      const tool = deps.tools.get(name);
+      if (tool) tools.push(tool);
+    }
+  };
   const model = await deps.models.languageModel(modelRef);
-  const sdkTools = toSdkTools(tools);
 
   let handoff: { messageId: number; to: string } | undefined;
   const toolContext: ToolContext = {
@@ -264,6 +307,7 @@ export async function* runAgent(deps: AgentLoopDeps, input: RunInput): AsyncGene
     thread,
     agent: agent.name,
     allowedDirs: deps.allowedDirs,
+    ...(deps.projectRoots?.length ? { projectRoots: deps.projectRoots } : {}),
     signal,
     mesh: input.mesh,
     requestHandoff: (request) => {
@@ -358,7 +402,8 @@ export async function* runAgent(deps: AgentLoopDeps, input: RunInput): AsyncGene
         model,
         instructions: prompt.system,
         messages: prompt.messages,
-        tools: sdkTools,
+        // Rebuilt every round so tools loaded by tool_search are offered at once.
+        tools: toSdkTools(tools),
         providerOptions,
         ...modelRef.params,
         abortSignal: signal,
@@ -471,7 +516,20 @@ export async function* runAgent(deps: AgentLoopDeps, input: RunInput): AsyncGene
       for (const call of calls) {
         const rejection = rejected.get(call.id);
         if (rejection === undefined) {
-          results.push(yield* runToolCall(deps, tools, call, toolContext));
+          const definition = tools.find((candidate) => candidate.name === call.name);
+          const toolStartedAt = Date.now();
+          const result = yield* runToolCall(deps, tools, call, toolContext);
+          results.push(result);
+          deps.usage.logToolCall({
+            traceId,
+            agent: agent.name,
+            tool: call.name,
+            risk: definition?.risk ?? 'unknown',
+            ok: result.ok,
+            durationMs: Date.now() - toolStartedAt,
+            ...(result.ok ? {} : { error: result.output }),
+          });
+          loadSearchedTools(result.output);
           continue;
         }
         yield { type: 'tool-call', call, risk: null };
@@ -479,6 +537,15 @@ export async function* runAgent(deps: AgentLoopDeps, input: RunInput): AsyncGene
           type: 'tool-result',
           result: { callId: call.id, name: call.name, ok: false, output: rejection },
         };
+        deps.usage.logToolCall({
+          traceId,
+          agent: agent.name,
+          tool: call.name,
+          risk: 'unknown',
+          ok: false,
+          durationMs: 0,
+          error: rejection,
+        });
       }
       if (results.length > 0) {
         const toolMessage: ModelMessage = {

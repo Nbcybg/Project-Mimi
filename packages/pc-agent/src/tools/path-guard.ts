@@ -10,6 +10,16 @@ export class PathNotAllowedError extends Error {
   }
 }
 
+/** The path is inside an allowed folder but outside every approved project root. */
+export class ProjectNotAllowedError extends Error {
+  constructor(requested: string, projectRoots: string[]) {
+    super(
+      `Path "${requested}" is outside the approved project folders (${projectRoots.join('; ') || 'none'}). Ask the user to add this project in Mimi's settings, or run outside a project.`,
+    );
+    this.name = 'ProjectNotAllowedError';
+  }
+}
+
 /**
  * Resolves symlinks for the part of the path that exists, so a link inside an
  * allowed folder cannot be used to reach outside of it.
@@ -46,6 +56,41 @@ export function resolveAllowedPath(
   const allowed = allowedDirs.some((dir) => isInside(target, realpathDeep(path.resolve(dir))));
   if (!allowed) throw new PathNotAllowedError(requested, allowedDirs);
   return target;
+}
+
+/**
+ * Resolves a folder a shell command may run in. The folder allowlist always applies;
+ * when `projectRoots` were approved the path must also lie inside one of them. Roots
+ * that are not inside the local allowlist are dropped, so the core can narrow the
+ * scope but can never widen it. An empty list keeps the older behaviour (any allowed
+ * folder), which is what a machine without project settings expects.
+ */
+export function resolveProjectPath(
+  requested: string,
+  allowedDirs: string[],
+  projectRoots: string[] | undefined,
+  baseDir: string = allowedDirs[0] ?? process.cwd(),
+): string {
+  const resolved = resolveAllowedPath(requested, allowedDirs, baseDir);
+  if (!projectRoots || projectRoots.length === 0) return resolved;
+  const roots: string[] = [];
+  for (const root of projectRoots) {
+    try {
+      roots.push(resolveAllowedPath(root, allowedDirs));
+    } catch (error) {
+      // A root this machine does not allow is ignored: local folders stay authoritative.
+      if (!(error instanceof PathNotAllowedError)) throw error;
+    }
+  }
+  if (roots.length === 0) {
+    throw new Error(
+      `No approved project folder is inside this computer's allowed folders (${allowedDirs.join('; ') || 'none configured'}). Add the project on this computer, or clear the project folders in Mimi's settings.`,
+    );
+  }
+  if (!roots.some((root) => isInside(resolved, realpathDeep(root)))) {
+    throw new ProjectNotAllowedError(requested, roots);
+  }
+  return resolved;
 }
 
 /**

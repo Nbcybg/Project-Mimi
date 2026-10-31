@@ -6,6 +6,7 @@ import { googleAuthResolver, type GoogleAuth, type GoogleAuthSource } from './au
 
 const GMAIL = 'https://gmail.googleapis.com/gmail/v1/users/me';
 const CALENDAR = 'https://www.googleapis.com/calendar/v3/calendars/primary';
+const PEOPLE = 'https://people.googleapis.com/v1';
 const BODY_LIMIT = 8000;
 
 interface GmailHeader {
@@ -23,6 +24,31 @@ interface GmailMessage {
   snippet?: string;
   payload?: GmailPart;
 }
+interface ContactPerson {
+  resourceName?: string;
+  etag?: string;
+  names?: Array<{ displayName?: string; unstructuredName?: string; givenName?: string; familyName?: string }>;
+  emailAddresses?: Array<{ value?: string }>;
+  phoneNumbers?: Array<{ value?: string }>;
+  organizations?: Array<{ name?: string; title?: string }>;
+  biographies?: Array<{ value?: string; contentType?: string }>;
+}
+
+/** `people/c123` -> a URL path whose slash stays a path separator. */
+const personPath = (resourceName: string) =>
+  resourceName
+    .split('/')
+    .filter(Boolean)
+    .map(encodeURIComponent)
+    .join('/');
+
+const contactLine = (person: ContactPerson): string => {
+  const name = person.names?.[0]?.displayName ?? person.names?.[0]?.unstructuredName ?? '(no name)';
+  const emails = (person.emailAddresses ?? []).map((entry) => entry.value).filter(Boolean).join(', ');
+  const phones = (person.phoneNumbers ?? []).map((entry) => entry.value).filter(Boolean).join(', ');
+  const company = person.organizations?.[0]?.name;
+  return `${person.resourceName ? `[id ${person.resourceName}] ` : ''}${name}${emails ? ` <${emails}>` : ''}${phones ? ` · ${phones}` : ''}${company ? ` · ${company}` : ''}`;
+};
 interface CalendarEvent {
   id: string;
   summary?: string;
@@ -265,7 +291,205 @@ export function createGoogleTools(source: GoogleAuthSource, timezone: TimeZoneSo
     },
   });
 
-  return [gmailSearch, gmailRead, gmailSend, gmailReply, calendarList, calendarCreate];
+  const contactsSearch = defineTool({
+    name: 'contacts_search',
+    description:
+      'Search the user\'s Google Contacts by name, e-mail or phone and return matching names, e-mail addresses and phone numbers. Use this before asking the user to type an address.',
+    risk: 'read',
+    target: 'core',
+    untrustedInput: true,
+    settings: [accountSetting('google')],
+    inputSchema: z.object({
+      query: z.string().optional().describe('Name, e-mail or phone; omit to list recent contacts'),
+      max_results: z.number().int().positive().max(50).optional().describe('Default 10'),
+    }),
+    summarize: (input) => `Search contacts${input.query ? ` for "${input.query}"` : ''}`,
+    async execute(input, _context, settings) {
+      const max = input.max_results ?? 10;
+      const auth = client(settings);
+      const people: ContactPerson[] = [];
+      if (input.query?.trim()) {
+        const found = await auth.request<{ results?: Array<{ person?: ContactPerson }> }>(
+          `${PEOPLE}/people:searchContacts?query=${encodeURIComponent(input.query.trim())}&readMask=names,emailAddresses,phoneNumbers&pageSize=${max}`,
+        );
+        for (const entry of found.results ?? []) if (entry.person) people.push(entry.person);
+      } else {
+        const found = await auth.request<{ connections?: ContactPerson[] }>(
+          `${PEOPLE}/people/me/connections?personFields=names,emailAddresses,phoneNumbers&pageSize=${max}&sortOrder=LAST_MODIFIED_DESCENDING`,
+        );
+        people.push(...(found.connections ?? []));
+      }
+      if (people.length === 0) return 'No contacts match.';
+      return people.slice(0, max).map(contactLine).join('\n');
+    },
+  });
+
+  const contactsCreate = defineTool({
+    name: 'contacts_create',
+    description:
+      'Add a person to the user\'s Google Contacts. Give the name and at least one of e-mail or phone when you know them. Use contacts_search first so the same person is not added twice.',
+    risk: 'write',
+    target: 'core',
+    settings: [accountSetting('google')],
+    inputSchema: z.object({
+      name: z.string().min(1).describe('Display name, e.g. สมชาย ใจดี'),
+      given_name: z.string().optional(),
+      family_name: z.string().optional(),
+      email: z.string().optional(),
+      phone: z.string().optional(),
+      company: z.string().optional(),
+      notes: z.string().optional(),
+    }),
+    summarize: (input) => `Add contact "${input.name}"`,
+    async execute(input, _context, settings) {
+      const name = input.name.trim();
+      if (!name) throw new Error('The contact needs a name.');
+      if (!input.email?.trim() && !input.phone?.trim()) throw new Error('Give an e-mail address or a phone number.');
+      const person = {
+        names: [
+          {
+            unstructuredName: name,
+            ...(input.given_name?.trim() ? { givenName: input.given_name.trim() } : {}),
+            ...(input.family_name?.trim() ? { familyName: input.family_name.trim() } : {}),
+          },
+        ],
+        ...(input.email?.trim() ? { emailAddresses: [{ value: input.email.trim() }] } : {}),
+        ...(input.phone?.trim() ? { phoneNumbers: [{ value: input.phone.trim() }] } : {}),
+        ...(input.company?.trim() ? { organizations: [{ name: input.company.trim() }] } : {}),
+        ...(input.notes?.trim() ? { biographies: [{ value: input.notes.trim(), contentType: 'TEXT_PLAIN' }] } : {}),
+      };
+      const created = await client(settings).request<ContactPerson>(
+        `${PEOPLE}/people:createContact?personFields=names,emailAddresses,phoneNumbers,organizations,biographies`,
+        { method: 'POST', body: person },
+      );
+      return `Added: ${contactLine(created)}`;
+    },
+  });
+
+  const contactsUpdate = defineTool({
+    name: 'contacts_update',
+    description:
+      'Change a Google contact (id from contacts_search). Only the fields you give are changed; an empty email, phone, company or notes clears that field.',
+    risk: 'write',
+    target: 'core',
+    settings: [accountSetting('google')],
+    inputSchema: z.object({
+      id: z.string().min(1).describe('The id from contacts_search, e.g. people/c123'),
+      name: z.string().optional(),
+      given_name: z.string().optional(),
+      family_name: z.string().optional(),
+      email: z.string().optional(),
+      phone: z.string().optional(),
+      company: z.string().optional(),
+      notes: z.string().optional(),
+    }),
+    summarize: (input) => `Update contact ${input.id}${input.name ? ` -> ${input.name}` : ''}`,
+    async execute(input, _context, settings) {
+      const auth = client(settings);
+      const path = personPath(input.id);
+      const person = await auth.request<ContactPerson>(
+        `${PEOPLE}/${path}?personFields=names,emailAddresses,phoneNumbers,organizations,biographies`,
+      );
+      const changed = new Set<string>();
+      if (input.name !== undefined || input.given_name !== undefined || input.family_name !== undefined) {
+        const first = person.names?.[0] ?? {};
+        person.names = [
+          {
+            ...first,
+            ...(input.name !== undefined ? { unstructuredName: input.name } : {}),
+            ...(input.given_name !== undefined ? { givenName: input.given_name } : {}),
+            ...(input.family_name !== undefined ? { familyName: input.family_name } : {}),
+          },
+        ];
+        changed.add('names');
+      }
+      if (input.email !== undefined) {
+        person.emailAddresses = input.email.trim() ? [{ value: input.email.trim() }] : [];
+        changed.add('emailAddresses');
+      }
+      if (input.phone !== undefined) {
+        person.phoneNumbers = input.phone.trim() ? [{ value: input.phone.trim() }] : [];
+        changed.add('phoneNumbers');
+      }
+      if (input.company !== undefined) {
+        person.organizations = input.company.trim() ? [{ name: input.company.trim() }] : [];
+        changed.add('organizations');
+      }
+      if (input.notes !== undefined) {
+        person.biographies = input.notes.trim() ? [{ value: input.notes.trim(), contentType: 'TEXT_PLAIN' }] : [];
+        changed.add('biographies');
+      }
+      if (changed.size === 0) throw new Error('Nothing to change: give a name, e-mail, phone, company or notes.');
+      const updateFields = [...changed].join(',');
+      const updated = await auth.request<ContactPerson>(
+        `${PEOPLE}/${path}:updateContact?updatePersonFields=${encodeURIComponent(updateFields)}&personFields=${encodeURIComponent(updateFields)}`,
+        { method: 'PATCH', body: person },
+      );
+      return `Updated: ${contactLine(updated)}`;
+    },
+  });
+
+  const calendarUpdate = defineTool({
+    name: 'calendar_update',
+    description: `Change an event on the user's primary Google Calendar (id from calendar_list). Only the fields you give are changed; date-times need an offset, in ${timeZoneName(timezone)}.`,
+    risk: 'write',
+    target: 'core',
+    settings: [accountSetting('google')],
+    inputSchema: z.object({
+      id: z.string().min(1),
+      summary: z.string().optional(),
+      start: z.string().optional(),
+      end: z.string().optional(),
+      location: z.string().optional(),
+      description: z.string().optional(),
+    }),
+    summarize: (input) => `Update calendar event ${input.id}${input.summary ? ` "${input.summary}"` : ''}`,
+    async execute(input, _context, settings) {
+      const body: Record<string, unknown> = {};
+      if (input.summary !== undefined) body.summary = input.summary;
+      if (input.location !== undefined) body.location = input.location;
+      if (input.description !== undefined) body.description = input.description;
+      if (input.start !== undefined) body.start = { dateTime: input.start, timeZone: timeZoneName(timezone) };
+      if (input.end !== undefined) body.end = { dateTime: input.end, timeZone: timeZoneName(timezone) };
+      if (Object.keys(body).length === 0) throw new Error('Give at least one field to change.');
+      const event = await client(settings).request<CalendarEvent>(`${CALENDAR}/events/${encodeURIComponent(input.id)}`, {
+        method: 'PATCH',
+        body,
+      });
+      return `Updated: ${eventLine(event)}${event.htmlLink ? `\n${event.htmlLink}` : ''}`;
+    },
+  });
+
+  const calendarDelete = defineTool({
+    name: 'calendar_delete',
+    description: 'Delete an event from the user\'s primary Google Calendar (id from calendar_list).',
+    risk: 'delete',
+    target: 'core',
+    settings: [accountSetting('google')],
+    inputSchema: z.object({
+      id: z.string().min(1),
+      summary: z.string().optional().describe('Title, shown when asking for approval'),
+    }),
+    summarize: (input) => `Delete calendar event${input.summary ? ` "${input.summary}"` : ''}`,
+    async execute(input, _context, settings) {
+      await client(settings).request(`${CALENDAR}/events/${encodeURIComponent(input.id)}`, { method: 'DELETE' });
+      return `Deleted calendar event ${input.id}${input.summary ? ` ("${input.summary}")` : ''}.`;
+    },
+  });
+
+  return [
+    gmailSearch,
+    gmailRead,
+    gmailSend,
+    gmailReply,
+    calendarList,
+    calendarCreate,
+    calendarUpdate,
+    calendarDelete,
+    contactsSearch,
+    contactsCreate,
+    contactsUpdate,
+  ];
 }
 
 /** One mail, as a trigger hands it to a workflow run. */

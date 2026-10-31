@@ -1,6 +1,10 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import { z } from 'zod';
 import { accountOf, accountSetting } from '../oauth/settings.ts';
 import { defineTool, type ToolDefinition } from '../tools/registry.ts';
+import { mimeOf } from '../tools/mime.ts';
+import { allowedPath } from '../workflows/file-nodes.ts';
 import { microsoftAuthResolver, type MicrosoftAuthSource } from './auth.ts';
 
 const TEXT_MIME = /^(text\/|application\/(json|xml|csv|x-ndjson))/;
@@ -119,5 +123,35 @@ export function createDriveTools(source: MicrosoftAuthSource): ToolDefinition<an
     },
   });
 
-  return [onedriveSearch, onedriveList, onedriveRead];
+  const onedriveUpload = defineTool({
+    name: 'onedrive_upload',
+    description:
+      'Upload a file from the allowed folders to OneDrive. `destination` is a path from the OneDrive root ("Documents/report.pdf"); ending it with "/" keeps the local file name. Files up to 50 MB use the simple upload.',
+    risk: 'write',
+    target: 'core',
+    settings: [accountSetting('microsoft')],
+    inputSchema: z.object({
+      path: z.string().min(1).describe('Local file inside the allowed folders'),
+      destination: z.string().min(1).describe('OneDrive path, e.g. "Documents/2026/report.pdf"'),
+      content_type: z.string().optional().describe('MIME type; inferred when omitted'),
+    }),
+    summarize: (input) => `Upload ${input.path} to OneDrive ${input.destination}`,
+    async execute(input, context, settings) {
+      const file = allowedPath(input.path, context.allowedDirs);
+      const stat = await fs.stat(file);
+      if (!stat.isFile()) throw new Error(`"${input.path}" is not a file.`);
+      if (stat.size > 50 * 1024 * 1024) throw new Error('OneDrive simple upload stops at 50 MB.');
+      const localName = path.basename(file);
+      const remote = input.destination.endsWith('/') ? `${input.destination}${localName}` : input.destination;
+      const encoded = remote.split('/').filter(Boolean).map(encodeURIComponent).join('/');
+      const item = await client(settings).request<DriveItem>(`/me/drive/root:/${encoded}:/content`, {
+        method: 'PUT',
+        bodyBytes: await fs.readFile(file),
+        headers: { 'content-type': input.content_type?.trim() || mimeOf(localName) },
+      });
+      return `Uploaded: ${itemLine(item)}${item.webUrl ? `\n${item.webUrl}` : ''}`;
+    },
+  });
+
+  return [onedriveSearch, onedriveList, onedriveRead, onedriveUpload];
 }

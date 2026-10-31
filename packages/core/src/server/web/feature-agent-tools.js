@@ -37,18 +37,18 @@
     { id: 'onedrive', label: 'OneDrive', prefix: 'onedrive_', match: (name) => name.startsWith('onedrive_') },
     { id: 'todo', label: 'To-do', prefix: 'todo_', match: (name) => name.startsWith('todo_') },
     { id: 'memory', label: 'Memory', match: (name) => ['read_memory', 'write_memory', 'delete_memory', 'search_history'].includes(name) },
-    { id: 'media', label: 'Media', match: (name) => ['send_file', 'generate_image', 'generate_video', 'text_to_speech'].includes(name) },
+    { id: 'media', label: 'Media', match: (name) => name.startsWith('media_') || name.startsWith('photo_') || ['send_file', 'generate_image', 'generate_video', 'text_to_speech'].includes(name) },
     {
       id: 'files',
       label: 'Files',
       match: (name) =>
-        ['read_file', 'write_file', 'edit_file', 'list_dir', 'find_files', 'file_info', 'make_dir', 'move_path', 'copy_path', 'delete_path', 'open_path'].includes(name),
+        ['read_file', 'write_file', 'edit_file', 'apply_patch', 'list_dir', 'find_files', 'file_info', 'make_dir', 'move_path', 'copy_path', 'delete_path', 'open_path', 'grep'].includes(name),
     },
     { id: 'browser', label: 'Browser', prefix: 'browser_', match: (name) => name.startsWith('browser_') },
     {
       id: 'system',
       label: 'System',
-      match: (name) => ['run_shell', 'system_info', 'list_processes', 'stop_process', 'power', 'wake_pc'].includes(name),
+      match: (name) => ['run_shell', 'shell_output', 'shell_stop', 'system_info', 'list_processes', 'stop_process', 'power', 'wake_pc', 'git_status', 'git_diff', 'git_log', 'git_commit'].includes(name),
     },
     { id: 'web', label: 'Web', match: (name) => ['web_search', 'map_search', 'youtube_search', 'weather'].includes(name) },
     {

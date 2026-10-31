@@ -33,7 +33,12 @@ function runtimeWith(fetchFn: typeof fetch): ConnectorRuntimeImpl {
   return new ConnectorRuntimeImpl({ registry: new ConnectorRegistry([slackConnector]), auth, fetchFn });
 }
 
-function deps(runtime: ConnectorRuntimeImpl, calls: string[], permissions?: Record<string, 'allow' | 'ask' | 'deny'>): WorkflowRunnerDeps {
+function deps(
+  runtime: ConnectorRuntimeImpl,
+  calls: string[],
+  permissions?: Record<string, 'allow' | 'ask' | 'deny'>,
+  logs?: Array<{ tool: string; ok: boolean; agent: string; risk: string }>,
+): WorkflowRunnerDeps {
   return {
     runAgent: async () => '',
     tool: () => undefined,
@@ -43,6 +48,7 @@ function deps(runtime: ConnectorRuntimeImpl, calls: string[], permissions?: Reco
     state: new WorkflowState(path.join(os.tmpdir(), `mimi-connector-state-${process.pid}-${Math.random().toString(36).slice(2)}.json`)),
     allowedDirs: [],
     ...(permissions ? { permissions } : {}),
+    ...(logs ? { logTool: (record) => logs.push(record) } : {}),
   };
 }
 
@@ -54,6 +60,7 @@ test('connector node: resolves expressions, calls Slack and passes items on', as
   }) as typeof fetch;
 
   const calls: string[] = [];
+  const logs: Array<{ tool: string; ok: boolean; agent: string; risk: string }> = [];
   const run = await runWorkflow(
     flow([
       {
@@ -71,10 +78,14 @@ test('connector node: resolves expressions, calls Slack and passes items on', as
       { id: 'n2', type: 'chat', title: 'แจ้ง', config: { text: '{{ $json.text }}' }, links: { main: [] } },
     ]),
     [{ json: { text: 'hello from workflow' } }],
-    deps(runtimeWith(fetchFn), calls),
+    deps(runtimeWith(fetchFn), calls, undefined, logs),
   );
 
   assert.equal(run.ok, true, run.result);
+  assert.deepEqual(
+    logs.map(({ tool, ok, agent, risk }) => ({ tool, ok, agent, risk })),
+    [{ tool: 'slack_send_message', ok: true, agent: 'mimi', risk: 'write' }],
+  );
   assert.deepEqual(bodies, [{ channel: 'C0123456', text: 'hello from workflow', unfurl_links: false }]);
   assert.deepEqual(calls, ['sent: hello from workflow']);
   assert.deepEqual(run.nodes[0]!.output[0]!.json, {

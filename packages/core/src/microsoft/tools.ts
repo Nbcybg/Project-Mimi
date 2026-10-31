@@ -43,6 +43,18 @@ interface TodoTask {
   dueDateTime?: { dateTime?: string };
   body?: { content?: string };
 }
+interface OutlookContact {
+  id: string;
+  displayName?: string;
+  givenName?: string;
+  surname?: string;
+  emailAddresses?: Array<{ address?: string; name?: string }>;
+  businessPhones?: string[];
+  mobilePhone?: string;
+  companyName?: string;
+  jobTitle?: string;
+  personalNotes?: string;
+}
 
 const who = (recipient: Recipient | undefined) => {
   const address = recipient?.emailAddress;
@@ -69,6 +81,33 @@ function eventLine(event: OutlookEvent): string {
 function taskLine(task: TodoTask): string {
   const due = task.dueDateTime?.dateTime ? ` (due ${task.dueDateTime.dateTime.slice(0, 10)})` : '';
   return `${task.status === 'completed' ? '[x]' : '[ ]'} ${task.title ?? '(untitled)'}${due} [id ${task.id}]`;
+}
+function contactLine(person: OutlookContact): string {
+  const emails = (person.emailAddresses ?? []).map((entry) => entry.address).filter(Boolean).join(', ');
+  const phones = [...(person.businessPhones ?? []), ...(person.mobilePhone ? [person.mobilePhone] : [])].filter(Boolean).join(', ');
+  return `[id ${person.id}] ${person.displayName ?? '(no name)'}${emails ? ` <${emails}>` : ''}${phones ? ` · ${phones}` : ''}${person.companyName ? ` · ${person.companyName}` : ''}`;
+}
+/** The Graph contact body built from what the model gave; empty strings clear a field. */
+function contactBody(input: {
+  name?: string | undefined;
+  given_name?: string | undefined;
+  family_name?: string | undefined;
+  email?: string | undefined;
+  phone?: string | undefined;
+  company?: string | undefined;
+  job_title?: string | undefined;
+  notes?: string | undefined;
+}): Record<string, unknown> {
+  const body: Record<string, unknown> = {};
+  if (input.name !== undefined) body.displayName = input.name;
+  if (input.given_name !== undefined) body.givenName = input.given_name;
+  if (input.family_name !== undefined) body.surname = input.family_name;
+  if (input.email !== undefined) body.emailAddresses = input.email.trim() ? [{ address: input.email.trim() }] : [];
+  if (input.phone !== undefined) body.businessPhones = input.phone.trim() ? [input.phone.trim()] : [];
+  if (input.company !== undefined) body.companyName = input.company;
+  if (input.job_title !== undefined) body.jobTitle = input.job_title;
+  if (input.notes !== undefined) body.personalNotes = input.notes;
+  return body;
 }
 
 /**
@@ -410,6 +449,90 @@ export function createMicrosoftTools(source: MicrosoftAuthSource, timezone: Time
     },
   });
 
+  const outlookContacts = defineTool({
+    name: 'outlook_contacts_search',
+    description:
+      'Search the user\'s Outlook contacts by name, e-mail or company and return names and e-mail addresses. Use this before asking the user to type an address.',
+    risk: 'read',
+    target: 'core',
+    untrustedInput: true,
+    settings: [accountSetting('microsoft')],
+    inputSchema: z.object({
+      query: z.string().optional().describe('Name, e-mail or company; omit to list recent contacts'),
+      max_results: z.number().int().positive().max(50).optional().describe('Default 10'),
+    }),
+    summarize: (input) => `Search Outlook contacts${input.query ? ` for "${input.query}"` : ''}`,
+    async execute(input, _context, settings) {
+      const found = await client(settings).request<{ value?: OutlookContact[] }>(
+        '/me/contacts?$top=200&$select=id,displayName,emailAddresses,businessPhones,mobilePhone,companyName',
+      );
+      const needle = input.query?.trim().toLowerCase();
+      const max = input.max_results ?? 10;
+      const people = (found.value ?? []).filter((person) => {
+        if (!needle) return true;
+        const text = `${person.displayName ?? ''} ${person.companyName ?? ''} ${(person.emailAddresses ?? []).map((entry) => entry.address ?? '').join(' ')}`.toLowerCase();
+        return text.includes(needle);
+      });
+      if (people.length === 0) return 'No contacts match.';
+      return people.slice(0, max).map(contactLine).join('\n');
+    },
+  });
+
+  const outlookContactsCreate = defineTool({
+    name: 'outlook_contacts_create',
+    description:
+      'Add a person to the user\'s Outlook contacts. Give the name and at least one of e-mail or phone when you know them. Use outlook_contacts_search first so the same person is not added twice.',
+    risk: 'write',
+    target: 'core',
+    settings: [accountSetting('microsoft')],
+    inputSchema: z.object({
+      name: z.string().min(1),
+      given_name: z.string().optional(),
+      family_name: z.string().optional(),
+      email: z.string().optional(),
+      phone: z.string().optional(),
+      company: z.string().optional(),
+      job_title: z.string().optional(),
+      notes: z.string().optional(),
+    }),
+    summarize: (input) => `Add Outlook contact "${input.name}"`,
+    async execute(input, _context, settings) {
+      if (!input.email?.trim() && !input.phone?.trim()) throw new Error('Give an e-mail address or a phone number.');
+      const person = await client(settings).request<OutlookContact>('/me/contacts', {
+        method: 'POST',
+        body: contactBody(input),
+      });
+      return `Added: ${contactLine(person)}`;
+    },
+  });
+
+  const outlookContactsUpdate = defineTool({
+    name: 'outlook_contacts_update',
+    description:
+      'Change an Outlook contact (id from outlook_contacts_search). Only the fields you give are changed; an empty e-mail or phone clears that field.',
+    risk: 'write',
+    target: 'core',
+    settings: [accountSetting('microsoft')],
+    inputSchema: z.object({
+      id: z.string().min(1).describe('The id from outlook_contacts_search'),
+      name: z.string().optional(),
+      given_name: z.string().optional(),
+      family_name: z.string().optional(),
+      email: z.string().optional(),
+      phone: z.string().optional(),
+      company: z.string().optional(),
+      job_title: z.string().optional(),
+      notes: z.string().optional(),
+    }),
+    summarize: (input) => `Update Outlook contact ${input.id}${input.name ? ` -> ${input.name}` : ''}`,
+    async execute(input, _context, settings) {
+      const body = contactBody(input);
+      if (Object.keys(body).length === 0) throw new Error('Nothing to change: give a name, e-mail, phone, company, job title or notes.');
+      const person = await client(settings).request<OutlookContact>(`/me/contacts/${id(input.id)}`, { method: 'PATCH', body });
+      return `Updated: ${contactLine(person)}`;
+    },
+  });
+
   return [
     outlookSearch,
     outlookRead,
@@ -424,6 +547,9 @@ export function createMicrosoftTools(source: MicrosoftAuthSource, timezone: Time
     todoCreate,
     todoUpdate,
     todoDelete,
+    outlookContacts,
+    outlookContactsCreate,
+    outlookContactsUpdate,
   ];
 }
 

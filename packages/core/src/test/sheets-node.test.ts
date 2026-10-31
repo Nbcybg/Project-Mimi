@@ -45,7 +45,7 @@ function fakeTool(name: string, risk: 'read' | 'write', calls: Call[]): ToolDefi
   });
 }
 
-function deps(calls: Call[], risk: 'read' | 'write' = 'read'): WorkflowRunnerDeps {
+function deps(calls: Call[], risk: 'read' | 'write' = 'read', logs?: Array<{ tool: string; ok: boolean; agent: string; risk: string }>): WorkflowRunnerDeps {
   return {
     runAgent: async () => '',
     tool: (name) => {
@@ -59,6 +59,7 @@ function deps(calls: Call[], risk: 'read' | 'write' = 'read'): WorkflowRunnerDep
     state: new WorkflowState(path.join(tmp, `state-${Math.random().toString(36).slice(2)}.json`)),
     allowedDirs: [allowed],
     timezone: 'Asia/Bangkok',
+    ...(logs ? { logTool: (record) => logs.push(record) } : {}),
   };
 }
 
@@ -68,6 +69,7 @@ const run = (n: WorkflowNode, d: WorkflowRunnerDeps, items: FlowItem[] = [{ json
 
 test('sheets node: read passes the account and spreadsheet to the base tool', async () => {
   const calls: Call[] = [];
+  const logs: Array<{ tool: string; ok: boolean; agent: string; risk: string }> = [];
   const result = await run(
     node({
       account: 'google-a',
@@ -75,9 +77,13 @@ test('sheets node: read passes the account and spreadsheet to the base tool', as
       operation: 'read',
       range: 'Sheet1!A1:B2',
     }),
-    deps(calls),
+    deps(calls, 'read', logs),
   );
   assert.equal(result.ok, true, result.error);
+  assert.deepEqual(
+    logs.map(({ tool, ok, agent, risk }) => ({ tool, ok, agent, risk })),
+    [{ tool: 'sheets_read', ok: true, agent: 'mimi', risk: 'read' }],
+  );
   assert.deepEqual(calls[0]!.settings, {
     account: 'google-a',
     spreadsheetId: 'https://docs.google.com/spreadsheets/d/abc/edit',

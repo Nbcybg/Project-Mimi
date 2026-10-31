@@ -277,9 +277,14 @@ const DEVELOPER_TASK_TOOLS = [
   'list_dir',
   'file_info',
   'find_files',
+  'grep',
   'read_file',
   'write_file',
   'edit_file',
+  'apply_patch',
+  'git_status',
+  'git_diff',
+  'git_log',
 ];
 
 /** Wires the core services together. Each front end (CLI, WebSocket server) brings its own broker. */
@@ -405,6 +410,12 @@ export async function createCore(
     return normal[0] ?? (names.includes(OVERSEER_NAME) ? OVERSEER_NAME : null);
   };
   const secrets = new SecretStore(config.secretsPath);
+  /** Vault values, so a run history or debug line never stores one in clear text. */
+  const secretValues = (): string[] =>
+    secrets
+      .names()
+      .map((name) => secrets.get(name))
+      .filter((value): value is string => typeof value === 'string' && value.length >= 4);
   // Every OAuth account keeps its own client and refresh token; the old single-account
   // credentials in the environment become an account once, on first start.
   const oauth = new OAuthAccounts({
@@ -570,6 +581,9 @@ export async function createCore(
     secret: (name) => secrets.get(name) ?? process.env[name],
   });
   const toolPool = new ToolPool(tools, toolStore, secrets, mcp, pcRunner);
+  // A quiet health check keeps an unreachable MCP server from looking alive forever.
+  const mcpHealthTimer = setInterval(() => void mcp.healthCheck(), 15 * 60_000);
+  mcpHealthTimer.unref?.();
   const workflows = new WorkflowStore(config.workflowsDir);
   const customNodes = new CustomNodeStore(config.nodesDir);
   /** Old prompts and custom tools, so the Overseer can undo its own writes. */
@@ -668,6 +682,8 @@ export async function createCore(
   const permissionGate = new PermissionGate(broker, {
     timeoutMs: config.permissionTimeoutMs,
     overrides: settings.permission,
+    alwaysLoad: () => options.app?.permissionGrants ?? {},
+    alwaysSave: (grants) => options.app?.setPermissionGrants(grants),
   });
   const tasks = new TaskRepo(db);
   const interruptedTasks = tasks.markInterrupted();
@@ -678,6 +694,13 @@ export async function createCore(
     repo: tasks,
     recipes: createDefaultRecipes(),
     gate: permissionGate,
+    agentPermissions: (name) => {
+      try {
+        return agents.get(name).permissions;
+      } catch {
+        return undefined;
+      }
+    },
     execute: async (toolName, input, context) => {
       const definition = toolPool.get(toolName);
       if (!definition) throw new Error(`Unknown PC tool "${toolName}".`);
@@ -688,6 +711,7 @@ export async function createCore(
         taskId: context.taskId,
         ...(context.signal ? { signal: context.signal } : {}),
         allowedDirs: config.allowedDirs,
+        ...(config.projectRoots.length ? { projectRoots: config.projectRoots } : {}),
       });
     },
     runAgentStep: async (input) => {
@@ -713,7 +737,15 @@ export async function createCore(
     tools: toolPool,
     executor,
     gate: permissionGate,
+    agentPermissions: (name) => {
+      try {
+        return agents.get(name).permissions;
+      } catch {
+        return undefined;
+      }
+    },
     allowedDirs: config.allowedDirs,
+    projectRoots: config.projectRoots,
     timezone: () => config.timezone,
     mesh,
     workingDir: () => (options.pc?.online ? options.pc.allowedDirs[0] : config.allowedDirs[0]),
@@ -768,8 +800,11 @@ export async function createCore(
               triggerPool,
               workflowRuns,
               versions: overseerVersions,
+              toolStats: (days) => usage.toolStats(days),
+              logTool: (record) => usage.logToolCall(record),
               timezone: config.timezone,
               allowedDirs: config.allowedDirs,
+              projectRoots: config.projectRoots,
               runAgentTest: async (agentName, text, maxRounds) => {
                 const target = agents.get(agentName);
                 const traceId = randomUUID();
@@ -813,6 +848,7 @@ export async function createCore(
                   thread: 'overseer-test',
                   agent: OVERSEER_NAME,
                   allowedDirs: config.allowedDirs,
+                  ...(config.projectRoots.length ? { projectRoots: config.projectRoots } : {}),
                   signal,
                 });
               },
@@ -822,6 +858,7 @@ export async function createCore(
                 tools: () => listeners.toolsChanged?.(),
                 skills: () => listeners.skillsChanged?.(),
                 nodes: () => listeners.nodesChanged?.(),
+                workflow: (id) => workflowChanged(id),
               },
             })
           : [];
@@ -844,7 +881,7 @@ export async function createCore(
       };
       const authoring = createWorkflowAuthorTools({
         agent: agent.name,
-        ...(agent.name === OVERSEER_NAME ? { allowTarget: true, runFor: runOwnedWorkflow } : {}),
+        ...(agent.name === OVERSEER_NAME ? { allowTarget: true, runFor: runOwnedWorkflow, versions: overseerVersions } : {}),
         workflows,
         triggerPool,
         hasAgent: (name) => agents.names().includes(name),
@@ -866,9 +903,15 @@ export async function createCore(
             repo: tasks,
             chatIdForThread: (thread) => chats.sessionByThread(thread)?.chatId,
           });
+      // Long work gets a visible checklist and an approvable plan without editing the agent.
+      const workTools = ['plan_set', 'plan_read', 'todo_write', 'todo_read']
+        .filter((name) => !agent.tools.includes(name))
+        .map((name) => toolPool.get(name))
+        .filter((tool): tool is NonNullable<typeof tool> => tool !== undefined);
       return [
         ...taskTools,
         ...overseer,
+        ...workTools,
         ...(own.length > 0 ? [createUseSkillTool(own, runSkill)] : []),
         ...flows,
         ...authoring,
@@ -956,6 +999,9 @@ export async function createCore(
       return decision;
     },
     secret: (name) => secrets.get(name),
+    secretNames: () => secrets.names(),
+    log: (message) => console.log(message),
+    logTool: (record) => usage.logToolCall(record),
     // Approvals and long waits store the run; it finishes later, also after a restart.
     park: (parked) => {
       const id = parkedRuns.add(parked);
@@ -966,6 +1012,13 @@ export async function createCore(
       return id;
     },
     permissions: settings.permission,
+    permissionsFor: (name) => {
+      try {
+        return agents.get(name).permissions;
+      } catch {
+        return undefined;
+      }
+    },
     knowledge,
     attachmentFile: (id) => {
       const file = attachments.get(id);
@@ -1051,6 +1104,7 @@ export async function createCore(
     customNode: (name) => customNodes.get(name),
     state: workflowState,
     allowedDirs: config.allowedDirs,
+    projectRoots: config.projectRoots,
     timezone: () => config.timezone,
     ...(workflowNodeTimeoutMs ? { nodeTimeoutMs: workflowNodeTimeoutMs } : {}),
     ...(workflowRunTimeoutMs ? { runTimeoutMs: workflowRunTimeoutMs } : {}),
@@ -1113,7 +1167,7 @@ export async function createCore(
     const startedAt = new Date();
     const outcome = await runWorkflowNodes(workflow, items, workflowRunner, signal, mode, 0, options);
     // Every top-level run lands in the history, whatever started it.
-    outcome.runId = workflowRuns.record(`${workflow.agent}/${workflow.name}`, mode, startedAt, outcome);
+    outcome.runId = workflowRuns.record(`${workflow.agent}/${workflow.name}`, mode, startedAt, outcome, secretValues());
     if (!outcome.ok) await runErrorWorkflow(workflow, outcome);
     return outcome;
   }
@@ -1264,7 +1318,7 @@ export async function createCore(
         task: (signal) => resumeWorkflow(workflow, parked, outcome, workflowRunner, signal),
       });
       const outcomeRun = await queued.promise;
-      outcomeRun.runId = workflowRuns.record(`${workflow.agent}/${workflow.name}`, `${parked.state.execution.mode} (ต่อ)`, startedAt, outcomeRun);
+      outcomeRun.runId = workflowRuns.record(`${workflow.agent}/${workflow.name}`, `${parked.state.execution.mode} (ต่อ)`, startedAt, outcomeRun, secretValues());
       if (!outcomeRun.ok) await runErrorWorkflow(workflow, outcomeRun);
       return outcomeRun;
     } catch (error) {
@@ -1737,6 +1791,7 @@ export async function createCore(
       scheduler.stop();
       mailWatch.stop();
       workflowQueue.close();
+      clearInterval(mcpHealthTimer);
       await mcp.close();
       closed = true;
       clearInterval(wakeTimer);

@@ -39,6 +39,8 @@ export interface TaskRunnerDeps {
   repo: TaskRepo;
   recipes: RecipeRegistry;
   gate: PermissionGate;
+  /** The task agent's own allow / ask / deny policy, read when a gate is reached. */
+  agentPermissions?(agent: string): Record<string, 'allow' | 'ask' | 'deny'> | undefined;
   execute(tool: string, input: unknown, context: TaskExecutorContext): Promise<string>;
   /** The core supplies this; a recipe step may use it for work that needs a model. */
   runAgentStep?: (input: TaskAgentStepInput) => Promise<string>;
@@ -296,20 +298,34 @@ export class TaskRunner {
       confirm: async (request: TaskConfirmInput): Promise<PermissionDecision> => {
         const permission = this.deps.gate.createRequest({
           traceId: record.traceId,
+          thread: record.thread,
           agent: record.agent,
           tool: request.tool,
           risk: request.risk,
           input: request.input,
           summary: request.summary,
         });
-        const gate: TaskGateView = { id: permission.id, status: 'pending', summary: permission.summary };
+        const modeOptions = {
+          thread: record.thread,
+          agent: record.agent,
+          overrides: this.deps.agentPermissions?.(record.agent) ?? {},
+        };
+        const mode = this.deps.gate.modeFor(request.tool, request.risk, record.traceId, modeOptions);
+        const gate: TaskGateView = { id: permission.id, status: mode === 'deny' ? 'denied' : 'pending', summary: permission.summary };
         record.gates.push(gate);
-        record.status = 'awaiting_confirmation';
-        this.deps.repo.save(record);
-        emit({ type: 'task-update', task: taskView(record) });
-        emit({ type: 'permission-request', request: permission });
-        const decision = await this.deps.gate.decide(permission, controller.signal);
-        emit({ type: 'permission-decision', requestId: permission.id, decision });
+        let decision: PermissionDecision;
+        if (mode === 'auto') {
+          decision = { allow: true, via: 'auto' };
+        } else if (mode === 'deny') {
+          decision = { allow: false, reason: 'denied' };
+        } else {
+          record.status = 'awaiting_confirmation';
+          this.deps.repo.save(record);
+          emit({ type: 'task-update', task: taskView(record) });
+          emit({ type: 'permission-request', request: permission });
+          decision = await this.deps.gate.decide(permission, controller.signal, modeOptions);
+          emit({ type: 'permission-decision', requestId: permission.id, decision });
+        }
         gate.status = decision.allow ? 'approved' : decision.reason === 'timeout' ? 'expired' : 'denied';
         gate.decidedAt = this.now().toISOString();
         record.status = 'running';

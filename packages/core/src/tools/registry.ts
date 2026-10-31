@@ -6,6 +6,10 @@ export { defineTool, type ToolContext, type ToolDefinition } from '@mimi/shared'
 export interface ToolSource {
   get(name: string): ToolDefinition | undefined;
   select(names: string[]): ToolDefinition[];
+  /** Every name an agent file may list (needed for lazy tool search). */
+  names?(): string[];
+  /** `mcp_<server>` -> that server's tools. */
+  expand?(name: string): string[] | undefined;
 }
 
 /** The untrusted-source/shell pair that may not share an agent, if there is one. */

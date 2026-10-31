@@ -5,7 +5,7 @@ import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { callResultText } from '../mcp/client.ts';
+import { callResultText, type JsonRpcMessage, type McpLink } from '../mcp/client.ts';
 import { McpHub, mcpToolName } from '../mcp/hub.ts';
 
 /** A tiny MCP server over stdio: two pages of tools, an echo, an error, and a ping to the client. */
@@ -45,6 +45,41 @@ process.stdin.on('data', (chunk) => {
 
 function tempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'mimi-mcp-'));
+}
+
+/** An in-memory MCP server; `drop()` is what a broken transport looks like to the client. */
+class FakeLink implements McpLink {
+  onMessage: (message: JsonRpcMessage) => void = () => {};
+  onClose: (error?: Error) => void = () => {};
+  calls = 0;
+
+  async send(message: JsonRpcMessage): Promise<void> {
+    if (message.method === 'initialize' || message.method === 'tools/list' || message.method === 'tools/call') this.calls++;
+    if (message.id === undefined) return;
+    const result =
+      message.method === 'initialize'
+        ? { protocolVersion: '2025-06-18', capabilities: {} }
+        : message.method === 'tools/list'
+          ? { tools: [{ name: 'ping', annotations: { readOnlyHint: true } }] }
+          : message.method === 'tools/call'
+            ? { content: [{ type: 'text', text: 'pong' }] }
+            : {};
+    setTimeout(() => this.onMessage({ jsonrpc: '2.0', id: message.id, result }), 0);
+  }
+
+  async close(): Promise<void> {}
+
+  drop(): void {
+    this.onClose(new Error('transport dropped'));
+  }
+}
+
+async function waitFor(check: () => boolean, timeoutMs = 1000): Promise<void> {
+  const started = Date.now();
+  while (!check()) {
+    if (Date.now() - started > timeoutMs) throw new Error('timed out waiting for a reconnect');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
 }
 
 const ctx = { traceId: 't', thread: 'th', agent: 'mimi', allowedDirs: [] };
@@ -119,6 +154,74 @@ test('mcp stdio: a command that does not start is reported, not thrown', async (
   }
 });
 
+test('mcp reconnect: a dropped transport is reopened at once and the tools keep working', async () => {
+  const dir = tempDir();
+  const links: FakeLink[] = [];
+  const hub = new McpHub({
+    configPath: path.join(dir, 'mcp.json'),
+    cachePath: path.join(dir, 'cache.json'),
+    secret: () => undefined,
+    link: () => {
+      const link = new FakeLink();
+      links.push(link);
+      return link;
+    },
+    reconnect: { baseMs: 5, maxMs: 20, maxAttempts: 3 },
+  });
+  try {
+    hub.save({ name: 'mock', enabled: true, transport: 'http', url: 'http://mock.invalid/mcp' });
+    const view = await hub.refresh('mock');
+    assert.equal(view.error, undefined);
+    assert.equal(links.length, 1);
+    assert.equal(await hub.get('mcp_mock_ping')!.execute({}, ctx), 'pong');
+
+    links[0]!.drop();
+    await waitFor(() => links.length >= 2 && hub.views()[0]?.error === undefined);
+    assert.equal(await hub.get('mcp_mock_ping')!.execute({}, ctx), 'pong');
+
+    await hub.close();
+    const count = links.length;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.equal(links.length, count, 'a closed hub does not reconnect');
+  } finally {
+    await hub.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('mcp reconnect: retries stop after maxAttempts', async () => {
+  const dir = tempDir();
+  let links = 0;
+  const hub = new McpHub({
+    configPath: path.join(dir, 'mcp.json'),
+    cachePath: path.join(dir, 'cache.json'),
+    secret: () => undefined,
+    link: () => {
+      links++;
+      return {
+        onMessage: () => {},
+        onClose: () => {},
+        async send() {
+          throw new Error('server is down');
+        },
+        async close() {},
+      };
+    },
+    reconnect: { baseMs: 1, maxMs: 2, maxAttempts: 2 },
+  });
+  try {
+    hub.save({ name: 'down', enabled: true, transport: 'http', url: 'http://down.invalid/mcp' });
+    const view = await hub.refresh('down');
+    assert.match(view.error ?? '', /server is down/);
+    await waitFor(() => links >= 3);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(links, 3, 'the first try and two retries');
+  } finally {
+    await hub.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('mcp http: session header kept, answers as JSON or as an SSE stream, headers from the vault', async () => {
   const seen: Array<{ method?: string; session?: string; auth?: string; version?: string }> = [];
   const server = http.createServer((req, res) => {
@@ -159,6 +262,51 @@ test('mcp http: session header kept, answers as JSON or as an SSE stream, header
     assert.ok(seen.slice(1).every((entry) => entry.session === 'sess-9' && entry.version === '2025-06-18'));
     assert.ok(seen.every((entry) => entry.auth === 'Bearer k1'));
     assert.throws(() => hub.save({ name: 'nourl', enabled: true, transport: 'http', url: 'ftp://x' }), /URL/);
+  } finally {
+    await hub.close();
+    server.closeAllConnections();
+    server.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('mcp sse: the old HTTP+SSE transport receives the endpoint and answers on the stream', async () => {
+  let stream: import('node:http').ServerResponse | undefined;
+  const seen: string[] = [];
+  const server = http.createServer((req, res) => {
+    if (req.method === 'GET') {
+      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
+      res.write('event: endpoint\ndata: /messages?session=abc\n\n');
+      stream = res;
+      req.on('close', () => {
+        if (stream === res) stream = undefined;
+      });
+      return;
+    }
+    let body = '';
+    req.on('data', (chunk) => (body += chunk));
+    req.on('end', () => {
+      const message = JSON.parse(body) as { id?: number; method?: string; params?: { name?: string; arguments?: { text?: string } } };
+      seen.push(String(message.method));
+      res.writeHead(202).end();
+      if (message.id === undefined || !stream) return;
+      const reply = (result: unknown) => stream!.write(`event: message\ndata: ${JSON.stringify({ jsonrpc: '2.0', id: message.id, result })}\n\n`);
+      if (message.method === 'initialize') reply({ protocolVersion: '2025-06-18', capabilities: {} });
+      else if (message.method === 'tools/list') reply({ tools: [{ name: 'shout', inputSchema: { type: 'object', properties: { text: { type: 'string' } } } }] });
+      else if (message.method === 'tools/call') reply({ content: [{ type: 'text', text: String(message.params?.arguments?.text).toUpperCase() }] });
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const dir = tempDir();
+  const hub = new McpHub({ configPath: path.join(dir, 'mcp.json'), cachePath: path.join(dir, 'cache.json'), secret: () => undefined });
+  try {
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/sse`;
+    hub.save({ name: 'legacy', enabled: true, transport: 'sse', url });
+    const view = await hub.refresh('legacy');
+    assert.equal(view.error, undefined);
+    assert.equal(typeof view.latencyMs, 'number');
+    assert.equal(await hub.get('mcp_legacy_shout')!.execute({ text: 'hi' }, ctx), 'HI');
+    assert.deepEqual(seen.filter((method) => method !== 'notifications/initialized'), ['initialize', 'tools/list', 'tools/call']);
   } finally {
     await hub.close();
     server.closeAllConnections();

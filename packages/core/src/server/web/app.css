@@ -364,6 +364,12 @@ html[data-mode="mobile"] #input { font-size: max(16px, var(--chat-fs)); }
 .check input { margin-top: 3px; accent-color: var(--accent); }
 .check small { grid-column: 2; color: var(--muted); font-size: 11.5px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .check .mono { font-size: 12.5px; }
+.perm-matrix { display: grid; gap: 4px; max-height: 280px; overflow-y: auto; margin: 6px 0 4px; padding: 8px; border: 1px solid var(--line-soft); border-radius: 10px; background: var(--panel); }
+.perm-filter { position: sticky; top: -8px; z-index: 1; min-width: 0; border: 1px solid var(--line); background: var(--bg); border-radius: 8px; padding: 6px 10px; font-size: 12.5px; outline: 0; }
+.perm-filter:focus { border-color: rgba(var(--accent-rgb),.6); }
+.perm-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+.perm-row .perm-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--ink); }
+.perm-row select { min-width: 96px; }
 .toolgrid { margin: 8px 0 4px; }
 .toolgrid-bar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; margin-bottom: 10px; }
 .toolgrid-search { grid-column: 1 / -1; min-width: 0; border: 1px solid var(--line); background: var(--bg); border-radius: 8px; padding: 6px 10px; font-size: 12.5px; outline: 0; }

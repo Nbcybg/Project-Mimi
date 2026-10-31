@@ -6,6 +6,8 @@ export interface WorkflowValidationContext {
   hasTool(name: string): boolean;
   hasTrigger(pool: string): boolean;
   workflowNames(agent: string): string[];
+  /** Custom nodes saved under user/nodes (for `custom:<name>` and the plugin node). */
+  hasCustomNode?(name: string): boolean;
 }
 
 const isDynamic = (value: unknown): boolean => typeof value === 'string' && value.includes('{{');
@@ -13,7 +15,7 @@ const isDynamic = (value: unknown): boolean => typeof value === 'string' && valu
 /** One node may only name agents, tools and workflows that exist (expressions are checked at run time). */
 export function validateWorkflowNode(node: WorkflowNode, agent: string, context: WorkflowValidationContext): void {
   const where = `node "${node.id}"`;
-  if (node.type === 'agent' && !isDynamic(node.config.agent) && !context.hasAgent(String(node.config.agent ?? ''))) {
+  if ((node.type === 'agent' || node.type === 'agent_call') && !isDynamic(node.config.agent) && !context.hasAgent(String(node.config.agent ?? ''))) {
     throw new Error(`${where}: agent "${String(node.config.agent ?? '')}" does not exist.`);
   }
   if ((node.type === 'chat' || node.type === 'approval' || node.type === 'tool') && node.config.agent && !isDynamic(node.config.agent) && !context.hasAgent(String(node.config.agent))) {
@@ -24,6 +26,13 @@ export function validateWorkflowNode(node: WorkflowNode, agent: string, context:
   }
   if ((node.type === 'workflow' || node.type === 'loop') && !isDynamic(node.config.workflow) && !context.workflowNames(agent).includes(String(node.config.workflow ?? ''))) {
     throw new Error(`${where}: unknown workflow "${String(node.config.workflow ?? '')}".`);
+  }
+  if (node.type.startsWith('custom:')) {
+    const name = node.type.slice('custom:'.length);
+    if (!context.hasCustomNode?.(name)) throw new Error(`${where}: unknown custom node "${name}".`);
+  }
+  if (node.type === 'plugin' && node.config.plugin && !isDynamic(node.config.plugin) && !context.hasCustomNode?.(String(node.config.plugin))) {
+    throw new Error(`${where}: unknown custom node "${String(node.config.plugin)}".`);
   }
 }
 

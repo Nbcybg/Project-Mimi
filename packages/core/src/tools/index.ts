@@ -4,6 +4,7 @@ import type { ChatStore } from '../chat/chat-store.ts';
 import { createSessionTools } from '../chat/session-tools.ts';
 import type { MemoStore, StatusStore } from '../chat/state-store.ts';
 import { createStateTools } from '../chat/state-tools.ts';
+import { createPlanTools, createTodoTools } from '../chat/plan-tools.ts';
 import type { MessagesRepo } from '../db/messages-repo.ts';
 import type { KnowledgeStore } from '../knowledge/store.ts';
 import { createKnowledgeTools } from '../knowledge/tools.ts';
@@ -79,6 +80,8 @@ export function createToolRegistry(services: ToolServices): ToolRegistry {
     ),
     ...createSessionTools(services.chats, services.messages),
     ...createStateTools(services.status, services.memos),
+    ...createTodoTools(services.memos),
+    ...createPlanTools(services.memos),
     ...createTriggerTools(services.triggers, services.agents, services.timezone),
     ...createGoogleTools(services.googleFor ?? services.google, services.timezone),
     ...createSheetTools(services.googleFor ?? services.google),

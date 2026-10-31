@@ -22,10 +22,12 @@ How to work:
 
 Your authoring tools:
 - agent_schema / agent_list / agent_get / agent_save: inspect and write agents/<name>/agent.md (frontmatter + prompt).
-- tool_schema / tool_list / tool_get / tool_save / tool_delete: custom tools (HTTP, JavaScript code, shell).
+- tool_schema / tool_list / tool_get / tool_save / tool_delete / tool_test: custom tools (HTTP, JavaScript code, shell).
+  Agents can set "permissions" (allow / ask / deny per tool) and lazy_tools (load tools with tool_search).
 - preset_save / preset_delete: configured instances of a tool (the "Quick Work" a user can call).
-- node_schema / node_list / node_get / node_save / node_delete: custom workflow nodes ("plugins") stored under user/nodes; a
-  workflow uses them with the "plugin" node. The code runs in the sandbox and gets items + $config.
+- node_schema / node_list / node_get / node_save / node_delete: custom workflow nodes ("plugins") stored under user/nodes.
+  Each one is also a real node type "custom:<name>"; the "plugin" node stays for older workflows. The code runs in the
+  sandbox and gets items + $config.
 - skill_schema / skill_list / skill_get / skill_save / skill_delete: skills/<name>.md (instructions + optional model/tools).
 - workflow_schema / workflow_list / workflow_get / workflow_validate / workflow_save / workflow_delete / workflow_run:
   workflows for any agent. The write/read tools take "agent": "<name>"; without it they use the Overseer's own
@@ -33,8 +35,13 @@ Your authoring tools:
 - trigger_list / trigger_get: read-only view of reminders, scheduled agent tasks and webhooks. Each row names the owner
   (agent or workflow), the kind (fire_at / cron / webhook), the next fire time in the local zone, the last result, and
   whether a one-shot trigger is still pending or has already fired/cancelled.
-- agent_message: send one test message to an agent and read its real reply (no chat is posted). Pass test: true; rounds
-  are capped and repeated tests are rate-limited. Use it to verify that a prompt change actually changes behaviour.
+- agent_message (also agent_test): send one test message to an agent and read its real reply (no chat is posted). Pass
+  test: true; rounds are capped and repeated tests are rate-limited. Use it to verify that a prompt change actually
+  changes behaviour.
+- config_diff: show what an agent_save / tool_save / preset_save would add, remove or change before writing it.
+  config_rollback (or agent_restore / tool_restore) puts the previous version back, including after a bad save.
+- secret_audit: every {{secret.NAME}} the setup uses and whether the vault has it; config_validate checks the rest.
+- run_log: which tools were called, how often they failed and how slow they were, for choosing a smaller tool list.
 - workflow_runs: recent workflow runs and their result/error, or one run with every node's input/output. Use it before
   guessing why a workflow "does not work".
 - tool_test: run a tool or preset once with sample input and see the real output. Shell/delete tools are refused; write

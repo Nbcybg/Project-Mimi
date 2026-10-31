@@ -95,6 +95,53 @@ test('a grant never overrides an explicit deny', () => {
   assert.equal(gate.modeFor('organize_files', 'write', 'trace'), 'deny');
 });
 
+test('an agent policy beats the risk default: run_shell allowed, delete_path asks', () => {
+  const gate = new PermissionGate(new FakeBroker(true));
+  const policy = { run_shell: 'allow', delete_path: 'ask' } as const;
+
+  assert.equal(gate.modeFor('run_shell', 'shell', 'trace', { overrides: policy }), 'auto');
+  assert.equal(gate.modeFor('delete_path', 'delete', 'trace', { overrides: policy }), 'ask');
+  assert.equal(gate.modeFor('write_file', 'write', 'trace', { overrides: policy }), 'ask', 'unlisted tools keep the global policy');
+});
+
+test('session grants cover one thread; forever grants are persisted', () => {
+  let saved: Record<string, string[]> = {};
+  const gate = new PermissionGate(new FakeBroker(true), {
+    alwaysLoad: () => saved,
+    alwaysSave: (grants) => {
+      saved = grants;
+    },
+  });
+
+  assert.equal(gate.grant('trace', 'run_shell', { scope: 'session', thread: 'thread-1' }), true);
+  assert.equal(gate.modeFor('run_shell', 'shell', 'other', { thread: 'thread-1' }), 'auto');
+  assert.equal(gate.modeFor('run_shell', 'shell', 'other', { thread: 'thread-2' }), 'ask');
+  assert.equal(gate.modeFor('run_shell', 'shell', 'other'), 'ask');
+
+  assert.equal(gate.grant('trace', 'delete_path', { scope: 'always', agent: 'mimi' }), true);
+  assert.equal(gate.modeFor('delete_path', 'delete', 'other', { agent: 'mimi' }), 'auto');
+  assert.deepEqual(saved, { mimi: ['delete_path'] });
+  assert.equal(gate.revokeAlways('delete_path', 'mimi'), true);
+  assert.deepEqual(saved, {});
+});
+
+test('a forever grant only covers the agent it was approved for', () => {
+  const gate = new PermissionGate(new FakeBroker(true));
+  assert.equal(gate.grant('trace', 'delete_path', { scope: 'always', agent: 'mimi' }), true);
+  assert.equal(gate.modeFor('delete_path', 'delete', 'other', { agent: 'mimi' }), 'auto');
+  assert.equal(gate.modeFor('delete_path', 'delete', 'other', { agent: 'tim' }), 'ask');
+  assert.deepEqual(gate.alwaysGrantsByAgent(), { mimi: ['delete_path'] });
+  assert.equal(gate.revokeAlways('delete_path'), true, 'without an agent it is removed everywhere');
+  assert.deepEqual(gate.alwaysGrantsByAgent(), {});
+});
+
+test('old global forever grants still cover every agent', () => {
+  const gate = new PermissionGate(new FakeBroker(true), { alwaysLoad: () => ({ '*': ['run_shell'] }) });
+  assert.equal(gate.modeFor('run_shell', 'shell', 'other', { agent: 'mimi' }), 'auto');
+  assert.equal(gate.modeFor('run_shell', 'shell', 'other', { agent: 'tim' }), 'auto');
+  assert.deepEqual(gate.alwaysAllowed(), ['run_shell']);
+});
+
 test('stopping the caller withdraws the permission prompt', async () => {
   let aborted = false;
   const broker: PermissionBroker = {

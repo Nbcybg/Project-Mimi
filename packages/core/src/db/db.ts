@@ -28,6 +28,7 @@ const MIGRATIONS = [
   '020-attachment-expiry.sql',
   '021-notification-agent.sql',
   '022-tasks.sql',
+  '023-tool-calls.sql',
 ];
 
 function migrate(db: Db): void {

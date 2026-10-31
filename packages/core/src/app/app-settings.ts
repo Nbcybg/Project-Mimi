@@ -1,4 +1,4 @@
-import type { PreferencesView } from '@mimi/shared';
+import { type PreferencesView, toolFamily } from '@mimi/shared';
 import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -38,6 +38,8 @@ interface StoredSettings {
   /** The model pool: named presets (model + sampling settings) that agents and skills refer to by name. */
   presets: Record<string, ModelPreset>;
   allowedDirs: string[];
+  /** Approved project roots for shell commands; always inside allowedDirs. */
+  projectRoots: string[];
   /**
    * How much disk the user allows, in bytes: chat media (expires), the user's own media
    * (pictures and models kept until deleted) and chat text.
@@ -50,6 +52,25 @@ interface StoredSettings {
   preferences: PreferencesView;
   /** Screen settings every device of the user shares (character position, sounds, …), key → value. */
   ui: Record<string, string>;
+  /**
+   * Tool families the user chose "always allow" for, per agent; machine-local like the
+   * approvals themselves. `*` holds old, pre-agent grants that cover every agent.
+   */
+  permissionGrants: Record<string, string[]>;
+}
+
+/** Old settings stored one flat list; keep those as `*` (every agent). */
+function readPermissionGrants(value: unknown): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  const add = (agent: unknown, families: unknown) => {
+    if (!Array.isArray(families)) return;
+    const key = String(agent || '*');
+    const clean = [...new Set(families.map((family) => toolFamily(String(family))).filter(Boolean))].sort();
+    if (clean.length > 0) out[key] = clean;
+  };
+  if (Array.isArray(value)) add('*', value);
+  else if (value && typeof value === 'object') for (const [agent, families] of Object.entries(value)) add(agent, families);
+  return out;
 }
 
 export interface SessionPolicy {
@@ -127,6 +148,7 @@ export class AppSettings {
       defaults: { ...stored.defaults },
       presets: { ...stored.presets },
       allowedDirs: Array.isArray(stored.allowedDirs) ? stored.allowedDirs.map(String) : [],
+      projectRoots: Array.isArray(stored.projectRoots) ? stored.projectRoots.map(String) : [],
       storage: {
         mediaQuotaBytes: savedQuotaBytes(stored.storage?.mediaQuotaBytes, DEFAULT_MEDIA_QUOTA_MB),
         userMediaQuotaBytes: savedQuotaBytes(stored.storage?.userMediaQuotaBytes, DEFAULT_USER_MEDIA_QUOTA_MB),
@@ -136,6 +158,7 @@ export class AppSettings {
       timezone: cleanTimeZone(stored.timezone),
       preferences: { ...stored.preferences },
       ui: stored.ui && typeof stored.ui === 'object' ? { ...stored.ui } : {},
+      permissionGrants: readPermissionGrants(stored.permissionGrants),
     });
     if (stored.token !== settings.data.token) settings.save();
     return settings;
@@ -156,6 +179,10 @@ export class AppSettings {
 
   get allowedDirs(): string[] {
     return this.data.allowedDirs;
+  }
+
+  get projectRoots(): string[] {
+    return this.data.projectRoots;
   }
 
   get session(): SessionPolicy {
@@ -201,6 +228,16 @@ export class AppSettings {
 
   get providers(): Record<string, ConnectedProvider> {
     return this.data.providers;
+  }
+
+  /** Forever-allowed tool families per agent, used by the permission gate when it starts. */
+  get permissionGrants(): Record<string, string[]> {
+    return Object.fromEntries(Object.entries(this.data.permissionGrants).map(([agent, families]) => [agent, [...families]]));
+  }
+
+  setPermissionGrants(grants: Record<string, string[]>): void {
+    this.data.permissionGrants = readPermissionGrants(grants);
+    this.save();
   }
 
   get preferences(): PreferencesView {
@@ -289,6 +326,7 @@ export class AppSettings {
       if (value) env[name] = value;
     }
     if (this.data.allowedDirs.length > 0) env.ALLOWED_DIRS = this.data.allowedDirs.join(';');
+    if (this.data.projectRoots.length > 0) env.MIMI_PROJECT_ROOTS = this.data.projectRoots.join(';');
   }
 
   /** Stores keys; an empty value removes one. Unknown names are ignored. */
@@ -320,6 +358,11 @@ export class AppSettings {
 
   setAllowedDirs(dirs: string[]): void {
     this.data.allowedDirs = dirs.map((dir) => String(dir).trim()).filter(Boolean);
+    this.save();
+  }
+
+  setProjectRoots(dirs: string[]): void {
+    this.data.projectRoots = dirs.map((dir) => String(dir).trim()).filter(Boolean);
     this.save();
   }
 }

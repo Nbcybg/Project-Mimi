@@ -824,9 +824,11 @@
       node,
       finish(ok, output) {
         status.className = `s ${ok ? 'ok' : 'bad'}`;
-        status.textContent = ok ? '✓ เสร็จ' : '✗ ไม่สำเร็จ';
-        body = el('div', 'b', String(output).slice(0, 4000));
-        body.hidden = ok;
+        status.textContent = ok ? '�o" �1?�,��,��1؅,^' : '�o- �1,�,��1^�,��,3�1?�,��1؅,^';
+        // Plans and checklists are meant to stay visible while the work runs.
+        const visible = ['todo_write', 'todo_read', 'plan_set', 'plan_read'].includes(name);
+        body = el('div', `b${visible ? ' checklist' : ''}`, String(output).slice(0, 4000));
+        body.hidden = ok && !visible;
         node.append(body);
       },
     };
@@ -1240,13 +1242,15 @@
     card.append(details);
     const answer = (allow, scope) => send({ type: 'permission-response', requestId: request.id, allow, ...(scope ? { scope } : {}) });
     const allowTask = button('btn pri', 'อนุญาตทั้งงานนี้', () => answer(true, 'task'));
-    const allowOnce = button('btn', 'อนุญาตครั้งนี้', () => answer(true, 'once'));
+    const allowOnce = button('btn', 'ครั้งนี้', () => answer(true, 'once'));
+    const allowSession = button('btn', 'ทั้ง session', () => answer(true, 'session'));
+    const allowAlways = button('btn', 'ตลอดไป', () => answer(true, 'always'));
     const deny = button('btn', 'ปฏิเสธ', () => answer(false));
     const verdict = el('span', 'muted');
     const row = el('div', 'btns');
-    row.append(allowTask, allowOnce, deny, verdict);
+    row.append(allowTask, allowOnce, allowSession, allowAlways, deny, verdict);
     card.append(row);
-    cards.set(request.id, { allowTask, allowOnce, deny, verdict });
+    cards.set(request.id, { allowTask, allowOnce, allowSession, allowAlways, deny, verdict });
     if (live) {
       const stick = pinned();
       live.body.append(card);
@@ -1259,7 +1263,7 @@
     state.pendingPerms.delete(requestId);
     const card = cards.get(requestId);
     if (!card) return;
-    card.allowTask.disabled = card.allowOnce.disabled = card.deny.disabled = true;
+    card.allowTask.disabled = card.allowOnce.disabled = card.allowSession.disabled = card.allowAlways.disabled = card.deny.disabled = true;
     card.verdict.textContent = decision.allow ? 'อนุญาตแล้ว' : `ไม่อนุญาต (${decision.reason})`;
   }
 
@@ -3120,6 +3124,45 @@
     const toolGrid = toolHook ? toolHook.render(toolBox, () => name.value.trim(), agent ? agent.tools : []) : null;
     const tools = toolGrid ? null : checkList(toolItems(), agent ? agent.tools : [], describeTool);
     form.append(toolGrid ? toolBox : tools);
+    form.append(el('h4', '', 'Agent permissions'));
+    form.append(el('p', 'hint', 'Per tool or preset: default follows the risk policy. "allow" never asks, "ask" always asks, "deny" always refuses.'));
+    const permissionRows = new Map();
+    const permissionCells = new Map();
+    const toolsForPolicy = () => (toolGrid ? toolGrid.names() : picked(tools));
+    const policyNames = new Set([...(agent ? Object.keys(agent.permissions || {}) : []), ...toolsForPolicy()]);
+    const matrix = el('div', 'perm-matrix');
+    if (policyNames.size > 0) {
+      const filter = el('input', 'perm-filter');
+      filter.placeholder = 'Filter tools';
+      filter.oninput = () => {
+        const query = filter.value.trim().toLowerCase();
+        for (const [tool, row] of permissionCells) row.hidden = Boolean(query) && !tool.toLowerCase().includes(query);
+      };
+      matrix.append(filter);
+    }
+    for (const tool of [...policyNames].sort()) {
+      const row = el('div', 'perm-row');
+      row.append(el('span', 'perm-name mono', tool));
+      const select = el('select');
+      for (const [value, label] of [['', 'default'], ['allow', 'allow'], ['ask', 'ask'], ['deny', 'deny']]) {
+        const option = el('option', '', label);
+        option.value = value;
+        select.append(option);
+      }
+      select.value = (agent && agent.permissions && agent.permissions[tool]) || '';
+      row.append(select);
+      matrix.append(row);
+      permissionRows.set(tool, select);
+      permissionCells.set(tool, row);
+    }
+    if (permissionRows.size === 0) matrix.append(el('p', 'hint', 'Pick tools above; their policy appears here.'));
+    form.append(matrix);
+    const lazyLabel = el('label', 'hstack');
+    const lazyTools = el('input');
+    lazyTools.type = 'checkbox';
+    lazyTools.checked = Boolean(agent && agent.lazyTools);
+    lazyLabel.append(lazyTools, el('span', '', 'Lazy tools: send only tool_search and load a tool when the model asks for it (for large tool lists)'));
+    form.append(lazyLabel);
     form.append(el('h4', '', 'ส่งงานต่อให้ agent ไหนได้บ้าง (นอกแชตกลุ่ม)'));
     const peers = checkList(state.agents.filter((entry) => entry.name !== ui.agent), agent ? agent.canMessage : [], (entry) => entry.description);
     form.append(peers);
@@ -3165,6 +3208,10 @@
         const charHook = window.MimiHooks && window.MimiHooks.character;
         const character = (charHook && charHook.form && charHook.form()) || {};
         if (toolGrid) toolGrid.persist();
+        const permissionPolicy = {};
+        for (const [tool, select] of permissionRows) {
+          if (select.value === 'allow' || select.value === 'ask' || select.value === 'deny') permissionPolicy[tool] = select.value;
+        }
         send({
           type: 'agent-save',
           renameFrom: agent ? agent.name : undefined,
@@ -3176,6 +3223,8 @@
             systemPrompt: systemPrompt.value,
             models: chosen,
             tools: toolGrid ? toolGrid.names() : picked(tools),
+            lazyTools: lazyTools.checked,
+            permissions: permissionPolicy,
             skills: picked(skills),
             canMessage: picked(peers),
             budgets: { maxRounds: Number(rounds.value) || 12, maxTokens: Number(tokens.value) || 200000 },
@@ -3844,6 +3893,27 @@
       dirs.value = view.allowedDirs.join('\n');
       dirs.dataset.initial = dirs.value;
       general.append(dirs);
+      general.append(
+        el('h4', '', 'โฟลเดอร์โปรเจกต์ที่อนุญาตให้รันคำสั่ง'),
+        el('p', 'hint', 'เว้นว่าง = รันคำสั่งได้ทุกโฟลเดอร์ที่อนุญาตด้านบน · แต่ละบรรทัดต้องอยู่ในโฟลเดอร์ที่อนุญาต และบนเครื่องที่ใช้ PC agent โฟลเดอร์นั้นต้องอยู่ในรายการที่อนุญาตของเครื่องด้วย'),
+      );
+      const projectRoots = el('textarea');
+      projectRoots.value = (view.projectRoots || []).join('\n');
+      projectRoots.dataset.initial = projectRoots.value;
+      general.append(projectRoots);
+      const grantsByAgent = view.permissionAgentGrants || ((view.permissionGrants || []).length > 0 ? { '*': view.permissionGrants } : {});
+      if (Object.keys(grantsByAgent).length > 0) {
+        general.append(el('h4', '', 'Always allowed tools'));
+        general.append(el('p', 'hint', 'Tool families approved with the "Always" button on a permission card, per agent. Remove one to start asking again.'));
+        for (const [agent, families] of Object.entries(grantsByAgent)) {
+          general.append(el('p', 'hint', agent === '*' ? 'Every agent (older grants)' : `Agent: ${agent}`));
+          const rows = el('div', 'btns');
+          for (const tool of families) {
+            rows.append(button('btn ghost', `${tool} ×`, () => send({ type: 'permission-revoke', tool, ...(agent === '*' ? {} : { agent }) })));
+          }
+          general.append(rows);
+        }
+      }
       // Google and Microsoft sign-ins live in one place: Hub → บัญชี (several accounts, each with its own client).
       const googleKeys = [];
       const accountsRow = el('div', 'btns');
@@ -3878,6 +3948,7 @@
         if (Object.keys(session).length) change.session = session;
         if (zoneField.value.trim() !== view.timezone) change.timezone = zoneField.value.trim();
         if (dirs.value !== dirs.dataset.initial) change.allowedDirs = dirs.value.split('\n').map((line) => line.trim()).filter(Boolean);
+        if (projectRoots.value !== projectRoots.dataset.initial) change.projectRoots = projectRoots.value.split('\n').map((line) => line.trim()).filter(Boolean);
         if (Object.keys(change).length === 1) return;
         flash('กำลังบันทึก…');
         send(change);

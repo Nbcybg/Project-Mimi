@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { z } from 'zod';
 import { isTriggerNodeType, type ConnectorRuntime, type FlowItem, type JsonValue, type Operator, type WorkflowNode, type WorkflowNodeTestResult, type WorkflowNodeTrace, type WorkflowResponse, type WorkflowRunNodeView, type WorkflowRunResult, type WorkflowView } from '@mimi/shared';
 import type { ToolContext, ToolDefinition } from '../tools/registry.ts';
 import { type Ask, askJson, attributesOf, categoriesOf, classifyText, extractFields } from './ai-nodes.ts';
@@ -10,7 +11,7 @@ import type { ApprovalDecision } from './approvals.ts';
 import { DEFAULT_TOKEN_SECRET, sendTelegram } from './telegram.ts';
 import { sandbox } from './sandbox.ts';
 import { safeFetch, type Lookup } from './net-guard.ts';
-import { redactText } from './redact.ts';
+import { redactItems, redactText } from './redact.ts';
 import { readXlsx, sheetItems } from './xlsx.ts';
 import fsp from 'node:fs/promises';
 import { addTo, type DateUnit, diffIn, formatDate, parseDate, startOf } from './datetime.ts';
@@ -55,8 +56,8 @@ export interface WorkflowRunnerDeps {
   runAgent(agentName: string, prompt: string, thread: string, signal?: AbortSignal): Promise<string>;
   /** A tool or preset from the pool, by name. */
   tool(name: string): ToolDefinition | undefined;
-  /** A custom node made by the user / the AI Overseer (the `plugin` node). */
-  customNode?(name: string): { code: string; timeoutMs?: number } | undefined;
+  /** A custom node made by the user / the AI Overseer (the `plugin` node and `custom:<name>`). */
+  customNode?(name: string): { code: string; timeoutMs?: number; outputs?: string[] } | undefined;
   /** Native connector operations (the `connector` node); missing means the node is unavailable. */
   connector?: Pick<ConnectorRuntime, 'get' | 'execute'>;
   /** Posts a message into an agent's chat with the user. */
@@ -77,6 +78,8 @@ export interface WorkflowRunnerDeps {
   };
   state: WorkflowState;
   allowedDirs: string[];
+  /** Approved project roots for shell commands; empty means any allowed folder. */
+  projectRoots?: string[];
   /** For `$today`; defaults to the machine's zone. */
   timezone?: TimeZoneSource;
   /** Runs another workflow of the same agent (the `workflow` node). */
@@ -87,10 +90,14 @@ export interface WorkflowRunnerDeps {
   complete?(request: ModelRequest): Promise<string>;
   /** Posts a question into an agent's chat and waits for the user's answer (the approval node). */
   requestApproval?(request: { workflow: string; agent: string; text: string; timeoutMs: number; signal?: AbortSignal }): Promise<ApprovalDecision>;
-  /** A secret from the app's vault (Telegram bot token). */
+  /** A secret from the app's vault (Telegram bot token, and `$secret.NAME` in every node). */
   secret?(name: string): string | undefined;
+  /** Names of the vault entries, so expressions can expose `$secret.NAME` to every node. */
+  secretNames?(): string[];
   /** Per-tool overrides from the settings file (`permission` block): allow / ask / deny. */
   permissions?: Record<string, 'allow' | 'ask' | 'deny'>;
+  /** The owning agent's own policy, read at node time; it wins over the global map. */
+  permissionsFor?(agent: string): Record<string, 'allow' | 'ask' | 'deny'> | undefined;
   /** DNS for the local-network guard of HTTP calls; tests that bring their own fetch skip the guard. */
   lookup?: Lookup;
   /** Telegram Bot API base URL (tests point it elsewhere). */
@@ -106,6 +113,10 @@ export interface WorkflowRunnerDeps {
   nodeTimeoutMs?: number;
   /** Default per-run deadline in milliseconds; unset means no deadline. */
   runTimeoutMs?: number;
+  /** Where a debug node writes its items (defaults to console.log). */
+  log?(message: string): void;
+  /** Records a tool call made by a workflow node, for the Overseer's run_log. */
+  logTool?(record: { traceId: string; agent: string; tool: string; risk: string; ok: boolean; durationMs: number; error?: string }): void;
 }
 
 export interface ModelRequest {
@@ -175,6 +186,22 @@ export function unwrapItems(value: unknown): FlowItem[] {
   return normalizeItems(value);
 }
 
+/** Custom nodes with several outputs route each item by its `$output` key. */
+function customOutputs(result: unknown, outputs: string[] | undefined): Record<string, FlowItem[]> {
+  const items = unwrapItems(result);
+  const names = (outputs ?? []).filter((name) => /^[a-zA-Z][a-zA-Z0-9_]*$/.test(name));
+  if (names.length <= 1) return { main: items };
+  const grouped: Record<string, FlowItem[]> = Object.fromEntries(names.map((name) => [name, []]));
+  for (const item of items) {
+    const key = typeof item.json.$output === 'string' && names.includes(item.json.$output) ? item.json.$output : 'main';
+    const json = { ...item.json };
+    delete json.$output;
+    (grouped[key] ??= []).push({ json });
+  }
+  if (!grouped.main && items.length > 0) grouped.main = [];
+  return grouped;
+}
+
 /** Anything JSON-shaped becomes items the way n8n does: arrays split, values wrap. */
 export function normalizeItems(value: unknown): FlowItem[] {
   if (Array.isArray(value)) {
@@ -202,6 +229,8 @@ interface NodeContext {
   /** Items routed to each node, per source node — what the merge node joins. */
   incoming: Record<string, Record<string, FlowItem[]>>;
   vars: Record<string, JsonValue>;
+  /** Vault values for `$secret.NAME`; never written to the run history. */
+  secrets: Record<string, JsonValue>;
   today: string;
   /** How many sub-workflows deep this run is. */
   depth: number;
@@ -295,9 +324,57 @@ function todayIn(timezone: TimeZoneSource | undefined): string {
 }
 
 /** Everything an expression may reference in this run. */
+/** Runs one tool call and records it for run_log, whatever the outcome. */
+async function loggedToolCall<T>(
+  ctx: NodeContext,
+  agent: string,
+  tool: string,
+  risk: string,
+  work: () => Promise<T>,
+): Promise<T> {
+  const started = Date.now();
+  try {
+    const value = await work();
+    ctx.deps.logTool?.({ traceId: `workflow:${ctx.thread}`, agent, tool, risk, ok: true, durationMs: Date.now() - started });
+    return value;
+  } catch (error) {
+    ctx.deps.logTool?.({
+      traceId: `workflow:${ctx.thread}`,
+      agent,
+      tool,
+      risk,
+      ok: false,
+      durationMs: Date.now() - started,
+      error: (error as Error).message,
+    });
+    throw error;
+  }
+}
+
+/** A tool's policy for one agent: the agent's own map wins over the global settings map. */
+function policyFor(deps: WorkflowRunnerDeps, agent: string, tool: string): 'allow' | 'ask' | 'deny' | undefined {
+  return deps.permissionsFor?.(agent)?.[tool] ?? deps.permissions?.[tool];
+}
+
+/** Every vault value, as `$secret.NAME`; empty names are left out. */
+function secretsOf(deps: WorkflowRunnerDeps): Record<string, JsonValue> {
+  const out: Record<string, JsonValue> = {};
+  for (const name of deps.secretNames?.() ?? []) {
+    const value = deps.secret?.(name);
+    if (value !== undefined && value !== '') out[name] = value;
+  }
+  return out;
+}
+
+/** The literal vault values worth replacing on sight (short ones would hit normal words). */
+function secretValuesOf(deps: WorkflowRunnerDeps): string[] {
+  return Object.values(secretsOf(deps)).filter((value): value is string => typeof value === 'string' && value.length >= 4);
+}
+
 function contextAt(ctx: NodeContext, item: FlowItem, index: number, items: FlowItem[]): ExpressionContext {
   return contextFor(item, index, items, {
     $vars: ctx.vars,
+    $secret: ctx.secrets,
     $node: ctx.outputs,
     $workflow: { name: ctx.workflow.name, title: ctx.workflow.title, agent: ctx.workflow.agent },
     $execution: ctx.execution,
@@ -448,10 +525,36 @@ async function runHttp(config: Record<string, JsonValue>, item: FlowItem, index:
 
 async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeContext): Promise<Record<string, FlowItem[]>> {
   const { deps, workflow } = ctx;
+  // A first-class custom node (`custom:<name>`) runs its sandbox code with the node's config.
+  if (node.type.startsWith('custom:')) {
+    const name = node.type.slice('custom:'.length);
+    const spec = deps.customNode?.(name);
+    if (!spec) throw new Error(`custom node: unknown node "${name}" (look in user/nodes)`);
+    const resolved = (await resolveValue(node.config, contextAt(ctx, items[0] ?? { json: {} }, 0, items))) as Record<string, JsonValue>;
+    const nested = resolved.config;
+    const pluginConfig: Record<string, JsonValue> = {
+      ...resolved,
+      ...(nested && typeof nested === 'object' && !Array.isArray(nested) ? (nested as Record<string, JsonValue>) : {}),
+    };
+    delete pluginConfig.config;
+    let result: JsonValue | undefined;
+    try {
+      ({ value: result } = await sandbox().runNode(spec.code, items.map((item) => item.json), {
+        ...(ctx.signal ? { signal: ctx.signal } : {}),
+        ...(spec.timeoutMs ? { timeoutMs: spec.timeoutMs } : {}),
+        config: pluginConfig,
+      }));
+    } catch (error) {
+      throw new Error(`custom node "${name}": ${(error as Error).message}`);
+    }
+    if (result === undefined) return { main: items };
+    return customOutputs(result, spec.outputs);
+  }
   // A trigger node only marks where the run began; its items already came from triggerItems().
   if (isTriggerNodeType(node.type)) return { main: items };
   switch (node.type) {
-    case 'agent': {
+    case 'agent':
+    case 'agent_call': {
       const first = firstOrEmpty(items);
       const config = (await resolveValue(node.config, contextAt(ctx, first, 0, items))) as { agent?: JsonValue; instruction?: JsonValue };
       const agentName = asText(config.agent) || workflow.agent;
@@ -631,7 +734,7 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
       // The same locked-down process as expressions: no files, no programs, no keys (see sandbox.ts).
       let result: JsonValue | undefined;
       try {
-        ({ value: result } = await sandbox().runNode(code, items.map((item) => item.json), { signal: ctx.signal }));
+        ({ value: result } = await sandbox().runNode(code, items.map((item) => item.json), { signal: ctx.signal, secret: ctx.secrets }));
       } catch (error) {
         throw new Error(`code node: ${(error as Error).message}`);
       }
@@ -661,7 +764,7 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
         throw new Error(`plugin "${name}": ${(error as Error).message}`);
       }
       if (result === undefined) return { main: items };
-      return { main: unwrapItems(result) };
+      return customOutputs(result, spec.outputs);
     }
     case 'tool': {
       const out: FlowItem[] = [];
@@ -671,9 +774,10 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
         const tool = deps.tool(toolName);
         if (!tool) throw new Error(`tool node: unknown tool "${toolName}"`);
         // Unattended runs cannot ask: anything beyond reading needs the node's own consent
-        // (or an "allow" for the tool in the settings file). A "deny" there always wins.
-        const policy = deps.permissions?.[toolName];
-        if (policy === 'deny') throw new Error(`tool node: "${toolName}" is denied in the settings file`);
+        // (or an "allow" for the tool, global or this agent's). A "deny" always wins.
+        const agentName = asText(config.agent) || workflow.agent;
+        const policy = policyFor(deps, agentName, toolName);
+        if (policy === 'deny') throw new Error(`tool node: "${toolName}" is denied by the permission settings`);
         if (tool.risk !== 'read' && policy !== 'allow' && node.config.allow !== true) {
           throw new Error(`tool node: "${toolName}" can change things (${tool.risk}); tick "อนุญาตให้ทำงานนี้" on the node to let the workflow run it`);
         }
@@ -684,12 +788,89 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
           thread: ctx.thread,
           agent: asText(config.agent) || workflow.agent,
           allowedDirs: deps.allowedDirs,
+          ...(deps.projectRoots?.length ? { projectRoots: deps.projectRoots } : {}),
           signal: ctx.signal,
         };
-        const text = await tool.execute(parsed.data, context, {});
+        const text = await loggedToolCall(ctx, context.agent, toolName, tool.risk, () => tool.execute(parsed.data, context, {}));
         out.push({ json: { ...item.json, text } });
       }
       return { main: out };
+    }
+    case 'mcp': {
+      const out: FlowItem[] = [];
+      for (const [index, item] of items.entries()) {
+        const config = (await resolveValue(node.config, contextAt(ctx, item, index, items))) as { tool?: JsonValue; input?: JsonValue };
+        const toolName = asText(config.tool).trim();
+        if (!toolName.startsWith('mcp_')) throw new Error('mcp node: choose an MCP tool (mcp_<server>_<tool>)');
+        const tool = deps.tool(toolName);
+        if (!tool) throw new Error(`mcp node: unknown tool "${toolName}" (refresh that MCP server on the Tools screen)`);
+        const policy = policyFor(deps, workflow.agent, toolName);
+        if (policy === 'deny') throw new Error(`mcp node: "${toolName}" is denied by the permission settings`);
+        if (tool.risk !== 'read' && policy !== 'allow' && node.config.allow !== true) {
+          throw new Error(`mcp node: "${toolName}" can change things (${tool.risk}); tick "allow" on the node to let the workflow run it`);
+        }
+        const parsed = tool.inputSchema.safeParse(config.input ?? {});
+        if (!parsed.success) throw new Error(`mcp node "${toolName}": ${z.prettifyError(parsed.error)}`);
+        const text = await loggedToolCall(ctx, workflow.agent, toolName, tool.risk, () =>
+          tool.execute(parsed.data, {
+            traceId: `workflow:${ctx.thread}`,
+            thread: ctx.thread,
+            agent: workflow.agent,
+            allowedDirs: deps.allowedDirs,
+            ...(deps.projectRoots?.length ? { projectRoots: deps.projectRoots } : {}),
+            signal: ctx.signal,
+          }),
+        );
+        out.push({ json: { ...item.json, text } });
+      }
+      return { main: out };
+    }
+    case 'assert': {
+      const failed: string[] = [];
+      for (const [index, item] of items.entries()) {
+        const config = (await resolveValue(node.config, contextAt(ctx, item, index, items))) as Record<string, JsonValue>;
+        if (!passesConditions(conditionsOf(config), asText(config.combinator || 'and'))) {
+          const message = asText(config.message).trim();
+          failed.push(`item ${index + 1}${message ? `: ${message}` : ''}`);
+        }
+      }
+      if (failed.length > 0) throw new Error(`assert node: ${failed.slice(0, 10).join('; ')}${failed.length > 10 ? ` (+${failed.length - 10} more)` : ''}`);
+      return { main: items };
+    }
+    case 'debug': {
+      const config = (await resolveValue(node.config, contextAt(ctx, items[0] ?? { json: {} }, 0, items))) as { label?: JsonValue; maxItems?: JsonValue };
+      const label = asText(config.label).trim() || node.title?.trim() || node.id;
+      const max = Math.max(1, Math.min(200, Number(config.maxItems) || 20));
+      const log = deps.log ?? ((message: string) => console.log(message));
+      const shown = redactItems(items.slice(0, max), secretValuesOf(deps)).map((item) => item.json);
+      log(`[workflow debug] ${workflow.agent}/${workflow.name} · ${label} · ${items.length} item(s)\n${JSON.stringify(shown, null, 2)}${items.length > max ? `\n[${items.length - max} more items]` : ''}`);
+      return { main: items };
+    }
+    case 'json_schema': {
+      let schema = (node.config.schema ?? {}) as JsonValue;
+      if (typeof schema === 'string') {
+        try {
+          schema = JSON.parse(schema) as JsonValue;
+        } catch (error) {
+          throw new Error(`json_schema node: the schema is not valid JSON: ${(error as Error).message}`);
+        }
+      }
+      let validator: z.ZodType<unknown>;
+      try {
+        validator = z.fromJSONSchema(schema as Parameters<typeof z.fromJSONSchema>[0]);
+      } catch (error) {
+        throw new Error(`json_schema node: unsupported JSON Schema: ${(error as Error).message}`);
+      }
+      const valid: FlowItem[] = [];
+      const invalid: FlowItem[] = [];
+      for (const [index, item] of items.entries()) {
+        const config = (await resolveValue(node.config, contextAt(ctx, item, index, items))) as { field?: JsonValue; name?: JsonValue };
+        const target = config.field ?? item.json;
+        const parsed = validator.safeParse(target);
+        if (parsed.success) valid.push({ json: { ...item.json, ...(asText(config.name).trim() ? { [asText(config.name).trim()]: parsed.data as JsonValue } : {}) } });
+        else invalid.push({ json: { ...item.json, _error: z.prettifyError(parsed.error) } });
+      }
+      return { invalid, main: valid };
     }
     case 'connector': {
       if (!deps.connector) throw new Error('connector node: no connector runtime is configured');
@@ -720,8 +901,8 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
         // A workflow runs unattended: anything beyond reading needs the node's own
         // consent (or an "allow" for the tool in the settings file). A "deny" always wins.
         const toolName = `${connectorKey}_${operationKey}`;
-        const policy = deps.permissions?.[toolName];
-        if (policy === 'deny') throw new Error(`connector node: "${toolName}" is denied in the settings file`);
+        const policy = policyFor(deps, workflow.agent, toolName);
+        if (policy === 'deny') throw new Error(`connector node: "${toolName}" is denied by the permission settings`);
         if (operation.risk !== 'read' && policy !== 'allow' && node.config.allow !== true) {
           throw new Error(`connector node: "${toolName}" can change things (${operation.risk}); tick "อนุญาตให้ทำงานนี้" on the node to let the workflow run it`);
         }
@@ -739,16 +920,18 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
           ...(version || connector.version ? { connectorVersion: version ?? connector.version } : {}),
           requestId: `${ctx.execution.id}:${node.id}`,
         };
-        const result = await deps.connector.execute({
-          connector: connectorKey,
-          operation: operationKey,
-          input: (rawInput ?? {}) as Record<string, unknown>,
-          agent: workflow.agent,
-          ...(account ? { account } : {}),
-          ...(version ? { version } : {}),
-          ...(idempotencyKey ? { idempotencyKey } : {}),
-          ...(ctx.signal ? { signal: ctx.signal } : {}),
-        });
+        const result = await loggedToolCall(ctx, workflow.agent, toolName, operation.risk, () =>
+          deps.connector!.execute({
+            connector: connectorKey,
+            operation: operationKey,
+            input: (rawInput ?? {}) as Record<string, unknown>,
+            agent: workflow.agent,
+            ...(account ? { account } : {}),
+            ...(version ? { version } : {}),
+            ...(idempotencyKey ? { idempotencyKey } : {}),
+            ...(ctx.signal ? { signal: ctx.signal } : {}),
+          }),
+        );
         ctx.trace = {
           ...ctx.trace,
           ...(result.version ? { connectorVersion: result.version } : {}),
@@ -1241,8 +1424,8 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
         if (!tool) throw new Error(`sheets node: tool "${toolName}" is not available`);
         // Same rule as the tool node: reading is free, writing needs the node's own consent
         // (or an "allow" in the settings file). A "deny" there always wins.
-        const policy = deps.permissions?.[toolName];
-        if (policy === 'deny') throw new Error(`sheets node: "${toolName}" is denied in the settings file`);
+        const policy = policyFor(deps, workflow.agent, toolName);
+        if (policy === 'deny') throw new Error(`sheets node: "${toolName}" is denied by the permission settings`);
         if (tool.risk !== 'read' && policy !== 'allow' && node.config.allow !== true) {
           throw new Error(`sheets node: "${operation}" changes the spreadsheet (${tool.risk}); tick "อนุญาตให้ทำงานนี้" on the node to let the workflow run it`);
         }
@@ -1253,10 +1436,11 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
           thread: ctx.thread,
           agent: workflow.agent,
           allowedDirs: deps.allowedDirs,
+          ...(deps.projectRoots?.length ? { projectRoots: deps.projectRoots } : {}),
           signal: ctx.signal,
         };
         const settings = { account: asText(config.account).trim() || undefined, spreadsheetId };
-        const text = await tool.execute(parsed.data, context, settings);
+        const text = await loggedToolCall(ctx, workflow.agent, toolName, tool.risk, () => tool.execute(parsed.data, context, settings));
         out.push({ json: { ...item.json, text } });
       }
       return { main: out };
@@ -1360,6 +1544,7 @@ function contextFrom(workflow: WorkflowView, state: RunState, deps: WorkflowRunn
     trigger: state.trigger,
     incoming: state.incoming,
     vars: workflow.vars ?? {},
+    secrets: secretsOf(deps),
     today: todayIn(deps.timezone),
     depth: state.depth,
     suspendable: Boolean(deps.park) && state.depth === 0,
@@ -1390,8 +1575,9 @@ function settle(state: RunState, node: WorkflowNode, outputs: Record<string, Flo
   }
 }
 
-function resultOf(workflow: WorkflowView, state: RunState, suspended?: WorkflowRunResult['suspended']): WorkflowRunResult {
+function resultOf(workflow: WorkflowView, state: RunState, deps: WorkflowRunnerDeps, suspended?: WorkflowRunResult['suspended']): WorkflowRunResult {
   const views = state.views;
+  const known = secretValuesOf(deps);
   if (suspended) {
     return {
       name: workflow.name,
@@ -1404,12 +1590,12 @@ function resultOf(workflow: WorkflowView, state: RunState, suspended?: WorkflowR
   }
   const last = views.findLast((view) => view.status === 'ok' && view.output.length > 0) ?? views.at(-1);
   const finalItem = last?.output[0]?.json ?? {};
-  const result = redactText(finalItem.text !== undefined ? asText(finalItem.text) : asText(finalItem));
+  const result = redactText(finalItem.text !== undefined ? asText(finalItem.text) : asText(finalItem), known);
   const error = state.runError ?? views.find((view) => view.status === 'error')?.error;
   return {
     name: workflow.name,
     ok: !state.failed,
-    result: error ? `error: ${error}` : `${last?.title ?? ''}: ${result}`.trim().slice(0, 500),
+    result: error ? `error: ${redactText(error, known)}` : `${last?.title ?? ''}: ${result}`.trim().slice(0, 500),
     ...(state.response ? { response: state.response } : {}),
     nodes: views,
   };
@@ -1424,6 +1610,7 @@ async function drive(
   limits: { nodeTimeoutMs?: number; timedOut?: () => string | undefined } = {},
 ): Promise<WorkflowRunResult> {
   const context = contextFrom(workflow, state, deps, signal);
+  const known = secretValuesOf(deps);
   const nodes = workflow.nodes;
   const startIds = new Set(state.startIds);
   while (state.queue.length > 0 && state.views.length < MAX_NODES) {
@@ -1501,7 +1688,7 @@ async function drive(
           state.response = context.response;
           const parked: ParkedRun = { workflow: { agent: workflow.agent, name: workflow.name }, nodeId: id, input, wait: caught.wait, state };
           const parkedId = deps.park(parked);
-          return resultOf(workflow, state, { id: parkedId, nodeId: id, kind: caught.wait.kind, ...(caught.wait.kind === 'wait' ? { resumeAt: caught.wait.resumeAt } : {}) });
+          return resultOf(workflow, state, deps, { id: parkedId, nodeId: id, kind: caught.wait.kind, ...(caught.wait.kind === 'wait' ? { resumeAt: caught.wait.resumeAt } : {}) });
         }
         if (caught instanceof NodeTimeoutError) {
           error = caught.message;
@@ -1512,7 +1699,7 @@ async function drive(
           state.failed = true;
           break;
         }
-        error = redactText((caught as Error).message);
+        error = redactText((caught as Error).message, known);
         const code = errorCodeOf(caught);
         if (code) context.trace = { ...context.trace, errorCode: code };
         if (attempt < attempts - 1 && Number(node.retryWaitMs ?? 0) > 0) {
@@ -1537,7 +1724,7 @@ async function drive(
       // Stop ends the run here: no other branch may continue.
       view.status = stop.failed ? 'error' : 'ok';
       if (stop.failed) {
-        view.error = redactText(stop.message);
+        view.error = redactText(stop.message, known);
         state.failed = true;
       }
       view.output = input;
@@ -1568,7 +1755,7 @@ async function drive(
     state.runError ??= limits.timedOut();
   }
   state.response = context.response ?? state.response;
-  return resultOf(workflow, state);
+  return resultOf(workflow, state, deps);
 }
 
 interface RunLimits {
@@ -1691,7 +1878,7 @@ export async function resumeWorkflow(
   if (!node) {
     state.failed = true;
     if (at >= 0) state.views[at] = { ...state.views[at]!, status: 'error', error: 'the node was removed while the run was paused' };
-    return resultOf(workflow, state);
+    return resultOf(workflow, state, deps);
   }
   let outputs: Record<string, FlowItem[]>;
   if (outcome.kind === 'approval') {
@@ -1726,6 +1913,7 @@ export async function resumeWorkflow(
   const config = (workflow.trigger.config ?? {}) as Record<string, JsonValue>;
   const empty = contextFor({ json: {} }, 0, [], {
     $vars: workflow.vars ?? {},
+    $secret: secretsOf(deps),
     $workflow: { name: workflow.name, title: workflow.title, agent: workflow.agent },
     $today: todayIn(deps.timezone),
     $execution: { id: randomUUID(), mode: entry.kind },
@@ -1837,6 +2025,7 @@ export async function runWorkflowNode(
     trigger: { json: input[0]?.json ?? {}, items: input.map((item) => item.json) },
     incoming: {},
     vars: workflow.vars ?? {},
+    secrets: secretsOf(deps),
     today: todayIn(deps.timezone),
     depth: 0,
   };

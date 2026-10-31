@@ -42,6 +42,10 @@ test('overseer: reads triggers, tests a tool and sees the one-shot state', async
     const tested = JSON.parse(await run('tool_test', { name: 'read_file', input: { path: 'hello.txt' } }));
     assert.equal(tested.ok, true);
     assert.match(tested.output, /hello from the workspace/);
+    const logged = core.db.prepare(`SELECT tool, agent, risk, ok FROM tool_calls WHERE tool = 'read_file' ORDER BY id DESC LIMIT 1`).get() as
+      | { tool: string; agent: string; risk: string; ok: number }
+      | undefined;
+    assert.deepEqual(logged, { tool: 'read_file', agent: OVERSEER_NAME, risk: 'read', ok: 1 });
   } finally {
     await testCore.cleanup();
   }
@@ -146,6 +150,48 @@ test('overseer: agent and tool history can be restored', async () => {
     assert.ok(toolHistory.versions.length >= 1);
     await run('tool_restore', { name: 'probe', version: toolHistory.versions[0].id });
     assert.equal(core.tools.customSpecs().find((spec) => spec.name === 'probe')?.description, 'first');
+  } finally {
+    await testCore.cleanup();
+  }
+});
+
+test('overseer: skill, preset and workflow versions diff and roll back', async () => {
+  const testCore = await makeTestCore();
+  try {
+    const { core, config } = testCore;
+    const overseer = ensureOverseer(config.agentsDir);
+    const tools = core.deps.extraTools?.(overseer, { agent: overseer }) ?? [];
+    const run = async (name: string, input: unknown) => {
+      const tool = tools.find((entry) => entry.name === name) as ToolDefinition<any> | undefined;
+      assert.ok(tool, `tool ${name}`);
+      return tool.execute(input, context);
+    };
+
+    await run('skill_save', { skill: { name: 'roll-skill', description: 'first', body: 'BODY ONE' } });
+    await run('skill_save', { skill: { name: 'roll-skill', description: 'second', body: 'BODY TWO' } });
+    const diff = JSON.parse(await run('config_diff', { kind: 'skill', name: 'roll-skill', next: { body: 'BODY THREE' } }));
+    assert.ok(diff.changed.some((entry: { key: string }) => entry.key === 'body'));
+    await run('config_rollback', { kind: 'skill', name: 'roll-skill' });
+    assert.equal(core.skills().find((skill) => skill.name === 'roll-skill')?.description, 'first');
+
+    await run('tool_save', {
+      tool: { name: 'roll-base', description: 'base', kind: 'code', params: [], settings: [], config: { code: 'return "ok";' } },
+    });
+    await run('preset_save', { preset: { name: 'roll-preset', tool: 'roll-base', label: 'first', settings: {} } });
+    await run('preset_save', { preset: { name: 'roll-preset', tool: 'roll-base', label: 'second', settings: {} } });
+    await run('config_rollback', { kind: 'preset', name: 'roll-preset' });
+    assert.equal(core.tools.presetViews().find((preset) => preset.name === 'roll-preset')?.label, 'first');
+
+    const workflow = (title: string) => ({
+      name: 'roll-flow',
+      title,
+      trigger: { pool: 'manual', config: {} },
+      nodes: [{ id: 'mark', type: 'set', config: { fields: { ok: true } }, links: { main: [] } }],
+    });
+    await run('workflow_save', { workflow: workflow('First title'), agent: 'tim' });
+    await run('workflow_save', { workflow: workflow('Second title'), agent: 'tim' });
+    await run('config_rollback', { kind: 'workflow', name: 'tim/roll-flow' });
+    assert.equal(core.workflows.get('tim', 'roll-flow')?.title, 'First title');
   } finally {
     await testCore.cleanup();
   }

@@ -10,8 +10,8 @@ const skipTests = (src) =>
  * (node_modules/@mimi/pc-agent/src/main.ts) could not start at all.
  *
  * Copy the PC agent and @mimi/shared outside node_modules, then rewrite the PC
- * agent's bare `@mimi/shared` imports to the copied source. Everything else (zod)
- * is already plain JavaScript under node_modules.
+ * agent's bare `@mimi/shared` imports to the copied source. Everything else (zod,
+ * pdf-lib) is already plain JavaScript under node_modules.
  */
 export function packPcAgent(root, app) {
   for (const pkg of ['shared', 'pc-agent']) {
@@ -42,4 +42,20 @@ export function packPcAgent(root, app) {
     }
   };
   rewrite(path.join(app, 'pc-agent', 'src'));
+}
+
+/** The outside packages the copied PC agent imports at run time (zod and pdf-lib). */
+export const PC_AGENT_PACKAGES = ['zod', 'pdf-lib', 'pako', 'tslib', '@pdf-lib/standard-fonts', '@pdf-lib/upng'];
+
+/** Copies those packages beside the app, where the copied PC agent finds them. */
+export function copyPcAgentPackages(root, app) {
+  const modules = path.join(app, 'node_modules');
+  fs.mkdirSync(modules, { recursive: true });
+  for (const name of PC_AGENT_PACKAGES) {
+    const from = path.join(root, 'node_modules', ...name.split('/'));
+    const to = path.join(modules, ...name.split('/'));
+    fs.rmSync(to, { recursive: true, force: true });
+    fs.mkdirSync(path.dirname(to), { recursive: true });
+    fs.cpSync(from, to, { recursive: true });
+  }
 }

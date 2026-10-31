@@ -31,7 +31,7 @@ if (command === 'test') {
   const servers = hub.views();
   if (servers.length === 0) console.log(`No MCP servers yet. Add one on the Tools screen (or in ${path.join(config.toolsDir, 'mcp', 'servers.json')}).`);
   for (const server of servers) {
-    const where = server.transport === 'http' ? server.url : [server.command, ...(server.args ?? [])].join(' ');
+    const where = server.transport === 'http' || server.transport === 'sse' ? server.url : [server.command, ...(server.args ?? [])].join(' ');
     const state = !server.enabled ? 'off' : server.error ? `error: ${server.error}` : `${server.tools.length} tools`;
     console.log(`${server.name}  (${server.transport})  ${where}  — ${state}`);
   }

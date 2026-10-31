@@ -325,6 +325,10 @@ export interface AgentView {
   systemPrompt: string;
   models: ModelChoice;
   tools: string[];
+  /** Load tools on demand with tool_search instead of sending every schema up front. */
+  lazyTools?: boolean;
+  /** Per-agent permission policy: tool name -> allow / ask / deny. */
+  permissions?: Record<string, 'allow' | 'ask' | 'deny'>;
   /** Agents this one may message. */
   canMessage: string[];
   budgets: { maxRounds: number; maxTokens: number };
@@ -496,6 +500,8 @@ export interface SettingsView {
   /** How many agents exist. */
   agents: number;
   allowedDirs: string[];
+  /** Narrower roots that shell commands may run in; empty means any allowed folder. */
+  projectRoots: string[];
   google: { hasClient: boolean; connected: boolean };
   /** Outlook mail, calendar and To Do: `hasClient` once the Azure app's client ID is saved. */
   microsoft: { hasClient: boolean; connected: boolean; hasSecret?: boolean };
@@ -511,6 +517,10 @@ export interface SettingsView {
   /** Spending limit and notification choices, plus what was spent today. */
   preferences: PreferencesView;
   spentTodayUsd: number;
+  /** Tool families allowed forever with the permission card's "Always" button (old global list). */
+  permissionGrants: string[];
+  /** Forever grants per agent (`*` is the old, global list). */
+  permissionAgentGrants: Record<string, string[]>;
   /** Disk use and the user's quotas for chat media and chat text. */
   storage: StorageView;
   /** Which API keys of the web tools are set (never the keys themselves). */
@@ -551,6 +561,8 @@ export interface SettingsChange {
   /** Default model per capability; an empty string clears one. */
   defaults?: ModelChoice;
   allowedDirs?: string[];
+  /** Approved project roots for shell commands; must lie inside `allowedDirs`. */
+  projectRoots?: string[];
   /** Quotas in megabytes; 0 restores the default. */
   storage?: { mediaQuotaMb?: number; userMediaQuotaMb?: number; chatQuotaMb?: number };
   /** Session rollover: minutes of silence, and tokens of conversation (0 = no limit). */
@@ -590,6 +602,8 @@ export type ClientMessage =
   /** Keepalive, answered with `pong`; the client reconnects when no answer comes. */
   | { type: 'ping' }
   | { type: 'permission-response'; requestId: string; allow: boolean; scope?: PermissionScope }
+  /** Forgets a forever "always allow" grant for a tool family (of one agent, or all of them). */
+  | { type: 'permission-revoke'; tool: string; agent?: string }
   /** Stops a running task, or resumes one paused between steps. */
   | { type: 'task-control'; taskId: string; action: 'pause' | 'resume' | 'cancel' }
   /** Restores the files a finished task moved, from its journal. */
@@ -1018,4 +1032,9 @@ export type PcRequest = {
   agent: string;
   /** Set when the call belongs to a task, so local consent can last for that task. */
   taskId?: string;
+  /**
+   * Project roots the core approved for shell commands. The PC agent intersects them
+   * with its own folder allowlist, so a request can narrow but never widen what runs.
+   */
+  projectRoots?: string[];
 };

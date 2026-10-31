@@ -1,5 +1,6 @@
 import { isTriggerNodeType, NODE_TYPES, type JsonValue, type WorkflowRunResult, type WorkflowView } from '@mimi/shared';
 import { z } from 'zod';
+import type { VersionStore } from '../overseer/versions.ts';
 import { defineTool, type ToolDefinition } from '../tools/registry.ts';
 import type { TriggerPool } from './trigger-pool.ts';
 import { checkWorkflowData, type WorkflowStore } from './workflow-store.ts';
@@ -25,7 +26,15 @@ export interface WorkflowAuthorDeps {
   run(name: string, input?: JsonValue): Promise<WorkflowRunResult>;
   /** Runs another agent's workflow; required when `allowTarget` is set. */
   runFor?: (agent: string, name: string, input?: JsonValue) => Promise<WorkflowRunResult>;
+  /** Snapshots the version being replaced, so a bad write can be rolled back. */
+  versions?: VersionStore;
   changed(id?: string): void;
+}
+
+/** A snapshot without the generated webhook path/key, which must not churn on a restore. */
+function workflowSnapshot(workflow: WorkflowView): Record<string, unknown> {
+  const { webhook: _webhook, webhookKey: _webhookKey, ...rest } = workflow as WorkflowView & { webhookKey?: string | null };
+  return rest as unknown as Record<string, unknown>;
 }
 
 const workflowInput = z.object({
@@ -100,6 +109,8 @@ function saveView(deps: WorkflowAuthorDeps, input: WorkflowInput | string, agent
     hasTrigger: (pool) => deps.triggerPool.get(pool) !== undefined,
     workflowNames: (agent) => deps.workflows.names(agent),
   });
+  const current = deps.workflows.get(agent, draft.name);
+  if (current && deps.versions) deps.versions.save('workflow', `${agent}/${draft.name}`, workflowSnapshot(current));
   const saved = deps.workflows.save(view);
   deps.changed(`${saved.agent}/${saved.name}`);
   return `Saved workflow "${saved.name}" for agent "${saved.agent}" (${saved.nodes.length} nodes). It is disabled until the user reviews and enables it in Workflows.`;
@@ -122,27 +133,38 @@ export function createWorkflowAuthorTools(deps: WorkflowAuthorDeps): ToolDefinit
       const triggers = deps.triggerPool.list().filter((entry) => !input.trigger || entry.name === input.trigger);
       // Trigger nodes reuse the trigger schema above; including them twice doubles the
       // size and pushes the tools list past the clip.
-      const nodes = NODE_TYPES.filter(
-        (entry) => (!input.nodeType || entry.type === input.nodeType) && (!isTriggerNodeType(entry.type) || entry.type === input.nodeType),
-      );
+      const nodes = [
+        ...NODE_TYPES.filter(
+          (entry) => (!input.nodeType || entry.type === input.nodeType) && (!isTriggerNodeType(entry.type) || entry.type === input.nodeType),
+        ),
+        ...(deps.customNodes?.() ?? [])
+          .filter((name) => !input.nodeType || input.nodeType === `custom:${name}`)
+          .map((name) => ({
+            type: `custom:${name}`,
+            label: `Custom: ${name}`,
+            description: 'Custom node from user/nodes; config is passed as $config; items may carry $output to pick an output',
+            fields: [{ key: 'config', label: 'config', type: 'json' }],
+            outputs: [{ key: 'main', label: 'main' }],
+          })),
+      ];
       return pretty(
         {
-          triggers,
-          nodeTypes: nodes,
-          customNodes: deps.customNodes?.() ?? [],
-          agents: deps.agentNames(),
+          rules: {
+            workflow: 'name: lowercase letters/digits/_-; title required; at least one node; node ids unique and lowercase.',
+            links: 'Each node links outputs to node ids, e.g. {"main":["next"]}; if/switch use true/false/case0/fallback; links must not point at unknown or unreachable nodes.',
+            expressions: 'Strings may use {{ $json.field }}, {{ $node["Title"].json.field }}, {{ $trigger.json.field }}, {{ $vars.name }}, {{ $execution.id }}, {{ $today }}, {{ $now }}. Vault values are available as {{ $secret.NAME }} in every node; never write the value itself.',
+            trigger: 'Pick a trigger from the trigger list and put its settings in trigger.config. A manual trigger is best for testing.',
+            safety: 'Saved workflows are always disabled. Use workflow_run to test; the user must review and enable it.',
+          },
           tools: deps.tools().map((tool) => ({
             name: tool.name,
             risk: tool.risk,
             description: tool.description.split('. ')[0],
           })),
-          rules: {
-            workflow: 'name: lowercase letters/digits/_-; title required; at least one node; node ids unique and lowercase.',
-            links: 'Each node links outputs to node ids, e.g. {"main":["next"]}; if/switch use true/false/case0/fallback; links must not point at unknown or unreachable nodes.',
-            expressions: 'Strings may use {{ $json.field }}, {{ $node["Title"].json.field }}, {{ $trigger.json.field }}, {{ $vars.name }}, {{ $execution.id }}, {{ $today }}, {{ $now }}.',
-            trigger: 'Pick a trigger from the trigger list and put its settings in trigger.config. A manual trigger is best for testing.',
-            safety: 'Saved workflows are always disabled. Use workflow_run to test; the user must review and enable it.',
-          },
+          agents: deps.agentNames(),
+          triggers,
+          nodeTypes: nodes,
+          customNodes: deps.customNodes?.() ?? [],
           example: {
             name: 'daily-summary',
             title: 'Daily summary',

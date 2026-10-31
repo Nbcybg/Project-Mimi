@@ -6,8 +6,10 @@ import { after, test } from 'node:test';
 import {
   missingPathError,
   PathNotAllowedError,
+  ProjectNotAllowedError,
   readFileTool,
   resolveAllowedPath,
+  resolveProjectPath,
   runShellTool,
   writeFileTool,
 } from '@mimi/pc-agent';
@@ -95,6 +97,42 @@ test('run_shell runs in the working folder and refuses a cwd outside the allowli
     runShellTool.execute({ command: 'echo x', cwd: outside }, context),
     PathNotAllowedError,
   );
+});
+
+test('project roots narrow shell folders without ever widening the allowlist', () => {
+  const project = path.join(allowed, 'project');
+  const other = path.join(allowed, 'other');
+  fs.mkdirSync(project, { recursive: true });
+  fs.mkdirSync(other, { recursive: true });
+
+  assert.equal(resolveProjectPath('project', [allowed], [project]), project);
+  assert.equal(resolveProjectPath(path.join(project, 'src'), [allowed], [project]), path.join(project, 'src'));
+  assert.throws(() => resolveProjectPath('other', [allowed], [project]), ProjectNotAllowedError);
+  assert.throws(() => resolveProjectPath('other', [allowed], [project]), /approved project folders/);
+  assert.throws(() => resolveProjectPath(path.join(outside, 'secret.txt'), [allowed], [project]), PathNotAllowedError);
+
+  // A root the core asks for but this machine does not allow is ignored, not trusted.
+  assert.throws(() => resolveProjectPath('other', [allowed], [outside]), /No approved project folder/);
+  assert.throws(() => resolveProjectPath('other', [allowed], [outside, sibling]), /No approved project folder/);
+  assert.throws(() => resolveProjectPath(path.join(outside, 'secret.txt'), [allowed], [outside]), PathNotAllowedError);
+
+  // No project roots configured: the folder allowlist alone decides, as before.
+  assert.equal(resolveProjectPath('other', [allowed], []), other);
+  assert.equal(resolveProjectPath('other', [allowed], undefined), other);
+});
+
+test('run_shell follows the project allowlist when one is set', async () => {
+  const project = path.join(allowed, 'shell-project');
+  const other = path.join(allowed, 'shell-other');
+  fs.mkdirSync(project, { recursive: true });
+  fs.mkdirSync(other, { recursive: true });
+
+  const scoped = { ...context, projectRoots: [project] };
+  const output = await runShellTool.execute({ command: 'echo inside-project', cwd: project }, scoped);
+  assert.match(output, /inside-project/);
+
+  await assert.rejects(runShellTool.execute({ command: 'echo x', cwd: other }, scoped), ProjectNotAllowedError);
+  await assert.rejects(runShellTool.execute({ command: 'echo x', cwd: outside }, scoped), PathNotAllowedError);
 });
 
 test('run_shell kills a command that exceeds its timeout', async () => {

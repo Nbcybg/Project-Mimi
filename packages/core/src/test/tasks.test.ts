@@ -44,10 +44,16 @@ function toolsFor(folder: string) {
   };
 }
 
-function runnerFor(folder: string, broker: FakeBroker, recipes = createDefaultRecipes(), timeoutMs = 2_000) {
+function runnerFor(
+  folder: string,
+  broker: FakeBroker,
+  recipes = createDefaultRecipes(),
+  timeoutMs = 2_000,
+  agentPermissions?: Record<string, 'allow' | 'ask' | 'deny'>,
+) {
   const repo = new TaskRepo(openDb(':memory:'));
   const gate = new PermissionGate(broker, { timeoutMs });
-  const runner = new TaskRunner({ repo, recipes, gate, execute: toolsFor(folder) });
+  const runner = new TaskRunner({ repo, recipes, gate, execute: toolsFor(folder), agentPermissions: () => agentPermissions });
   return { repo, gate, runner };
 }
 
@@ -95,6 +101,32 @@ test('file-organizer: preview, one approval, receipt, verification and undo', as
   assert.equal(undone.status, 'undone');
   assert.ok(undone.receipt, 'the original receipt is kept');
   assert.ok(undone.undoReceipt, 'the undo receipt is kept too');
+});
+
+test('file-organizer: an agent policy of allow skips the approval prompt', async () => {
+  const folder = folderWith({ 'photo.jpg': 'image' });
+  const broker = new FakeBroker(false);
+  const { runner } = runnerFor(folder, broker, createDefaultRecipes(), 2_000, { organize_files: 'allow' });
+  const events = await collect(
+    runner.run({ recipe: 'file-organizer', goal: 'organize', input: { folder }, traceId: 'trace-policy', thread: 'main', agent: 'mimi' }),
+  );
+  assert.equal(eventsOf(events, 'permission-request').length, 0);
+  assert.equal(broker.requests.length, 0);
+  assert.equal(eventsOf(events, 'task-finish')[0]!.status, 'completed');
+  assert.equal(fs.existsSync(path.join(folder, 'Images', 'photo.jpg')), true);
+});
+
+test('file-organizer: an agent policy of deny refuses without asking', async () => {
+  const folder = folderWith({ 'photo.jpg': 'image' });
+  const broker = new FakeBroker(true);
+  const { runner } = runnerFor(folder, broker, createDefaultRecipes(), 2_000, { organize_files: 'deny' });
+  const events = await collect(
+    runner.run({ recipe: 'file-organizer', goal: 'organize', input: { folder }, traceId: 'trace-deny', thread: 'main', agent: 'mimi' }),
+  );
+  assert.equal(eventsOf(events, 'permission-request').length, 0);
+  assert.equal(broker.requests.length, 0);
+  assert.notEqual(eventsOf(events, 'task-finish')[0]!.status, 'completed');
+  assert.equal(fs.existsSync(path.join(folder, 'Images', 'photo.jpg')), false);
 });
 
 test('file-organizer: a refusal cancels the task and moves nothing', async () => {

@@ -1,13 +1,13 @@
 import { defineTool } from '@mimi/shared';
 import { z } from 'zod';
-import { HttpLink, McpClient, type McpLink, StdioLink } from '../mcp/client.ts';
+import { HttpLink, McpClient, type McpLink, SseLink, StdioLink } from '../mcp/client.ts';
 import { resolveAllowedPath } from './path-guard.ts';
 
 /** Environment a stdio server starts with: enough to find programs, none of the assistant's keys. */
 const BASE_ENV = ['PATH', 'Path', 'PATHEXT', 'SystemRoot', 'SYSTEMROOT', 'ComSpec', 'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP', 'LANG', 'ProgramFiles', 'ProgramData'];
 
 const specSchema = z.object({
-  transport: z.enum(['stdio', 'http']),
+  transport: z.enum(['stdio', 'http', 'sse']),
   command: z.string().optional(),
   args: z.array(z.string()).optional(),
   cwd: z.string().optional(),
@@ -20,7 +20,7 @@ export type McpRunSpec = z.infer<typeof specSchema>;
 const sessions = new Map<string, Promise<McpClient>>();
 
 function makeLink(spec: McpRunSpec, allowedDirs: string[]): McpLink {
-  if (spec.transport === 'http') {
+  if (spec.transport === 'http' || spec.transport === 'sse') {
     let url: URL;
     try {
       url = new URL(spec.url ?? '');
@@ -28,7 +28,7 @@ function makeLink(spec: McpRunSpec, allowedDirs: string[]): McpLink {
       throw new Error('The MCP server needs an http:// or https:// address.');
     }
     if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('The MCP server needs an http:// or https:// address.');
-    return new HttpLink(url.toString(), spec.headers ?? {});
+    return spec.transport === 'sse' ? new SseLink(url.toString(), spec.headers ?? {}) : new HttpLink(url.toString(), spec.headers ?? {});
   }
   if (!spec.command?.trim()) throw new Error('The MCP server needs a command.');
   const env: NodeJS.ProcessEnv = {};
@@ -79,7 +79,7 @@ export const mcpSessionTool = defineTool({
     tool: z.string().optional(),
     arguments: z.record(z.string(), z.unknown()).optional(),
   }),
-  summarize: (input) => `MCP ${input.action}${input.tool ? ` ${input.tool}` : ''} (${input.spec.transport === 'http' ? input.spec.url : input.spec.command})`,
+  summarize: (input) => `MCP ${input.action}${input.tool ? ` ${input.tool}` : ''} (${input.spec.transport === 'http' || input.spec.transport === 'sse' ? input.spec.url : input.spec.command})`,
   async execute(input, context) {
     if (input.action === 'close') {
       const key = JSON.stringify(input.spec);

@@ -3,6 +3,8 @@ import type { RiskLevel } from './tools.ts';
 export interface PermissionRequest {
   id: string;
   traceId: string;
+  /** The session thread, so a "allow for this session" grant covers exactly that conversation. */
+  thread?: string;
   agent: string;
   tool: string;
   risk: RiskLevel;
@@ -18,8 +20,11 @@ export type PermissionDecision =
   | { allow: true; via: 'auto' | 'user' }
   | { allow: false; reason: 'denied' | 'timeout' | 'error' };
 
-/** How long an approval lasts: this one call, or every call of the same tool family in this task. */
-export type PermissionScope = 'once' | 'task';
+/**
+ * How long an approval lasts: this one call, every call of the same tool family in this
+ * task (trace), in this chat session, or until the user removes it (stored on the machine).
+ */
+export type PermissionScope = 'once' | 'task' | 'session' | 'always';
 
 /**
  * Tools that are one family for "allow for this task". Approving the organizer also
@@ -42,6 +47,15 @@ const TOOL_FAMILIES: Record<string, string> = {
   media_contact_sheet: 'media.photos',
   media_transform: 'media.photos',
   media_mux_cover: 'media.photos',
+  image_crop: 'media.photos',
+  image_rotate: 'media.photos',
+  media_trim: 'media.video',
+  media_subtitle: 'media.video',
+  video_merge: 'media.video',
+  pdf_merge: 'files.pdf',
+  pdf_split: 'files.pdf',
+  pdf_delete_pages: 'files.pdf',
+  pdf_rotate: 'files.pdf',
   browser_open: 'browser.task',
   browser_upload: 'browser.task',
   browser_click: 'browser.task',

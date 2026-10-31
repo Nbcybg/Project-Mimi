@@ -105,6 +105,20 @@ export class SnapshotExecutor implements ToolExecutor {
         }
       }
     }
+    if (tool.name === 'apply_patch' && local) {
+      const patches = (input as { patches?: unknown }).patches;
+      if (Array.isArray(patches)) {
+        for (const patch of patches) {
+          const requested = (patch as { path?: unknown } | null)?.path;
+          if (typeof requested !== 'string') continue;
+          try {
+            this.snapshots.remember(context.thread, context.traceId, resolveAllowedPath(requested, context.allowedDirs));
+          } catch {
+            // the tool itself refuses it
+          }
+        }
+      }
+    }
     return this.inner.execute(tool, input, context);
   }
 }

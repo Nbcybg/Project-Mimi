@@ -139,6 +139,62 @@ test('runner: node errors carry connector trace, error code and attempts', async
   assert.match(node.trace?.requestId ?? '', /:n1$/);
 });
 
+test('run history: literal vault values are redacted before they are stored', () => {
+  const store = new WorkflowRunStore(openDb(':memory:'));
+  const run: WorkflowRunResult = {
+    name: 'triage',
+    ok: true,
+    result: 'used vault-value-1234',
+    nodes: [
+      {
+        id: 'n1',
+        title: 'step',
+        type: 'set',
+        status: 'ok',
+        input: [{ json: { note: 'vault-value-1234' } }],
+        output: [{ json: { note: 'vault-value-1234' } }],
+      },
+    ],
+  };
+  const id = store.record('mimi/triage', 'manual', new Date(), run, ['vault-value-1234']);
+  const stored = store.get(id)!;
+  assert.doesNotMatch(stored.result, /vault-value/);
+  assert.doesNotMatch(JSON.stringify(stored.nodes), /vault-value/);
+});
+
+test('runner: vault values are redacted in debug output and the run result', async () => {
+  const logs: string[] = [];
+  const deps: WorkflowRunnerDeps = {
+    runAgent: async () => '',
+    tool: () => undefined,
+    speak: () => {},
+    mail: { list: async () => [], markRead: async () => {} },
+    state: new WorkflowState(path.join(os.tmpdir(), `mimi-secret-${process.pid}-${Math.random().toString(36).slice(2)}.json`)),
+    allowedDirs: [],
+    secretNames: () => ['API_KEY'],
+    secret: (name) => (name === 'API_KEY' ? 'real-secret-value' : undefined),
+    log: (message) => logs.push(message),
+  };
+  const flow: WorkflowView = {
+    name: 'secrets',
+    agent: 'mimi',
+    title: 'Secrets',
+    description: '',
+    enabled: true,
+    trigger: { pool: 'manual', config: {} },
+    webhook: null,
+    nodes: [
+      { id: 'debug', type: 'debug', title: 'Show', config: {}, links: { main: ['show'] } },
+      { id: 'show', type: 'set', title: 'Show secret', config: { fields: { text: '{{ $secret.API_KEY }}' } }, links: { main: [] } },
+    ],
+  };
+  const run = await runWorkflow(flow, [{ json: { note: 'real-secret-value' } }], deps);
+  assert.ok(logs.some((message) => message.includes('[redacted]')));
+  assert.ok(logs.every((message) => !message.includes('real-secret-value')));
+  assert.doesNotMatch(run.result, /real-secret-value/);
+  assert.match(run.result, /\[redacted\]/);
+});
+
 test('core: every top-level run is stored and the result carries its id', async () => {
   const target = await makeTestCore({});
   target.core.workflows.save({

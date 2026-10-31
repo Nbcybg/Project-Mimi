@@ -54,6 +54,25 @@ const SendInput = z.object({
     .enum(['delegate', 'handoff'])
     .optional()
     .describe('"delegate" (default): wait for their reply. "handoff": they answer the user instead of you.'),
+  max_rounds: z.number().int().min(1).max(30).optional().describe('Cap the sub-agent\'s model rounds for this call'),
+  max_tokens: z.number().int().min(1000).max(500_000).optional().describe('Cap the sub-agent\'s tokens for this call'),
+});
+
+const ParallelInput = z.object({
+  agents: z
+    .array(
+      z.object({
+        agent: z.string().min(1).describe('Name of the agent to message'),
+        task: z.string().min(1).describe('What this sub-agent should do, stated so it stands on its own'),
+        context: z.string().optional(),
+        expected_result: z.string().optional(),
+        max_rounds: z.number().int().min(1).max(30).optional(),
+        max_tokens: z.number().int().min(1000).max(500_000).optional(),
+      }),
+    )
+    .min(1)
+    .max(8)
+    .describe('Sub-agents to run at the same time (at most 8)'),
 });
 
 const ReplyInput = z.object({
@@ -150,7 +169,7 @@ export class MeshRouter implements MeshToolProvider {
 
   toolsFor(agent: AgentDefinition, mesh: MeshContext | undefined): ToolDefinition<any>[] {
     const tools: ToolDefinition<any>[] = [];
-    if (agent.canMessage.length > 0) tools.push(this.sendTool(agent));
+    if (agent.canMessage.length > 0) tools.push(this.sendTool(agent), this.sendAgentsTool(agent));
     if (mesh?.mode === 'delegate') tools.push(this.replyTool());
     return tools;
   }
@@ -174,6 +193,45 @@ export class MeshRouter implements MeshToolProvider {
       inputSchema: SendInput,
       summarize: (input) => `${input.mode ?? 'delegate'} to ${input.agent}: ${input.task.slice(0, 120)}`,
       execute: (input, context) => this.send(sender, input, context),
+    });
+  }
+
+  private sendAgentsTool(sender: AgentDefinition): ToolDefinition<z.infer<typeof ParallelInput>> {
+    const directory = sender.canMessage.join(', ');
+    return defineTool({
+      name: 'send_agents',
+      description: `Run several sub-agents in parallel and wait for all their replies. You may message: ${directory}. Each result is returned separately; one failing does not cancel the others.`,
+      risk: 'read',
+      target: 'core',
+      inputSchema: ParallelInput,
+      summarize: (input) => `Ask ${input.agents.length} agents in parallel: ${input.agents.map((entry) => entry.agent).join(', ')}`,
+      execute: async (input, context) => {
+        const results = await Promise.allSettled(
+          input.agents.map((entry) =>
+            this.send(
+              sender,
+              {
+                agent: entry.agent,
+                task: entry.task,
+                ...(entry.context ? { context: entry.context } : {}),
+                ...(entry.expected_result ? { expected_result: entry.expected_result } : {}),
+                mode: 'delegate',
+                ...(entry.max_rounds ? { max_rounds: entry.max_rounds } : {}),
+                ...(entry.max_tokens ? { max_tokens: entry.max_tokens } : {}),
+              },
+              context,
+            ),
+          ),
+        );
+        return results
+          .map((result, index) => {
+            const name = input.agents[index]!.agent;
+            return result.status === 'fulfilled'
+              ? `### ${name}\n${result.value}`
+              : `### ${name}\nFAILED: ${(result.reason as Error)?.message ?? String(result.reason)}`;
+          })
+          .join('\n\n');
+      },
     });
   }
 
@@ -251,11 +309,19 @@ export class MeshRouter implements MeshToolProvider {
       context.requestHandoff!({ messageId: id, to: target.name });
       return `Handed off to ${target.name} (message #${id}). They answer the user now. End your turn without adding anything.`;
     }
-    return this.runDelegate(this.getMessage(id)!, target, context);
+    return this.runDelegate(this.getMessage(id)!, target, context, {
+      ...(input.max_rounds ? { maxRounds: input.max_rounds } : {}),
+      ...(input.max_tokens ? { maxTokens: input.max_tokens } : {}),
+    });
   }
 
   /** Wakes the receiver for one loop run and waits for its reply, up to the reply timeout. */
-  private async runDelegate(message: AgentMessage, target: AgentDefinition, context: ToolContext): Promise<string> {
+  private async runDelegate(
+    message: AgentMessage,
+    target: AgentDefinition,
+    context: ToolContext,
+    limits: { maxRounds?: number; maxTokens?: number } = {},
+  ): Promise<string> {
     if (!this.runner) throw new Error('Mesh router is not attached to a runner');
     const runner = this.runner;
     this.setStatus(message.id, 'running');
@@ -267,7 +333,13 @@ export class MeshRouter implements MeshToolProvider {
     let finish: RunFinish | undefined;
     const run = (async () => {
       for await (const event of runner({
-        agent: target,
+        agent: {
+          ...target,
+          budgets: {
+            maxRounds: Math.min(target.budgets.maxRounds, limits.maxRounds ?? target.budgets.maxRounds),
+            maxTokens: Math.min(target.budgets.maxTokens, limits.maxTokens ?? target.budgets.maxTokens),
+          },
+        },
         userText: renderMessage(message),
         thread: `mesh:${message.id}`,
         traceId: message.traceId,

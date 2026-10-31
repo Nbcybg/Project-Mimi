@@ -154,6 +154,48 @@ test('microsoft auth: public client; the rotated refresh token is kept; clear gu
   await assert.rejects(microsoft.auth.request('/me/nothing'), /Microsoft Graph error 404: Not Found/);
 });
 
+test('outlook contacts: search by name, then create and update', async () => {
+  const microsoft = fakeMicrosoft({
+    '/me/contacts/c1': { id: 'c1', displayName: 'Somchai', emailAddresses: [{ address: 'somchai@example.com' }], businessPhones: ['0899999999'], companyName: 'Acme' },
+    '/me/contacts': (call: { method: string }) =>
+      call.method === 'POST'
+        ? { id: 'c2', displayName: 'Mali', emailAddresses: [{ address: 'mali@example.com' }], companyName: 'Acme' }
+        : {
+            value: [
+              { id: 'c1', displayName: 'Somchai', emailAddresses: [{ address: 'somchai@example.com' }], companyName: 'Acme' },
+              { id: 'c3', displayName: 'Other', emailAddresses: [{ address: 'other@example.com' }] },
+            ],
+          },
+  });
+  const { tools } = microsoft;
+  const found = await tools.outlook_contacts_search!.execute({ query: 'somchai' }, context);
+  assert.equal(found, '[id c1] Somchai <somchai@example.com> · Acme');
+  assert.match(microsoft.graph().at(-1)!.url, /\/me\/contacts\?/);
+
+  const created = await tools.outlook_contacts_create!.execute(
+    { name: 'Mali', email: 'mali@example.com', company: 'Acme' },
+    context,
+  );
+  assert.match(created, /^Added: \[id c2\] Mali <mali@example\.com>/);
+  const post = microsoft.graph().at(-1)!;
+  assert.equal(post.method, 'POST');
+  assert.deepEqual(JSON.parse(post.body!), {
+    displayName: 'Mali',
+    emailAddresses: [{ address: 'mali@example.com' }],
+    companyName: 'Acme',
+  });
+
+  const updated = await tools.outlook_contacts_update!.execute({ id: 'c1', phone: '0899999999' }, context);
+  assert.match(updated, /^Updated: \[id c1\] Somchai/);
+  const patch = microsoft.graph().at(-1)!;
+  assert.equal(patch.method, 'PATCH');
+  assert.match(patch.url, /\/me\/contacts\/c1$/);
+  assert.deepEqual(JSON.parse(patch.body!), { businessPhones: ['0899999999'] });
+
+  await assert.rejects(tools.outlook_contacts_create!.execute({ name: 'Nobody' }, context), /e-mail address or a phone number/);
+  await assert.rejects(tools.outlook_contacts_update!.execute({ id: 'c1' }, context), /Nothing to change/);
+});
+
 test('outlook mail: list, search, read, send and reply', async () => {
   const message = {
     id: 'AAA=',

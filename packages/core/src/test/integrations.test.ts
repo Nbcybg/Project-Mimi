@@ -5,6 +5,7 @@ import path from 'node:path';
 import { after, test } from 'node:test';
 import { z } from 'zod';
 import { GoogleAuth, GoogleNotConfiguredError } from '../google/auth.ts';
+import { createSheetTools } from '../google/sheets.ts';
 import { buildRawEmail, createGoogleTools } from '../google/tools.ts';
 import { PermissionGate } from '../permissions/gate.ts';
 import { createSkillTool, loadPersona, loadSkills, renderSkillIndex } from '../skills/skills.ts';
@@ -130,7 +131,8 @@ function fakeGoogle(routes: Record<string, unknown>) {
   const tools = Object.fromEntries(
     createGoogleTools(auth, 'Asia/Bangkok').map((tool) => [tool.name, tool]),
   ) as Record<string, ToolDefinition<any>>;
-  return { auth, tools, calls, api: () => calls.filter((call) => !call.url.includes('/token')), advance: (ms: number) => (now += ms) };
+  const sheetTools = Object.fromEntries(createSheetTools(auth).map((tool) => [tool.name, tool])) as Record<string, ToolDefinition<any>>;
+  return { auth, tools, sheetTools, calls, api: () => calls.filter((call) => !call.url.includes('/token')), advance: (ms: number) => (now += ms) };
 }
 
 test('google auth: clear guidance when not connected; tokens are refreshed and cached', async () => {
@@ -173,8 +175,8 @@ test('gmail tools: search, read, send', async () => {
   });
   const { tools } = google;
   assert.deepEqual(
-    ['gmail_search', 'gmail_read', 'gmail_send', 'calendar_list', 'calendar_create'].map((name) => [tools[name]!.risk, tools[name]!.untrustedInput ?? false]),
-    [['read', true], ['read', true], ['network', false], ['read', true], ['write', false]],
+    ['gmail_search', 'gmail_read', 'gmail_send', 'calendar_list', 'calendar_create', 'calendar_update', 'calendar_delete'].map((name) => [tools[name]!.risk, tools[name]!.untrustedInput ?? false]),
+    [['read', true], ['read', true], ['network', false], ['read', true], ['write', false], ['write', false], ['delete', false]],
   );
 
   const found = await tools.gmail_search!.execute({ query: 'is:unread from:boss' }, context);
@@ -192,6 +194,120 @@ test('gmail tools: search, read, send', async () => {
   assert.match(raw, /Content-Type: text\/plain; charset=UTF-8/);
   assert.equal(Buffer.from(raw.split('\r\n\r\n')[1]!, 'base64').toString('utf8'), 'รับทราบครับ');
   assert.match(Buffer.from(buildRawEmail({ to: 'x@y.z', subject: 'plain ascii', body: 'b' }), 'base64url').toString(), /Subject: plain ascii/);
+});
+
+test('drive_upload: multipart body carries the metadata and the file bytes', async () => {
+  const google = fakeGoogle({ '/upload/drive/v3/files': { id: 'd1', name: 'note.txt', mimeType: 'text/plain' } });
+  const file = path.join(tmp, 'note.txt');
+  fs.writeFileSync(file, 'drive me');
+  const result = await google.sheetTools.drive_upload!.execute({ path: file }, { ...context, allowedDirs: [tmp] });
+  assert.match(result, /Uploaded: \[id d1\] note\.txt/);
+  const upload = google.api().at(-1)!;
+  assert.equal(upload.method, 'POST');
+  assert.match(upload.url, /uploadType=multipart/);
+  const body = Buffer.from(upload.body as unknown as Uint8Array).toString('utf8');
+  assert.match(body, /"name":"note\.txt"/);
+  assert.match(body, /drive me/);
+});
+
+test('drive_share and drive_update_metadata call the Drive API', async () => {
+  const google = fakeGoogle({
+    '/files/d1/permissions': { id: 'p1', type: 'user', role: 'writer', emailAddress: 'friend@example.com' },
+    '/files/d1?fields=': { id: 'd1', name: 'plan.pdf', mimeType: 'application/pdf', starred: true, modifiedTime: '2026-10-31T10:00:00Z' },
+  });
+  const shared = await google.sheetTools.drive_share!.execute(
+    { file_id: 'd1', email: 'friend@example.com', role: 'writer', notify: true, message: 'อ่านด้วยนะ' },
+    context,
+  );
+  assert.equal(shared, 'Shared d1 with friend@example.com as writer (permission p1).');
+  const share = google.api().at(-1)!;
+  assert.equal(share.method, 'POST');
+  assert.match(share.url, /\/files\/d1\/permissions\?/);
+  assert.match(decodeURIComponent(share.url), /sendNotificationEmail=true/);
+  assert.deepEqual(JSON.parse(share.body!), {
+    type: 'user',
+    role: 'writer',
+    emailAddress: 'friend@example.com',
+    emailMessage: 'อ่านด้วยนะ',
+  });
+
+  const anonymous = await google.sheetTools.drive_share!.execute({ file_id: 'd1', type: 'anyone' }, context);
+  assert.match(anonymous, /^Shared d1 with /);
+  assert.doesNotMatch(decodeURIComponent(google.api().at(-1)!.url), /sendNotificationEmail/);
+  assert.deepEqual(JSON.parse(google.api().at(-1)!.body!), { type: 'anyone', role: 'reader' });
+
+  const updated = await google.sheetTools.drive_update_metadata!.execute({ file_id: 'd1', name: 'plan.pdf', starred: true }, context);
+  assert.match(updated, /^Updated: \[id d1\] plan\.pdf/);
+  const patch = google.api().at(-1)!;
+  assert.equal(patch.method, 'PATCH');
+  assert.deepEqual(JSON.parse(patch.body!), { name: 'plan.pdf', starred: true });
+
+  await assert.rejects(google.sheetTools.drive_share!.execute({ file_id: 'd1', type: 'user' }, context), /needs an e-mail address/);
+  await assert.rejects(google.sheetTools.drive_share!.execute({ file_id: 'd1', type: 'domain' }, context), /needs its name/);
+  await assert.rejects(google.sheetTools.drive_update_metadata!.execute({ file_id: 'd1' }, context), /at least one field/);
+});
+
+test('contacts_search returns names, ids, e-mails and phones from Google Contacts', async () => {
+  const google = fakeGoogle({
+    '/people:searchContacts': {
+      results: [
+        {
+          person: {
+            resourceName: 'people/c1',
+            names: [{ displayName: 'สมชาย' }],
+            emailAddresses: [{ value: 'somchai@example.com' }],
+            phoneNumbers: [{ value: '0812345678' }],
+          },
+        },
+      ],
+    },
+  });
+  const found = await google.tools.contacts_search!.execute({ query: 'สม' }, context);
+  assert.equal(found, '[id people/c1] สมชาย <somchai@example.com> · 0812345678');
+  assert.match(google.api()[0]!.url, /people:searchContacts\?query=/);
+});
+
+test('contacts_create and contacts_update write to Google Contacts', async () => {
+  const google = fakeGoogle({
+    '/people:createContact': {
+      resourceName: 'people/c2',
+      names: [{ displayName: 'ใหม่ ใจดี' }],
+      emailAddresses: [{ value: 'new@example.com' }],
+    },
+    '/people/c1?personFields': {
+      resourceName: 'people/c1',
+      etag: 'etag-1',
+      names: [{ displayName: 'สมชาย', givenName: 'สมชาย' }],
+      emailAddresses: [{ value: 'somchai@example.com' }],
+      phoneNumbers: [{ value: '0812345678' }],
+    },
+    '/people/c1:updateContact': {
+      resourceName: 'people/c1',
+      names: [{ displayName: 'สมชาย' }],
+      emailAddresses: [{ value: 'somchai@example.com' }],
+      phoneNumbers: [{ value: '0899999999' }],
+    },
+  });
+  const created = await google.tools.contacts_create!.execute({ name: 'ใหม่ ใจดี', email: 'new@example.com' }, context);
+  assert.match(created, /^Added: \[id people\/c2\]/);
+  const create = google.api().at(-1)!;
+  assert.equal(create.method, 'POST');
+  assert.deepEqual(JSON.parse(create.body!), {
+    names: [{ unstructuredName: 'ใหม่ ใจดี' }],
+    emailAddresses: [{ value: 'new@example.com' }],
+  });
+
+  const updated = await google.tools.contacts_update!.execute({ id: 'people/c1', phone: '0899999999' }, context);
+  assert.match(updated, /^Updated: \[id people\/c1\]/);
+  const patch = google.api().at(-1)!;
+  assert.equal(patch.method, 'PATCH');
+  assert.match(decodeURIComponent(patch.url), /updatePersonFields=phoneNumbers/);
+  const body = JSON.parse(patch.body!) as { etag: string; phoneNumbers: Array<{ value: string }> };
+  assert.equal(body.etag, 'etag-1');
+  assert.deepEqual(body.phoneNumbers, [{ value: '0899999999' }]);
+
+  await assert.rejects(google.tools.contacts_create!.execute({ name: 'ไม่มี聯絡' }, context), /e-mail address or a phone number/);
+  await assert.rejects(google.tools.contacts_update!.execute({ id: 'people/c1' }, context), /Nothing to change/);
 });
 
 test('calendar tools: list a range, create an event in the core time zone', async () => {
@@ -218,4 +334,11 @@ test('calendar tools: list a range, create an event in the core time zone', asyn
     start: { dateTime: '2026-10-20T10:00:00+07:00', timeZone: 'Asia/Bangkok' },
     end: { dateTime: '2026-10-20T11:00:00+07:00', timeZone: 'Asia/Bangkok' },
   });
+
+  const updated = await tools.calendar_update!.execute({ id: 'e1', summary: 'หมอฟัน' }, context);
+  assert.match(updated, /^Updated:/);
+  assert.equal(google.api().at(-1)!.method, 'PATCH');
+  assert.deepEqual(JSON.parse(google.api().at(-1)!.body!), { summary: 'หมอฟัน' });
+  assert.match(await tools.calendar_delete!.execute({ id: 'e1' }, context), /Deleted calendar event e1/);
+  assert.equal(google.api().at(-1)!.method, 'DELETE');
 });

@@ -1,10 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-/** How many old versions of one agent or tool are kept. */
+/** How many old versions of one item are kept. */
 const KEEP = 10;
 
-export type VersionKind = 'agent' | 'tool';
+export type VersionKind = 'agent' | 'tool' | 'preset' | 'skill' | 'workflow';
 
 export interface VersionEntry<T = unknown> {
   id: string;
@@ -18,8 +18,8 @@ interface VersionFile<T> extends VersionEntry<T> {
 }
 
 /**
- * Snapshots of the Overseer's own writes. Saving an agent or a custom tool puts the
- * previous version here first, so a bad prompt or a broken tool can be restored.
+ * Snapshots of the Overseer's own writes. Saving an agent, tool, preset, skill or
+ * workflow puts the previous version here first, so a bad change can be restored.
  * Files live under user/snapshots/<kind>/<name>/<timestamp>.json.
  */
 export class VersionStore {

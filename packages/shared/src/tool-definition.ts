@@ -19,6 +19,11 @@ export interface ToolContext {
   taskId?: string;
   /** Folder allowlist for file/shell access; the first entry is the default working folder. */
   allowedDirs: string[];
+  /**
+   * Approved project roots for shell commands. Empty or absent keeps the older behaviour
+   * (any folder in `allowedDirs`); otherwise `cwd` must lie inside one of them as well.
+   */
+  projectRoots?: string[];
   signal?: AbortSignal;
   mesh?: MeshContext;
   /** The stored assistant message that made this call; files the tool sends are shown under it. */

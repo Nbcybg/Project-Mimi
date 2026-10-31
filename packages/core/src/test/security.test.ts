@@ -110,9 +110,12 @@ test('tool node: tools that change things need the node to allow them; settings 
   assert.match(blocked.error!, /can change things \(write\).*อนุญาต/);
   assert.equal((await runWorkflowNode(workflow(), node('send', true), [], deps(base))).ok, true);
   assert.equal((await runWorkflowNode(workflow(), node('send'), [], deps({ ...base, permissions: { send: 'allow' } }))).ok, true);
+  assert.equal((await runWorkflowNode(workflow(), node('send'), [], deps({ ...base, permissionsFor: () => ({ send: 'allow' }) }))).ok, true);
   const denied = await runWorkflowNode(workflow(), node('send', true), [], deps({ ...base, permissions: { send: 'deny' } }));
-  assert.match(denied.error!, /denied in the settings/);
-  assert.deepEqual(calls, ['look', 'send', 'send']);
+  assert.match(denied.error!, /denied by the permission settings/);
+  const deniedByAgent = await runWorkflowNode(workflow(), node('send', true), [], deps({ ...base, permissionsFor: () => ({ send: 'deny' }) }));
+  assert.match(deniedByAgent.error!, /denied by the permission settings/);
+  assert.deepEqual(calls, ['look', 'send', 'send', 'send']);
 });
 
 test('auth limiter: too many wrong tokens block the address for a while', () => {

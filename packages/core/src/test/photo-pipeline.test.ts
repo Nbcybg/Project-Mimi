@@ -5,7 +5,17 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { after, test } from 'node:test';
-import { detectMediaTools, mediaContactSheetTool, mediaTransformTool, pcTools } from '@mimi/pc-agent';
+import {
+  detectMediaTools,
+  imageCropTool,
+  imageRotateTool,
+  mediaContactSheetTool,
+  mediaSubtitleTool,
+  mediaTransformTool,
+  mediaTrimTool,
+  pcTools,
+  videoMergeTool,
+} from '@mimi/pc-agent';
 import { makeTestCore } from './core-helpers.ts';
 import { collect, eventsOf } from './helpers.ts';
 
@@ -186,4 +196,106 @@ test('media_transform writes a resized copy, never the original', async (t) => {
   assert.equal(result.ok, true);
   assert.equal(hash(path.join(source, 'original.png')), before);
   assert.equal(fs.readdirSync(output).length, 1);
+});
+
+function streamInfo(file: string): { width?: number; height?: number; codec?: string } {
+  const json = JSON.parse(
+    execFileSync('ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height,codec_name', '-of', 'json', file]).toString(),
+  ) as { streams?: Array<{ width?: number; height?: number; codec_name?: string }> };
+  const stream = json.streams?.[0] ?? {};
+  return { width: stream.width, height: stream.height, codec: stream.codec_name };
+}
+
+test('image_crop and image_rotate write new files and keep the source', async (t) => {
+  const tools = await detectMediaTools();
+  if (!tools.ffmpeg.available) {
+    t.skip('ffmpeg is not installed');
+    return;
+  }
+  const source = path.join(tmp, 'crop-src.png');
+  try {
+    makeImage(source, 'color=c=green:s=80x60');
+  } catch {
+    t.skip('ffmpeg cannot create the fixture image');
+    return;
+  }
+  const before = hash(source);
+
+  const cropped = path.join(tmp, 'crop-out.png');
+  await imageCropTool.execute(imageCropTool.inputSchema.parse({ path: source, output: cropped, x: 10, y: 5, width: 30, height: 20 }), context);
+  assert.deepEqual([streamInfo(cropped).width, streamInfo(cropped).height], [30, 20]);
+  assert.equal(hash(source), before);
+
+  const rotated = path.join(tmp, 'rotate-out.png');
+  await imageRotateTool.execute(imageRotateTool.inputSchema.parse({ path: source, output: rotated, degrees: 90 }), context);
+  assert.deepEqual([streamInfo(rotated).width, streamInfo(rotated).height], [60, 80]);
+  assert.equal(hash(source), before);
+
+  await assert.rejects(
+    imageCropTool.execute(imageCropTool.inputSchema.parse({ path: source, output: source, x: 0, y: 0, width: 10, height: 10 }), context),
+    /new file/,
+  );
+});
+
+test('video_merge and media_subtitle write new files and keep the sources', async (t) => {
+  const tools = await detectMediaTools();
+  if (!tools.ffmpeg.available || !tools.ffprobe.available) {
+    t.skip('ffmpeg/ffprobe are not installed');
+    return;
+  }
+  const one = path.join(tmp, 'merge-1.mp4');
+  const two = path.join(tmp, 'merge-2.mp4');
+  const merged = path.join(tmp, 'merged.mp4');
+  try {
+    execFileSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'color=c=red:s=64x48:d=1', '-pix_fmt', 'yuv420p', '-y', one], { stdio: 'ignore' });
+    execFileSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'color=c=blue:s=64x48:d=1', '-pix_fmt', 'yuv420p', '-y', two], { stdio: 'ignore' });
+  } catch {
+    t.skip('ffmpeg cannot create the fixture videos');
+    return;
+  }
+  const before = [hash(one), hash(two)];
+  const result = parse(await videoMergeTool.execute(videoMergeTool.inputSchema.parse({ files: [one, two], output: merged }), context));
+  assert.equal(result.ok, true);
+  const duration = Number(
+    execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=nw=1:nk=1', merged]).toString().trim(),
+  );
+  assert.ok(duration >= 1.8, `merged duration ${duration}`);
+  assert.deepEqual([hash(one), hash(two)], before);
+
+  const subtitles = path.join(tmp, 'subs.srt');
+  fs.writeFileSync(subtitles, '1\n00:00:00,000 --> 00:00:00,800\nhello\n');
+  const subtitled = path.join(tmp, 'subtitled.mp4');
+  await mediaSubtitleTool.execute(
+    mediaSubtitleTool.inputSchema.parse({ video: one, subtitles, output: subtitled, language: 'eng' }),
+    context,
+  );
+  const streams = execFileSync('ffprobe', ['-v', 'error', '-select_streams', 's', '-show_entries', 'stream=codec_name', '-of', 'csv=p=0', subtitled]).toString().trim();
+  assert.match(streams, /mov_text/);
+  assert.deepEqual([hash(one), hash(two)], before);
+});
+
+test('media_trim writes a shorter video and leaves the source alone', async (t) => {
+  const tools = await detectMediaTools();
+  if (!tools.ffmpeg.available) {
+    t.skip('ffmpeg is not installed');
+    return;
+  }
+  const source = path.join(tmp, 'trim-src.mp4');
+  const output = path.join(tmp, 'trim-out.mp4');
+  try {
+    execFileSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'color=c=blue:s=64x64:d=3', '-pix_fmt', 'yuv420p', '-y', source], { stdio: 'ignore' });
+  } catch {
+    t.skip('ffmpeg cannot create the fixture video');
+    return;
+  }
+  const before = hash(source);
+  const result = parse(
+    await mediaTrimTool.execute(
+      mediaTrimTool.inputSchema.parse({ path: source, output, start_seconds: 0.5, duration_seconds: 1 }),
+      context,
+    ),
+  );
+  assert.equal(result.ok, true);
+  assert.equal(hash(source), before);
+  assert.ok(fs.statSync(output).size > 0);
 });

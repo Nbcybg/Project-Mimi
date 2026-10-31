@@ -28,6 +28,8 @@ export interface CustomNodeSpec {
   code: string;
   /** Optional form fields the editor can show (stored with the definition). */
   fields?: NodeTypeField[];
+  /** Extra output keys; an item's `$output` chooses one (default: just `main`). */
+  outputs?: string[];
   timeoutMs?: number;
 }
 
@@ -37,6 +39,11 @@ const specSchema = z.strictObject({
   description: z.string().min(1),
   code: z.string().min(1),
   fields: z.array(fieldSchema).max(30).optional(),
+  outputs: z
+    .array(z.string().regex(/^[a-zA-Z][a-zA-Z0-9_]*$/, 'an output name'))
+    .min(1)
+    .max(12)
+    .optional(),
   timeoutMs: z.number().int().min(1_000).max(120_000).optional(),
 }) satisfies z.ZodType<CustomNodeSpec>;
 

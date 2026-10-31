@@ -142,6 +142,174 @@ async function* sseData(body: ReadableStream<Uint8Array>): AsyncGenerator<string
   }
 }
 
+/** Reads both `event:` names and `data:` payloads from an SSE body. */
+async function* sseEvents(body: ReadableStream<Uint8Array>): AsyncGenerator<{ event: string; data: string }> {
+  const decoder = new TextDecoder();
+  let buffer = '';
+  for await (const chunk of body as unknown as AsyncIterable<Uint8Array>) {
+    buffer += decoder.decode(chunk, { stream: true }).replace(/\r\n?/g, '\n');
+    let split = buffer.indexOf('\n\n');
+    while (split >= 0) {
+      const raw = buffer.slice(0, split);
+      buffer = buffer.slice(split + 2);
+      split = buffer.indexOf('\n\n');
+      let event = 'message';
+      const data: string[] = [];
+      for (const line of raw.split('\n')) {
+        if (line.startsWith('event:')) event = line.slice(6).trim();
+        else if (line.startsWith('data:')) data.push(line.slice(5).replace(/^ /, ''));
+      }
+      if (data.length > 0) yield { event, data: data.join('\n') };
+    }
+  }
+}
+
+/**
+ * The original MCP SSE transport: a GET stream carries server messages, and the server
+ * announces a POST endpoint in its first `endpoint` event. Kept for servers that have
+ * not moved to Streamable HTTP.
+ */
+export class SseLink implements McpLink {
+  onMessage: (message: JsonRpcMessage) => void = () => {};
+  onClose: (error?: Error) => void = () => {};
+  private readonly url: string;
+  private readonly headers: Record<string, string>;
+  private readonly controller = new AbortController();
+  private current?: AbortController;
+  private endpoint?: string;
+  private readonly ready: Promise<string>;
+  private started = false;
+
+  constructor(url: string, headers: Record<string, string> = {}) {
+    this.url = url;
+    this.headers = headers;
+    this.ready = this.start();
+    this.ready.catch(() => {});
+  }
+
+  /** The first attempt is immediate; a failed start is retried twice with a short backoff. */
+  private async start(): Promise<string> {
+    const delays = [500, 1500];
+    let lastError: Error | undefined;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.open();
+      } catch (error) {
+        lastError = error as Error;
+        if (this.started || attempt >= delays.length) break;
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, delays[attempt]!);
+          timer.unref?.();
+        });
+      }
+    }
+    throw lastError ?? new Error('MCP SSE connection failed');
+  }
+
+  private async open(): Promise<string> {
+    const controller = new AbortController();
+    this.current = controller;
+    if (this.started) controller.abort();
+    const closed = () => this.started || controller.signal.aborted;
+    let response: Response;
+    try {
+      response = await fetch(this.url, {
+        method: 'GET',
+        headers: { ...this.headers, accept: 'text/event-stream' },
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new Error(`MCP SSE endpoint answered HTTP ${response.status}`);
+      if (!response.body) throw new Error('MCP SSE endpoint sent no stream');
+    } catch (error) {
+      if (this.current === controller) this.current = undefined;
+      throw error;
+    }
+    const base = response.url || this.url;
+    const body = response.body;
+    return await new Promise<string>((resolve, reject) => {
+      let settled = false;
+      const fail = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        reject(error);
+      };
+      const timer = setTimeout(() => {
+        fail(new Error('MCP SSE server did not send an endpoint within 30 s'));
+        controller.abort();
+      }, 30_000);
+      const consume = async () => {
+        try {
+          for await (const event of sseEvents(body)) {
+            if (event.event === 'endpoint') {
+              if (settled) continue;
+              const target = new URL(event.data, base);
+              this.endpoint = target.toString();
+              settled = true;
+              clearTimeout(timer);
+              resolve(this.endpoint);
+              continue;
+            }
+            if (event.event !== 'message') continue;
+            try {
+              this.onMessage(JSON.parse(event.data) as JsonRpcMessage);
+            } catch {
+              // a comment or a malformed message
+            }
+          }
+          clearTimeout(timer);
+          if (this.endpoint) {
+            // The server stream is the session: a new one needs a fresh connect (the hub does that).
+            if (!this.started) this.onClose(new Error('MCP SSE stream ended'));
+          } else {
+            fail(new Error('MCP SSE stream ended before it sent an endpoint'));
+          }
+        } catch (error) {
+          clearTimeout(timer);
+          const reason = error as Error;
+          if (!settled) fail(reason);
+          if (!closed() && this.endpoint) this.onClose(reason);
+        } finally {
+          if (this.current === controller) this.current = undefined;
+        }
+      };
+      void consume();
+    });
+  }
+
+  async send(message: JsonRpcMessage): Promise<void> {
+    if (this.started) throw new Error('MCP SSE connection is closed');
+    const endpoint = await this.ready;
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { ...this.headers, 'content-type': 'application/json' },
+      body: JSON.stringify(message),
+      signal: this.controller.signal,
+    });
+    if (response.status === 202 || response.status === 204) return;
+    if (!response.ok) {
+      const text = (await response.text()).slice(0, 300);
+      throw new Error(`MCP SSE server answered HTTP ${response.status}${text ? `: ${text}` : ''}`);
+    }
+    // A few servers answer on the POST itself instead of the stream.
+    const text = await response.text();
+    if (!text.trim()) return;
+    try {
+      const body = JSON.parse(text) as JsonRpcMessage | JsonRpcMessage[];
+      for (const entry of Array.isArray(body) ? body : [body]) this.onMessage(entry);
+    } catch {
+      // the answer is expected on the stream
+    }
+  }
+
+  async close(): Promise<void> {
+    if (this.started) return;
+    this.started = true;
+    this.controller.abort();
+    this.current?.abort();
+    this.endpoint = undefined;
+  }
+}
+
 /** A server at a URL (Streamable HTTP): each message is a POST; answers come back on it. */
 export class HttpLink implements McpLink {
   onMessage: (message: JsonRpcMessage) => void = () => {};

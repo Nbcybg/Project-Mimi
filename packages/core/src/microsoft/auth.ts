@@ -12,7 +12,9 @@ export const MICROSOFT_SCOPES = [
   'Mail.Send',
   'Calendars.ReadWrite',
   'Tasks.ReadWrite',
+  'Contacts.ReadWrite',
   'Files.Read',
+  'Files.ReadWrite',
 ];
 export const GRAPH = 'https://graph.microsoft.com/v1.0';
 const authority = (tenant: string) => `https://login.microsoftonline.com/${encodeURIComponent(tenant)}/oauth2/v2.0`;
@@ -143,16 +145,17 @@ export class MicrosoftAuth {
   /** Calls a Microsoft Graph endpoint (a path under v1.0) and returns the parsed JSON body. */
   async request<T>(
     pathAndQuery: string,
-    init: { method?: string; body?: unknown; headers?: Record<string, string> } = {},
+    init: { method?: string; body?: unknown; bodyBytes?: Uint8Array; headers?: Record<string, string> } = {},
   ): Promise<T> {
     const response = await (this.options.fetchFn ?? fetch)(`${GRAPH}${pathAndQuery}`, {
       method: init.method ?? 'GET',
       headers: {
         authorization: `Bearer ${await this.accessToken()}`,
         ...(init.body !== undefined ? { 'content-type': 'application/json' } : {}),
+        ...(init.bodyBytes !== undefined && !init.headers?.['content-type'] ? { 'content-type': 'application/octet-stream' } : {}),
         ...init.headers,
       },
-      body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
+      body: init.bodyBytes ?? (init.body !== undefined ? JSON.stringify(init.body) : undefined),
     });
     const text = await response.text();
     if (!response.ok) {

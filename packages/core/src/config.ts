@@ -72,6 +72,11 @@ export interface CoreConfig {
   /** Folder allowlist for file/shell tools. */
   allowedDirs: string[];
   /**
+   * Narrower roots that shell commands may run in. Must lie inside `allowedDirs`; empty
+   * means any allowed folder (the old behaviour).
+   */
+  projectRoots: string[];
+  /**
    * Run file/shell tools inside the core process when no PC agent is connected.
    * Right for a core running on the user's own machine, wrong for one in the cloud.
    */
@@ -131,6 +136,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
     .map((dir) => dir.trim())
     .filter(Boolean)
     .map((dir) => path.resolve(rootDir, dir));
+  const projectRoots = (env.MIMI_PROJECT_ROOTS ?? '')
+    .split(';')
+    .map((dir) => dir.trim())
+    .filter(Boolean)
+    .map((dir) => path.resolve(rootDir, dir));
 
   return {
     rootDir,
@@ -173,6 +183,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
     memoryDir: path.join(userDir, 'memory'),
     historyDir: path.join(userDir, 'history'),
     allowedDirs: allowedDirs.length > 0 ? allowedDirs : [path.join(userDir, 'workspace')],
+    projectRoots,
     localPcTools: env.MIMI_LOCAL_PC_TOOLS !== '0' && env.MIMI_LOCAL_PC_TOOLS !== 'false',
     host: env.MIMI_HOST ?? '127.0.0.1',
     port: positiveInt(env.PORT ?? env.MIMI_PORT, 8787),

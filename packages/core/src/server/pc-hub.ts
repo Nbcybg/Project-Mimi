@@ -85,6 +85,7 @@ export class PcHub implements PcLink {
       thread: context.thread,
       agent: context.agent,
       ...(context.taskId ? { taskId: context.taskId } : {}),
+      ...(context.projectRoots?.length ? { projectRoots: context.projectRoots } : {}),
     };
     return new Promise<string>((resolve, reject) => {
       const finish = (settle: () => void) => {

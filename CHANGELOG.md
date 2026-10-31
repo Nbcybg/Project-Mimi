@@ -4,6 +4,39 @@
 
 ### 0.7.8-prototype
 
+- MCP: the legacy HTTP+SSE transport is supported next to stdio and Streamable HTTP; a refresh also records the
+  server's health latency. A dropped transport reconnects at once, then backs off (1 s doubling to 60 s, five
+  tries), and an SSE stream that ends closes the session so the next call starts a fresh one. Agents still see
+  tools as `mcp_<server>_<tool>` with risk and `{{secret.NAME}}`.
+- Permissions: each agent can carry its own `permissions` map (allow / ask / deny per tool or preset), enforced in
+  chat, task gates and workflow tool nodes; the agent editor shows a searchable allow/ask/deny matrix. Approval
+  cards offer once / task / session / always; forever grants are stored per agent (old global grants still apply as
+  `*`) and removable in Settings.
+- Coding tools: `grep`, multi-file `apply_patch`, `git_status` / `git_diff` / `git_log` / `git_commit`, and background
+  `run_shell` with `shell_output` / `shell_stop`; rewind now restores `apply_patch` changes too. A separate project
+  allowlist narrows `run_shell` to approved folders inside the allowed folders; the PC agent intersects the list with
+  its own folders, so the core can narrow but never widen what runs.
+- Agents: `lazy_tools` plus `tool_search` keep large tool lists out of the prompt until the model asks for them;
+  `send_to` can cap a sub-agent's rounds/tokens; `send_agents` runs up to 8 sub-agents in parallel; `plan_set` /
+  `plan_read` and `todo_write` / `todo_read` track long work, with the checklist shown open in the chat.
+- Custom workflow nodes are first-class node types (`custom:<name>`) as well as the older plugin node, and may declare
+  several outputs; an item's `$output` chooses one.
+- Workflow nodes: `assert`, `debug`, `json_schema`, `agent_call` and `mcp`; `$secret.NAME` works in every expression
+  (and in the code node) without writing the value into the workflow.
+- AI Overseer: `agent_test` (alias of `agent_message`), `secret_audit`, `config_diff` / `config_rollback` (agents,
+  tools, presets, skills and workflows; writes are snapshotted first), and `run_log` (tool call counts, failures
+  and duration, backed by migration 023; chat tools plus workflow `tool`, `mcp`, `connector` and `sheets` nodes are
+  logged, and `tool_test` records the tool it tested).
+- Secrets: workflow run history, debug output, errors and the run result redact the actual vault values, not just
+  credential-shaped text. `git_commit` refuses `.env`, key and credential files unless `allow_secrets` is set.
+- Calendar, contacts and files: Google Calendar events can be updated and deleted next to list/create; Google
+  Contacts and Outlook Contacts can be searched, created and updated; Google Drive gains `drive_share` and
+  `drive_update_metadata` next to `drive_upload` (multipart, up to 50 MB) and OneDrive gains `onedrive_upload`
+  (Files.ReadWrite, up to 50 MB). `media_trim` cuts video/audio to a new file without touching the original.
+  Google and Microsoft accounts must be reconnected once to grant the contacts / file-write scopes.
+- Media editing: `pdf_merge`, `pdf_split`, `pdf_delete_pages` and `pdf_rotate` (pdf-lib), `image_crop` /
+  `image_rotate`, `video_merge` and `media_subtitle` (soft SRT track) all write new files and never change the
+  originals. MCP servers get a quiet 15-minute health check over the existing connection.
 - Chat: room settings sync across devices, a go-to-bottom button, and permission notifications.
 - Triggers: schedule times are shown in the local time zone, not UTC.
 - Chat: the message action bar (love, react, reply, forward, copy, pin) sits under the bubble and is no longer

@@ -5,9 +5,12 @@ export const GOOGLE_SCOPES = [
   'https://www.googleapis.com/auth/gmail.send',
   'https://www.googleapis.com/auth/gmail.modify',
   'https://www.googleapis.com/auth/calendar.events',
+  'https://www.googleapis.com/auth/contacts.readonly',
+  'https://www.googleapis.com/auth/contacts',
   'https://www.googleapis.com/auth/spreadsheets',
   'https://www.googleapis.com/auth/drive.readonly',
   'https://www.googleapis.com/auth/drive.file',
+  'https://www.googleapis.com/auth/drive',
   'https://www.googleapis.com/auth/documents',
   'https://www.googleapis.com/auth/tasks',
   'https://www.googleapis.com/auth/forms.body',
@@ -126,14 +129,19 @@ export class GoogleAuth {
   }
 
   /** Calls a Google REST endpoint and returns the parsed JSON body. */
-  async request<T>(url: string, init: { method?: string; body?: unknown } = {}): Promise<T> {
+  async request<T>(
+    url: string,
+    init: { method?: string; body?: unknown; bodyBytes?: Uint8Array; headers?: Record<string, string> } = {},
+  ): Promise<T> {
     const response = await (this.options.fetchFn ?? fetch)(url, {
       method: init.method ?? 'GET',
       headers: {
         authorization: `Bearer ${await this.accessToken()}`,
         ...(init.body !== undefined ? { 'content-type': 'application/json' } : {}),
+        ...(init.bodyBytes !== undefined && !init.headers?.['content-type'] ? { 'content-type': 'application/octet-stream' } : {}),
+        ...init.headers,
       },
-      body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
+      body: init.bodyBytes ?? (init.body !== undefined ? JSON.stringify(init.body) : undefined),
     });
     const text = await response.text();
     if (!response.ok) {

@@ -37,13 +37,13 @@ const summaryOf = (row: RunRow): WorkflowRunSummary => {
 };
 
 /** Strips credentials from anything a node stored, including errors from older rows. */
-function safeNodes(nodes: WorkflowRunNodeView[]): WorkflowRunNodeView[] {
+function safeNodes(nodes: WorkflowRunNodeView[], known?: readonly string[]): WorkflowRunNodeView[] {
   return nodes.map((node) => ({
     ...node,
-    input: redactItems(node.input),
-    output: redactItems(node.output),
-    ...(node.error ? { error: redactText(node.error) } : {}),
-    ...(node.trace ? { trace: redactValue(node.trace) as WorkflowRunNodeView['trace'] } : {}),
+    input: redactItems(node.input, known),
+    output: redactItems(node.output, known),
+    ...(node.error ? { error: redactText(node.error, known) } : {}),
+    ...(node.trace ? { trace: redactValue(node.trace, known) as WorkflowRunNodeView['trace'] } : {}),
   }));
 }
 
@@ -65,8 +65,8 @@ export class WorkflowRunStore {
     this.db = db;
   }
 
-  record(workflow: string, mode: string, startedAt: Date, result: WorkflowRunResult): number {
-    const stored = safeNodes(result.nodes);
+  record(workflow: string, mode: string, startedAt: Date, result: WorkflowRunResult, knownSecrets: readonly string[] = []): number {
+    const stored = safeNodes(result.nodes, knownSecrets);
     let nodes = JSON.stringify(trimmed(stored, ITEMS_PER_NODE));
     // A huge run keeps only a peek at each node rather than blowing up the database.
     if (nodes.length > MAX_RUN_BYTES) nodes = JSON.stringify(trimmed(stored, 2));
@@ -80,7 +80,7 @@ export class WorkflowRunStore {
         workflow,
         mode,
         result.ok ? 1 : 0,
-        redactText(result.result),
+        redactText(result.result, knownSecrets),
         startedAt.toISOString(),
         Date.now() - startedAt.getTime(),
         result.nodes.length,

@@ -146,6 +146,51 @@ test('extract_file node: CSV / JSON become items, HTML text, PDF and images go t
   assert.match(excel.error!, /not a zip/);
 });
 
+test('assert, json_schema, debug, custom:<name> and $secret work in a node', async () => {
+  const ok = await run(node('assert', { conditions: [{ left: '{{ $json.status }}', operator: 'equals', right: 'ok' }] }), [{ json: { status: 'ok' } }]);
+  assert.equal(ok.ok, true, ok.error);
+  const failed = await run(node('assert', { conditions: [{ left: '{{ $json.status }}', operator: 'equals', right: 'ok' }], message: 'bad status' }), [{ json: { status: 'no' } }]);
+  assert.equal(failed.ok, false);
+  assert.match(failed.error!, /bad status/);
+
+  const schema = { type: 'object', required: ['name'], properties: { name: { type: 'string' } } };
+  const valid = await run(node('json_schema', { schema }), [{ json: { name: 'Mimi' } }, { json: { id: 2 } }]);
+  assert.equal(valid.ok, true, valid.error);
+  assert.equal(valid.outputs.main!.length, 1);
+  assert.match(String(valid.outputs.invalid![0]!.json._error), /name/);
+
+  const logs: string[] = [];
+  const debugged = await run(node('debug', { label: 'check' }), [{ json: { a: 1 } }], deps({ log: (line) => logs.push(line) }));
+  assert.equal(debugged.ok, true);
+  assert.match(logs[0]!, /check/);
+  assert.equal(debugged.outputs.main![0]!.json.a, 1);
+
+  const custom = await run(
+    node('custom:upper', { config: { suffix: '!' } }),
+    [{ json: { text: 'hi' } }],
+    deps({ customNode: (name) => (name === 'upper' ? { code: 'return items.map((json) => ({ ...json, text: String(json.text).toUpperCase() + ($config.suffix || "") }));' } : undefined) }),
+  );
+  assert.equal(custom.ok, true, custom.error);
+  assert.equal(custom.outputs.main![0]!.json.text, 'HI!');
+
+  const routed = await run(
+    node('custom:router', { config: {} }),
+    [{ json: { value: 1 } }],
+    deps({ customNode: (name) => (name === 'router' ? { code: 'return items.map((json) => ({ ...json, $output: json.value > 0 ? "yes" : "no" }));', outputs: ['yes', 'no'] } : undefined) }),
+  );
+  assert.equal(routed.ok, true, routed.error);
+  assert.deepEqual(routed.outputs.yes?.map((item) => item.json.value), [1]);
+  assert.deepEqual(routed.outputs.no, []);
+
+  const secret = await run(
+    node('set', { fields: { token: '{{ $secret.API_TOKEN }}' } }),
+    [{ json: {} }],
+    deps({ secret: (name) => (name === 'API_TOKEN' ? 's3cret' : undefined), secretNames: () => ['API_TOKEN'] }),
+  );
+  assert.equal(secret.ok, true, secret.error);
+  assert.equal(secret.outputs.main![0]!.json.token, 's3cret');
+});
+
 test('core: extract_file reads a PDF with the agent vision model', async () => {
   const target = await makeTestCore({ small: replyingModel([{ text: 'ใบเสร็จ: 99 บาท' }]) });
   const folder = target.core.deps.allowedDirs[0]!;

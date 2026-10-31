@@ -475,7 +475,7 @@
     const title = M().textInput(spec.title || '', 'ชื่อที่โชว์ (ไม่บังคับ)');
     const top = el('div', 'grid2');
     top.append(M().labelled('ชื่อ (a-z 0-9 -)', name), M().labelled('ชื่อที่โชว์', title));
-    const transport = select(['stdio', 'http'], spec.transport || 'stdio');
+    const transport = select(['stdio', 'http', 'sse'], spec.transport || 'stdio');
     const risk = select(['write', 'read', 'network', 'shell', 'delete'], spec.risk || 'write');
     const mid = el('div', 'grid2');
     mid.append(M().labelled('ต่อแบบ', transport), M().labelled('ระดับของเครื่องมือที่ไม่ได้บอกว่าอ่านอย่างเดียว', risk));
@@ -494,7 +494,7 @@
     httpBox.append(M().labelled('URL', url), M().labelled('Headers (ชื่อ: ค่า บรรทัดละตัว)', headers));
     const showTransport = () => {
       stdioBox.hidden = transport.value !== 'stdio';
-      httpBox.hidden = transport.value !== 'http';
+      httpBox.hidden = transport.value === 'stdio';
     };
     transport.onchange = showTransport;
     showTransport();
@@ -517,7 +517,7 @@
     if (!isNew) {
       const status = el('div');
       if (spec.error) status.append(el('p', 'hint badtxt', `ต่อไม่ได้: ${spec.error}`));
-      if (spec.checkedAt) status.append(el('p', 'hint', `อ่านรายการล่าสุด ${M().fmtDate(spec.checkedAt)}`));
+      if (spec.checkedAt) status.append(el('p', 'hint', `อ่านรายการล่าสุด ${M().fmtDate(spec.checkedAt)}${spec.latencyMs !== undefined ? ` · health ${spec.latencyMs} ms` : ''}`));
       if (spec.tools.length > 0) {
         const list = el('div', 'tbl');
         for (const tool of spec.tools) {

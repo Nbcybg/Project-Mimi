@@ -787,6 +787,202 @@ export const mediaMuxCoverTool = defineTool({
   },
 });
 
+export const mediaTrimTool = defineTool({
+  name: 'media_trim',
+  description:
+    'Trim a video or audio file to a new file with ffmpeg (start + duration, in seconds). Originals are never changed. Video becomes H.264/AAC MP4 when the output ends in .mp4/.mov; audio is copied or re-encoded.',
+  risk: 'write',
+  target: 'pc',
+  inputSchema: z.object({
+    path: z.string().min(1).describe('Source media file inside the allowed folders'),
+    output: z.string().min(1).describe('New file path (e.g. clips/intro.mp4)'),
+    start_seconds: z.number().min(0).max(86_400).optional().describe('Default 0'),
+    duration_seconds: z.number().positive().max(86_400).describe('How many seconds to keep'),
+    reencode: z.boolean().optional().describe('Re-encode instead of stream copy (default true)'),
+  }),
+  summarize: (input) => `Trim ${input.path} to ${input.duration_seconds}s → ${input.output}`,
+  async execute(input, context) {
+    const source = resolveAllowedPath(input.path, context.allowedDirs);
+    const output = resolveAllowedPath(input.output, context.allowedDirs);
+    const tools = await detectMediaTools();
+    requireTool(tools.ffmpeg, 'ffmpeg');
+    await fs.mkdir(path.dirname(output), { recursive: true });
+    const start = input.start_seconds ?? 0;
+    const video = /\.(mp4|mov|mkv|webm|avi|m4v)$/i.test(output);
+    const args = ['-v', 'error', '-ss', String(start), '-i', source, '-t', String(input.duration_seconds)];
+    if (input.reencode === false) args.push('-c', 'copy');
+    else if (video) args.push('-c:v', 'libx264', '-c:a', 'aac', '-pix_fmt', 'yuv420p', '-movflags', '+faststart');
+    else args.push('-vn', '-c:a', 'aac');
+    args.push('-y', output);
+    const result = await runMedia('ffmpeg', args, {
+      cwd: path.dirname(source),
+      timeoutMs: 300_000,
+      maxOutput: 1024 * 1024,
+      ...(context.signal ? { signal: context.signal } : {}),
+    });
+    if (result.exitCode !== 0) throw new Error(`ffmpeg failed: ${result.output.trim() || `exit ${result.exitCode}`}`);
+    return JSON.stringify({ ok: true, source, output, start, duration: input.duration_seconds, summary: `Wrote ${output}` }, null, 2);
+  },
+});
+
+export const imageCropTool = defineTool({
+  name: 'image_crop',
+  description: 'Crop an image to a rectangle and write a new file with ffmpeg. The source is never changed.',
+  risk: 'write',
+  target: 'pc',
+  inputSchema: z.object({
+    path: z.string().min(1).describe('Source image inside the allowed folders'),
+    output: z.string().min(1).describe('New file path, e.g. cropped/photo.jpg'),
+    x: z.number().int().min(0).describe('Left edge in pixels'),
+    y: z.number().int().min(0).describe('Top edge in pixels'),
+    width: z.number().int().min(1).max(20_000),
+    height: z.number().int().min(1).max(20_000),
+  }),
+  summarize: (input) => `Crop ${path.basename(input.path)} to ${input.width}x${input.height}`,
+  async execute(input, context) {
+    const source = resolveAllowedPath(input.path, context.allowedDirs);
+    const output = resolveAllowedPath(input.output, context.allowedDirs);
+    if (output.toLowerCase() === source.toLowerCase()) throw new Error('The output must be a new file, not the source.');
+    const tools = await detectMediaTools();
+    requireTool(tools.ffmpeg, 'ffmpeg');
+    await fs.mkdir(path.dirname(output), { recursive: true });
+    const result = await runMedia(
+      'ffmpeg',
+      ['-v', 'error', '-i', source, '-vf', `crop=${input.width}:${input.height}:${input.x}:${input.y}`, '-frames:v', '1', '-y', output],
+      { cwd: path.dirname(source), timeoutMs: 120_000, maxOutput: 1024 * 1024, ...(context.signal ? { signal: context.signal } : {}) },
+    );
+    if (result.exitCode !== 0) throw new Error(`ffmpeg could not crop the image: ${result.output.trim() || `exit ${result.exitCode}`}`);
+    return JSON.stringify({ ok: true, source, output, x: input.x, y: input.y, width: input.width, height: input.height, summary: `Wrote ${output}` }, null, 2);
+  },
+});
+
+export const imageRotateTool = defineTool({
+  name: 'image_rotate',
+  description: 'Rotate an image clockwise by any angle and write a new file with ffmpeg. The source is never changed.',
+  risk: 'write',
+  target: 'pc',
+  inputSchema: z.object({
+    path: z.string().min(1).describe('Source image inside the allowed folders'),
+    output: z.string().min(1).describe('New file path'),
+    degrees: z.number().min(-360).max(360).describe('Clockwise degrees; 90 / 180 / 270 keep the best quality'),
+    background: z.string().optional().describe('Colour behind an arbitrary rotation (default black)'),
+  }),
+  summarize: (input) => `Rotate ${path.basename(input.path)} by ${input.degrees}°`,
+  async execute(input, context) {
+    const source = resolveAllowedPath(input.path, context.allowedDirs);
+    const output = resolveAllowedPath(input.output, context.allowedDirs);
+    if (output.toLowerCase() === source.toLowerCase()) throw new Error('The output must be a new file, not the source.');
+    if (input.degrees === 0) throw new Error('Nothing to rotate: give a non-zero angle.');
+    const tools = await detectMediaTools();
+    requireTool(tools.ffmpeg, 'ffmpeg');
+    await fs.mkdir(path.dirname(output), { recursive: true });
+    const normalized = ((input.degrees % 360) + 360) % 360;
+    const filter =
+      normalized === 90
+        ? 'transpose=1'
+        : normalized === 180
+          ? 'transpose=1,transpose=1'
+          : normalized === 270
+            ? 'transpose=2'
+            : `rotate=${normalized}*PI/180:ow=rotw(${normalized}*PI/180):oh=roth(${normalized}*PI/180):c=${input.background?.trim() || 'black'}`;
+    const result = await runMedia('ffmpeg', ['-v', 'error', '-i', source, '-vf', filter, '-frames:v', '1', '-y', output], {
+      cwd: path.dirname(source),
+      timeoutMs: 120_000,
+      maxOutput: 1024 * 1024,
+      ...(context.signal ? { signal: context.signal } : {}),
+    });
+    if (result.exitCode !== 0) throw new Error(`ffmpeg could not rotate the image: ${result.output.trim() || `exit ${result.exitCode}`}`);
+    return JSON.stringify({ ok: true, source, output, degrees: input.degrees, summary: `Wrote ${output}` }, null, 2);
+  },
+});
+
+/** A path as the concat demuxer reads it: forward slashes, single quotes escaped. */
+function concatLine(file: string): string {
+  return `file '${path.resolve(file).replace(/\\/g, '/').replaceAll("'", "'\\''")}'`;
+}
+
+export const videoMergeTool = defineTool({
+  name: 'video_merge',
+  description:
+    'Join videos into one file, in the order given, by stream copy (the inputs should share codecs, e.g. clips from the same phone). The source files are never changed.',
+  risk: 'write',
+  target: 'pc',
+  inputSchema: z.object({
+    files: z.array(z.string()).min(2).describe('Video paths inside the allowed folders, in order'),
+    output: z.string().min(1).describe('New .mp4/.mov/.mkv path'),
+  }),
+  summarize: (input) => `Merge ${input.files.length} videos into ${input.output}`,
+  async execute(input, context) {
+    const sources = input.files.map((file) => resolveAllowedPath(file, context.allowedDirs));
+    const output = resolveAllowedPath(input.output, context.allowedDirs);
+    if (sources.some((source) => source.toLowerCase() === output.toLowerCase())) throw new Error('The output must be a new file, not one of the sources.');
+    const tools = await detectMediaTools();
+    requireTool(tools.ffmpeg, 'ffmpeg');
+    await fs.mkdir(path.dirname(output), { recursive: true });
+    const list = path.join(path.dirname(output), `.mimi-concat-${process.pid}-${Date.now()}.txt`);
+    await fs.writeFile(list, `${sources.map(concatLine).join('\n')}\n`, 'utf8');
+    try {
+      const result = await runMedia('ffmpeg', ['-v', 'error', '-f', 'concat', '-safe', '0', '-i', list, '-c', 'copy', '-y', output], {
+        cwd: path.dirname(output),
+        timeoutMs: 600_000,
+        maxOutput: 2 * 1024 * 1024,
+        ...(context.signal ? { signal: context.signal } : {}),
+      });
+      if (result.exitCode !== 0) {
+        throw new Error(
+          `ffmpeg could not join the videos: ${result.output.trim() || `exit ${result.exitCode}`}. The clips probably use different codecs; re-encode or trim them to the same format first.`,
+        );
+      }
+    } finally {
+      await fs.rm(list, { force: true });
+    }
+    return JSON.stringify({ ok: true, output, sources, summary: `Merged ${sources.length} videos into ${output}.` }, null, 2);
+  },
+});
+
+export const mediaSubtitleTool = defineTool({
+  name: 'media_subtitle',
+  description:
+    'Add an SRT subtitle file to an MP4 as a soft subtitle track (no re-encoding; viewers can turn it on or off). The video and subtitles are never changed.',
+  risk: 'write',
+  target: 'pc',
+  inputSchema: z.object({
+    video: z.string().min(1).describe('Source .mp4 inside the allowed folders'),
+    subtitles: z.string().min(1).describe('SRT file inside the allowed folders'),
+    output: z.string().min(1).describe('New .mp4 path'),
+    language: z.string().optional().describe('Track language tag, e.g. tha or eng (default und)'),
+  }),
+  summarize: (input) => `Add subtitles to ${path.basename(input.video)} -> ${input.output}`,
+  async execute(input, context) {
+    const video = resolveAllowedPath(input.video, context.allowedDirs);
+    const subtitles = resolveAllowedPath(input.subtitles, context.allowedDirs);
+    const output = resolveAllowedPath(input.output, context.allowedDirs);
+    if (output.toLowerCase() === video.toLowerCase()) throw new Error('The output must be a new file, not the source video.');
+    if (!/\.mp4$/i.test(output)) throw new Error('A soft subtitle track needs an .mp4 output (mov_text).');
+    const tools = await detectMediaTools();
+    requireTool(tools.ffmpeg, 'ffmpeg');
+    await fs.mkdir(path.dirname(output), { recursive: true });
+    const language = (input.language ?? 'und').trim() || 'und';
+    const result = await runMedia(
+      'ffmpeg',
+      [
+        '-v', 'error',
+        '-i', video,
+        '-i', subtitles,
+        '-map', '0',
+        '-map', '1',
+        '-c', 'copy',
+        '-c:s', 'mov_text',
+        '-metadata:s:s:0', `language=${language}`,
+        '-y', output,
+      ],
+      { cwd: path.dirname(video), timeoutMs: 300_000, maxOutput: 2 * 1024 * 1024, ...(context.signal ? { signal: context.signal } : {}) },
+    );
+    if (result.exitCode !== 0) throw new Error(`ffmpeg could not add the subtitles: ${result.output.trim() || `exit ${result.exitCode}`}`);
+    return JSON.stringify({ ok: true, video, subtitles, output, language, summary: `Wrote ${output} with a ${language} subtitle track.` }, null, 2);
+  },
+});
+
 export const mediaTools = [
   mediaProbeTool,
   photoScanTool,
@@ -796,4 +992,9 @@ export const mediaTools = [
   mediaContactSheetTool,
   mediaTransformTool,
   mediaMuxCoverTool,
+  mediaTrimTool,
+  imageCropTool,
+  imageRotateTool,
+  videoMergeTool,
+  mediaSubtitleTool,
 ];

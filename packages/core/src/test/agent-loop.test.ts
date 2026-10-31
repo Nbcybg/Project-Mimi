@@ -117,6 +117,23 @@ test('tool call: runs the tool, feeds the result back, then answers', async () =
   assert.deepEqual(storedRoles(harness.db), ['user', 'assistant', 'tool', 'assistant']);
 });
 
+test('lazy tools: tool_search loads a declared tool into the run', async () => {
+  const model = scriptedModel([
+    toolStep('tool_search', { query: 'echo' }),
+    toolStep('echo', { text: 'ping' }),
+    textStep('done'),
+  ]);
+  const harness = makeHarness(model);
+
+  const events = await collect(runAgent(harness.deps, { agent: makeAgent({ lazyTools: true }), userText: 'echo it' }));
+
+  const results = eventsOf(events, 'tool-result').map((event) => event.result);
+  assert.equal(results[0]!.name, 'tool_search');
+  assert.match(results[0]!.output, /mimi-tools/);
+  assert.deepEqual(results[1], { callId: results[1]!.callId, name: 'echo', ok: true, output: 'echo: ping' });
+  assert.equal(eventsOf(events, 'run-finish')[0]!.reason, 'stop');
+});
+
 test('max_rounds budget stops a model that never stops calling tools', async () => {
   const model = scriptedModel([toolStep('echo', { text: 'again' })]);
   const harness = makeHarness(model);
@@ -155,6 +172,22 @@ test('ask-level tool runs only after the user approves', async () => {
   assert.equal(harness.broker.requests[0]!.summary, 'Change a.txt');
   assert.deepEqual(eventsOf(events, 'permission-decision')[0]!.decision, { allow: true, via: 'user' });
   assert.deepEqual(harness.executed, [{ tool: 'danger', input: { target: 'a.txt' } }]);
+});
+
+test('per-agent policy: danger allowed without asking, while another allowed tool stays ask', async () => {
+  const model = scriptedModel([toolStep('danger', { target: 'file' }), textStep('done')]);
+  const harness = makeHarness(model, { agentPermissions: { danger: 'allow', echo: 'ask' } });
+
+  const events = await collect(runAgent(harness.deps, { agent: makeAgent(), userText: 'change it' }));
+
+  assert.equal(eventsOf(events, 'tool-result')[0]!.result.ok, true);
+  assert.equal(harness.broker.requests.length, 0, 'the agent policy allowed danger without a prompt');
+  assert.deepEqual(harness.executed, [{ tool: 'danger', input: { target: 'file' } }]);
+
+  const asked = scriptedModel([toolStep('echo', { text: 'hi' }), textStep('done')]);
+  const second = makeHarness(asked, { agentPermissions: { echo: 'ask' } });
+  await collect(runAgent(second.deps, { agent: makeAgent(), userText: 'echo' }));
+  assert.equal(second.broker.requests.length, 1, 'an explicit ask still asks');
 });
 
 test('denied tool is not run; the model is told and can still answer', async () => {

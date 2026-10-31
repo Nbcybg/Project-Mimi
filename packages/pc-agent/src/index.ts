@@ -11,6 +11,11 @@ import { runShellTool } from './tools/run-shell.ts';
 import { screenTools } from './tools/screen.ts';
 import { systemTools } from './tools/system.ts';
 import { writeFileTool } from './tools/write-file.ts';
+import { backgroundTools } from './tools/background.ts';
+import { applyPatchTool } from './tools/patch.ts';
+import { grepTool } from './tools/search.ts';
+import { gitTools } from './tools/git.ts';
+import { pdfTools } from './tools/pdf.ts';
 
 export { PcAgent, type PcAgentOptions } from './client.ts';
 export {
@@ -22,7 +27,13 @@ export {
   osConsentPrompt,
   StdioConsentPrompt,
 } from './local-consent.ts';
-export { PathNotAllowedError, missingPathError, resolveAllowedPath } from './tools/path-guard.ts';
+export {
+  PathNotAllowedError,
+  ProjectNotAllowedError,
+  missingPathError,
+  resolveAllowedPath,
+  resolveProjectPath,
+} from './tools/path-guard.ts';
 export { type CdpClient, connectCdp } from './browser/cdp.ts';
 export {
   callResultText,
@@ -33,7 +44,8 @@ export {
   type McpCallResult,
   type McpContent,
   type McpLink,
-  type McpTool,
+  type   McpTool,
+  SseLink,
   StdioLink,
 } from './mcp/client.ts';
 export { closeMcpSessions, type McpRunSpec, mcpSessionTool, pcInternalTools } from './tools/mcp-session.ts';
@@ -60,16 +72,22 @@ export {
 export { computerTools } from './tools/computer.ts';
 export {
   detectMediaTools,
+  imageCropTool,
+  imageRotateTool,
   mediaContactSheetTool,
   mediaMuxCoverTool,
   mediaProbeTool,
+  mediaSubtitleTool,
   mediaTools,
   mediaTransformTool,
+  mediaTrimTool,
   photoApplyTool,
   photoScanTool,
   photoUndoTool,
   photoVerifyTool,
+  videoMergeTool,
 } from './tools/media.ts';
+export { pageRange, pdfDeletePagesTool, pdfMergeTool, pdfRotateTool, pdfSplitTool, pdfTools } from './tools/pdf.ts';
 export {
   isWorkspaceCommandBlocked,
   isWorkspaceDestructive,
@@ -84,16 +102,25 @@ export {
 export { parseProcessList, powerInvocation, systemTools } from './tools/system.ts';
 export { clipboardTool, screenshotTool, screenTools } from './tools/screen.ts';
 export { readFileTool, runShellTool, writeFileTool };
+export { applyPatchTool } from './tools/patch.ts';
+export { grepTool } from './tools/search.ts';
+export { gitCommitTool, gitDiffTool, gitLogTool, gitStatusTool, gitTools } from './tools/git.ts';
+export { backgroundTools, shellOutputTool, shellStopTool, startBackground } from './tools/background.ts';
 
 /** Tools that act on the user's machine. The core holds their schemas; the PC agent runs them. */
 export const pcTools: ToolDefinition<any>[] = [
   readFileTool,
   writeFileTool,
+  applyPatchTool,
+  grepTool,
   runShellTool,
+  ...backgroundTools,
+  ...gitTools,
   ...fileTools,
   ...organizeTools,
   ...workspaceTools,
   ...mediaTools,
+  ...pdfTools,
   ...computerTools,
   ...systemTools,
   ...browserTools,

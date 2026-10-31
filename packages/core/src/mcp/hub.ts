@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { renderTemplate, truncateOutput } from '../tools/custom-tools.ts';
 import { PC_OFFLINE, type PcRunner } from '../tools/executor.ts';
 import type { ToolContext, ToolDefinition } from '../tools/registry.ts';
-import { callResultText, HttpLink, McpClient, type McpCallResult, type McpLink, type McpTool, StdioLink } from './client.ts';
+import { callResultText, HttpLink, McpClient, type McpCallResult, type McpLink, type McpTool, SseLink, StdioLink } from './client.ts';
 
 export const MCP_SERVER_NAME = /^[a-z0-9][a-z0-9-]{0,23}$/;
 
@@ -13,7 +13,7 @@ const serverSchema = z.strictObject({
   name: z.string().regex(MCP_SERVER_NAME, 'lowercase letters, digits and "-" (no "_"), up to 24'),
   title: z.string().optional(),
   enabled: z.boolean().default(true),
-  transport: z.enum(['stdio', 'http']),
+  transport: z.enum(['stdio', 'http', 'sse']),
   command: z.string().optional(),
   args: z.array(z.string()).optional(),
   cwd: z.string().optional(),
@@ -28,11 +28,22 @@ const serverSchema = z.strictObject({
 interface CachedServer {
   tools: McpTool[];
   checkedAt?: string;
+  latencyMs?: number;
   error?: string;
 }
 
 /** Environment a stdio server starts with: enough to find programs, none of Mimi's keys. */
 const BASE_ENV = ['PATH', 'Path', 'PATHEXT', 'SystemRoot', 'SYSTEMROOT', 'ComSpec', 'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP', 'LANG', 'ProgramFiles', 'ProgramData'];
+
+/** How a dropped MCP transport is retried: at once, then with an exponential backoff. */
+export interface McpReconnectOptions {
+  /** First backoff step in milliseconds; each failed attempt doubles it. Default 1000. */
+  baseMs?: number;
+  /** Longest wait between attempts. Default 60_000. */
+  maxMs?: number;
+  /** Attempts after a drop before giving up. Default 5; 0 turns reconnecting off. */
+  maxAttempts?: number;
+}
 
 export interface McpHubOptions {
   /** `tools/mcp/servers.json`: the servers (synced with the user folder). */
@@ -43,6 +54,8 @@ export interface McpHubOptions {
   secret(name: string): string | undefined;
   /** Where servers marked `runsOn: "pc"` run; without it they run here. */
   pc?: PcRunner;
+  /** Automatic reconnect after a dropped session; on by default. */
+  reconnect?: boolean | McpReconnectOptions;
   /** Tests swap the transport. */
   link?(spec: McpServerSpec, render: (text: string) => string): McpLink;
 }
@@ -113,6 +126,8 @@ function inputSchemaOf(schema: Record<string, unknown> | undefined): z.ZodType<R
 export class McpHub {
   private readonly options: McpHubOptions;
   private readonly live = new Map<string, Promise<McpSession>>();
+  private readonly reconnecting = new Map<string, ReturnType<typeof setTimeout>>();
+  private disposed = false;
 
   constructor(options: McpHubOptions) {
     this.options = options;
@@ -142,6 +157,7 @@ export class McpHub {
         ...spec,
         tools: (cached?.tools ?? []).map((tool) => this.toolView(spec, tool)),
         ...(cached?.checkedAt ? { checkedAt: cached.checkedAt } : {}),
+        ...(cached?.latencyMs !== undefined ? { latencyMs: cached.latencyMs } : {}),
         ...(cached?.error ? { error: cached.error } : {}),
       };
     });
@@ -150,7 +166,7 @@ export class McpHub {
   save(input: McpServerSpec, renameFrom?: string): McpServerSpec {
     const spec = serverSchema.parse(input);
     if (spec.transport === 'stdio' && !spec.command?.trim()) throw new Error('Fill in the command that starts the MCP server.');
-    if (spec.transport === 'http') {
+    if (spec.transport === 'http' || spec.transport === 'sse') {
       try {
         const url = new URL(spec.url ?? '');
         if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('http');
@@ -188,14 +204,18 @@ export class McpHub {
     const spec = this.server(name);
     if (!spec) throw new Error(`Unknown MCP server "${name}".`);
     await this.disconnect(name);
+    const started = Date.now();
     try {
       const client = await this.client(name);
       const tools = await client.listTools();
-      this.setCache(name, { tools, checkedAt: new Date().toISOString() });
+      // `listTools` proves the server is alive; the round-trip time is its health figure.
+      this.cancelReconnect(name);
+      this.setCache(name, { tools, checkedAt: new Date().toISOString(), latencyMs: Date.now() - started });
     } catch (error) {
       const previous = this.cache()[name];
       this.setCache(name, { tools: previous?.tools ?? [], checkedAt: new Date().toISOString(), error: (error as Error).message.slice(0, 500) });
       await this.disconnect(name);
+      this.scheduleReconnect(name);
     }
     return this.views().find((view) => view.name === name)!;
   }
@@ -223,7 +243,36 @@ export class McpHub {
     return this.entries().map((entry) => ({ ...this.toolView(entry.server, entry.tool), server: entry.server }));
   }
 
+  /**
+   * Checks every enabled server over its existing connection (or opens one) and updates
+   * the cached tool list, latency and error. Used by the core's periodic health timer.
+   */
+  async healthCheck(): Promise<void> {
+    for (const spec of this.servers()) {
+      if (!spec.enabled) continue;
+      const previous = this.cache()[spec.name];
+      const started = Date.now();
+      try {
+        const client = await this.client(spec.name);
+        const tools = await client.listTools();
+        this.cancelReconnect(spec.name);
+        this.setCache(spec.name, { tools, checkedAt: new Date().toISOString(), latencyMs: Date.now() - started });
+      } catch (error) {
+        this.setCache(spec.name, {
+          tools: previous?.tools ?? [],
+          checkedAt: new Date().toISOString(),
+          ...(previous?.latencyMs !== undefined ? { latencyMs: previous.latencyMs } : {}),
+          error: (error as Error).message.slice(0, 500),
+        });
+        await this.disconnect(spec.name);
+        this.scheduleReconnect(spec.name);
+      }
+    }
+  }
+
   async close(): Promise<void> {
+    this.disposed = true;
+    for (const name of [...this.reconnecting.keys()]) this.cancelReconnect(name);
     await Promise.all([...this.live.keys()].map((name) => this.disconnect(name)));
   }
 
@@ -272,6 +321,8 @@ export class McpHub {
   private client(name: string): Promise<McpSession> {
     const existing = this.live.get(name);
     if (existing) return existing;
+    // A call arriving before the backoff timer is a good moment to connect now.
+    this.cancelReconnect(name);
     const spec = this.server(name);
     if (!spec) return Promise.reject(new Error(`Unknown MCP server "${name}".`));
     if (!spec.enabled) return Promise.reject(new Error(`MCP server "${name}" is turned off.`));
@@ -288,8 +339,19 @@ export class McpHub {
       }
     }
     const connecting = McpClient.connect((this.options.link ?? this.makeLink)(spec, render)).then((client) => {
-      client.onClose = () => {
-        if (this.live.get(name) === connecting) this.live.delete(name);
+      client.onClose = (error) => {
+        if (this.live.get(name) !== connecting) return;
+        this.live.delete(name);
+        if (this.disposed) return;
+        // Show the drop on the Tools screen; a successful reconnect clears it.
+        const previous = this.cache()[name];
+        this.setCache(name, {
+          tools: previous?.tools ?? [],
+          checkedAt: new Date().toISOString(),
+          ...(previous?.latencyMs !== undefined ? { latencyMs: previous.latencyMs } : {}),
+          error: error.message.slice(0, 500),
+        });
+        this.scheduleReconnect(name);
       };
       return client;
     });
@@ -301,10 +363,10 @@ export class McpHub {
   }
 
   private remoteSpec(spec: McpServerSpec, render: (text: string) => string): Record<string, unknown> {
-    if (spec.transport === 'http') {
+    if (spec.transport === 'http' || spec.transport === 'sse') {
       const headers: Record<string, string> = {};
       for (const [key, value] of Object.entries(spec.headers ?? {})) headers[key] = render(value);
-      return { transport: 'http', url: render(spec.url ?? ''), headers };
+      return { transport: spec.transport, url: render(spec.url ?? ''), headers };
     }
     const env: Record<string, string> = {};
     for (const [key, value] of Object.entries(spec.env ?? {})) env[key] = render(value);
@@ -312,10 +374,11 @@ export class McpHub {
   }
 
   private readonly makeLink = (spec: McpServerSpec, render: (text: string) => string): McpLink => {
-    if (spec.transport === 'http') {
+    if (spec.transport === 'http' || spec.transport === 'sse') {
       const headers: Record<string, string> = {};
       for (const [key, value] of Object.entries(spec.headers ?? {})) headers[key] = render(value);
-      return new HttpLink(render(spec.url ?? ''), headers);
+      const url = render(spec.url ?? '');
+      return spec.transport === 'sse' ? new SseLink(url, headers) : new HttpLink(url, headers);
     }
     const env: NodeJS.ProcessEnv = {};
     for (const key of BASE_ENV) if (process.env[key] !== undefined) env[key] = process.env[key];
@@ -323,7 +386,66 @@ export class McpHub {
     return new StdioLink(render(spec.command ?? ''), (spec.args ?? []).map(render), { cwd: spec.cwd || undefined, env });
   };
 
+  /** The backoff in force: `attempt` is 0 for the immediate retry after a drop. */
+  private reconnectSetting(): Required<McpReconnectOptions> | undefined {
+    const setting = this.options.reconnect;
+    if (setting === false) return undefined;
+    const options = setting === true || setting === undefined ? {} : setting;
+    const maxAttempts = Math.max(0, Math.floor(options.maxAttempts ?? 5));
+    if (maxAttempts === 0) return undefined;
+    return {
+      baseMs: Math.max(0, Math.floor(options.baseMs ?? 1000)),
+      maxMs: Math.max(0, Math.floor(options.maxMs ?? 60_000)),
+      maxAttempts,
+    };
+  }
+
+  /** Tries at once, then 1x, 2x, 4x ... baseMs apart, up to maxAttempts. */
+  private scheduleReconnect(name: string, attempt = 0): void {
+    const settings = this.reconnectSetting();
+    if (!settings || this.disposed || attempt >= settings.maxAttempts) return;
+    if (this.reconnecting.has(name) || this.live.has(name)) return;
+    if (!this.server(name)?.enabled) return;
+    const delay = attempt === 0 ? 0 : Math.min(settings.maxMs, settings.baseMs * 2 ** (attempt - 1));
+    const timer = setTimeout(() => {
+      this.reconnecting.delete(name);
+      void this.reconnect(name, attempt);
+    }, delay);
+    timer.unref?.();
+    this.reconnecting.set(name, timer);
+  }
+
+  private cancelReconnect(name: string): void {
+    const timer = this.reconnecting.get(name);
+    if (!timer) return;
+    clearTimeout(timer);
+    this.reconnecting.delete(name);
+  }
+
+  private async reconnect(name: string, attempt: number): Promise<void> {
+    const settings = this.reconnectSetting();
+    const spec = this.server(name);
+    if (!settings || this.disposed || !spec?.enabled) return;
+    const started = Date.now();
+    try {
+      const client = await this.client(name);
+      const tools = await client.listTools();
+      this.setCache(name, { tools, checkedAt: new Date().toISOString(), latencyMs: Date.now() - started });
+    } catch (error) {
+      const previous = this.cache()[name];
+      this.setCache(name, {
+        tools: previous?.tools ?? [],
+        checkedAt: new Date().toISOString(),
+        ...(previous?.latencyMs !== undefined ? { latencyMs: previous.latencyMs } : {}),
+        error: (error as Error).message.slice(0, 500),
+      });
+      await this.disconnect(name);
+      this.scheduleReconnect(name, attempt + 1);
+    }
+  }
+
   private async disconnect(name: string): Promise<void> {
+    this.cancelReconnect(name);
     const connecting = this.live.get(name);
     if (!connecting) return;
     this.live.delete(name);

@@ -9,6 +9,7 @@ export interface FlowItem {
 
 export type NodeTypeName =
   | 'agent'
+  | 'agent_call'
   | 'chat'
   | 'if'
   | 'switch'
@@ -16,6 +17,10 @@ export type NodeTypeName =
   | 'code'
   | 'http'
   | 'tool'
+  | 'mcp'
+  | 'assert'
+  | 'debug'
+  | 'json_schema'
   | 'connector'
   | 'filter'
   | 'sort'
@@ -50,7 +55,9 @@ export type NodeTypeName =
   | 'trigger_telegram'
   | 'trigger_tool'
   | 'trigger_connector'
-  | 'trigger_custom';
+  | 'trigger_custom'
+  /** A first-class custom node saved under user/nodes: `custom:<name>`. */
+  | `custom:${string}`;
 
 export type NodeFieldType = 'string' | 'number' | 'boolean' | 'text' | 'json' | 'expression' | 'account';
 
@@ -270,6 +277,16 @@ export const NODE_TYPES: NodeTypeView[] = [
     outputs: [{ key: 'main', label: 'main' }],
   },
   {
+    type: 'agent_call',
+    label: 'เรียก agent (รอผล)',
+    description: 'เรียก agent อีกตัวหนึ่งและรอผลลัพธ์กลับมาใน item (ต่างจาก chat ที่เป็นแค่การส่งข้อความ)',
+    fields: [
+      { key: 'agent', label: 'agent', type: 'string', required: true, placeholder: 'ชื่อ agent' },
+      { key: 'instruction', label: 'คำสั่ง', type: 'text', placeholder: 'งานที่ให้ agent ทำกับ input นี้' },
+    ],
+    outputs: [{ key: 'main', label: 'main' }],
+  },
+  {
     type: 'chat',
     label: 'ส่งเข้าแชต',
     description: 'ส่งข้อความ และ/หรือ ไฟล์ (รูป เสียง วิดีโอ เอกสาร) เข้าแชตของ agent (ค่าเริ่มต้น = agent เจ้าของ workflow)',
@@ -366,6 +383,52 @@ export const NODE_TYPES: NodeTypeView[] = [
       { key: 'allow', label: 'อนุญาตให้ทำงานนี้ (เครื่องมือที่ส่ง / แก้ / ลบข้อมูล ต้องติ๊ก เพราะ workflow รันเองโดยไม่มีใครกดยืนยัน)', type: 'boolean' },
     ],
     outputs: [{ key: 'main', label: 'main' }],
+  },
+  {
+    type: 'mcp',
+    label: 'MCP tool',
+    description: 'เรียกเครื่องมือจาก MCP server ที่ลงทะเบียนไว้ (ชื่อ mcp_<server>_<tool>) และรอผลลัพธ์',
+    fields: [
+      { key: 'tool', label: 'MCP tool', type: 'string', required: true, placeholder: 'mcp_github_list_issues' },
+      { key: 'input', label: 'input (JSON + expression)', type: 'json', placeholder: '{"owner": "acme", "repo": "app"}' },
+      { key: 'allow', label: 'อนุญาตให้เครื่องมือนี้เปลี่ยนข้อมูล', type: 'boolean', description: 'เครื่องมือ MCP ที่ไม่ใช่ read ต้องเปิด (หรือ permission ของ tool เป็น allow)' },
+    ],
+    outputs: [{ key: 'main', label: 'main' }],
+  },
+  {
+    type: 'assert',
+    label: 'assert / expect',
+    description: 'ตรวจว่า item ทุกตัวผ่านเงื่อนไข; ถ้าไม่ผ่านจะทำให้ node นี้ error (ใช้ onError/retry หรือ branch "error" ต่อได้)',
+    fields: [
+      { key: 'combinator', label: 'รวมเงื่อนไข', type: 'string', options: ['and', 'or'] },
+      { key: 'conditions', label: 'เงื่อนไข', type: 'json', required: true, placeholder: '[{"left":"{{ $json.status }}","operator":"equals","right":"ok"}]' },
+      { key: 'message', label: 'ข้อความเมื่อไม่ผ่าน', type: 'text', placeholder: 'ผลลัพธ์ไม่ตรงกับที่คาด' },
+    ],
+    outputs: [{ key: 'main', label: 'main' }],
+  },
+  {
+    type: 'debug',
+    label: 'debug dump',
+    description: 'เขียน items ของ node ลง log แล้วส่งต่อเหมือนเดิม ใช้ตรวจ workflow หรือปิดด้วย disabled เมื่อเสร็จ',
+    fields: [
+      { key: 'label', label: 'ป้ายใน log', type: 'string', placeholder: 'after-extract' },
+      { key: 'maxItems', label: 'จำนวน item สูงสุด', type: 'number', placeholder: '20' },
+    ],
+    outputs: [{ key: 'main', label: 'main' }],
+  },
+  {
+    type: 'json_schema',
+    label: 'JSON schema',
+    description: 'ตรวจผลจาก LLM / extract กับ JSON Schema; item ที่ผ่านไป output main, ที่ไม่ผ่านไป output invalid พร้อม _error',
+    fields: [
+      { key: 'schema', label: 'JSON Schema', type: 'json', required: true, placeholder: '{"type":"object","required":["name"],"properties":{"name":{"type":"string"}}}' },
+      { key: 'field', label: 'field ที่ตรวจ (expression; เว้นว่าง = ทั้ง item)', type: 'expression', placeholder: '{{ $json.output }}' },
+      { key: 'name', label: 'ชื่อ field ผลลัพธ์ที่ผ่าน', type: 'string', placeholder: 'value' },
+    ],
+    outputs: [
+      { key: 'main', label: 'valid' },
+      { key: 'invalid', label: 'invalid' },
+    ],
   },
   {
     type: 'connector',

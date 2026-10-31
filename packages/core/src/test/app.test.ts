@@ -52,6 +52,19 @@ test('app settings: token is created once; providers, models and Google client p
   assert.equal(AppSettings.load(file).timezone, '');
 });
 
+test('app settings: forever grants are per agent and old flat lists still load', () => {
+  const legacy = path.join(tmp, 'grants-legacy/app-settings.json');
+  fs.mkdirSync(path.dirname(legacy), { recursive: true });
+  fs.writeFileSync(legacy, JSON.stringify({ permissionGrants: ['run_shell'] }));
+  assert.deepEqual(AppSettings.load(legacy).permissionGrants, { '*': ['run_shell'] });
+
+  const file = path.join(tmp, 'grants/app-settings.json');
+  const settings = AppSettings.load(file);
+  settings.setPermissionGrants({ mimi: ['delete_path', 'delete_path'], tim: ['organize_files'] });
+  assert.deepEqual(settings.permissionGrants, { mimi: ['delete_path'], tim: ['files.organize'] });
+  assert.deepEqual(AppSettings.load(file).permissionGrants, { mimi: ['delete_path'], tim: ['files.organize'] });
+});
+
 test('credentials are stored like opencode auth.json', () => {
   const file = path.join(tmp, 'auth/auth.json');
   const auth = new AuthStore(file);
@@ -425,6 +438,15 @@ test('settings screen: folders and the Google client can be changed', async () =
   assert.deepEqual(saved.settings.allowedDirs, [workDir]);
   assert.ok(fs.existsSync(workDir));
   assert.deepEqual(server.core.deps.allowedDirs, [workDir], 'tools see the new folder list immediately');
+
+  const projectDir = path.join(workDir, 'project');
+  fs.mkdirSync(projectDir, { recursive: true });
+  const withRoots = await client.ask({ type: 'settings-save', projectRoots: [projectDir] }, 'settings');
+  assert.equal(withRoots.settings.projectRoots.length, 1);
+  assert.equal(path.resolve(withRoots.settings.projectRoots[0]!), path.resolve(projectDir));
+  assert.deepEqual(server.core.deps.projectRoots, withRoots.settings.projectRoots, 'shell tools see the project roots at once');
+  const deniedRoot = await client.ask({ type: 'settings-save', projectRoots: [parts.root] }, 'error');
+  assert.match(deniedRoot.message, /must be inside one of the allowed folders/);
 
   const zone = await client.ask({ type: 'settings-save', timezone: 'Asia/Singapore' }, 'settings');
   assert.equal(zone.settings.timezone, 'Asia/Singapore');

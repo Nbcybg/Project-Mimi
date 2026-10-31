@@ -62,6 +62,32 @@ test('delegate: the receiver runs in its own thread and its answer comes back as
   await target.cleanup();
 });
 
+test('send_agents: several sub-agents run in parallel and each result comes back', async () => {
+  const mimi = scriptedModel([
+    toolStep('send_agents', {
+      agents: [
+        { agent: 'tim', task: 'plan it', max_rounds: 2 },
+        { agent: 'scout', task: 'check it', max_tokens: 5000 },
+      ],
+    }),
+    textStep('both done'),
+  ]);
+  const tim = scriptedModel([textStep('TIM PLAN')]);
+  const scout = scriptedModel([textStep('SCOUT CHECK')]);
+  const target = await makeTestCore({ models: { mimi, tim, scout } });
+
+  const events = await turn(target, 'mimi', 'do both');
+  const result = eventsOf(events, 'tool-result')[0]!.result;
+  assert.equal(result.ok, true);
+  assert.match(result.output, /TIM PLAN/);
+  assert.match(result.output, /SCOUT CHECK/);
+  assert.deepEqual(rows(target).map((row) => [row.to_agent, row.mode, row.status]), [
+    ['tim', 'delegate', 'replied'],
+    ['scout', 'delegate', 'replied'],
+  ]);
+  await target.cleanup();
+});
+
 test('delegate: an explicit reply() wins over the final text', async () => {
   const mimi = scriptedModel([toolStep('send_to', { agent: 'tim', task: 'x' }), textStep('done')]);
   const tim = scriptedModel([toolStep('reply', { message_id: 1, result: 'EXPLICIT RESULT' }), textStep('chatter')]);
@@ -126,8 +152,8 @@ test('can_message is enforced, and agents without peers get no send_to at all', 
 
   const tools = (agent: string, mesh?: Parameters<typeof target.core.mesh.toolsFor>[1]) =>
     target.core.mesh.toolsFor(target.core.agents.get(agent), mesh).map((tool) => tool.name);
-  assert.deepEqual(tools('mimi'), ['send_to']);
-  assert.deepEqual(tools('tim', { messageId: 1, from: 'mimi', mode: 'delegate', hop: 1 }), ['send_to', 'reply']);
+  assert.deepEqual(tools('mimi'), ['send_to', 'send_agents']);
+  assert.deepEqual(tools('tim', { messageId: 1, from: 'mimi', mode: 'delegate', hop: 1 }), ['send_to', 'send_agents', 'reply']);
   assert.deepEqual(target.core.mesh.toolsFor({ ...target.core.agents.get('scout'), canMessage: [] }, undefined), []);
   await target.cleanup();
 });

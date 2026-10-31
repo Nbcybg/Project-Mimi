@@ -1,3 +1,4 @@
+import type { McpServerView } from '@mimi/shared';
 import type { AgentCatalog } from '../agents/loader.ts';
 import { presetSecretKey, type SecretStore } from '../app/secrets.ts';
 import type { TriggerStore } from '../scheduler/triggers.ts';
@@ -17,6 +18,8 @@ export interface DiagnosticsDeps {
   secrets: SecretStore;
   triggers: TriggerStore;
   triggerPool: TriggerPool;
+  /** Configured MCP servers, whose env and headers may reference vault secrets. */
+  mcpServers?(): McpServerView[];
 }
 
 export interface DiagnosticIssue {
@@ -32,6 +35,43 @@ export interface DiagnosticReport {
 }
 
 const secretRefs = (text: string): string[] => [...text.matchAll(/\{\{\s*secret\.([A-Za-z0-9_]+)\s*\}\}/g)].map((match) => match[1]!);
+
+export interface SecretReference {
+  name: string;
+  where: string;
+  /** True when the vault has this name. */
+  present: boolean;
+}
+
+/**
+ * Every {{secret.NAME}} the setup refers to, and whether the vault has it. Covers
+ * agent prompts, skills, custom tools, presets, workflows and MCP server env/headers.
+ */
+export function auditSecrets(deps: DiagnosticsDeps): SecretReference[] {
+  const known = new Set(deps.secrets.names());
+  const found: SecretReference[] = [];
+  const add = (text: string, where: string) => {
+    for (const name of new Set(secretRefs(text))) found.push({ name, where, present: known.has(name) });
+  };
+  for (const name of deps.agents.names()) {
+    const agent = deps.agents.get(name);
+    add(agent.systemPrompt, `agent "${name}" prompt`);
+  }
+  for (const skill of deps.skills()) {
+    let body = '';
+    try {
+      body = readSkillBody(skill);
+    } catch {
+      // an unreadable skill has no body to scan
+    }
+    add(body, `skill "${skill.name}"`);
+  }
+  for (const spec of deps.tools.customSpecs()) add(JSON.stringify(spec), `tool "${spec.name}"`);
+  for (const preset of deps.tools.presetViews()) add(JSON.stringify(preset.settings ?? {}), `preset "${preset.name}"`);
+  for (const workflow of deps.workflows.list()) add(JSON.stringify(workflow), `workflow "${workflow.agent}/${workflow.name}"`);
+  for (const server of deps.mcpServers?.() ?? []) add(JSON.stringify({ env: server.env, headers: server.headers, url: server.url }), `MCP server "${server.name}"`);
+  return found.sort((a, b) => Number(a.present) - Number(b.present) || a.name.localeCompare(b.name) || a.where.localeCompare(b.where));
+}
 const envRefs = (text: string): string[] => [...text.matchAll(/\{\{\s*env\.([A-Za-z0-9_]+)\s*\}\}/g)].map((match) => match[1]!);
 const escape = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -141,6 +181,7 @@ export function validateConfig(deps: DiagnosticsDeps): DiagnosticReport {
     hasTool: (name: string) => knownTools.has(name),
     hasTrigger: (name: string) => Boolean(deps.triggerPool.get(name)),
     workflowNames,
+    hasCustomNode: (name: string) => nodeNames.has(name),
   };
   for (const workflow of workflows) {
     const where = `workflow "${workflow.agent}/${workflow.name}"`;

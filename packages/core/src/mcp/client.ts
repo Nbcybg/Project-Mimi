@@ -10,5 +10,6 @@ export {
   type McpContent,
   type McpLink,
   type McpTool,
+  SseLink,
   StdioLink,
 } from '@mimi/pc-agent';

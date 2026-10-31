@@ -209,6 +209,7 @@ export interface Harness {
 export interface HarnessOptions extends Partial<FakeModelsOptions> {
   approve?: boolean | 'never';
   permissionTimeoutMs?: number;
+  agentPermissions?: Record<string, 'allow' | 'ask' | 'deny'>;
 }
 
 export function makeHarness(model: MockLanguageModelV4, options: HarnessOptions = {}): Harness {
@@ -256,6 +257,7 @@ export function makeHarness(model: MockLanguageModelV4, options: HarnessOptions 
       tools: new ToolRegistry().register(echo, danger, ...createMemoryTools(memory, messages)),
       executor: new LocalExecutor(),
       gate: new PermissionGate(broker, { timeoutMs: options.permissionTimeoutMs ?? 1_000 }),
+      agentPermissions: () => options.agentPermissions,
       allowedDirs: [],
       timezone: 'Asia/Bangkok',
       now: () => new Date('2026-10-12T05:00:00Z'),

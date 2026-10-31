@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { electronDist } from './electron-dist.mjs';
-import { packPcAgent } from './pack-pc-agent.mjs';
+import { copyPcAgentPackages, packPcAgent } from './pack-pc-agent.mjs';
 
 // Builds the Windows app people install: dist/win/Mimi/Mimi.exe, a window onto a Mimi server
 // elsewhere (the accounts gateway, or one core), the same app as build-mac.mjs. It holds no
@@ -56,8 +56,8 @@ fs.writeFileSync(
 // Node 24 refuses to strip TypeScript types under node_modules, so the PC agent
 // and shared sources live beside the app, not in node_modules/@mimi.
 packPcAgent(ROOT, APP);
-// The only outside package the PC agent and @mimi/shared use.
-fs.cpSync(path.join(ROOT, 'node_modules', 'zod'), path.join(APP, 'node_modules', 'zod'), { recursive: true });
+// The outside packages the copied PC agent imports (zod, pdf-lib).
+copyPcAgentPackages(ROOT, APP);
 log('app and PC agent copied');
 
 // 3. The window and tray picture, drawn in code (the same picture as the Mac build). The .exe

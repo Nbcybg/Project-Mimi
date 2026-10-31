@@ -33,6 +33,10 @@ const FrontmatterSchema = z.strictObject({
   speech_model: modelRefString.optional(),
   video_model: modelRefString.optional(),
   tools: z.array(z.string()).default([]),
+  /** Load tools on demand with tool_search instead of sending every schema up front. */
+  lazy_tools: z.boolean().default(false),
+  /** Tool name -> allow / ask / deny, for this agent only. It beats the global policy. */
+  permissions: z.record(z.string(), z.enum(['allow', 'ask', 'deny'])).default({}),
   /** Skills from the skill hub this agent may use. */
   skills: z.array(z.string()).default([]),
   can_message: z.array(agentName).default([]),
@@ -56,6 +60,10 @@ export interface AgentDefinition {
   intro?: string;
   models: ModelSelection;
   tools: string[];
+  /** Only tool_search is sent up front; matching tools are added to the run on demand. */
+  lazyTools?: boolean;
+  /** Tool name (or preset name) -> allow / ask / deny for this agent. */
+  permissions?: Record<string, 'allow' | 'ask' | 'deny'>;
   skills: string[];
   /** Agents this one is allowed to message. */
   canMessage: string[];
@@ -90,7 +98,7 @@ export function parseAgentFile(source: string, origin = 'agent file'): AgentDefi
 
   // `effort` stays accepted so old agent files keep loading; it is ignored now that effort
   // belongs to the model preset (one per model choice, independent for each capability).
-  const { name, display_name, description, intro, effort: _legacyEffort, tools, skills, can_message, budgets, character, idle_motion, ...models } = parsed.data;
+  const { name, display_name, description, intro, effort: _legacyEffort, tools, lazy_tools, permissions, skills, can_message, budgets, character, idle_motion, ...models } = parsed.data;
   return {
     name,
     displayName: display_name,
@@ -98,6 +106,8 @@ export function parseAgentFile(source: string, origin = 'agent file'): AgentDefi
     ...(intro ? { intro } : {}),
     models,
     tools,
+    ...(lazy_tools ? { lazyTools: true } : {}),
+    ...(Object.keys(permissions).length > 0 ? { permissions } : {}),
     skills,
     canMessage: can_message,
     ...(character !== 'sprite' ? { character } : {}),
@@ -173,6 +183,8 @@ export function serializeAgent(agent: AgentDefinition): string {
     if (agent.models[key]) frontmatter[key] = agent.models[key];
   }
   frontmatter.tools = agent.tools;
+  if (agent.lazyTools) frontmatter.lazy_tools = true;
+  if (agent.permissions && Object.keys(agent.permissions).length > 0) frontmatter.permissions = agent.permissions;
   if (agent.skills.length > 0) frontmatter.skills = agent.skills;
   frontmatter.can_message = agent.canMessage;
   if (agent.character && agent.character !== 'sprite') frontmatter.character = agent.character;

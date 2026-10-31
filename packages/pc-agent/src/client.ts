@@ -155,6 +155,7 @@ export class PcAgent {
         agent: request.agent,
         ...(request.taskId ? { taskId: request.taskId } : {}),
         allowedDirs: this.options.allowedDirs,
+        ...(request.projectRoots?.length ? { projectRoots: request.projectRoots } : {}),
       });
       respond(true, output);
     } catch (error) {

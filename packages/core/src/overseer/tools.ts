@@ -1,4 +1,4 @@
-import { NODE_TYPES, type CustomToolSpec, type ToolPreset } from '@mimi/shared';
+import { NODE_TYPES, type CustomToolSpec, type ToolPreset, type WorkflowView } from '@mimi/shared';
 import { z } from 'zod';
 import { MODEL_KEYS } from '../app/app-settings.ts';
 import type { AgentCatalog, AgentDefinition } from '../agents/loader.ts';
@@ -13,10 +13,11 @@ import { localStamp } from '../scheduler/trigger-tools.ts';
 import type { ToolPool } from '../tools/pool.ts';
 import { defineTool, type ToolDefinition } from '../tools/registry.ts';
 import type { TriggerPool } from '../workflows/trigger-pool.ts';
+import type { ToolCallRecord, ToolStat } from '../usage/logger.ts';
 import type { WorkflowRunStore } from '../workflows/run-history.ts';
 import type { WorkflowStore } from '../workflows/workflow-store.ts';
 import { type CustomNodeSpec, type CustomNodeStore } from '../workflows/custom-nodes.ts';
-import { validateConfig } from './diagnostics.ts';
+import { auditSecrets, validateConfig } from './diagnostics.ts';
 import { OVERSEER_NAME } from './overseer.ts';
 import type { VersionStore } from './versions.ts';
 
@@ -34,8 +35,14 @@ export interface OverseerToolDeps {
   triggerPool: TriggerPool;
   workflowRuns: WorkflowRunStore;
   versions: VersionStore;
+  /** Tool call counts and failures, for run_log. */
+  toolStats?(days: number): ToolStat[];
+  /** Records a tool call (tool_test included) for the Overseer's run_log. */
+  logTool?(record: ToolCallRecord): void;
   timezone: string;
   allowedDirs: string[];
+  /** Approved project roots for shell commands; empty means any allowed folder. */
+  projectRoots?: string[];
   /** Runs a throw-away test turn with an agent and returns what it said (no chat, no notification). */
   runAgentTest?(agent: string, text: string, maxRounds: number): Promise<{ text: string; reason: string; error?: string; errorCode?: string; rounds: number }>;
   /** Runs a tool through the normal executor (so PC tools reach the PC agent), without the permission prompt. */
@@ -47,6 +54,7 @@ export interface OverseerToolDeps {
     tools(): void;
     skills(): void;
     nodes?(): void;
+    workflow?(id: string): void;
   };
 }
 
@@ -69,8 +77,13 @@ const agentInput = z.object({
   systemPrompt: z.string().optional().describe('The full system prompt; omit to keep the current one'),
   models: modelChoice.optional().describe('Merged into the current models; an empty string clears one'),
   tools: z.array(z.string()).optional().describe('The full tool list; replaces the current list'),
+  lazyTools: z.boolean().optional().describe('Send only tool_search up front and load tools on demand (useful for 50+ tools)'),
   addTools: z.array(z.string()).optional(),
   removeTools: z.array(z.string()).optional(),
+  permissions: z
+    .record(z.string(), z.enum(['allow', 'ask', 'deny']))
+    .optional()
+    .describe('Per-agent policy: tool or preset name -> allow (never ask), ask (always ask), deny (never run)'),
   skills: z.array(z.string()).optional().describe('The full skill list; replaces the current list'),
   addSkills: z.array(z.string()).optional(),
   removeSkills: z.array(z.string()).optional(),
@@ -120,6 +133,12 @@ const customNodeInput = z.object({
     .min(1)
     .describe('JavaScript body run in the workflow sandbox: items (JSON array) and $config are in scope; return new items, e.g. items.map((json) => ({...json, upper: String(json.text).toUpperCase()}))'),
   timeoutMs: z.number().int().min(1000).max(120000).optional(),
+  outputs: z
+    .array(z.string().regex(/^[a-zA-Z][a-zA-Z0-9_]*$/, 'an output name'))
+    .min(1)
+    .max(12)
+    .optional()
+    .describe('Output keys; an item returned with "$output": "name" goes to that output (default main)'),
   fields: z
     .array(
       z.object({
@@ -225,6 +244,84 @@ function versionSummary(entry: { id: string; at: string; data: unknown }) {
   };
 }
 
+/** Flattens an object into `path -> JSON value` for a readable config diff. */
+function flattened(value: unknown, prefix = '', out = new Map<string, string>()): Map<string, string> {
+  if (value === null || typeof value !== 'object') {
+    out.set(prefix || '(value)', JSON.stringify(value));
+    return out;
+  }
+  if (Array.isArray(value)) {
+    out.set(prefix || '(value)', JSON.stringify(value));
+    return out;
+  }
+  for (const [key, entry] of Object.entries(value)) {
+    const path = prefix ? `${prefix}.${key}` : key;
+    if (entry && typeof entry === 'object' && !Array.isArray(entry)) flattened(entry, path, out);
+    else out.set(path, JSON.stringify(entry));
+  }
+  return out;
+}
+
+/** The fields a save would add, remove or change. */
+function configDiff(current: unknown, next: Record<string, unknown>) {
+  const before = flattened(current ?? {});
+  const after = flattened(next);
+  const added: Array<{ key: string; next: string }> = [];
+  const removed: Array<{ key: string; current: string }> = [];
+  const changed: Array<{ key: string; current: string; next: string }> = [];
+  for (const [key, value] of after) {
+    if (!before.has(key)) added.push({ key, next: value });
+    else if (before.get(key) !== value) changed.push({ key, current: before.get(key)!, next: value });
+  }
+  for (const [key, value] of before) if (!after.has(key)) removed.push({ key, current: value });
+  // Lists are easier to read as add/remove than as one long changed JSON value.
+  const currentRecord = current && typeof current === 'object' && !Array.isArray(current) ? (current as Record<string, unknown>) : {};
+  const lists: Record<string, { added: unknown[]; removed: unknown[] }> = {};
+  for (const key of ['tools', 'skills', 'canMessage']) {
+    const was = Array.isArray(currentRecord[key]) ? (currentRecord[key] as unknown[]) : undefined;
+    const will = Array.isArray(next[key]) ? (next[key] as unknown[]) : undefined;
+    if (!was || !will) continue;
+    const addedItems = will.filter((entry) => !was.includes(entry));
+    const removedItems = was.filter((entry) => !will.includes(entry));
+    if (addedItems.length + removedItems.length > 0) lists[key] = { added: addedItems, removed: removedItems };
+  }
+  return { added, removed, changed, ...(Object.keys(lists).length > 0 ? { lists } : {}) };
+}
+
+/** The portable part of a skill: a restore writes these fields back to the file. */
+function skillSnapshot(skill: Skill) {
+  return {
+    name: skill.name,
+    description: skill.description,
+    ...(skill.model ? { model: skill.model } : {}),
+    tools: skill.tools,
+    body: readSkillBody(skill),
+  };
+}
+
+/** A workflow without the generated webhook fields, which a restore must not churn. */
+function workflowSnapshot(workflow: WorkflowView): Record<string, unknown> {
+  const { webhook: _webhook, webhookKey: _webhookKey, ...rest } = workflow as WorkflowView & { webhookKey?: string | null };
+  return rest as unknown as Record<string, unknown>;
+}
+
+/** A workflow's owner from "agent/name", an explicit agent, or a unique name. */
+function workflowTarget(deps: OverseerToolDeps, name: string, agent?: string): { agent: string; name: string } {
+  const trimmed = name.trim();
+  if (agent?.trim()) return { agent: agent.trim(), name: trimmed };
+  if (trimmed.includes('/')) {
+    const [who, what] = trimmed.split('/', 2);
+    if (!who || !what) throw new Error(`Workflow "${name}" needs the form "agent/name".`);
+    return { agent: who, name: what };
+  }
+  const matches = deps.workflows.list().filter((workflow) => workflow.name === trimmed);
+  if (matches.length === 1) return { agent: matches[0]!.agent, name: trimmed };
+  if (matches.length > 1) {
+    throw new Error(`Workflow "${trimmed}" exists for ${matches.map((workflow) => workflow.agent).join(', ')}; pass the agent.`);
+  }
+  throw new Error(`No workflow "${trimmed}".`);
+}
+
 function agentSummary(deps: OverseerToolDeps, name: string) {
   const agent = deps.agents.get(name);
   return {
@@ -233,6 +330,7 @@ function agentSummary(deps: OverseerToolDeps, name: string) {
     description: agent.description,
     model: agent.models.model ?? null,
     tools: agent.tools,
+    permissions: agent.permissions ?? {},
     skills: agent.skills,
   };
 }
@@ -287,7 +385,7 @@ export function createOverseerTools(deps: OverseerToolDeps): ToolDefinition<any>
           workflows: 'Workflows are always saved disabled; the user enables them.',
           secrets: 'Only names are shown. Put values in the vault; use {{secret.NAME}} in tools.',
           errors: 'Chat errors, tool_test and agent_message carry a stable code (E-AUTH-401, E-RATE-429, E-CONTEXT, E-NETWORK, E-CONFIG, E-BUDGET, ...). Call error_codes when the user reports one; it explains the cause and the next step.',
-          nodes: 'Custom nodes are files under user/nodes and run in the workflow sandbox via the "plugin" node. Create them with node_save; they may read items and $config and must return items. Never put secrets in a custom node.',
+          nodes: 'Custom nodes are files under user/nodes. Each one is a real node type "custom:<name>" (and still works through the "plugin" node). Create them with node_save; they may read items and $config and must return items. Never put secrets in a custom node.',
         },
         // Names are enough here; tool_get has the full settings and templates.
         tools: deps.tools.views().map((tool) => ({
@@ -334,6 +432,8 @@ export function createOverseerTools(deps: OverseerToolDeps): ToolDefinition<any>
           'Reads, PDFs: read_document. Gmail: gmail_*. Calendar: calendar_*. Sheets: sheets_*. Drive: drive_search only.',
           'Never put API keys in the prompt; tools read them from the vault.',
           'An agent cannot have both an untrusted-content tool and a shell tool.',
+          'permissions: {"run_shell":"allow","delete_path":"ask"} sets this agent\'s policy; it beats the global risk default, and deny is always refused.',
+          'lazyTools: true sends only tool_search up front; the model loads the tools it needs (use it for 50+ tools).',
         ],
         example: {
           name: 'researcher',
@@ -419,6 +519,8 @@ export function createOverseerTools(deps: OverseerToolDeps): ToolDefinition<any>
         intro: input.intro ?? current?.intro,
         models,
         tools,
+        lazyTools: input.lazyTools ?? current?.lazyTools,
+        permissions: { ...(current?.permissions ?? {}), ...(input.permissions ?? {}) },
         skills,
         canMessage,
         character: current?.character,
@@ -600,6 +702,8 @@ export function createOverseerTools(deps: OverseerToolDeps): ToolDefinition<any>
           throw new Error(`"${key}" is a secret setting. Do not put its value here; tell the user to add it in the vault.`);
         }
       }
+      const current = deps.tools.presetViews().find((preset) => preset.name === (input.renameFrom ?? name));
+      if (current) deps.versions.save('preset', name, current);
       const saved = deps.tools.savePreset(input.preset as ToolPreset, input.renameFrom);
       if (input.renameFrom && input.renameFrom !== saved.name) {
         updateAgents(deps, (agent) => {
@@ -704,6 +808,9 @@ export function createOverseerTools(deps: OverseerToolDeps): ToolDefinition<any>
     async execute(input) {
       if (input.skill.model) modelInfo(deps, 'model', input.skill.model);
       if (input.skill.tools) deps.tools.select(input.skill.tools);
+      const name = input.skill.name;
+      const current = deps.skills().find((skill) => skill.name === (input.renameFrom ?? name));
+      if (current && !current.builtin) deps.versions.save('skill', name, skillSnapshot(current));
       const saved = saveSkill(deps.skillsDir, {
         name: input.skill.name,
         description: input.skill.description,
@@ -753,13 +860,14 @@ export function createOverseerTools(deps: OverseerToolDeps): ToolDefinition<any>
     summarize: () => 'Read the custom node schema',
     async execute() {
       return pretty({
-        storage: 'user/nodes/<name>.json; the workflow editor lists it in the "plugin" node',
+        storage: 'user/nodes/<name>.json; the workflow editor lists it as node type "custom:<name>" (and on the "plugin" node)',
         fields: {
           name: 'lowercase letters, digits, "-" or "_"',
           label: 'shown in the workflow editor',
           description: 'what it does; the model and the user read it',
           code: 'JavaScript body; items and $config are in scope; return an array of JSON objects or one object',
           timeoutMs: 'optional, 1000-120000',
+          outputs: 'optional output keys (default ["main"]); return an item with "$output": "<key>" to route it',
           fields: 'optional form documentation: [{key,label,type,required,placeholder,description}]',
         },
         example: {
@@ -772,7 +880,7 @@ export function createOverseerTools(deps: OverseerToolDeps): ToolDefinition<any>
         rules: [
           'The sandbox has no files, child processes, network or secrets; it only gets items and config as JSON.',
           'Never put API keys or passwords in a custom node. Use a tool or connector for authenticated work.',
-          'Use a workflow "plugin" node and choose this custom node by name.',
+          'Add node type "custom:<name>" in the workflow (the older "plugin" node still works).',
           'A custom node cannot run shell commands or read files; use the built-in file/tool nodes for that.',
         ],
       });
@@ -916,6 +1024,13 @@ export function createOverseerTools(deps: OverseerToolDeps): ToolDefinition<any>
     },
   });
 
+  // The name people ask for; it is the same safe, rate-limited test turn as agent_message.
+  const agentTest: ToolDefinition<any> = {
+    ...agentMessage,
+    name: 'agent_test',
+    description: 'Test an agent with one message and see what it replies and which tools it picks (same as agent_message; no chat is posted).',
+  };
+
   const workflowRuns: ToolDefinition<any> = defineTool({
     name: 'workflow_runs',
     description:
@@ -1010,6 +1125,7 @@ export function createOverseerTools(deps: OverseerToolDeps): ToolDefinition<any>
         thread: 'overseer-test',
         agent: OVERSEER_NAME,
         allowedDirs: deps.allowedDirs,
+        ...(deps.projectRoots?.length ? { projectRoots: deps.projectRoots } : {}),
         signal: controller.signal,
       };
       try {
@@ -1017,9 +1133,14 @@ export function createOverseerTools(deps: OverseerToolDeps): ToolDefinition<any>
           deps.runTool ? deps.runTool(name, parsed.data, controller.signal) : tool.execute(parsed.data, context),
           aborted,
         ]);
-        return pretty({ name, risk: tool.risk, ok: true, durationMs: Date.now() - started, output: clip(String(output)) });
+        const durationMs = Date.now() - started;
+        deps.logTool?.({ traceId: context.traceId, agent: OVERSEER_NAME, tool: name, risk: tool.risk, ok: true, durationMs });
+        return pretty({ name, risk: tool.risk, ok: true, durationMs, output: clip(String(output)) });
       } catch (error) {
-        return pretty({ name, risk: tool.risk, ok: false, durationMs: Date.now() - started, error: formatError(error) });
+        const durationMs = Date.now() - started;
+        const message = formatError(error);
+        deps.logTool?.({ traceId: context.traceId, agent: OVERSEER_NAME, tool: name, risk: tool.risk, ok: false, durationMs, error: message });
+        return pretty({ name, risk: tool.risk, ok: false, durationMs, error: message });
       } finally {
         clearTimeout(timer);
       }
@@ -1065,6 +1186,7 @@ export function createOverseerTools(deps: OverseerToolDeps): ToolDefinition<any>
           secrets: deps.secrets,
           triggers: deps.triggers,
           triggerPool: deps.triggerPool,
+          mcpServers: () => deps.tools.mcp?.views() ?? [],
         }),
       );
     },
@@ -1142,6 +1264,172 @@ export function createOverseerTools(deps: OverseerToolDeps): ToolDefinition<any>
     },
   });
 
+  const secretAudit: ToolDefinition<any> = defineTool({
+    name: 'secret_audit',
+    description:
+      'List every {{secret.NAME}} the setup references (agent prompts, skills, custom tools, presets, workflows, MCP servers) and whether the vault has it. Missing names are the ones that will fail at run time.',
+    risk: 'read',
+    target: 'core',
+    inputSchema: z.object({
+      missingOnly: z.boolean().optional().describe('Only list names that are not in the vault (default true)'),
+    }),
+    summarize: () => 'Audit vault secret references',
+    async execute(input) {
+      const refs = auditSecrets({
+        agents: deps.agents,
+        tools: deps.tools,
+        skills: deps.skills,
+        workflows: deps.workflows,
+        nodes: deps.nodes,
+        secrets: deps.secrets,
+        triggers: deps.triggers,
+        triggerPool: deps.triggerPool,
+        mcpServers: () => deps.tools.mcp?.views() ?? [],
+      });
+      const missing = refs.filter((entry) => !entry.present);
+      const shown = input.missingOnly === false ? refs : missing;
+      return pretty({
+        vault: deps.secrets.names(),
+        missing: missing.map((entry) => entry.name).filter((name, index, all) => all.indexOf(name) === index),
+        references: shown,
+      });
+    },
+  });
+
+  const configDiffTool: ToolDefinition<any> = defineTool({
+    name: 'config_diff',
+    description:
+      'Show what saving a proposed agent, custom tool, preset, skill or workflow would add, remove or change, without writing anything. Use it before agent_save / tool_save / preset_save / skill_save / workflow_save.',
+    risk: 'read',
+    target: 'core',
+    inputSchema: z.object({
+      kind: z.enum(['agent', 'tool', 'preset', 'skill', 'workflow']),
+      name: z.string().min(1).describe('The name; a workflow may be "agent/name"'),
+      agent: z.string().optional().describe('The workflow owner when name has no agent/ prefix'),
+      next: z.record(z.string(), z.unknown()).describe('The fields you intend to save (partial is fine)'),
+    }),
+    summarize: (input) => `Diff ${input.kind} ${input.name}`,
+    async execute(input) {
+      const name = input.name.trim();
+      let current: unknown;
+      let exists = false;
+      let key = name;
+      if (input.kind === 'agent') {
+        exists = deps.agents.names().includes(name);
+        current = exists ? deps.agents.get(name) : {};
+      } else if (input.kind === 'tool') {
+        current = deps.tools.customSpecs().find((tool) => tool.name === name);
+        exists = current !== undefined;
+      } else if (input.kind === 'preset') {
+        current = deps.tools.presetViews().find((preset) => preset.name === name);
+        exists = current !== undefined;
+      } else if (input.kind === 'skill') {
+        const skill = deps.skills().find((entry) => entry.name === name);
+        current = skill ? skillSnapshot(skill) : {};
+        exists = skill !== undefined;
+      } else {
+        const target = workflowTarget(deps, name, input.agent);
+        key = `${target.agent}/${target.name}`;
+        const workflow = deps.workflows.get(target.agent, target.name);
+        current = workflow ? workflowSnapshot(workflow) : {};
+        exists = workflow !== undefined;
+      }
+      return pretty({ kind: input.kind, name: key, exists, ...configDiff(current, input.next) });
+    },
+  });
+
+  const configRollback: ToolDefinition<any> = defineTool({
+    name: 'config_rollback',
+    description:
+      'Roll an agent, custom tool, preset, skill or workflow back to a saved version (the newest by default). The version being replaced is snapshotted first, so even a rollback can be undone.',
+    risk: 'write',
+    target: 'core',
+    inputSchema: z.object({
+      kind: z.enum(['agent', 'tool', 'preset', 'skill', 'workflow']),
+      name: z.string().min(1).describe('The name; a workflow may be "agent/name"'),
+      agent: z.string().optional().describe('The workflow owner when name has no agent/ prefix'),
+      version: z.string().optional().describe('A version id from the matching history tool; omit for the newest'),
+    }),
+    summarize: (input) => `Roll back ${input.kind} ${input.name}`,
+    async execute(input) {
+      const name = input.name.trim();
+      if (input.kind === 'workflow') {
+        const target = workflowTarget(deps, name, input.agent);
+        const key = `${target.agent}/${target.name}`;
+        const versions = deps.versions.list('workflow', key, 10);
+        if (versions.length === 0) throw new Error(`No saved versions of workflow "${key}".`);
+        const entry = input.version ? deps.versions.get<WorkflowView>('workflow', key, input.version) : (versions[0] as { id: string; at: string; data: WorkflowView });
+        if (!entry) throw new Error(`No version "${input.version}" for workflow "${key}".`);
+        const current = deps.workflows.get(target.agent, target.name);
+        if (current) deps.versions.save('workflow', key, workflowSnapshot(current));
+        deps.workflows.save({ ...entry.data, agent: target.agent, name: target.name });
+        deps.changed.workflow?.(key);
+        return `Rolled workflow "${key}" back to ${entry.at} (${entry.id}).`;
+      }
+      const versions = deps.versions.list(input.kind, name, 10);
+      if (versions.length === 0) throw new Error(`No saved versions of ${input.kind} "${name}".`);
+      if (input.kind === 'agent') {
+        const entry = input.version ? deps.versions.get<AgentDefinition>('agent', name, input.version) : (versions[0] as { id: string; at: string; data: AgentDefinition });
+        if (!entry) throw new Error(`No version "${input.version}" for agent "${name}".`);
+        const current = deps.agents.names().includes(name) ? deps.agents.get(name) : undefined;
+        if (current) deps.versions.save('agent', name, current);
+        saveAgent(deps.agentsDir, { ...entry.data, name });
+        deps.changed.agent(name);
+        return `Rolled agent "${name}" back to ${entry.at} (${entry.id}).`;
+      }
+      if (input.kind === 'tool') {
+        const entry = input.version ? deps.versions.get<CustomToolSpec>('tool', name, input.version) : (versions[0] as { id: string; at: string; data: CustomToolSpec });
+        if (!entry) throw new Error(`No version "${input.version}" for tool "${name}".`);
+        const current = deps.tools.customSpecs().find((tool) => tool.name === name);
+        if (current) deps.versions.save('tool', name, current);
+        deps.tools.saveCustom({ ...entry.data, name });
+        deps.changed.tools();
+        return `Rolled tool "${name}" back to ${entry.at} (${entry.id}).`;
+      }
+      if (input.kind === 'preset') {
+        const entry = input.version ? deps.versions.get<ToolPreset>('preset', name, input.version) : (versions[0] as { id: string; at: string; data: ToolPreset });
+        if (!entry) throw new Error(`No version "${input.version}" for preset "${name}".`);
+        const current = deps.tools.presetViews().find((preset) => preset.name === name);
+        if (current) deps.versions.save('preset', name, current);
+        deps.tools.savePreset({ ...entry.data, name });
+        deps.changed.tools();
+        return `Rolled preset "${name}" back to ${entry.at} (${entry.id}).`;
+      }
+      const entry = input.version
+        ? deps.versions.get<ReturnType<typeof skillSnapshot>>('skill', name, input.version)
+        : (versions[0] as { id: string; at: string; data: ReturnType<typeof skillSnapshot> });
+      if (!entry) throw new Error(`No version "${input.version}" for skill "${name}".`);
+      const current = deps.skills().find((skill) => skill.name === name);
+      if (current && !current.builtin) deps.versions.save('skill', name, skillSnapshot(current));
+      saveSkill(deps.skillsDir, { ...entry.data, name, body: String(entry.data.body ?? ''), tools: Array.isArray(entry.data.tools) ? entry.data.tools : [] });
+      deps.changed.skills();
+      return `Rolled skill "${name}" back to ${entry.at} (${entry.id}).`;
+    },
+  });
+
+  const runLog: ToolDefinition<any> = defineTool({
+    name: 'run_log',
+    description:
+      'Show which tools were called, how often, how slow and how often they failed over the last days, so a bad tool list or prompt can be changed with evidence.',
+    risk: 'read',
+    target: 'core',
+    inputSchema: z.object({
+      days: z.number().int().min(1).max(90).optional().describe('Default 7'),
+      limit: z.number().int().min(1).max(200).optional().describe('Default 50'),
+      errorsOnly: z.boolean().optional().describe('Only tools that failed at least once'),
+    }),
+    summarize: (input) => `Read tool run log (${input.days ?? 7} days)`,
+    async execute(input) {
+      const stats = deps.toolStats?.(input.days ?? 7) ?? [];
+      const shown = (input.errorsOnly ? stats.filter((entry) => entry.errors > 0) : stats).slice(0, input.limit ?? 50);
+      return pretty({
+        days: input.days ?? 7,
+        tools: shown.map((entry) => ({ ...entry, errorRate: Number(entry.errorRate.toFixed(3)) })),
+        recentWorkflowRuns: deps.workflowRuns.recent(10).map((run) => ({ id: run.id, workflow: run.workflow, ok: run.ok, startedAt: run.startedAt, result: clip(run.result.slice(0, 200)) })),
+      });
+    },
+  });
+
   return [
     state,
     agentSchema,
@@ -1151,6 +1439,7 @@ export function createOverseerTools(deps: OverseerToolDeps): ToolDefinition<any>
     agentHistory,
     agentRestore,
     agentMessage,
+    agentTest,
     toolSchema,
     toolList,
     toolGet,
@@ -1164,6 +1453,10 @@ export function createOverseerTools(deps: OverseerToolDeps): ToolDefinition<any>
     triggerList,
     triggerGet,
     workflowRuns,
+    runLog,
+    secretAudit,
+    configDiffTool,
+    configRollback,
     errorCodes,
     configValidate,
     nodeSchema,

@@ -64,6 +64,7 @@ import {
   type ResolvedProvider,
 } from '../providers/registry.ts';
 import { resolveModelName } from '../providers/routing.ts';
+import { resolveAllowedPath } from '@mimi/pc-agent';
 import { toTriggerInfo } from '../scheduler/triggers.ts';
 import { createChatApi } from './chat-api.ts';
 import { handleHttpApi, type WebhookReply } from './http-api.ts';
@@ -138,12 +139,25 @@ export async function startServer(
   });
   /** Node types as the editor sees them: the plugin node names the user's custom nodes. */
   const nodeTypesView = () => {
-    const names = core.customNodes.names();
-    return NODE_TYPES.map((spec) =>
+    const nodes = core.customNodes.list();
+    const names = nodes.map((node) => node.name);
+    const builtins = NODE_TYPES.map((spec) =>
       spec.type === 'plugin'
         ? { ...spec, fields: spec.fields.map((field) => (field.key === 'plugin' ? { ...field, options: names } : field)) }
         : spec,
     );
+    // Custom nodes are real node types too: `custom:<name>` carries one config field.
+    const custom = nodes.map((node) => ({
+      type: `custom:${node.name}` as const,
+      label: node.label,
+      description: node.description,
+      fields: [
+        { key: 'config', label: 'config (JSON + expression)', type: 'json' as const, placeholder: '{"key": "{{ $json.Subject }}"}' },
+        ...(node.fields ?? []),
+      ],
+      outputs: (node.outputs && node.outputs.length > 0 ? node.outputs : ['main']).map((key) => ({ key, label: key })),
+    }));
+    return [...builtins, ...custom];
   };
   // Providers used to live in user/data/app-settings.json; copy them into syncable files once.
   core.providers.migrate(
@@ -200,7 +214,7 @@ export async function startServer(
   const agentsMessage = (saved?: string): ServerMessage => ({
     type: 'agents',
     agents: core.agents.names().map((name) => {
-      const { displayName, description, intro, systemPrompt, models, tools, skills, canMessage, budgets, character, idleMotion } =
+      const { displayName, description, intro, systemPrompt, models, tools, lazyTools, permissions, skills, canMessage, budgets, character, idleMotion } =
         core.agents.get(name);
       return {
         name,
@@ -210,6 +224,8 @@ export async function startServer(
         systemPrompt,
         models,
         tools,
+        ...(lazyTools ? { lazyTools: true } : {}),
+        permissions,
         skills,
         canMessage,
         budgets,
@@ -309,6 +325,15 @@ export async function startServer(
       }
     }
 
+    const existing = renameFrom ?? name;
+    const current = known.includes(existing) ? core.agents.get(existing) : undefined;
+    const permissions: Record<string, 'allow' | 'ask' | 'deny'> = view.permissions === undefined ? { ...(current?.permissions ?? {}) } : {};
+    if (view.permissions !== undefined) {
+      for (const [tool, mode] of Object.entries(view.permissions)) {
+        if (mode === 'allow' || mode === 'ask' || mode === 'deny') permissions[tool] = mode;
+      }
+    }
+    const lazyTools = view.lazyTools === undefined ? Boolean(current?.lazyTools) : view.lazyTools === true;
     saveAgent(config.agentsDir, {
       name,
       displayName: String(view.displayName ?? '').trim(),
@@ -317,6 +342,8 @@ export async function startServer(
       systemPrompt: String(view.systemPrompt ?? ''),
       models,
       tools,
+      ...(lazyTools ? { lazyTools: true } : {}),
+      permissions,
       skills,
       canMessage,
       character,
@@ -358,6 +385,7 @@ export async function startServer(
     hasTool: (name) => core.tools.get(name) !== undefined,
     hasTrigger: (pool) => core.triggerPool.get(pool) !== undefined,
     workflowNames: (agent) => core.workflows.names(agent),
+    hasCustomNode: (name) => core.customNodes.get(name) !== undefined,
   };
   const validateNode = (node: WorkflowNode, agent: string) => validateWorkflowNode(node, agent, workflowRules);
   const validateWorkflow = (view: WorkflowView) => validateWorkflowView(view, workflowRules);
@@ -423,6 +451,7 @@ export async function startServer(
       presets: chatApi.presetViews(),
       agents: core.agents.names().filter((name) => name !== OVERSEER_NAME).length,
       allowedDirs: [...config.allowedDirs],
+      projectRoots: [...config.projectRoots],
       google: { hasClient: core.google.hasClient, connected: core.google.isConfigured },
       microsoft: {
         hasClient: core.microsoft.hasClient,
@@ -434,6 +463,8 @@ export async function startServer(
       ...(hostedCallbacks ? { oauthRedirectUri: hostedCallbacks.redirectUri } : {}),
       preferences: appSettings.preferences,
       spentTodayUsd: core.spentToday(),
+      permissionGrants: core.deps.gate.alwaysAllowed(),
+      permissionAgentGrants: core.deps.gate.alwaysGrantsByAgent(),
       storage: {
         media: { usedBytes: mediaUsage.bytes, quotaBytes: appSettings.storage.mediaQuotaBytes, files: mediaUsage.files },
         userMedia: { usedBytes: mediaAssets, quotaBytes: appSettings.storage.userMediaQuotaBytes },
@@ -598,6 +629,38 @@ export async function startServer(
       appSettings.setAllowedDirs(dirs);
       // Same array the tools use, so the new list applies to the next tool call.
       config.allowedDirs.splice(0, config.allowedDirs.length, ...(dirs.length > 0 ? dirs : [path.join(config.rootDir, 'workspace')]));
+      // A project root that is no longer covered by the allowlist is dropped, not left
+      // behind to fail every shell call.
+      const kept = config.projectRoots.filter((root) => {
+        try {
+          resolveAllowedPath(root, config.allowedDirs);
+          return true;
+        } catch {
+          return false;
+        }
+      });
+      if (kept.length !== config.projectRoots.length) {
+        config.projectRoots.splice(0, config.projectRoots.length, ...kept);
+        appSettings.setProjectRoots(kept);
+      }
+    }
+    if (change.projectRoots) {
+      const roots: string[] = [];
+      for (const line of change.projectRoots) {
+        const requested = String(line).trim();
+        if (!requested) continue;
+        const resolved = path.resolve(config.rootDir, requested);
+        let allowed: string;
+        try {
+          allowed = resolveAllowedPath(resolved, config.allowedDirs);
+        } catch {
+          throw new Error(`Project folder "${resolved}" must be inside one of the allowed folders.`);
+        }
+        if (!roots.includes(allowed)) roots.push(allowed);
+      }
+      appSettings.setProjectRoots(roots);
+      // Same array the tools and the PC hub use, so the new list applies to the next call.
+      config.projectRoots.splice(0, config.projectRoots.length, ...roots);
     }
   };
 
@@ -935,14 +998,24 @@ export async function startServer(
         break;
       case 'permission-response': {
         const allow = message.allow === true;
-        // "Allow for this task" covers the same tool family for the rest of this trace.
-        if (allow && message.scope === 'task') {
+        // once = this call only; task = the trace; session = the chat; always = this machine.
+        if (allow && message.scope && message.scope !== 'once') {
           const request = broker.pending().find((entry) => entry.id === message.requestId);
-          if (request) core.deps.gate.grant(request.traceId, request.tool);
+          if (request) {
+            core.deps.gate.grant(request.traceId, request.tool, {
+              scope: message.scope,
+              agent: request.agent,
+              ...(request.thread ? { thread: request.thread } : {}),
+            });
+          }
         }
         broker.respond(message.requestId, allow);
         break;
       }
+      case 'permission-revoke':
+        core.deps.gate.revokeAlways(String(message.tool), typeof message.agent === 'string' ? message.agent : undefined);
+        broadcast({ type: 'settings', settings: settingsView(), saved: true });
+        break;
       case 'task-control':
         if (message.action === 'pause' || message.action === 'resume' || message.action === 'cancel') {
           core.taskRunner.control(message.taskId, message.action);

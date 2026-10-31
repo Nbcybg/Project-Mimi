@@ -109,8 +109,8 @@ export interface ToolResult {
   output: string;
 }
 
-/** How Mimi reaches an MCP server: a local command (stdio) or a URL (Streamable HTTP). */
-export type McpTransport = 'stdio' | 'http';
+/** How Mimi reaches an MCP server: a local command (stdio), Streamable HTTP, or the older HTTP+SSE. */
+export type McpTransport = 'stdio' | 'http' | 'sse';
 
 /** An MCP server the user added, stored in `tools/mcp/servers.json`. Values may use {{secret.NAME}}. */
 export interface McpServerSpec {
@@ -145,5 +145,7 @@ export interface McpServerView extends McpServerSpec {
   tools: McpToolView[];
   /** When the tool list was last read from the server. */
   checkedAt?: string;
+  /** Round-trip time of the last health check (connect + list tools), when it succeeded. */
+  latencyMs?: number;
   error?: string;
 }

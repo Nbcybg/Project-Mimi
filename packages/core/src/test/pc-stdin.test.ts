@@ -3,7 +3,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
-import { packPcAgent } from '../../../../scripts/pack-pc-agent.mjs';
+import { copyPcAgentPackages, packPcAgent } from '../../../../scripts/pack-pc-agent.mjs';
 import { startServer } from '../server/server.ts';
 import { testCoreParts } from './core-helpers.ts';
 
@@ -76,9 +76,9 @@ test('the packaged layout starts the PC agent outside node_modules', async () =>
   const { parts, token, server, pcDir } = await boot();
   const app = fs.realpathSync.native(fs.mkdtempSync(path.join(parts.root, 'app-')));
   packPcAgent(ROOT, app);
-  fs.mkdirSync(path.join(app, 'node_modules'), { recursive: true });
-  fs.cpSync(path.join(ROOT, 'node_modules', 'zod'), path.join(app, 'node_modules', 'zod'), { recursive: true });
+  copyPcAgentPackages(ROOT, app);
   assert.equal(fs.existsSync(path.join(app, 'node_modules', '@mimi', 'pc-agent')), false);
+  assert.ok(fs.existsSync(path.join(app, 'node_modules', 'pdf-lib')), 'pdf-lib travels with the PC agent');
   assert.match(fs.readFileSync(path.join(app, 'pc-agent/src/tools/organize.ts'), 'utf8'), /shared\/src\/index\.ts/);
   const entry = path.join(app, 'pc-agent/src/main.ts');
   const { child, lines } = startAgent(entry, server, pcDir, token);

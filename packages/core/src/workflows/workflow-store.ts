@@ -10,6 +10,7 @@ export const NODE_ID = /^[a-z0-9][a-z0-9_-]*$/;
 
 const NODE_TYPES = [
   'agent',
+  'agent_call',
   'chat',
   'if',
   'switch',
@@ -17,6 +18,10 @@ const NODE_TYPES = [
   'code',
   'http',
   'tool',
+  'mcp',
+  'assert',
+  'debug',
+  'json_schema',
   'connector',
   'filter',
   'sort',
@@ -56,7 +61,7 @@ const NODE_TYPES = [
 
 const nodeSchema = z.strictObject({
   id: z.string().regex(NODE_ID, 'lowercase letters, digits, "-" or "_"'),
-  type: z.enum(NODE_TYPES),
+  type: z.union([z.enum(NODE_TYPES), z.string().regex(/^custom:[a-z][a-z0-9_-]{1,60}$/, 'custom:<node name>')]),
   title: z.string().optional(),
   config: z.record(z.string(), z.unknown()).default({}),
   links: z.record(z.string(), z.array(z.string())).default({ main: [] }),

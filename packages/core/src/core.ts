@@ -869,7 +869,7 @@ export async function createCore(
     const base = agents.get(input.agent);
     const developer: AgentDefinition = {
       ...base,
-      tools: DEVELOPER_TASK_TOOLS,
+      tools: input.tools ?? DEVELOPER_TASK_TOOLS,
       budgets: {
         maxRounds: Math.min(input.maxRounds ?? 20, base.budgets.maxRounds),
         maxTokens: Math.min(base.budgets.maxTokens, 120_000),

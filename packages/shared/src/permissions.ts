@@ -36,6 +36,11 @@ const TOOL_FAMILIES: Record<string, string> = {
   workspace_undo: 'files.workspace',
   write_file: 'files.workspace',
   edit_file: 'files.workspace',
+  photo_apply: 'media.photos',
+  photo_undo: 'media.photos',
+  photo_verify: 'media.photos',
+  media_contact_sheet: 'media.photos',
+  media_transform: 'media.photos',
 };
 
 export function toolFamily(tool: string): string {

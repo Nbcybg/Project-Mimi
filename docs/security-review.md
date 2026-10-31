@@ -120,6 +120,15 @@
 - test command ตรวจจับจาก package.json/Cargo/go/pytest/Makefile; ถ้าไม่พบต้องให้ผู้ใช้ระบุ
 - ยังเปิด: app allowlist ของคำสั่ง (Sprint 6), sandbox ของ process (ตอนนี้เป็น process ปกติภายใต้สิทธิ์ผู้ใช้), manual OS matrix
 
+## 9. Media / photo pipeline (Sprint 3)
+
+- `photo_scan` เป็น read-only: อ่านไฟล์, hash, ffprobe/ffmpeg, EXIF; ไม่เขียนต้นฉบับ
+- `photo_apply` คัดลอกเท่านั้น (ต้นฉบับ read-only), conflict ใช้ชื่อใหม่, journal อยู่ใต้ `output/.mimi-media/`; `photo_undo` ย้ายผลลัพธ์ไป `.mimi-media/trash/` ไม่ลบ
+- ffmpeg/ffprobe รันด้วย sanitized env, timeout, output cap และ retry หนึ่งครั้งเมื่ออ่านไฟล์ล้มเหลว; path guard ทุก path
+- vision scoring เป็น optional: จำนวน sample ถูกจำกัดด้วย `vision_samples` และ `max_cost_usd` (ประเมินต่อ sample) และปิดโดยค่าเริ่มต้น; deterministic cull ไม่พึ่ง vision
+- contact sheet และ transform เขียนเฉพาะ output folder ใหม่
+- ยังเปิด: decoder ของ ffmpeg กับไฟล์ที่ถูกออกแบบมาโจมตี, การทดสอบกับไลบรารีรูปจริงบน macOS/Windows, และการจัดกลุ่ม near-duplicate ที่แม่นยำกว่านี้
+
 ## สิ่งที่ยังไม่ได้ตรวจ
 
 deploy จริงบน Railway (header `Host`, `*.railway.internal`, IPv6), Android จริง/FCM, iPhone, Apple Silicon, Windows,

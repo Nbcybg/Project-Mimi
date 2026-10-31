@@ -31,20 +31,24 @@ export function createTaskTools(deps: TaskToolDeps) {
   const run = defineTool({
     name: 'task_run',
     description:
-      'Run a task recipe on the user\'s computer. "file-organizer" previews and organizes a folder\'s top-level files into type folders. "developer" inspects a git workspace, reproduces a failing test, checkpoints, fixes it with a developer agent, reruns the tests, shows the diff and leaves an undo. Never commit, push or merge. Provide the folder or workspace path; never guess a path the user did not name.',
+      'Run a task recipe on the user\'s computer. "file-organizer" previews and organizes a folder\'s top-level files into type folders. "developer" inspects a git workspace, reproduces a failing test, checkpoints, fixes it with a developer agent, reruns the tests, shows the diff and leaves an undo. "photo-cull" finds duplicates/blurry photos, shows a plan, optionally samples vision within a cost cap, copies keepers/rejects to a new folder and leaves an undo. Never commit, push or merge. Provide the folder or workspace path; never guess a path the user did not name.',
     risk: 'read',
     target: 'core',
     inputSchema: z.object({
-      recipe: z.string().min(1).describe('Recipe name: "file-organizer" or "developer"'),
+      recipe: z.string().min(1).describe('Recipe name: "file-organizer", "developer" or "photo-cull"'),
       goal: z.string().optional().describe('What the user asked for, in their words'),
       folder: z.string().optional().describe('File-organizer: the folder to organize'),
-      path: z.string().optional().describe('Developer: the workspace folder'),
+      path: z.string().optional().describe('Developer/photo-cull: the workspace or photo folder'),
+      output: z.string().optional().describe('Photo-cull: new output folder'),
       instructions: z.string().optional().describe('Developer: what the user asked for'),
       test_command: z.string().optional().describe('Developer: override the detected test command'),
       policy: z.enum(['rename', 'skip', 'overwrite']).optional().describe('File-organizer: conflict policy (default rename)'),
-      max_files: z.number().int().min(1).max(2_000).optional().describe('File-organizer: files per run (default 500)'),
+      max_files: z.number().int().min(1).max(2_000).optional().describe('File-organizer/photo-cull: files per run'),
       max_rounds: z.number().int().min(2).max(40).optional().describe('Developer: most agent rounds for the fix'),
-      input: z.record(z.string(), z.unknown()).optional().describe('Recipe input for recipes other than file-organizer'),
+      blur_threshold: z.number().min(0).max(10_000).optional().describe('Photo-cull: sharpness below this is blurry'),
+      vision_samples: z.number().int().min(0).max(200).optional().describe('Photo-cull: optional vision samples'),
+      max_cost_usd: z.number().min(0).max(100).optional().describe('Photo-cull: vision cost cap'),
+      input: z.record(z.string(), z.unknown()).optional().describe('Recipe input for other recipes'),
     }),
     summarize: (input) => `Start ${input.recipe}${input.folder ?? input.path ? ` in ${input.folder ?? input.path}` : ''}`,
     async execute(input, context) {
@@ -56,9 +60,13 @@ export function createTaskTools(deps: TaskToolDeps) {
         ({
           ...(input.folder ? { folder: input.folder } : {}),
           ...(input.path ? { path: input.path } : {}),
+          ...(input.output ? { output: input.output } : {}),
           ...(input.instructions ? { instructions: input.instructions } : {}),
           ...(input.test_command ? { test_command: input.test_command } : {}),
           ...(input.max_rounds ? { max_rounds: input.max_rounds } : {}),
+          ...(input.blur_threshold !== undefined ? { blur_threshold: input.blur_threshold } : {}),
+          ...(input.vision_samples !== undefined ? { vision_samples: input.vision_samples } : {}),
+          ...(input.max_cost_usd !== undefined ? { max_cost_usd: input.max_cost_usd } : {}),
           ...(input.policy ? { policy: input.policy } : {}),
           ...(input.max_files ? { max_files: input.max_files } : {}),
         } as Record<string, unknown>);

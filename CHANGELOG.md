@@ -31,6 +31,9 @@
   reproduces a failing test, fixes it with an agent, reruns the tests and shows the diff without commit/push.
 - Desktop: packaged builds now run the PC agent outside `node_modules`; Node 24 no longer refuses to strip
   TypeScript types, so the PC agent connects after the tray switch is enabled.
+- Media: `photo_scan`, `photo_apply`, `photo_undo`, `photo_verify`, `media_contact_sheet` and `media_transform`
+  with ffmpeg/ffprobe detection, exact and perceptual duplicate grouping, blur scores, EXIF, a sampled vision
+  budget (`max_cost_usd`), read-only originals and backup-safe undo; `photo-cull` task recipe.
 
 ### 0.7.7-prototype
 

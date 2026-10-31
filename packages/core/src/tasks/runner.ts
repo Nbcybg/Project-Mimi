@@ -30,6 +30,8 @@ export interface TaskAgentStepInput {
   taskId: string;
   signal?: AbortSignal;
   maxRounds?: number;
+  /** Tool allowlist for the nested run; the core picks a safe default when absent. */
+  tools?: string[];
   emit(event: AgentEvent): void;
 }
 
@@ -235,6 +237,7 @@ export class TaskRunner {
           taskId: record.id,
           signal: controller.signal,
           ...(runOptions?.maxRounds !== undefined ? { maxRounds: runOptions.maxRounds } : {}),
+          ...(runOptions?.tools ? { tools: runOptions.tools } : {}),
           emit,
         });
       },

@@ -60,3 +60,13 @@
 - `TaskRunnerDeps.runAgentStep` + `RunInput.noTaskTools`: nested agent ใช้ tool allowlist, thread `task-<id>`, ส่ง events กลับเป็น `agent-activity`, ไม่ให้เริ่ม task ซ้อน
 - session grant family `files.workspace` ครอบ workspace tools + `write_file`/`edit_file`
 - Tests: `workspace.test.ts` (temp repo, policy, checkpoint/diff/undo), `developer.test.ts` (failing test → agent edit → pass → diff → undo); `npm run typecheck && npm test`
+
+## 8. Media / photo pipeline (Sprint 3)
+
+- `packages/pc-agent/src/tools/media.ts`: `media_probe`, `photo_scan`, `photo_apply`, `photo_undo`, `photo_verify`, `media_contact_sheet`, `media_transform`
+- ffprobe metadata + exact SHA-256 + ffmpeg 9x8 grayscale dHash + 64x64 Laplacian variance (blur); duplicate grouping with union-find; optional vision sample budget
+- `process.ts` binary stdout mode for ffmpeg raw pixels; retry once for transient decode failures
+- `packages/core/src/tasks/photo-cull.ts`: scan → confirm → optional vision → contact sheet → copy keep/reject → verify → receipt/undo; originals are never written
+- TaskRunner supplies the batch progress/pause/cancel/resume; photo scan enforces `max_cost_usd` before any vision step
+- Tests: `photo-pipeline.test.ts` with ffmpeg-generated fixtures (exact duplicate, blur, contact sheet, transform, apply/verify/undo); skipped when ffmpeg/ffprobe are absent
+- `npm run typecheck && npm test`

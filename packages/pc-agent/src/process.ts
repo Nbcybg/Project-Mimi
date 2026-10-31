@@ -15,10 +15,12 @@ export function shellInvocation(command: string, platform: NodeJS.Platform = pro
 
 export interface CommandResult {
   output: string;
+  /** Raw stdout when `binary` was requested. */
+  buffer?: Buffer;
   exitCode: number | null;
   timedOut: boolean;
   cancelled: boolean;
-  /** Characters dropped because the output exceeded `maxOutput`. */
+  /** Characters (or bytes, for binary output) dropped because the output exceeded `maxOutput`. */
   truncated: number;
 }
 
@@ -28,6 +30,8 @@ export interface CommandOptions {
   timeoutMs?: number;
   maxOutput?: number;
   signal?: AbortSignal;
+  /** Collect stdout as bytes (stdout is not decoded); stderr goes to `output`. */
+  binary?: boolean;
 }
 
 function killTree(pid: number, platform: NodeJS.Platform): void {
@@ -58,19 +62,38 @@ export function runProcess(file: string, args: string[], options: CommandOptions
     });
 
     let output = '';
+    let stderr = '';
+    const chunks: Buffer[] = [];
+    let binaryBytes = 0;
     let truncated = 0;
     let timedOut = false;
     let cancelled = false;
     let stopReason: 'timeout' | 'cancel' | null = null;
 
-    const collect = (chunk: Buffer) => {
+    const collectText = (chunk: Buffer) => {
       const text = chunk.toString('utf8');
       const room = maxOutput - output.length;
       output += text.slice(0, Math.max(room, 0));
       truncated += Math.max(text.length - Math.max(room, 0), 0);
     };
-    child.stdout.on('data', collect);
-    child.stderr.on('data', collect);
+    const collectBinary = (chunk: Buffer) => {
+      const room = maxOutput - binaryBytes;
+      const kept = chunk.subarray(0, Math.max(room, 0));
+      if (kept.length > 0) {
+        chunks.push(kept);
+        binaryBytes += kept.length;
+      }
+      truncated += Math.max(chunk.length - kept.length, 0);
+    };
+    if (options.binary) {
+      child.stdout.on('data', collectBinary);
+      child.stderr.on('data', (chunk: Buffer) => {
+        stderr += chunk.toString('utf8');
+      });
+    } else {
+      child.stdout.on('data', collectText);
+      child.stderr.on('data', collectText);
+    }
 
     const stop = (reason: 'timeout' | 'cancel') => {
       stopReason ??= reason;
@@ -92,7 +115,14 @@ export function runProcess(file: string, args: string[], options: CommandOptions
     });
     child.on('close', (code) => {
       cleanup();
-      resolve({ output, exitCode: code, timedOut: timedOut || stopReason === 'timeout', cancelled, truncated });
+      resolve({
+        output: options.binary ? stderr : output,
+        ...(options.binary ? { buffer: Buffer.concat(chunks) } : {}),
+        exitCode: code,
+        timedOut: timedOut || stopReason === 'timeout',
+        cancelled,
+        truncated,
+      });
     });
   });
 }

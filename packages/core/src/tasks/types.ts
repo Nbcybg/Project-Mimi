@@ -41,8 +41,8 @@ export interface TaskStepContext<Input> {
   runPc(tool: string, input: unknown): Promise<string>;
   /** Puts the recipe's confirmation in front of the user. */
   confirm(request: TaskConfirmInput): Promise<PermissionDecision>;
-  /** Runs a nested agent on the task's thread, for steps that need judgment (the developer fix). */
-  runAgent(prompt: string, options?: { maxRounds?: number }): Promise<string>;
+  /** Runs a nested agent on the task's thread, for steps that need judgment (developer fix, photo scoring). */
+  runAgent(prompt: string, options?: { maxRounds?: number; tools?: string[] }): Promise<string>;
   emit(event: AgentEvent): void;
   update(patch: { plan?: TaskPlanView; receipt?: TaskReceiptView; verification?: TaskVerificationView }): void;
 }

@@ -3,6 +3,7 @@ import { readFileTool } from './tools/read-file.ts';
 import { browserTools } from './tools/browser.ts';
 import { fileTools } from './tools/files.ts';
 import { pcInternalTools } from './tools/mcp-session.ts';
+import { mediaTools } from './tools/media.ts';
 import { organizeTools } from './tools/organize.ts';
 import { workspaceTools } from './tools/workspace.ts';
 import { runShellTool } from './tools/run-shell.ts';
@@ -41,6 +42,17 @@ export { browserSession, browserTools, formatSnapshot, setBrowserSession } from 
 export { fileTools, moveToTrash, wildcardToRegExp } from './tools/files.ts';
 export { isOrganizerReadOnly, organizeFilesTool, organizeTools, undoOrganizeTool } from './tools/organize.ts';
 export {
+  detectMediaTools,
+  mediaContactSheetTool,
+  mediaProbeTool,
+  mediaTools,
+  mediaTransformTool,
+  photoApplyTool,
+  photoScanTool,
+  photoUndoTool,
+  photoVerifyTool,
+} from './tools/media.ts';
+export {
   isWorkspaceCommandBlocked,
   isWorkspaceDestructive,
   workspaceCheckpointTool,
@@ -63,6 +75,7 @@ export const pcTools: ToolDefinition<any>[] = [
   ...fileTools,
   ...organizeTools,
   ...workspaceTools,
+  ...mediaTools,
   ...systemTools,
   ...browserTools,
   ...screenTools,

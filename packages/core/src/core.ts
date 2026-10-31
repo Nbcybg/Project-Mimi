@@ -2,8 +2,8 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { embedMany, generateText } from 'ai';
-import type { AgentEvent, ConnectorRuntime, HistoryMessage, Notification, WorkflowRunResult } from '@mimi/shared';
-import { AgentCatalog } from './agents/loader.ts';
+import type { AgentEvent, ConnectorRuntime, HistoryMessage, MimiampCommand, Notification, WorkflowRunResult } from '@mimi/shared';
+import { type AgentDefinition, AgentCatalog } from './agents/loader.ts';
 import type { AppSettings } from './app/app-settings.ts';
 import { SecretStore } from './app/secrets.ts';
 import {
@@ -50,6 +50,10 @@ import { MeshRouter } from './mesh/router.ts';
 import { MicrosoftAuth } from './microsoft/auth.ts';
 import { outlookListUnread, outlookMarkRead } from './microsoft/tools.ts';
 import { type PermissionBroker, PermissionGate } from './permissions/gate.ts';
+import { TaskRepo } from './tasks/repo.ts';
+import { createDefaultRecipes } from './tasks/recipes.ts';
+import { type TaskAgentStepInput, TaskRunner } from './tasks/runner.ts';
+import { createTaskTools } from './tasks/tools.ts';
 import { AuthStore } from './providers/auth-store.ts';
 import { loadCatalog, type ModelCatalog } from './providers/catalog.ts';
 import { ProviderStore } from './providers/provider-store.ts';
@@ -83,6 +87,7 @@ import { NotificationCenter } from './notify/notifications.ts';
 import { loadOrCreateVapid, type VapidKeys } from './notify/web-push.ts';
 import { OVERSEER_NAME } from './overseer/overseer.ts';
 import { createOverseerTools } from './overseer/tools.ts';
+import { VersionStore } from './overseer/versions.ts';
 import { Approvals } from './workflows/approvals.ts';
 import { ParkedRuns } from './workflows/parked-runs.ts';
 import { allowedPath, documentText, htmlToText, kindOfFile } from './workflows/file-nodes.ts';
@@ -130,6 +135,8 @@ export interface CoreListeners {
   nodesChanged?: () => void;
   /** A skill file was added, changed or removed. */
   skillsChanged?: () => void;
+  /** An agent asked the Mimiamp player to do something; returns how many apps were told. */
+  mimiampCommand?: (command: MimiampCommand) => number;
 }
 
 export interface CoreOptions {
@@ -193,6 +200,10 @@ export interface Core {
   resumeParked(runId: number, outcome: ResumeOutcome): Promise<WorkflowRunResult | undefined>;
   /** Files as they were before agents wrote them (restored on rewind). */
   fileSnapshots: FileSnapshots;
+  /** First-class tasks and their receipts. */
+  tasks: TaskRepo;
+  /** Runs deterministic recipes (Sprint 1: file-organizer). */
+  taskRunner: TaskRunner;
   /** Estimated model spending since midnight (configured zone). */
   spentToday(): number;
   /** Stored notifications and the browsers they are pushed to. */
@@ -255,6 +266,21 @@ export interface Core {
 }
 
 const USER_THREAD = 'main';
+
+/** The tools the nested developer agent may use; no deletion, no untrusted content. */
+const DEVELOPER_TASK_TOOLS = [
+  'workspace_info',
+  'workspace_create',
+  'workspace_run',
+  'workspace_checkpoint',
+  'workspace_diff',
+  'list_dir',
+  'file_info',
+  'find_files',
+  'read_file',
+  'write_file',
+  'edit_file',
+];
 
 /** Wires the core services together. Each front end (CLI, WebSocket server) brings its own broker. */
 /**
@@ -503,6 +529,8 @@ export async function createCore(
     gallery,
     knowledge,
     profile,
+    // Music runs in the open web clients; this core only passes the request on.
+    mimiamp: (command) => listeners.mimiampCommand?.(command) ?? 0,
     media: {
       attachments,
       models,
@@ -544,6 +572,8 @@ export async function createCore(
   const toolPool = new ToolPool(tools, toolStore, secrets, mcp, pcRunner);
   const workflows = new WorkflowStore(config.workflowsDir);
   const customNodes = new CustomNodeStore(config.nodesDir);
+  /** Old prompts and custom tools, so the Overseer can undo its own writes. */
+  const overseerVersions = new VersionStore(path.join(config.userDir, 'snapshots'));
   const triggerPool = new TriggerPool(path.join(config.triggersDir, 'pool'), () => connectorRegistry.list());
   const workflowState = new WorkflowState(config.workflowStatePath);
   const workflowRuns = new WorkflowRunStore(db);
@@ -631,6 +661,38 @@ export async function createCore(
   }
 
   const fileSnapshots = new FileSnapshots(db);
+  const executor = new ToolFileExecutor(
+    new SnapshotExecutor(new RoutingExecutor({ pc: options.pc, localPcTools: config.localPcTools }), fileSnapshots, { pc: options.pc, localPcTools: config.localPcTools }),
+    attachments,
+  );
+  const permissionGate = new PermissionGate(broker, {
+    timeoutMs: config.permissionTimeoutMs,
+    overrides: settings.permission,
+  });
+  const tasks = new TaskRepo(db);
+  /** Assigned once `deps` exists; a developer step calls back into the agent loop. */
+  let taskAgentStep: ((input: TaskAgentStepInput) => Promise<string>) | undefined;
+  const taskRunner = new TaskRunner({
+    repo: tasks,
+    recipes: createDefaultRecipes(),
+    gate: permissionGate,
+    execute: async (toolName, input, context) => {
+      const definition = toolPool.get(toolName);
+      if (!definition) throw new Error(`Unknown PC tool "${toolName}".`);
+      return executor.execute(definition, input, {
+        traceId: context.traceId,
+        thread: context.thread,
+        agent: context.agent,
+        taskId: context.taskId,
+        ...(context.signal ? { signal: context.signal } : {}),
+        allowedDirs: config.allowedDirs,
+      });
+    },
+    runAgentStep: async (input) => {
+      if (!taskAgentStep) throw new Error('The agent loop is not ready for this task.');
+      return taskAgentStep(input);
+    },
+  });
   const deps: AgentLoopDeps = {
     budgetCheck: () => budgetCheck(),
     messages,
@@ -639,14 +701,8 @@ export async function createCore(
     usage,
     models,
     tools: toolPool,
-    executor: new ToolFileExecutor(
-      new SnapshotExecutor(new RoutingExecutor({ pc: options.pc, localPcTools: config.localPcTools }), fileSnapshots, { pc: options.pc, localPcTools: config.localPcTools }),
-      attachments,
-    ),
-    gate: new PermissionGate(broker, {
-      timeoutMs: config.permissionTimeoutMs,
-      overrides: settings.permission,
-    }),
+    executor,
+    gate: permissionGate,
     allowedDirs: config.allowedDirs,
     timezone: () => config.timezone,
     mesh,
@@ -684,7 +740,7 @@ export async function createCore(
         return item && `${item.title}${item.description ? ` (${item.description.slice(0, 120)})` : ''}`;
       }),
     media: attachments,
-    extraTools: (agent) => {
+    extraTools: (agent, runInput) => {
       const own = skillsOf(agent);
       const overseer =
         agent.name === OVERSEER_NAME
@@ -698,6 +754,58 @@ export async function createCore(
               nodes: customNodes,
               models,
               secrets,
+              triggers,
+              triggerPool,
+              workflowRuns,
+              versions: overseerVersions,
+              timezone: config.timezone,
+              allowedDirs: config.allowedDirs,
+              runAgentTest: async (agentName, text, maxRounds) => {
+                const target = agents.get(agentName);
+                const traceId = randomUUID();
+                const controller = new AbortController();
+                const timer = setTimeout(() => controller.abort(new Error('agent test timed out after 120s')), 120_000);
+                let finish: RunFinish | undefined;
+                try {
+                  for await (const event of runAgent(deps, {
+                    agent: {
+                      ...target,
+                      budgets: {
+                        maxRounds: Math.min(target.budgets.maxRounds, maxRounds),
+                        maxTokens: Math.min(target.budgets.maxTokens, 100_000),
+                      },
+                    },
+                    userText: text,
+                    thread: `overseer-test/${target.name}/${Date.now().toString(36)}`,
+                    traceId,
+                    budget: mesh.budgetFor(traceId),
+                    signal: controller.signal,
+                  })) {
+                    if (event.type === 'run-finish') finish = event;
+                  }
+                } finally {
+                  clearTimeout(timer);
+                  mesh.endTrace(traceId);
+                }
+                return {
+                  text: finish?.text ?? '',
+                  reason: finish?.reason ?? 'error',
+                  error: finish?.error,
+                  errorCode: finish?.errorCode,
+                  rounds: finish?.rounds ?? 0,
+                };
+              },
+              runTool: async (name, input, signal) => {
+                const tool = toolPool.get(name);
+                if (!tool) throw new Error(`Unknown tool or preset "${name}".`);
+                return deps.executor.execute(tool, input, {
+                  traceId: `overseer-tool-test-${Date.now().toString(36)}`,
+                  thread: 'overseer-test',
+                  agent: OVERSEER_NAME,
+                  allowedDirs: config.allowedDirs,
+                  signal,
+                });
+              },
               defaultModel: () => options.app?.defaults.model ?? settings.model,
               changed: {
                 agent: (name) => listeners.agentsChanged?.(name),
@@ -741,8 +849,51 @@ export async function createCore(
         run: (name, input) => runOwnedWorkflow(agent.name, name, input),
         changed: workflowChanged,
       });
-      return [...overseer, ...(own.length > 0 ? [createUseSkillTool(own, runSkill)] : []), ...flows, ...authoring];
+      const taskTools = runInput.noTaskTools
+        ? []
+        : createTaskTools({
+            runner: taskRunner,
+            repo: tasks,
+            chatIdForThread: (thread) => chats.sessionByThread(thread)?.chatId,
+          });
+      return [
+        ...taskTools,
+        ...overseer,
+        ...(own.length > 0 ? [createUseSkillTool(own, runSkill)] : []),
+        ...flows,
+        ...authoring,
+      ];
     },
+  };
+  taskAgentStep = async (input: TaskAgentStepInput) => {
+    const base = agents.get(input.agent);
+    const developer: AgentDefinition = {
+      ...base,
+      tools: DEVELOPER_TASK_TOOLS,
+      budgets: {
+        maxRounds: Math.min(input.maxRounds ?? 20, base.budgets.maxRounds),
+        maxTokens: Math.min(base.budgets.maxTokens, 120_000),
+      },
+    };
+    let finish: RunFinish | undefined;
+    for await (const event of runAgent(deps, {
+      agent: developer,
+      userText: input.prompt,
+      thread: `task-${input.taskId}`,
+      traceId: input.traceId,
+      budget: mesh.budgetFor(input.traceId),
+      noTaskTools: true,
+      noExtraTools: true,
+      noMeshTools: true,
+      ...(input.signal ? { signal: input.signal } : {}),
+    })) {
+      input.emit({ type: 'agent-activity', agent: `developer:${base.name}`, messageId: 0, event });
+      if (event.type === 'run-finish') finish = event;
+    }
+    if (!finish || finish.reason === 'error' || finish.reason === 'aborted') {
+      throw new Error(`The developer agent failed: ${finish?.error ?? finish?.reason ?? 'no result'}`);
+    }
+    return finish.text.trim() || '(the developer agent returned no text)';
   };
   mesh.attach((input) => runAgent(deps, input));
 
@@ -1494,6 +1645,8 @@ export async function createCore(
     notify,
     spentToday,
     fileSnapshots,
+    tasks,
+    taskRunner,
     parkedRuns,
     resumeParked,
     approvals,

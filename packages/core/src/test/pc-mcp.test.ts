@@ -76,7 +76,8 @@ test('MCP servers and shell tools set to run on the PC go through the PC agent',
   const context = { traceId: 't', thread: 'th', agent: 'mimi', allowedDirs: [parts.root] };
   await assert.rejects(buildCustomTool(shellSpec, undefined, runner).execute({}, context, {}), new RegExp(PC_OFFLINE.slice(0, 20)));
 
-  agent = new PcAgent({ url: `ws://127.0.0.1:${server.port}/ws`, token: TOKEN, allowedDirs: [pcDir], name: 'test-pc', reconnect: false });
+  // The test machine has no one to click a native consent dialog.
+  agent = new PcAgent({ url: `ws://127.0.0.1:${server.port}/ws`, token: TOKEN, allowedDirs: [pcDir], name: 'test-pc', reconnect: false, consent: false });
   agent.start();
   const deadline = Date.now() + 5000;
   while (!server.pc.online && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));

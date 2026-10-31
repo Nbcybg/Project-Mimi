@@ -8,7 +8,7 @@ const SCHEDULE_HELP =
   'Give exactly one of fire_at (one-shot local date-time in the configured time zone, like 2026-10-13T09:00:00), cron (recurring, e.g. "0 8 * * 1-5" for weekdays at 08:00), or webhook: true for a trigger that fires when an HTTP service calls its URL. Results show times in that same local zone with its UTC offset.';
 
 /** An ISO instant as local date-time, offset and zone name, e.g. 2026-10-31T00:30:00+07:00 (Asia/Bangkok). */
-function localStamp(iso: string | null, timezone: string): string | null {
+export function localStamp(iso: string | null, timezone: string): string | null {
   if (!iso) return null;
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
@@ -32,7 +32,7 @@ function localStamp(iso: string | null, timezone: string): string | null {
   return `${get('year')}-${pad(get('month'))}-${pad(get('day'))}T${pad(get('hour'))}:${pad(get('minute'))}:${pad(get('second'))}${offset} (${timezone})`;
 }
 
-function describe(trigger: Trigger, timezone: string): string {
+export function describeTrigger(trigger: Trigger, timezone: string): string {
   const when = trigger.webhook
     ? `on webhook ${trigger.webhook}`
     : trigger.cron
@@ -76,7 +76,7 @@ export function createTriggerTools(store: TriggerStore, agents: AgentCatalog, ti
         repeat: input.repeat,
         agent,
       });
-      return `Created ${describe(trigger, zone())}`;
+      return `Created ${describeTrigger(trigger, zone())}`;
     },
   });
 
@@ -90,7 +90,7 @@ export function createTriggerTools(store: TriggerStore, agents: AgentCatalog, ti
     async execute(input) {
       const status = input.status ?? 'active';
       const triggers = store.list(status === 'all' ? undefined : status);
-      return triggers.length > 0 ? triggers.map((trigger) => describe(trigger, zone())).join('\n') : `No ${status === 'all' ? '' : `${status} `}triggers.`;
+      return triggers.length > 0 ? triggers.map((trigger) => describeTrigger(trigger, zone())).join('\n') : `No ${status === 'all' ? '' : `${status} `}triggers.`;
     },
   });
 
@@ -110,7 +110,7 @@ export function createTriggerTools(store: TriggerStore, agents: AgentCatalog, ti
     summarize: (input) => `Update trigger #${input.id}`,
     async execute(input) {
       const { id, fire_at: fireAt, ...rest } = input;
-      return `Updated ${describe(store.update(id, { ...rest, fireAt }), zone())}`;
+      return `Updated ${describeTrigger(store.update(id, { ...rest, fireAt }), zone())}`;
     },
   });
 
@@ -122,7 +122,7 @@ export function createTriggerTools(store: TriggerStore, agents: AgentCatalog, ti
     inputSchema: z.object({ id: z.number().int().positive() }),
     summarize: (input) => `Cancel trigger #${input.id}`,
     async execute(input) {
-      return `Cancelled ${describe(store.cancel(input.id), zone())}`;
+      return `Cancelled ${describeTrigger(store.cancel(input.id), zone())}`;
     },
   });
 

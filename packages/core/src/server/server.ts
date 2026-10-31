@@ -27,6 +27,7 @@ import type {
 import { NODE_TYPES } from '@mimi/shared';
 import { WebSocket, WebSocketServer } from 'ws';
 import { deleteAgent, saveAgent } from '../agents/loader.ts';
+import { classifyError } from '../errors.ts';
 import { ensureOverseer, OVERSEER_NAME, overseerView as toOverseerView } from '../overseer/overseer.ts';
 import { readSkillBody } from '../skills/skills.ts';
 import { checkModelNeeds } from '../providers/model-requirements.ts';
@@ -616,6 +617,10 @@ export async function startServer(
     }
   };
   core.listeners.notification = (notification) => broadcast({ type: 'notification', notification });
+  core.listeners.mimiampCommand = (command) => {
+    broadcast({ type: 'mimiamp', command });
+    return clients.size;
+  };
 
   /** What each connected client shows: its open chat and whether its window is on screen. */
   const presence = new Map<WebSocket, { chatId: number | null; visible: boolean }>();
@@ -664,7 +669,8 @@ export async function startServer(
       try {
         await job(controller.signal);
       } catch (error) {
-        broadcast({ type: 'error', message: (error as Error).message, ...(tellClients ? { chatId } : {}) });
+        const classified = classifyError(error);
+        broadcast({ type: 'error', message: classified.message, code: classified.code, ...(tellClients ? { chatId } : {}) });
       } finally {
         activeByChat.delete(chatId);
         running--;
@@ -868,13 +874,21 @@ export async function startServer(
       broadcast({ type: 'user-message', text, agent: agent.name });
       for await (const event of core.runTurn({ agent, userText: text, signal })) forward(event);
     } catch (error) {
-      broadcast({ type: 'error', message: (error as Error).message });
+      const classified = classifyError(error);
+      broadcast({ type: 'error', message: classified.message, code: classified.code });
     }
     reportJobs();
   };
 
   const handleClient = (socket: WebSocket, message: ClientMessage) => {
-    const reply = (response: ServerMessage) => socket.send(JSON.stringify(response));
+    const reply = (response: ServerMessage) => {
+      let out = response;
+      if (response.type === 'error' && !response.code) {
+        const classified = classifyError(new Error(response.message));
+        out = { ...response, message: classified.message, code: classified.code };
+      }
+      socket.send(JSON.stringify(out));
+    };
     /** Starts the sign-in of one OAuth account and tells the client where to go. */
     const beginOAuthConnect = (id: string) => {
       void core.oauth.startConnect(id, oauthReceiver).then(
@@ -919,9 +933,41 @@ export async function startServer(
           for (const controller of activeByChat.values()) controller.abort();
         }
         break;
-      case 'permission-response':
-        broker.respond(message.requestId, message.allow === true);
+      case 'permission-response': {
+        const allow = message.allow === true;
+        // "Allow for this task" covers the same tool family for the rest of this trace.
+        if (allow && message.scope === 'task') {
+          const request = broker.pending().find((entry) => entry.id === message.requestId);
+          if (request) core.deps.gate.grant(request.traceId, request.tool);
+        }
+        broker.respond(message.requestId, allow);
         break;
+      }
+      case 'task-control':
+        if (message.action === 'pause' || message.action === 'resume' || message.action === 'cancel') {
+          core.taskRunner.control(message.taskId, message.action);
+        }
+        break;
+      case 'task-undo': {
+        const task = core.tasks.get(message.taskId);
+        if (!task) throw new Error(`No task "${message.taskId}".`);
+        const session = core.chats.sessionByThread(task.thread);
+        const chatId = task.chatId ?? session?.chatId;
+        void (async () => {
+          try {
+            for await (const event of core.taskRunner.undo(task)) {
+              if (chatId !== undefined && session) {
+                broadcast({ type: 'chat-event', chatId, sessionId: session.id, agent: task.agent, event });
+              } else {
+                forward(event);
+              }
+            }
+          } catch (error) {
+            broadcast({ type: 'error', message: (error as Error).message });
+          }
+        })();
+        break;
+      }
       case 'history':
         reply({ type: 'history', messages: core.history(message.beforeId, Math.min(message.limit ?? 50, 200)) });
         break;
@@ -1783,7 +1829,7 @@ export async function startServer(
   firstBackup.unref();
   const server = http.createServer(async (request, response) => {
     const url = new URL(request.url ?? '/', 'http://localhost');
-    if (request.method === 'GET' && serveWebFile(url.pathname, response)) {
+    if (request.method === 'GET' && serveWebFile(url.pathname, response, request.headers.range)) {
       // the web client
     } else if (await handleHttpApi(httpApi, request, response)) {
       // answered by the file API
@@ -1884,7 +1930,8 @@ export async function startServer(
       } catch (error) {
         // A rejected setting or memory write is the client's to show, not a reason to drop it.
         const clientId = message.type === 'chat-send' && typeof message.clientId === 'string' ? message.clientId : undefined;
-        socket.send(JSON.stringify({ type: 'error', message: (error as Error).message, ...(clientId ? { clientId } : {}) } satisfies ServerMessage));
+        const classified = classifyError(error);
+        socket.send(JSON.stringify({ type: 'error', message: classified.message, code: classified.code, ...(clientId ? { clientId } : {}) } satisfies ServerMessage));
       }
     });
 

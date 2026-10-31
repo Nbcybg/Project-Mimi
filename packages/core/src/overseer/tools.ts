@@ -2,16 +2,23 @@ import { NODE_TYPES, type CustomToolSpec, type ToolPreset } from '@mimi/shared';
 import { z } from 'zod';
 import { MODEL_KEYS } from '../app/app-settings.ts';
 import type { AgentCatalog, AgentDefinition } from '../agents/loader.ts';
+import { ERROR_CODE_GUIDE, errorGuideFor, formatError } from '../errors.ts';
 import { saveAgent } from '../agents/loader.ts';
 import { checkModelNeeds, MODEL_CAPABILITY } from '../providers/model-requirements.ts';
 import type { ModelService } from '../providers/routing.ts';
 import { deleteSkill, readSkillBody, saveSkill, type Skill } from '../skills/skills.ts';
 import type { SecretStore } from '../app/secrets.ts';
+import type { TriggerStore } from '../scheduler/triggers.ts';
+import { localStamp } from '../scheduler/trigger-tools.ts';
 import type { ToolPool } from '../tools/pool.ts';
 import { defineTool, type ToolDefinition } from '../tools/registry.ts';
+import type { TriggerPool } from '../workflows/trigger-pool.ts';
+import type { WorkflowRunStore } from '../workflows/run-history.ts';
 import type { WorkflowStore } from '../workflows/workflow-store.ts';
 import { type CustomNodeSpec, type CustomNodeStore } from '../workflows/custom-nodes.ts';
+import { validateConfig } from './diagnostics.ts';
 import { OVERSEER_NAME } from './overseer.ts';
+import type { VersionStore } from './versions.ts';
 
 export interface OverseerToolDeps {
   agentsDir: string;
@@ -23,6 +30,16 @@ export interface OverseerToolDeps {
   nodes: CustomNodeStore;
   models: ModelService;
   secrets: SecretStore;
+  triggers: TriggerStore;
+  triggerPool: TriggerPool;
+  workflowRuns: WorkflowRunStore;
+  versions: VersionStore;
+  timezone: string;
+  allowedDirs: string[];
+  /** Runs a throw-away test turn with an agent and returns what it said (no chat, no notification). */
+  runAgentTest?(agent: string, text: string, maxRounds: number): Promise<{ text: string; reason: string; error?: string; errorCode?: string; rounds: number }>;
+  /** Runs a tool through the normal executor (so PC tools reach the PC agent), without the permission prompt. */
+  runTool?(name: string, input: unknown, signal: AbortSignal): Promise<string>;
   /** The model a new agent gets when the request does not name one. */
   defaultModel(): string;
   changed: {
@@ -34,6 +51,9 @@ export interface OverseerToolDeps {
 }
 
 const MAX_OUTPUT = 30_000;
+/** Test turns are real model work; the limits survive between turns (one tool set per turn). */
+const testRuns = new Map<string, number>();
+const recentTests: number[] = [];
 const clip = (text: string): string =>
   text.length <= MAX_OUTPUT ? text : `${text.slice(0, MAX_OUTPUT)}\n… [cut: ${text.length - MAX_OUTPUT} more characters]`;
 const pretty = (value: unknown): string => clip(JSON.stringify(value, null, 2));
@@ -165,6 +185,46 @@ function applyList(current: string[], full?: string[], add?: string[], remove?: 
   return [...set];
 }
 
+/** What the Overseer needs to answer "did it fire, and will it fire again?" */
+function triggerView(deps: OverseerToolDeps, trigger: ReturnType<TriggerStore['get']>) {
+  if (!trigger) return null;
+  const kind = trigger.webhook ? 'webhook' : trigger.cron ? 'cron' : 'fire_at';
+  const oneShot = kind === 'fire_at';
+  return {
+    id: trigger.id,
+    owner: trigger.workflow ? `workflow ${trigger.workflow}` : trigger.agent ? `agent ${trigger.agent}` : 'user',
+    kind,
+    title: trigger.title,
+    text: clip(trigger.text),
+    status: trigger.status,
+    repeat: trigger.repeat,
+    nextFireAt: trigger.nextFireAt,
+    nextFireAtLocal: localStamp(trigger.nextFireAt, deps.timezone),
+    lastFiredAt: trigger.lastFiredAt,
+    lastFiredAtLocal: localStamp(trigger.lastFiredAt, deps.timezone),
+    lastResult: trigger.lastResult ? clip(trigger.lastResult) : null,
+    webhook: trigger.webhook,
+    /** A one-shot trigger is done when it is no longer active; a cron one keeps waiting. */
+    oneShotState: oneShot ? (trigger.status === 'active' ? 'pending' : trigger.status) : null,
+    createdAt: trigger.createdAt,
+    updatedAt: trigger.updatedAt,
+  };
+}
+
+function versionSummary(entry: { id: string; at: string; data: unknown }) {
+  const data = entry.data as Partial<AgentDefinition & CustomToolSpec>;
+  return {
+    id: entry.id,
+    at: entry.at,
+    name: data.name ?? null,
+    displayName: 'displayName' in data ? data.displayName ?? null : null,
+    tools: Array.isArray(data.tools) ? data.tools : null,
+    promptPreview: typeof (data as { systemPrompt?: unknown }).systemPrompt === 'string' ? clip((data as { systemPrompt: string }).systemPrompt.slice(0, 240)) : null,
+    kind: 'kind' in data ? data.kind ?? null : null,
+    description: typeof data.description === 'string' ? clip(data.description.slice(0, 240)) : null,
+  };
+}
+
 function agentSummary(deps: OverseerToolDeps, name: string) {
   const agent = deps.agents.get(name);
   return {
@@ -209,6 +269,15 @@ export function createOverseerTools(deps: OverseerToolDeps): ToolDefinition<any>
           trigger: workflow.trigger.pool,
           nodes: workflow.nodes.length,
         })),
+        triggers: deps.triggers.list().map((trigger) => triggerView(deps, trigger)),
+        recentRuns: deps.workflowRuns.recent(8).map((run) => ({
+          id: run.id,
+          workflow: run.workflow,
+          ok: run.ok,
+          trigger: run.trigger,
+          startedAt: run.startedAt,
+          result: clip(run.result.slice(0, 300)),
+        })),
         nodeTypes: NODE_TYPES.map((node) => ({ type: node.type, label: node.label })),
         customNodes: deps.nodes.list().map((node) => ({ name: node.name, label: node.label, description: node.description })),
         secrets: deps.secrets.names(),
@@ -217,6 +286,7 @@ export function createOverseerTools(deps: OverseerToolDeps): ToolDefinition<any>
           drive: 'Google Drive is read-only here (drive_search). Writing/uploading needs a new OAuth scope and the user\'s consent.',
           workflows: 'Workflows are always saved disabled; the user enables them.',
           secrets: 'Only names are shown. Put values in the vault; use {{secret.NAME}} in tools.',
+          errors: 'Chat errors, tool_test and agent_message carry a stable code (E-AUTH-401, E-RATE-429, E-CONTEXT, E-NETWORK, E-CONFIG, E-BUDGET, ...). Call error_codes when the user reports one; it explains the cause and the next step.',
           nodes: 'Custom nodes are files under user/nodes and run in the workflow sandbox via the "plugin" node. Create them with node_save; they may read items and $config and must return items. Never put secrets in a custom node.',
         },
         // Names are enough here; tool_get has the full settings and templates.
@@ -360,9 +430,11 @@ export function createOverseerTools(deps: OverseerToolDeps): ToolDefinition<any>
         systemPrompt: input.systemPrompt?.trim() || current?.systemPrompt || '',
       };
       if (!agent.systemPrompt) throw new Error('The system prompt is empty.');
+      // Keep the version that is about to be replaced: a wrong prompt must be undoable.
+      if (current) deps.versions.save('agent', name, current);
       saveAgent(deps.agentsDir, agent);
       deps.changed.agent(name);
-      return `Saved agent "${name}" (${agent.tools.length} tools, ${agent.skills.length} skills, model ${agent.models.model}).`;
+      return `Saved agent "${name}" (${agent.tools.length} tools, ${agent.skills.length} skills, model ${agent.models.model}). The previous version is in agent_history.`;
     },
   });
 
@@ -471,6 +543,8 @@ export function createOverseerTools(deps: OverseerToolDeps): ToolDefinition<any>
     inputSchema: z.object({ tool: customToolInput, renameFrom: z.string().optional() }),
     summarize: (input) => `Save tool ${input.tool.name}`,
     async execute(input) {
+      const current = deps.tools.customSpecs().find((tool) => tool.name === (input.renameFrom ?? input.tool.name));
+      if (current) deps.versions.save('tool', current.name, current);
       const saved = deps.tools.saveCustom(input.tool as CustomToolSpec, input.renameFrom);
       if (input.renameFrom && input.renameFrom !== saved.name) {
         updateAgents(deps, (agent) => {
@@ -762,19 +836,336 @@ export function createOverseerTools(deps: OverseerToolDeps): ToolDefinition<any>
     },
   });
 
+  const triggerList: ToolDefinition<any> = defineTool({
+    name: 'trigger_list',
+    description:
+      'Read-only list of reminders, scheduled agent tasks and webhooks. Shows the owner (agent or workflow), the kind (fire_at / cron / webhook), the next fire time in the local zone, the last result, and whether a one-shot trigger is still pending or already fired/cancelled.',
+    risk: 'read',
+    target: 'core',
+    inputSchema: z.object({
+      status: z.enum(['active', 'fired', 'cancelled', 'all']).optional().describe('Defaults to all'),
+      owner: z.string().optional().describe('Agent name or "agent/name" workflow owner'),
+      limit: z.number().int().min(1).max(200).optional(),
+    }),
+    summarize: () => 'List triggers',
+    async execute(input) {
+      const status = input.status && input.status !== 'all' ? input.status : undefined;
+      let triggers = deps.triggers.list(status);
+      if (input.owner) {
+        const owner = input.owner.trim();
+        triggers = triggers.filter(
+          (trigger) => trigger.agent === owner || trigger.workflow === owner || (trigger.workflow ?? '').endsWith(`/${owner}`),
+        );
+      }
+      triggers = triggers.slice(0, input.limit ?? 100);
+      return triggers.length === 0 ? 'No triggers.' : pretty(triggers.map((trigger) => triggerView(deps, trigger)));
+    },
+  });
+
+  const triggerGet: ToolDefinition<any> = defineTool({
+    name: 'trigger_get',
+    description: 'Read one trigger in full: owner, kind, next fire, last result, webhook URL and one-shot state.',
+    risk: 'read',
+    target: 'core',
+    inputSchema: z.object({ id: z.number().int().positive() }),
+    summarize: (input) => `Read trigger #${input.id}`,
+    async execute(input) {
+      const trigger = deps.triggers.get(input.id);
+      if (!trigger) throw new Error(`No trigger #${input.id}.`);
+      return pretty(triggerView(deps, trigger));
+    },
+  });
+
+  const agentMessage: ToolDefinition<any> = defineTool({
+    name: 'agent_message',
+    description:
+      'Send one test message to an agent and read its reply. This runs a real turn (with the agent\'s prompt, tools and skills) but posts nothing to the user\'s chats. Pass test: true. Rounds are capped, and the same agent can be tested at most once every 10 seconds (5 tests per minute overall).',
+    risk: 'write',
+    target: 'core',
+    inputSchema: z.object({
+      agent: z.string().min(1),
+      text: z.string().min(1),
+      test: z.boolean().default(true).describe('Must be true; this tool only runs test messages'),
+      maxRounds: z.number().int().min(1).max(8).optional().describe('Defaults to 3'),
+    }),
+    summarize: (input) => `Test agent ${input.agent}`,
+    async execute(input) {
+      if (input.test !== true) throw new Error('agent_message only runs test messages; pass test: true.');
+      if (!deps.runAgentTest) throw new Error('Test turns are not available in this build.');
+      const name = input.agent.trim();
+      if (name === OVERSEER_NAME) throw new Error('The Overseer cannot message itself.');
+      deps.agents.get(name); // must exist
+      const now = Date.now();
+      const last = testRuns.get(name) ?? 0;
+      if (now - last < 10_000) throw new Error(`Just tested "${name}" — wait ${Math.ceil((10_000 - (now - last)) / 1000)}s before trying again.`);
+      while (recentTests.length > 0 && now - recentTests[0]! > 60_000) recentTests.shift();
+      if (recentTests.length >= 5) throw new Error('Too many agent tests in one minute; wait a moment.');
+      testRuns.set(name, now);
+      recentTests.push(now);
+      const started = Date.now();
+      const result = await deps.runAgentTest(name, input.text.trim(), input.maxRounds ?? 3);
+      return pretty({
+        test: true,
+        agent: name,
+        rounds: result.rounds,
+        reason: result.reason,
+        durationMs: Date.now() - started,
+        ...(result.error ? { error: result.error, errorCode: result.errorCode ?? null } : {}),
+        text: result.text || '(no text)',
+      });
+    },
+  });
+
+  const workflowRuns: ToolDefinition<any> = defineTool({
+    name: 'workflow_runs',
+    description:
+      'Read workflow run history. Without a run id it lists recent runs (newest first) with ok/failed and the result/error; with a run id it shows every node input/output and the failing node.',
+    risk: 'read',
+    target: 'core',
+    inputSchema: z.object({
+      agent: z.string().optional(),
+      workflow: z.string().optional().describe('Workflow name, or "agent/name"'),
+      runId: z.number().int().positive().optional(),
+      limit: z.number().int().min(1).max(100).optional(),
+    }),
+    summarize: (input) => (input.runId ? `Read workflow run #${input.runId}` : 'List workflow runs'),
+    async execute(input) {
+      if (input.runId) {
+        const run = deps.workflowRuns.get(input.runId);
+        if (!run) throw new Error(`No workflow run #${input.runId}.`);
+        return pretty(run);
+      }
+      const limit = input.limit ?? 20;
+      let runs;
+      if (input.workflow) {
+        const name = input.workflow.trim();
+        let key = name;
+        if (!name.includes('/')) {
+          const found = deps.workflows.list(input.agent).find((workflow) => workflow.name === name);
+          if (!found) throw new Error(`No workflow "${name}"${input.agent ? ` for agent "${input.agent}"` : ''}.`);
+          key = `${found.agent}/${found.name}`;
+        }
+        runs = deps.workflowRuns.list(key, limit);
+      } else if (input.agent) {
+        runs = deps.workflows
+          .list(input.agent)
+          .flatMap((workflow) => deps.workflowRuns.list(`${workflow.agent}/${workflow.name}`, limit))
+          .sort((a, b) => b.id - a.id)
+          .slice(0, limit);
+      } else {
+        runs = deps.workflowRuns.recent(limit);
+      }
+      if (runs.length === 0) return 'No workflow runs yet.';
+      return pretty(
+        runs.map((run) => ({
+          id: run.id,
+          workflow: run.workflow,
+          agent: run.agent,
+          trigger: run.trigger,
+          ok: run.ok,
+          startedAt: run.startedAt,
+          durationMs: run.durationMs,
+          nodeCount: run.nodeCount,
+          result: clip(run.result),
+          ...(run.ok ? {} : { error: clip(run.result) }),
+        })),
+      );
+    },
+  });
+
+  const toolTest: ToolDefinition<any> = defineTool({
+    name: 'tool_test',
+    description:
+      'Run a tool or preset once with sample input and return its real output. Use it to check a preset\'s spreadsheet id, an HTTP tool\'s endpoint, or a connector. Shell and delete tools are refused; write tools need confirmWrite: true because they may change real data.',
+    risk: 'write',
+    target: 'core',
+    inputSchema: z.object({
+      name: z.string().min(1),
+      input: z.record(z.string(), z.unknown()).optional().describe('Sample input matching the tool\'s params'),
+      confirmWrite: z.boolean().optional().describe('Required for write-risk tools'),
+      timeoutMs: z.number().int().min(1000).max(120_000).optional(),
+    }),
+    summarize: (input) => `Test tool ${input.name}`,
+    async execute(input) {
+      const name = input.name.trim();
+      const tool = deps.tools.get(name);
+      if (!tool) throw new Error(`Unknown tool or preset "${name}".`);
+      if (tool.risk === 'shell' || tool.risk === 'delete') {
+        throw new Error(`"${name}" is ${tool.risk}-risk and cannot be run from tool_test. Ask the user to run it.`);
+      }
+      if (tool.risk === 'write' && !input.confirmWrite) {
+        throw new Error(`"${name}" can change data. Pass confirmWrite: true only when the sample values are safe to run for real.`);
+      }
+      const parsed = tool.inputSchema.safeParse(input.input ?? {});
+      if (!parsed.success) throw new Error(`Invalid sample input:\n${z.prettifyError(parsed.error)}`);
+      const timeoutMs = input.timeoutMs ?? 30_000;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(new Error(`tool_test timed out after ${timeoutMs}ms`)), timeoutMs);
+      const aborted = new Promise<never>((_, reject) => {
+        controller.signal.addEventListener('abort', () => reject(controller.signal.reason), { once: true });
+      });
+      const started = Date.now();
+      const context = {
+        traceId: `overseer-tool-test-${Date.now().toString(36)}`,
+        thread: 'overseer-test',
+        agent: OVERSEER_NAME,
+        allowedDirs: deps.allowedDirs,
+        signal: controller.signal,
+      };
+      try {
+        const output = await Promise.race([
+          deps.runTool ? deps.runTool(name, parsed.data, controller.signal) : tool.execute(parsed.data, context),
+          aborted,
+        ]);
+        return pretty({ name, risk: tool.risk, ok: true, durationMs: Date.now() - started, output: clip(String(output)) });
+      } catch (error) {
+        return pretty({ name, risk: tool.risk, ok: false, durationMs: Date.now() - started, error: formatError(error) });
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+  });
+
+  const errorCodes: ToolDefinition<any> = defineTool({
+    name: 'error_codes',
+    description:
+      'Explain the stable error codes shown in chats, toasts, tool_test and agent_message: what each one means and what to do next. Call it when the user reports a code such as E-RATE-429.',
+    risk: 'read',
+    target: 'core',
+    inputSchema: z.object({
+      code: z.string().optional().describe('One code such as E-RATE-429; omit to list every code'),
+    }),
+    summarize: (input) => (input.code ? `Explain error ${input.code}` : 'List error codes'),
+    async execute(input) {
+      if (input.code) {
+        const found = errorGuideFor(input.code);
+        if (!found) throw new Error(`Unknown error code "${input.code}". Known: ${ERROR_CODE_GUIDE.map((entry) => entry.code).join(', ')}.`);
+        return pretty(found);
+      }
+      return pretty(ERROR_CODE_GUIDE);
+    },
+  });
+
+  const configValidate: ToolDefinition<any> = defineTool({
+    name: 'config_validate',
+    description:
+      'Check the whole setup for leftovers: agents naming missing tools/skills/agents, prompts mentioning tools the agent does not have, tools using vault secrets that do not exist, presets with missing settings, workflows naming deleted agents/tools/workflows/plugins, and stale or broken triggers. Nothing is changed.',
+    risk: 'read',
+    target: 'core',
+    inputSchema: z.object({}),
+    summarize: () => 'Validate the whole setup',
+    async execute() {
+      return pretty(
+        validateConfig({
+          agents: deps.agents,
+          tools: deps.tools,
+          skills: deps.skills,
+          workflows: deps.workflows,
+          nodes: deps.nodes,
+          secrets: deps.secrets,
+          triggers: deps.triggers,
+          triggerPool: deps.triggerPool,
+        }),
+      );
+    },
+  });
+
+  const agentHistory: ToolDefinition<any> = defineTool({
+    name: 'agent_history',
+    description: 'List the last 10 saved versions of an agent (prompt, tools, models), newest first.',
+    risk: 'read',
+    target: 'core',
+    inputSchema: z.object({ name: z.string().min(1), limit: z.number().int().min(1).max(10).optional() }),
+    summarize: (input) => `Read history of agent ${input.name}`,
+    async execute(input) {
+      const name = input.name.trim();
+      const versions = deps.versions.list('agent', name, input.limit ?? 10);
+      return versions.length === 0 ? `No saved versions of agent "${name}" yet.` : pretty({ name, versions: versions.map(versionSummary) });
+    },
+  });
+
+  const agentRestore: ToolDefinition<any> = defineTool({
+    name: 'agent_restore',
+    description:
+      'Restore an agent from a saved version (agent_history). The current version is snapshotted first, so a restore can itself be undone. Omit version to restore the newest snapshot.',
+    risk: 'write',
+    target: 'core',
+    inputSchema: z.object({ name: z.string().min(1), version: z.string().optional() }),
+    summarize: (input) => `Restore agent ${input.name}`,
+    async execute(input) {
+      const name = input.name.trim();
+      const versions = deps.versions.list('agent', name, 10);
+      if (versions.length === 0) throw new Error(`No saved versions of agent "${name}".`);
+      const entry = input.version ? deps.versions.get<AgentDefinition>('agent', name, input.version) : (versions[0] as { id: string; at: string; data: AgentDefinition });
+      if (!entry) throw new Error(`No version "${input.version}" for agent "${name}".`);
+      const current = deps.agents.names().includes(name) ? deps.agents.get(name) : undefined;
+      if (current) deps.versions.save('agent', name, current);
+      const restored = saveAgent(deps.agentsDir, { ...entry.data, name });
+      deps.changed.agent(name);
+      return `Restored agent "${name}" from ${entry.at} (${entry.id}). The version it replaced is in agent_history.`;
+    },
+  });
+
+  const toolHistory: ToolDefinition<any> = defineTool({
+    name: 'tool_history',
+    description: 'List the last 10 saved versions of a custom tool, newest first.',
+    risk: 'read',
+    target: 'core',
+    inputSchema: z.object({ name: z.string().min(1), limit: z.number().int().min(1).max(10).optional() }),
+    summarize: (input) => `Read history of tool ${input.name}`,
+    async execute(input) {
+      const name = input.name.trim();
+      const versions = deps.versions.list('tool', name, input.limit ?? 10);
+      return versions.length === 0 ? `No saved versions of tool "${name}" yet.` : pretty({ name, versions: versions.map(versionSummary) });
+    },
+  });
+
+  const toolRestore: ToolDefinition<any> = defineTool({
+    name: 'tool_restore',
+    description:
+      'Restore a custom tool from a saved version (tool_history). The current version is snapshotted first. Omit version to restore the newest snapshot.',
+    risk: 'write',
+    target: 'core',
+    inputSchema: z.object({ name: z.string().min(1), version: z.string().optional() }),
+    summarize: (input) => `Restore tool ${input.name}`,
+    async execute(input) {
+      const name = input.name.trim();
+      const versions = deps.versions.list('tool', name, 10);
+      if (versions.length === 0) throw new Error(`No saved versions of tool "${name}".`);
+      const entry = input.version ? deps.versions.get<CustomToolSpec>('tool', name, input.version) : (versions[0] as { id: string; at: string; data: CustomToolSpec });
+      if (!entry) throw new Error(`No version "${input.version}" for tool "${name}".`);
+      const current = deps.tools.customSpecs().find((tool) => tool.name === name);
+      if (current) deps.versions.save('tool', name, current);
+      const restored = deps.tools.saveCustom({ ...entry.data, name });
+      deps.changed.tools();
+      return `Restored tool "${restored.name}" from ${entry.at} (${entry.id}). The version it replaced is in tool_history.`;
+    },
+  });
+
   return [
     state,
     agentSchema,
     agentList,
     agentGet,
     agentSave,
+    agentHistory,
+    agentRestore,
+    agentMessage,
     toolSchema,
     toolList,
     toolGet,
     toolSave,
     toolDelete,
+    toolTest,
+    toolHistory,
+    toolRestore,
     presetSave,
     presetDelete,
+    triggerList,
+    triggerGet,
+    workflowRuns,
+    errorCodes,
+    configValidate,
     nodeSchema,
     nodeList,
     nodeGet,

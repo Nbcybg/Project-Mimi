@@ -1,6 +1,8 @@
 import os from 'node:os';
 import type { PcMessage, PcRequest, ToolDefinition } from '@mimi/shared';
 import { pcInternalTools, pcTools } from './index.ts';
+import { LocalConsent } from './local-consent.ts';
+import { isOrganizerReadOnly } from './tools/organize.ts';
 
 export interface PcAgentOptions {
   /** WebSocket URL of the core, e.g. wss://my-core.example/ws */
@@ -17,6 +19,11 @@ export interface PcAgentOptions {
   shell?: boolean;
   /** Reconnect with backoff after the connection drops. Default true. */
   reconnect?: boolean;
+  /**
+   * Asks on this machine before every non-read tool (default: native dialog). Pass false
+   * only for a machine whose owner accepted that the core's prompt is enough.
+   */
+  consent?: LocalConsent | boolean;
   log?: (line: string) => void;
 }
 
@@ -30,6 +37,7 @@ const MAX_BACKOFF_MS = 30_000;
 export class PcAgent {
   private readonly options: PcAgentOptions;
   private readonly tools: Map<string, ToolDefinition<any>>;
+  private readonly consent: LocalConsent | null;
   private socket: WebSocket | null = null;
   private stopped = false;
   private backoffMs = 1000;
@@ -41,6 +49,8 @@ export class PcAgent {
     const shell = options.shell !== false;
     const offered = [...(options.tools ?? pcTools), ...(shell ? pcInternalTools : [])].filter((tool) => shell || tool.risk !== 'shell');
     this.tools = new Map(offered.map((tool) => [tool.name, tool]));
+    this.consent =
+      options.consent === false ? null : options.consent instanceof LocalConsent ? options.consent : new LocalConsent();
   }
 
   /** The tools this PC offers the core. */
@@ -82,6 +92,7 @@ export class PcAgent {
         name: this.options.name ?? os.hostname(),
         allowedDirs: this.options.allowedDirs,
         tools: [...this.tools.keys()],
+        consent: this.consent !== null,
       });
     });
 
@@ -121,11 +132,28 @@ export class PcAgent {
     if (!parsed.success) return respond(false, `Invalid input for ${request.tool}.`);
 
     this.log(`${request.agent}: ${tool.summarize(parsed.data)}`);
+    // An organizer plan/verify only reads the folder and writes its own journal; the
+    // apply (journal, dry_run false) is the call that changes the user's files.
+    const localRisk =
+      tool.name === 'organize_files' && isOrganizerReadOnly(parsed.data as { journal?: string; dry_run?: boolean; verify?: boolean })
+        ? 'read'
+        : tool.risk;
+    const allowed = await this.consent?.allow({
+      id: request.id,
+      tool: tool.name,
+      risk: localRisk,
+      summary: tool.summarize(parsed.data),
+      traceId: request.traceId,
+      ...(request.taskId ? { taskId: request.taskId } : {}),
+    });
+    if (allowed === false) return respond(false, 'The user denied this action on this computer.');
+
     try {
       const output = await tool.execute(parsed.data, {
         traceId: request.traceId,
         thread: request.thread,
         agent: request.agent,
+        ...(request.taskId ? { taskId: request.taskId } : {}),
         allowedDirs: this.options.allowedDirs,
       });
       respond(true, output);

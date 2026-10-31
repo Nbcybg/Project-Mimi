@@ -4,6 +4,7 @@ import type http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { renderIconPng } from '../app/icon.ts';
+import { AUDIO_TYPES, listMimiampTracks, trackPath } from '../mimiamp/library.ts';
 
 // The built-in web client, served by a core and by the accounts gateway alike.
 
@@ -45,12 +46,16 @@ const WEB_FILES: Record<string, [string, string]> = {
   '/feature-notify.js': ['feature-notify.js', 'text/javascript; charset=utf-8'],
   '/feature-mail.js': ['feature-mail.js', 'text/javascript; charset=utf-8'],
   '/feature-update.js': ['feature-update.js', 'text/javascript; charset=utf-8'],
+  '/feature-mimiamp.js': ['feature-mimiamp.js', 'text/javascript; charset=utf-8'],
   '/feature-vrm.js': ['feature-vrm.js', 'text/javascript; charset=utf-8'],
   // The chat sounds: sent, reply finished, asking for permission.
   '/sounds/chat_1.mp3': ['sounds/chat_1.mp3', 'audio/mpeg'],
   '/sounds/chat_2.mp3': ['sounds/chat_2.mp3', 'audio/mpeg'],
   '/sounds/chat_3.mp3': ['sounds/chat_3.mp3', 'audio/mpeg'],
 };
+
+/** The built-in backdrop art, served from web/backgrounds with a long cache. */
+const BACKGROUND_DIR = path.join(WEB_DIR, 'backgrounds');
 
 /** The 3D libraries (three.js, three-vrm) served from node_modules, so the client works offline. */
 function vendorFile(request: string): string | undefined {
@@ -121,10 +126,109 @@ const ICONS: Record<string, () => Buffer> = {
 const icons = new Map<string, Buffer>();
 
 /**
+ * Mimiamp's library: the track list as JSON, and the audio files themselves. The files are
+ * the developer's (shipped with the app, or MIMI_MUSIC_DIR); browsers need Range answers to
+ * seek in a long song without downloading it all again.
+ */
+function serveMimiamp(pathname: string, response: http.ServerResponse, range?: string): boolean {
+  if (pathname === '/mimiamp/tracks.json') {
+    const body = Buffer.from(JSON.stringify({ tracks: listMimiampTracks() }));
+    response.writeHead(200, {
+      'content-type': 'application/json; charset=utf-8',
+      'content-length': body.length,
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff',
+    });
+    response.end(body);
+    return true;
+  }
+  if (!pathname.startsWith('/mimiamp/')) return false;
+  let name: string;
+  try {
+    name = decodeURIComponent(pathname.slice('/mimiamp/'.length));
+  } catch {
+    response.writeHead(400).end();
+    return true;
+  }
+  const file = trackPath(name);
+  if (!file) {
+    response.writeHead(404).end();
+    return true;
+  }
+  let size: number;
+  try {
+    const stat = fs.statSync(file);
+    if (!stat.isFile()) throw new Error('not a file');
+    size = stat.size;
+  } catch {
+    response.writeHead(404).end();
+    return true;
+  }
+  const headers: Record<string, string> = {
+    'content-type': AUDIO_TYPES[path.extname(name).toLowerCase()] ?? 'application/octet-stream',
+    'accept-ranges': 'bytes',
+    'cache-control': 'private, max-age=3600',
+    'x-content-type-options': 'nosniff',
+    'content-disposition': `inline; filename*=UTF-8''${encodeURIComponent(name)}`,
+  };
+  const match = /^bytes=(\d*)-(\d*)$/.exec((range ?? '').trim());
+  let start = 0;
+  let end = size - 1;
+  if (match && (match[1] || match[2])) {
+    if (match[1]) {
+      start = Number(match[1]);
+      end = match[2] ? Math.min(Number(match[2]), size - 1) : size - 1;
+    } else {
+      // "bytes=-500": the last 500 bytes.
+      start = Math.max(0, size - Number(match[2]));
+    }
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || start > end || start >= size) {
+      response.writeHead(416, { ...headers, 'content-range': `bytes */${size}` });
+      response.end();
+      return true;
+    }
+    response.writeHead(206, {
+      ...headers,
+      'content-range': `bytes ${start}-${end}/${size}`,
+      'content-length': end - start + 1,
+    });
+  } else {
+    response.writeHead(200, { ...headers, 'content-length': size });
+  }
+  const stream = fs.createReadStream(file, { start, end });
+  stream.on('error', () => response.destroy());
+  stream.pipe(response);
+  return true;
+}
+
+/**
  * Answers a GET for the built-in web client (pages, scripts, 3D libraries, icon), which
  * needs no token. Shared with the accounts gateway. Returns false for any other path.
  */
-export function serveWebFile(pathname: string, response: http.ServerResponse): boolean {
+export function serveWebFile(pathname: string, response: http.ServerResponse, range?: string): boolean {
+  if (serveMimiamp(pathname, response, range)) return true;
+  if (pathname.startsWith('/backgrounds/')) {
+    const name = pathname.slice('/backgrounds/'.length);
+    if (!/^[a-z0-9-]+\.webp$/.test(name)) {
+      response.writeHead(404).end();
+      return true;
+    }
+    let body: Buffer;
+    try {
+      body = fs.readFileSync(path.join(BACKGROUND_DIR, name));
+    } catch {
+      response.writeHead(404).end();
+      return true;
+    }
+    response.writeHead(200, {
+      'content-type': 'image/webp',
+      'content-length': body.length,
+      'cache-control': 'public, max-age=31536000, immutable',
+      'x-content-type-options': 'nosniff',
+    });
+    response.end(body);
+    return true;
+  }
   const page = WEB_FILES[pathname];
   if (page) {
     const body = fs.readFileSync(path.join(WEB_DIR, page[0]));

@@ -5,7 +5,7 @@ import { defineTool } from '@mimi/shared';
 import { z } from 'zod';
 import { PathNotAllowedError, missingPathError, resolveAllowedPath } from './path-guard.ts';
 
-const SKIPPED_FOLDERS = new Set(['node_modules', '.git', '.mimi-trash']);
+const SKIPPED_FOLDERS = new Set(['node_modules', '.git', '.mimi-trash', '.mimi-organize']);
 const MAX_SEARCH_FILE = 1024 * 1024;
 
 const size = (bytes: number): string =>

@@ -1,6 +1,7 @@
 import type { PermissionDecision, PermissionRequest } from './permissions.ts';
 import type { AttachmentView } from './protocol.ts';
 import type { SpeechStyle } from './speech.ts';
+import type { TaskPlanView, TaskReceiptView, TaskStatus, TaskStepView, TaskView } from './tasks.ts';
 import type { RiskLevel, ToolCall, ToolResult } from './tools.ts';
 
 export type RunFinishReason =
@@ -41,6 +42,13 @@ export type AgentEvent =
   | { type: 'usage'; round: number; usage: UsageSnapshot }
   /** Something a sub-agent did while working on agent-to-agent message `messageId`. */
   | { type: 'agent-activity'; agent: string; messageId: number; event: AgentEvent }
+  /** A task started, changed or finished; the chat renders these as a task card. */
+  | { type: 'task-start'; task: TaskView }
+  | { type: 'task-update'; task: TaskView }
+  | { type: 'task-step'; taskId: string; step: TaskStepView }
+  | { type: 'task-plan'; taskId: string; plan: TaskPlanView }
+  | { type: 'task-receipt'; taskId: string; receipt: TaskReceiptView; undo?: boolean }
+  | { type: 'task-finish'; taskId: string; status: TaskStatus; receipt?: TaskReceiptView }
   | {
       type: 'run-finish';
       traceId: string;
@@ -56,4 +64,6 @@ export type AgentEvent =
       /** Set when reason is `handoff`. */
       handoff?: { messageId: number; to: string };
       error?: string;
+      /** Stable code for `error`, e.g. E-RATE-429. */
+      errorCode?: string;
     };

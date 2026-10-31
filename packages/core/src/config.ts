@@ -179,6 +179,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
     token: env.MIMI_TOKEN || undefined,
     clientIpHeader: env.MIMI_CLIENT_IP_HEADER?.trim().toLowerCase() || undefined,
     timezone: env.MIMI_TIMEZONE ?? 'Asia/Bangkok',
-    permissionTimeoutMs: positiveInt(env.PERMISSION_TIMEOUT_MS, 120_000),
+    permissionTimeoutMs: positiveInt(env.PERMISSION_TIMEOUT_MS, 900_000),
   };
 }

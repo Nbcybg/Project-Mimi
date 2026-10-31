@@ -47,6 +47,7 @@
   // ---------- the figure ----------
   let moodKey = null; // last emoji of the newest reply in this chat
   let shown = { path: '', outfit: '' }; // what the figure shows now
+  let shownAgent = ''; // whose picture is on the stage, so a chat switch never keeps the old one
   let pending = '';
   let retries = 0; // failed loads of the current picture
 
@@ -76,6 +77,11 @@
     if (outfit && outfit.image) return { path: `/api/wardrobe-image/${enc(outfit.id)}?v=${outfit.image}`, outfit: outfit.id };
     if (moodKey && own[moodKey]) return { path: `/api/sprite/agent/${enc(agent.name)}/${moodKey}?v=${own[moodKey]}`, outfit: outfit ? outfit.id : '' };
     if (agent.portrait) return { path: `/api/agent-image/${enc(agent.name)}/portrait?v=${agent.portrait}`, outfit: outfit ? outfit.id : '' };
+    // An agent with only expression pictures keeps a face even when the newest emoji has none.
+    const anyOutfit = outfit && outfit.sprites ? Object.keys(outfit.sprites)[0] : null;
+    if (anyOutfit) return { path: `/api/sprite/outfit/${enc(outfit.id)}/${anyOutfit}?v=${outfit.sprites[anyOutfit]}`, outfit: outfit.id };
+    const anyOwn = Object.keys(own)[0];
+    if (anyOwn) return { path: `/api/sprite/agent/${enc(agent.name)}/${anyOwn}?v=${own[anyOwn]}`, outfit: outfit ? outfit.id : '' };
     return null;
   }
 
@@ -195,6 +201,7 @@
       wrap.hidden = false;
       for (const old of wrap.querySelectorAll('img.fig')) old.remove();
       shown = { path: '', outfit: '' };
+      shownAgent = agent.name;
       pending = '';
       live.show(wrap, model, moodKey);
       kind = '3d';
@@ -203,13 +210,22 @@
     }
     live?.hide();
     const target = agent && pick(agent);
-    stage.classList.toggle('has-figure', Boolean(target));
-    wrap.hidden = !target;
+    // A missing picture for the newest emoji is not a reason to blank the stage: keep the
+    // last picture of this same agent until a real one is available or the chat changes.
+    const keepShown = !target && agent && shown.path && shownAgent === agent.name;
+    stage.classList.toggle('has-figure', Boolean(target) || Boolean(keepShown));
+    wrap.hidden = !target && !keepShown;
     if (!target) {
+      pending = '';
+      if (keepShown) {
+        kind = '2d';
+        applyView(agent);
+        return;
+      }
       kind = null;
       wrap.replaceChildren();
       shown = { path: '', outfit: '' };
-      pending = '';
+      shownAgent = '';
       return;
     }
     kind = '2d';
@@ -231,6 +247,7 @@
         }
         wrap.append(image);
         shown = { path: target.path, outfit: target.outfit };
+        shownAgent = agent.name;
         retries = 0;
       })
       .catch(() => {
@@ -251,6 +268,7 @@
       }
     }
     shown = { path: '', outfit: '' };
+    shownAgent = '';
     pending = '';
     const wrap = document.getElementById('figure');
     if (wrap) wrap.replaceChildren();

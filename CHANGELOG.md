@@ -6,6 +6,31 @@
 
 - Chat: room settings sync across devices, a go-to-bottom button, and permission notifications.
 - Triggers: schedule times are shown in the local time zone, not UTC.
+- Chat: the message action bar (love, react, reply, forward, copy, pin) sits under the bubble and is no longer
+  clipped by the message's paint containment.
+- Chat: the character stage keeps its last picture when an emoji has no picture yet, and falls back to another
+  sprite when an agent has no portrait, instead of going blank.
+- Chat: changing text size or the message level keeps the reader's place (and the chat settings panel no longer
+  jumps to the top after every change).
+- Errors in the chat and in toasts now carry a stable code such as `E-AUTH-401`, `E-RATE-429`, `E-NETWORK`,
+  `E-CONTEXT`, `E-CONFIG` or `E-BUDGET`. The AI Overseer can explain any code with `error_codes`; the same
+  catalog is in `docs/error-codes.md`.
+- AI Overseer: `trigger_list` / `trigger_get`, `agent_message` (test a prompt, rate-limited), `workflow_runs`,
+  `tool_test`, `config_validate`, and `agent_history` / `agent_restore` plus `tool_history` / `tool_restore`
+  (the last 10 versions, snapshotted before every write).
+- Tasks: a first-class task model and deterministic runner with steps, gates, verification, receipts and undo;
+  SQLite migration 022; `task_run` / `task_undo` offered to every agent.
+- File organizer: `organize_files` / `undo_organize` with a dry-run plan, journal, rename/skip/safe-overwrite
+  conflict policy, no deletion, and path-guard enforcement.
+- Permissions: session-scoped "allow for this task" grants by trace + tool family, 15-minute assist timeout,
+  and a plain-language permission card with the raw input behind details.
+- Local consent: the PC agent asks on the user's machine before non-read actions, through the desktop dialog
+  or an OS dialog; a task approval is cached for that task and tool family.
+- Workspace / developer task: `workspace_*` tools with a cross-platform command runner, sanitized env, command
+  policy, git checkpoints (`refs/mimi/checkpoints/*`), diff and backup-safe undo; a developer recipe that
+  reproduces a failing test, fixes it with an agent, reruns the tests and shows the diff without commit/push.
+- Desktop: packaged builds now run the PC agent outside `node_modules`; Node 24 no longer refuses to strip
+  TypeScript types, so the PC agent connects after the tray switch is enabled.
 
 ### 0.7.7-prototype
 

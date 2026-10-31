@@ -2,7 +2,7 @@ import type { AgentEvent, UsageSnapshot } from './events.ts';
 import type { MessageRole } from './messages.ts';
 import type { ConnectorConnectionInput, ConnectorConnectionView, OAuthAccountInput, OAuthAccountView } from './oauth.ts';
 import type { ConnectorView } from './connectors.ts';
-import type { PermissionDecision, PermissionRequest } from './permissions.ts';
+import type { PermissionDecision, PermissionRequest, PermissionScope } from './permissions.ts';
 import type { SpeechStyle } from './speech.ts';
 import type { CustomToolSpec, McpServerSpec, McpServerView, ToolPreset, ToolSettingField } from './tools.ts';
 
@@ -567,6 +567,20 @@ export interface MemoryView {
   updatedAt: string;
 }
 
+/** What the built-in Mimiamp player can be told to do. */
+export type MimiampAction = 'open' | 'play' | 'pause' | 'stop' | 'next' | 'previous' | 'volume' | 'seek';
+
+/** A command from an agent (or the app) to the Mimiamp player in the open clients. */
+export interface MimiampCommand {
+  action: MimiampAction;
+  /** Track title, artist or file name (play only). */
+  query?: string;
+  /** Volume, 0–100. */
+  level?: number;
+  /** Position in the track, in seconds. */
+  seconds?: number;
+}
+
 /** Sent by UI clients. */
 export type ClientMessage =
   | { type: 'hello'; role: 'client'; token: string; name?: string }
@@ -575,7 +589,11 @@ export type ClientMessage =
   | { type: 'abort'; chatId?: number }
   /** Keepalive, answered with `pong`; the client reconnects when no answer comes. */
   | { type: 'ping' }
-  | { type: 'permission-response'; requestId: string; allow: boolean }
+  | { type: 'permission-response'; requestId: string; allow: boolean; scope?: PermissionScope }
+  /** Stops a running task, or resumes one paused between steps. */
+  | { type: 'task-control'; taskId: string; action: 'pause' | 'resume' | 'cancel' }
+  /** Restores the files a finished task moved, from its journal. */
+  | { type: 'task-undo'; taskId: string }
   | { type: 'history'; beforeId?: number; limit?: number }
   /** Asks for the active triggers so the device can set its own alarms. */
   | { type: 'triggers-sync' }
@@ -752,7 +770,16 @@ export type ClientMessage =
 
 /** Sent by the PC agent. */
 export type PcMessage =
-  | { type: 'hello'; role: 'pc'; token: string; name?: string; allowedDirs: string[]; tools: string[] }
+  | {
+      type: 'hello';
+      role: 'pc';
+      token: string;
+      name?: string;
+      allowedDirs: string[];
+      tools: string[];
+      /** True when this machine asks locally before every non-read PC action. */
+      consent?: boolean;
+    }
   | { type: 'tool-result'; id: string; ok: boolean; output: string };
 
 /** Sent by the core to UI clients. */
@@ -865,6 +892,8 @@ export type ServerMessage =
   /** A picture was added, changed or removed (the manager asks for the list again). */
   | { type: 'gallery-changed'; agent: string }
   | { type: 'backgrounds'; items: BackgroundView[]; settings: BackgroundSettingsView; saved?: string }
+  /** The agent asked the Mimiamp player to open, play, pause and so on. */
+  | { type: 'mimiamp'; command: MimiampCommand }
   | { type: 'profile'; profile: UserProfileView; saved?: boolean }
   | { type: 'notifications'; items: NotificationItem[]; unread: number }
   | { type: 'backups'; backups: Array<{ name: string; bytes: number; createdAt: string }>; dir: string; created?: string }
@@ -887,7 +916,7 @@ export type ServerMessage =
   | { type: 'knowledge-embedded'; collection: string; count: number }
   | { type: 'workflow-run-record'; run: WorkflowRunRecord }
   | { type: 'status'; agent: string; status: AgentStatusView }
-  | { type: 'error'; message: string; chatId?: number; clientId?: string }
+  | { type: 'error'; message: string; /** Stable code such as E-AUTH-401, shown in the chat. */ code?: string; chatId?: number; clientId?: string }
   /** The push-mail watcher: watched accounts and when they were last checked. */
   | {
       type: 'mail-watch';
@@ -985,4 +1014,6 @@ export type PcRequest = {
   traceId: string;
   thread: string;
   agent: string;
+  /** Set when the call belongs to a task, so local consent can last for that task. */
+  taskId?: string;
 };

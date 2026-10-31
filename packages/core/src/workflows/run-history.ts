@@ -106,6 +106,17 @@ export class WorkflowRunStore {
     return rows.map(summaryOf);
   }
 
+  /** The newest runs across every workflow, for the Overseer's health check. */
+  recent(limit = 20): WorkflowRunSummary[] {
+    const rows = this.db
+      .prepare(
+        `SELECT id, workflow, mode, ok, result, started_at, duration_ms, node_count
+           FROM workflow_runs ORDER BY id DESC LIMIT ?`,
+      )
+      .all(limit) as RunRow[];
+    return rows.map(summaryOf);
+  }
+
   get(id: number): WorkflowRunRecord | undefined {
     const row = this.db.prepare('SELECT * FROM workflow_runs WHERE id = ?').get(id) as RunRow | undefined;
     if (!row) return undefined;

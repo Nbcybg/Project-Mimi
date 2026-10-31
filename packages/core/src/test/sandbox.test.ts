@@ -80,8 +80,9 @@ test('the sandbox process itself: no files, no child processes, no keys, no code
     attempt('worker', () => new (require('node:worker_threads').Worker)('1', { eval: true }));
     attempt('eval', () => eval('1 + 1'));
     attempt('function', () => new Function('return 1')());
-    // Set by the OS itself, not passed on: Windows needs SystemRoot; macOS adds its text encoding.
-    out.env = Object.keys(process.env).filter((key) => key !== 'SystemRoot' && key !== '__CF_USER_TEXT_ENCODING');
+    // Set by the OS itself, not passed on: Windows injects system variables; macOS adds its text encoding.
+    const osInjected = new Set(['SystemRoot', 'HOMEDRIVE', 'HOMEPATH', 'LOGONSERVER', 'PATH', 'SYSTEMDRIVE', 'TEMP', 'USERDOMAIN', 'USERNAME', 'USERPROFILE', 'WINDIR', '__CF_USER_TEXT_ENCODING']);
+    out.env = Object.keys(process.env).filter((key) => !osInjected.has(key));
     out.canary = process.env.MIMI_SANDBOX_CANARY ?? null;
     out.netFenced = process.permission ? !process.permission.has('net') : false;
     process.stdout.write(JSON.stringify(out));

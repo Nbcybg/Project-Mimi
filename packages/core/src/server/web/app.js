@@ -92,7 +92,14 @@
     return level === 0 || level === 2 ? level : 1;
   };
   const applyTextSize = () => {
-    document.documentElement.dataset.text = String(textSize());
+    const next = String(textSize());
+    if (document.documentElement.dataset.text === next) return;
+    // Re-layout changes the height of every message. Keep the reader where they were:
+    // the same distance from the newest message, or at the bottom when they followed it.
+    const key = `text:${state.chat ? state.chat.id : 'app'}:${next}`;
+    const keep = captureLogScroll();
+    document.documentElement.dataset.text = next;
+    restoreLogScroll(LOG_SCROLL_MEMO.get(key) ?? keep);
   };
   const APP_THEME_KEY = 'mimi.theme';
   const appTheme = () => (store.get(APP_THEME_KEY) === 'light' ? 'light' : 'dark');
@@ -641,6 +648,29 @@
   /** Pending coalesced re-render of the streaming text (one per frame, keeps typing smooth). */
   let liveFrame = null;
   const cards = new Map();
+  const taskCards = new Map();
+  /** Where the reader was for each display setting, so changing it back finds the same place. */
+  const LOG_SCROLL_MEMO = new Map();
+  /** The reader's place, measured from the newest message (and whether they were following it). */
+  function captureLogScroll() {
+    return {
+      atBottom: pinned(),
+      fromBottom: logBox.scrollHeight - logBox.scrollTop - logBox.clientHeight,
+    };
+  }
+  function restoreLogScroll(saved) {
+    if (!saved) return;
+    requestAnimationFrame(() => {
+      if (saved.atBottom || followLog) {
+        scrollDown();
+        return;
+      }
+      const max = Math.max(0, logBox.scrollHeight - logBox.clientHeight);
+      logBox.scrollTop = Math.max(0, Math.min(max, max - saved.fromBottom));
+      updateLogFade();
+      updateJump();
+    });
+  }
 
   const pinned = () => logBox.scrollHeight - logBox.scrollTop - logBox.clientHeight < 140;
   /** Telegram-like: the arrow appears while the view is away from the newest message, with how many came in. */
@@ -1197,23 +1227,26 @@
     if (cards.has(request.id)) return;
     const card = el('div', 'perm');
     card.append(
-      el('div', 'ttl', `${nameOf(request.agent)} ขออนุญาตใช้ ${request.tool} (${request.risk})`),
-      el('div', '', request.summary),
-      el('div', 'kv', JSON.stringify(request.input, null, 2)),
+      el('div', 'ttl', `${nameOf(request.agent)} ขออนุญาตทำสิ่งนี้`),
+      el('div', 'perm-summary', request.summary || `ใช้เครื่องมือ ${request.tool}`),
       el(
         'div',
         'faint',
-        `ขอเมื่อ ${request.createdAt ? fmtTime(request.createdAt) : 'ตอนนี้'} · รอได้ ${Math.max(1, Math.round((request.timeoutMs || 120000) / 60000))} นาที · session: ${state.session ? state.session.title || `#${state.session.id}` : '—'}`,
+        `${request.tool} · ${request.risk} · ขอเมื่อ ${request.createdAt ? fmtTime(request.createdAt) : 'ตอนนี้'} · รอได้ ${Math.max(1, Math.round((request.timeoutMs || 900000) / 60000))} นาที · session: ${state.session ? state.session.title || `#${state.session.id}` : '—'}`,
       ),
     );
-    const answer = (allow) => send({ type: 'permission-response', requestId: request.id, allow });
-    const allow = button('btn pri', 'อนุญาต', () => answer(true));
+    const details = el('details', 'perm-details');
+    details.append(el('summary', '', 'รายละเอียด'), el('div', 'kv', JSON.stringify(request.input, null, 2)));
+    card.append(details);
+    const answer = (allow, scope) => send({ type: 'permission-response', requestId: request.id, allow, ...(scope ? { scope } : {}) });
+    const allowTask = button('btn pri', 'อนุญาตทั้งงานนี้', () => answer(true, 'task'));
+    const allowOnce = button('btn', 'อนุญาตครั้งนี้', () => answer(true, 'once'));
     const deny = button('btn', 'ปฏิเสธ', () => answer(false));
     const verdict = el('span', 'muted');
     const row = el('div', 'btns');
-    row.append(allow, deny, verdict);
+    row.append(allowTask, allowOnce, deny, verdict);
     card.append(row);
-    cards.set(request.id, { allow, deny, verdict });
+    cards.set(request.id, { allowTask, allowOnce, deny, verdict });
     if (live) {
       const stick = pinned();
       live.body.append(card);
@@ -1226,8 +1259,100 @@
     state.pendingPerms.delete(requestId);
     const card = cards.get(requestId);
     if (!card) return;
-    card.allow.disabled = card.deny.disabled = true;
+    card.allowTask.disabled = card.allowOnce.disabled = card.deny.disabled = true;
     card.verdict.textContent = decision.allow ? 'อนุญาตแล้ว' : `ไม่อนุญาต (${decision.reason})`;
+  }
+
+  const TASK_STATUS = {
+    queued: 'รอเริ่ม',
+    running: 'กำลังทำ',
+    awaiting_confirmation: 'รอยืนยัน',
+    paused: 'พักอยู่',
+    cancelled: 'ยกเลิกแล้ว',
+    completed: 'เสร็จแล้ว',
+    failed: 'ไม่สำเร็จ',
+    undone: 'คืนไฟล์แล้ว',
+  };
+  const STEP_MARK = { pending: '•', running: '…', done: '✓', skipped: '–', failed: '✗', cancelled: '✗' };
+  function taskCard(task) {
+    let card = taskCards.get(task.id);
+    if (!card) {
+      const node = el('div', 'task');
+      const head = el('div', 'task-head');
+      const title = el('div', 'task-title');
+      const status = el('span', 'task-status');
+      const body = el('div', 'task-body');
+      head.append(title, status);
+      node.append(head, body);
+      card = { node, title, status, body, task };
+      taskCards.set(task.id, card);
+      if (live) {
+        const stick = pinned();
+        live.body.append(node);
+        if (stick) scrollDown();
+      } else {
+        add(node);
+      }
+    }
+    card.task = { ...card.task, ...task };
+    renderTask(card);
+    return card;
+  }
+  function renderTask(card) {
+    const task = card.task;
+    card.title.replaceChildren(el('b', '', task.goal || task.recipe), el('span', 'faint', ` · ${task.recipe} · ${task.level}`));
+    card.status.className = `task-status ${task.status}`;
+    card.status.textContent = TASK_STATUS[task.status] || task.status;
+    const parts = [];
+    const steps = el('div', 'task-steps');
+    for (const step of task.steps || []) {
+      const row = el('div', `task-step ${step.status}`);
+      row.append(el('span', 'mark', STEP_MARK[step.status] || '•'), el('span', 't', step.title));
+      if (step.detail) row.append(el('div', 'd', step.detail));
+      steps.append(row);
+    }
+    if (steps.childElementCount > 0) parts.push(steps);
+    if (task.plan) {
+      const box = el('div', 'task-plan');
+      box.append(el('div', 'task-sub', `แผน · ${task.plan.total} ไฟล์ (ยังไม่มีการเปลี่ยนแปลง)`));
+      for (const group of task.plan.groups) {
+        const line = `${group.key} · ${group.count}`;
+        box.append(el('div', 'task-group', group.examples.length > 0 ? `${line} — ${group.examples.join(', ')}` : line));
+      }
+      if (task.plan.skipped?.length > 0) {
+        box.append(el('div', 'faint', `ข้าม ${task.plan.skipped.length} ไฟล์: ${task.plan.skipped.slice(0, 3).map((entry) => entry.name).join(', ')}${task.plan.skipped.length > 3 ? '…' : ''}`));
+      }
+      if (task.plan.deferred) box.append(el('div', 'faint', `เหลือ ${task.plan.deferred} ไฟล์สำหรับรอบถัดไป`));
+      parts.push(box);
+    }
+    const receiptBlock = (receipt, label, withUndo) => {
+      const box = el('div', 'task-receipt');
+      box.append(el('div', 'task-sub', label), el('div', 'task-receipt-summary', receipt.summary));
+      if (receipt.examples?.length > 0) box.append(el('div', 'faint', `ตัวอย่าง: ${receipt.examples.join(', ')}`));
+      const actions = el('div', 'btns');
+      if (withUndo && receipt.undoable) {
+        const undo = button('btn', 'คืนไฟล์ทั้งหมด', () => {
+          undo.disabled = true;
+          send({ type: 'task-undo', taskId: task.id });
+        });
+        actions.append(undo);
+      }
+      if (task.verification) actions.append(el('span', 'faint', task.verification.ok ? '✓ ตรวจสอบแล้ว' : '✗ ตรวจสอบไม่ผ่าน'));
+      if (actions.childElementCount > 0) box.append(actions);
+      return box;
+    };
+    if (task.receipt) parts.push(receiptBlock(task.receipt, 'ใบเสร็จ', task.status === 'completed' || task.status === 'failed'));
+    if (task.undoReceipt) parts.push(receiptBlock(task.undoReceipt, 'ผลการคืนไฟล์', false));
+    const controls = el('div', 'btns');
+    if (task.status === 'running' || task.status === 'awaiting_confirmation') {
+      controls.append(button('btn', 'พัก', () => send({ type: 'task-control', taskId: task.id, action: 'pause' })));
+      controls.append(button('btn', 'หยุดงาน', () => send({ type: 'task-control', taskId: task.id, action: 'cancel' })));
+    } else if (task.status === 'paused') {
+      controls.append(button('btn pri', 'ทำต่อ', () => send({ type: 'task-control', taskId: task.id, action: 'resume' })));
+      controls.append(button('btn', 'ยกเลิก', () => send({ type: 'task-control', taskId: task.id, action: 'cancel' })));
+    }
+    if (controls.childElementCount > 0) parts.push(controls);
+    card.body.replaceChildren(...parts);
   }
 
   const REASONS = {
@@ -1360,9 +1485,74 @@
       case 'permission-decision':
         resolveCard(event.requestId, event.decision);
         break;
+      case 'task-start':
+        if (sub) {
+          subLine(sub, `งาน: ${event.task.goal || event.task.recipe}`);
+          break;
+        }
+        taskCard(event.task);
+        break;
+      case 'task-update':
+        if (sub) break;
+        {
+          const card = taskCards.get(event.task.id);
+          if (card) {
+            card.task = { ...card.task, ...event.task };
+            renderTask(card);
+          } else {
+            taskCard(event.task);
+          }
+        }
+        break;
+      case 'task-step': {
+        if (sub) {
+          subLine(sub, `${STEP_MARK[event.step.status] || '•'} ${event.step.title}`);
+          break;
+        }
+        const card = taskCards.get(event.taskId);
+        if (card) {
+          const steps = card.task.steps ? [...card.task.steps] : [];
+          const at = steps.findIndex((step) => step.id === event.step.id);
+          if (at >= 0) steps[at] = event.step;
+          else steps.push(event.step);
+          card.task = { ...card.task, steps };
+          renderTask(card);
+        }
+        break;
+      }
+      case 'task-plan': {
+        if (sub) break;
+        const card = taskCards.get(event.taskId);
+        if (card) {
+          card.task = { ...card.task, plan: event.plan };
+          renderTask(card);
+        }
+        break;
+      }
+      case 'task-receipt': {
+        if (sub) break;
+        const card = taskCards.get(event.taskId);
+        if (card) {
+          card.task = event.undo ? { ...card.task, undoReceipt: event.receipt } : { ...card.task, receipt: event.receipt };
+          renderTask(card);
+        }
+        break;
+      }
+      case 'task-finish': {
+        if (sub) {
+          subLine(sub, `งานเสร็จ: ${TASK_STATUS[event.status] || event.status}`);
+          break;
+        }
+        const card = taskCards.get(event.taskId);
+        if (card) {
+          card.task = { ...card.task, status: event.status, ...(event.receipt ? { receipt: event.receipt } : {}) };
+          renderTask(card);
+        }
+        break;
+      }
       case 'run-finish': {
         if (sub) {
-          subLine(sub, `เสร็จ: ${preview(event.text || event.error || event.reason, 160)}`);
+          subLine(sub, `เสร็จ: ${preview(event.text || (event.error ? `[${event.errorCode || 'E-INTERNAL'}] ${event.error}` : event.reason), 160)}`);
           state.subByChat.delete(chatId);
           renderHeader();
           renderChatList();
@@ -1379,9 +1569,9 @@
           live.raw = final.text;
           window.MimiHooks?.stage?.onText(final.text);
         }
-        if (event.reason === 'error') add(el('div', 'note bad', `ผิดพลาด: ${event.error}`));
+        if (event.reason === 'error') add(el('div', 'note bad', `ผิดพลาด [${event.errorCode || 'E-INTERNAL'}]: ${event.error}`));
         else if (!['stop', 'handoff'].includes(event.reason)) {
-          add(el('div', 'note bad', `หยุด: ${REASONS[event.reason] || event.reason}${event.error ? ` — ${event.error}` : ''}`));
+          add(el('div', 'note bad', `หยุด: ${REASONS[event.reason] || event.reason}${event.error ? ` — [${event.errorCode || 'E-INTERNAL'}] ${event.error}` : ''}`));
         }
         const usage = event.usage;
         const hit = usage.inputTokens ? Math.round((usage.cachedTokens / usage.inputTokens) * 100) : 0;
@@ -1602,6 +1792,7 @@
     ['appearance', 'หน้าตา', 'ตัวละคร ฟองข้อความ และฉากหลัง — จำเฉพาะแชตนี้'],
     ['info', 'ข้อมูล / ตั้งค่า', 'ข้อมูล agent หรือสมาชิก ภาษา และการตั้งค่าอื่น ๆ'],
   ];
+  let railShownTab = null;
   function renderRail() {
     const rail = $('rail');
     rail.hidden = !(state.railOpen && state.view === 'chat' && state.chat);
@@ -1609,6 +1800,8 @@
     $('toggle-rail').classList.toggle('pri', !rail.hidden);
     syncTopButtons();
     if (rail.hidden) return;
+    // A setting changes the panel under the finger; it must not jump back to the top.
+    const keepRailScroll = railShownTab === ui.railTab ? rail.scrollTop : 0;
     const chat = state.chat;
     const nodes = [];
 
@@ -1739,9 +1932,14 @@
           for (const level of [0, 1, 2]) {
             seg.append(
               button(bubbleLevel() === level ? 'on' : '', t(`bubbles.${level}`), () => {
+                const before = bubbleLevel();
+                if (before === level) return;
+                const keep = captureLogScroll();
+                LOG_SCROLL_MEMO.set(`bubbles:${chat.id}:${before}`, keep);
                 store.set(`mimi.chat.${chat.id}.bubbles`, String(level));
                 renderHeader();
                 renderRail();
+                restoreLogScroll(LOG_SCROLL_MEMO.get(`bubbles:${chat.id}:${level}`) ?? keep);
               }, t(`bubbles.${level}.hint`)),
             );
           }
@@ -1758,10 +1956,12 @@
       if (chatHasPref('character') || chatHasPref('bubbles') || chatHasPref('textSize') || chatHasPref('theme')) {
         nodes.push(
           button('btn ghost', 'ใช้ค่าเดิมของแอป (ล้างค่าของแชตนี้)', () => {
+            const keep = captureLogScroll();
             clearChatPref('character');
             clearChatPref('bubbles');
             clearChatPref('textSize');
             clearChatPref('theme');
+            restoreLogScroll(keep);
           }),
         );
       }
@@ -1825,6 +2025,8 @@
     }
 
     rail.replaceChildren(...nodes);
+    railShownTab = ui.railTab;
+    rail.scrollTop = keepRailScroll;
   }
 
   // ---------- composer ----------
@@ -1838,8 +2040,11 @@
   // A Thai app gets the fast line-break rule from the start, not in the middle of the first word.
   if (document.documentElement.lang === 'th') input.classList.add('th');
   function autosize() {
+    // Measuring with height:auto briefly scrolls the box; keep the caret's place in a long draft.
+    const scroll = input.scrollTop;
     input.style.height = 'auto';
     input.style.height = `${Math.min(input.scrollHeight, 180)}px`;
+    input.scrollTop = scroll;
   }
   let composing = false;
   let composerTimer = 0;
@@ -2591,7 +2796,7 @@
     state.view = view;
     applyTheme();
     setTimeout(() => reportPresence(), 0);
-    for (const name of ['chat', 'overseer', 'agents', 'hub', 'settings']) $(`view-${name}`).hidden = name !== view;
+    for (const name of ['chat', 'overseer', 'agents', 'hub', 'mimiamp', 'settings']) $(`view-${name}`).hidden = name !== view;
     for (const item of $('nav').children) item.classList.toggle('on', item.dataset.view === view);
     if (view === 'overseer') {
       window.MimiHooks?.overseer?.render?.();
@@ -2599,7 +2804,9 @@
     }
     if (view === 'agents') renderAgents();
     if (view === 'hub') renderHub();
+    if (view === 'mimiamp') window.MimiHooks?.mimiamp?.render?.();
     if (view === 'settings') renderSettings();
+    window.MimiHooks?.mimiamp?.onView?.(view);
     renderRail();
   }
   for (const item of $('nav').children) {
@@ -4325,7 +4532,8 @@
       }
       case 'error': {
         flash('');
-        toast('ผิดพลาด', message.message, true);
+        const code = message.code || 'E-INTERNAL';
+        toast(`ผิดพลาด [${code}]`, message.message, true);
         // Only the send that failed goes back into the composer; other chats keep their bubbles.
         const failed = message.clientId
           ? state.pendingEchoes.filter((pending) => pending.clientId === message.clientId)
@@ -4337,7 +4545,7 @@
           if (state.view === 'chat' && state.chat && message.chatId === state.chat.id) restoreEntries(entries, text);
         }
         if (state.view === 'chat' && state.chat && (message.chatId === undefined || message.chatId === state.chat.id)) {
-          add(el('div', 'note bad', `ผิดพลาด: ${message.message}`));
+          add(el('div', 'note bad', `ผิดพลาด [${code}]: ${message.message}`));
         }
         break;
       }
@@ -4439,6 +4647,10 @@
         }
         if (message.type === 'backgrounds') {
           window.MimiHooks?.backgrounds?.onMessage(message);
+          return;
+        }
+        if (message.type === 'mimiamp') {
+          window.MimiHooks?.mimiamp?.onMessage(message);
           return;
         }
         if (message.type === 'wardrobe') {

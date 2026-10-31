@@ -20,6 +20,7 @@ import {
 import { z } from 'zod';
 import type { AgentDefinition } from '../agents/loader.ts';
 import type { MessagesRepo } from '../db/messages-repo.ts';
+import { classifyError } from '../errors.ts';
 import type { ThreadRepo } from '../db/thread-repo.ts';
 import type { MemoryStore } from '../memory/store.ts';
 import type { TraceBudget } from '../mesh/budget.ts';
@@ -105,6 +106,12 @@ export interface RunInput {
   traceId?: string;
   mesh?: MeshContext;
   budget?: TraceBudget;
+  /** A nested task agent may not start or undo other tasks. */
+  noTaskTools?: boolean;
+  /** A nested task agent gets no skills, workflows or overseer tools. */
+  noExtraTools?: boolean;
+  /** A nested task agent may not message other agents. */
+  noMeshTools?: boolean;
 }
 
 const DENIAL_TEXT = {
@@ -194,7 +201,7 @@ async function* runToolCall(
     result = finish(false, `Invalid tool input:\n${z.prettifyError(parsed.error)}`);
   } else {
     let denial: string | null = null;
-    const mode = deps.gate.modeFor(definition.name, definition.risk);
+    const mode = deps.gate.modeFor(definition.name, definition.risk, context.traceId);
     if (mode === 'deny') {
       denial = DENIAL_TEXT.policy;
     } else if (mode === 'ask') {
@@ -207,7 +214,7 @@ async function* runToolCall(
         summary: definition.summarize(parsed.data),
       });
       yield { type: 'permission-request', request };
-      const decision = await deps.gate.decide(request);
+      const decision = await deps.gate.decide(request, context.signal);
       yield { type: 'permission-decision', requestId: request.id, decision };
       if (!decision.allow) denial = DENIAL_TEXT[decision.reason];
     }
@@ -245,8 +252,8 @@ export async function* runAgent(deps: AgentLoopDeps, input: RunInput): AsyncGene
   const modelInfo = deps.models.info(modelRef);
   const tools = [
     ...deps.tools.select(agent.tools),
-    ...(deps.mesh?.toolsFor(agent, input.mesh) ?? []),
-    ...(deps.extraTools?.(agent, input) ?? []),
+    ...(input.noMeshTools ? [] : (deps.mesh?.toolsFor(agent, input.mesh) ?? [])),
+    ...(input.noExtraTools ? [] : (deps.extraTools?.(agent, input) ?? [])),
   ];
   const model = await deps.models.languageModel(modelRef);
   const sdkTools = toSdkTools(tools);
@@ -324,6 +331,7 @@ export async function* runAgent(deps: AgentLoopDeps, input: RunInput): AsyncGene
   let speech: SpeechStyle | undefined;
   let reason: RunFinishReason = 'stop';
   let error: string | undefined;
+  let errorCode: string | undefined;
   /** Some models end a turn with no text at all (everything went into reasoning); they get one more go. */
   let nudged = false;
 
@@ -339,6 +347,7 @@ export async function* runAgent(deps: AgentLoopDeps, input: RunInput): AsyncGene
       if (exhausted) {
         reason = 'trace_budget';
         error = exhausted;
+        errorCode = 'E-BUDGET';
         break;
       }
       rounds++;
@@ -500,7 +509,11 @@ export async function* runAgent(deps: AgentLoopDeps, input: RunInput): AsyncGene
     }
   } catch (caught) {
     reason = signal?.aborted ? 'aborted' : 'error';
-    if (reason === 'error') error = errorMessage(caught);
+    if (reason === 'error') {
+      const classified = classifyError(caught);
+      error = classified.message;
+      errorCode = classified.code;
+    }
   }
 
   deps.usage.finishRun(runId, {
@@ -524,5 +537,6 @@ export async function* runAgent(deps: AgentLoopDeps, input: RunInput): AsyncGene
     speech,
     handoff: reason === 'handoff' ? handoff : undefined,
     error,
+    errorCode,
   };
 }

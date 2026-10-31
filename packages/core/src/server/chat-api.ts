@@ -22,6 +22,7 @@ import type { Chat, Session } from '../chat/chat-store.ts';
 import { STATUS_KEYS } from '../chat/state-store.ts';
 import type { CoreConfig } from '../config.ts';
 import type { Core } from '../core.ts';
+import { classifyError } from '../errors.ts';
 import { type ModelRef, parseModelRef } from '../providers/registry.ts';
 import { deleteSkill, readSkillBody, saveSkill } from '../skills/skills.ts';
 import { toTriggerInfo } from '../scheduler/triggers.ts';
@@ -261,7 +262,8 @@ export function createChatApi(context: ChatApiContext) {
         }
       }
     } catch (error) {
-      broadcast({ type: 'error', message: (error as Error).message, chatId, ...(turn.clientId ? { clientId: turn.clientId } : {}) });
+      const classified = classifyError(error);
+      broadcast({ type: 'error', message: classified.message, code: classified.code, chatId, ...(turn.clientId ? { clientId: turn.clientId } : {}) });
     }
     broadcast({ type: 'chat-transcribing', chatId, on: false });
     markStored();

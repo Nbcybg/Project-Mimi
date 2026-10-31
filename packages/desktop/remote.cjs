@@ -166,6 +166,10 @@ let pcStatus = 'ปิด';
 let pcRetryMs = 2000;
 
 function pcAgentEntry() {
+  // Packaged: Node 24 cannot strip TypeScript types under node_modules, so the build
+  // copies the PC agent beside the app. From the sources the workspace package is fine.
+  const packaged = path.join(__dirname, 'pc-agent', 'src', 'main.ts');
+  if (fs.existsSync(packaged)) return packaged;
   return path.join(path.dirname(require.resolve('@mimi/pc-agent')), 'main.ts');
 }
 
@@ -211,6 +215,7 @@ function startPcAgent() {
     ...(process.env.TMPDIR ? { TMPDIR: process.env.TMPDIR } : {}),
     ...(process.platform === 'win32' ? { SystemRoot: process.env.SystemRoot, USERPROFILE: home, APPDATA: process.env.APPDATA, LOCALAPPDATA: process.env.LOCALAPPDATA } : {}),
     MIMI_TOKEN_STDIN: '1',
+    MIMI_CONSENT_STDIO: '1',
     MIMI_PC_SHELL: config.pcAgent.shell ? '1' : '0',
     MIMI_CORE_URL: lib.wsUrl(config.server),
     ALLOWED_DIRS: folders.join(';'),
@@ -223,8 +228,8 @@ function startPcAgent() {
   pc = running;
   pcStatus = 'กำลังเชื่อมต่อ…';
   child.stdin.write(`${current.token}\n`); // stdin stays open: closing it stops the agent
-  const watch = (data) => {
-    const text = String(data);
+
+  const status = (text) => {
     if (/connected to /.test(text)) {
       pcStatus = 'เชื่อมต่อแล้ว';
       pcRetryMs = 2000;
@@ -235,8 +240,66 @@ function startPcAgent() {
     }
     refreshMenu();
   };
-  child.stdout.on('data', watch);
-  child.stderr.on('data', watch);
+
+  // The PC agent asks, through this window, before it changes anything on this computer.
+  let consentQueue = Promise.resolve();
+  const askConsent = (request) => {
+    const answer = (allow) => {
+      try {
+        child.stdin.write(`${JSON.stringify({ type: 'consent-response', id: request.id, allow })}\n`);
+      } catch {
+        // the agent is gone; its tool call fails anyway
+      }
+    };
+    consentQueue = consentQueue
+      .then(async () => {
+        const options = {
+          type: 'warning',
+          buttons: ['อนุญาต', 'ไม่อนุญาต'],
+          defaultId: 0,
+          cancelId: 1,
+          noLink: true,
+          title: 'Mimi ขออนุญาตบนเครื่องนี้',
+          message: request.summary || `Mimi ขอใช้ ${request.tool} บนเครื่องนี้`,
+          detail:
+            `เครื่องมือ: ${request.tool} (${request.risk || 'write'})\n` +
+            'คำขอนี้มาจาก Mimi บนเซิร์ฟเวอร์ และจะทำบนเครื่องนี้เท่านั้น อ่านรายละเอียดก่อนกดอนุญาต',
+        };
+        try {
+          const { response } =
+            win && !win.isDestroyed() && win.isVisible() ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options);
+          answer(response === 0);
+        } catch {
+          answer(false);
+        }
+      })
+      .catch(() => answer(false));
+  };
+
+  const onLine = (line) => {
+    const prefix = '@@mimi-consent@@';
+    if (line.startsWith(prefix)) {
+      try {
+        const request = JSON.parse(line.slice(prefix.length));
+        if (request && typeof request.id === 'string') void askConsent(request);
+      } catch {
+        // a malformed line can only be a bug; no action is safer than a guess
+      }
+      return;
+    }
+    if (line) status(line);
+  };
+  let output = '';
+  child.stdout.on('data', (data) => {
+    output += String(data);
+    let at;
+    while ((at = output.indexOf('\n')) >= 0) {
+      const line = output.slice(0, at).replace(/\r$/, '');
+      output = output.slice(at + 1);
+      onLine(line);
+    }
+  });
+  child.stderr.on('data', (data) => status(String(data)));
   child.on('error', () => {});
   child.on('exit', () => {
     if (pc === running) pc = null;

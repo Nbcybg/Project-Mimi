@@ -68,6 +68,20 @@ test('PWA: the page links what exists; the offline page loads nothing from outsi
   assert.match(worker, /'\/offline\.html'/);
 });
 
+test('PWA: built-in backdrop art is served from /backgrounds', async (t) => {
+  const base = await serve(t);
+  for (const name of ['floral', 'mint', 'blush', 'sky', 'grid', 'starlight', 'dawn', 'ember', 'crimson', 'waves', 'confetti']) {
+    const response = await fetch(`${base}/backgrounds/${name}.webp?v=1`);
+    assert.equal(response.status, 200, name);
+    assert.equal(response.headers.get('content-type'), 'image/webp', name);
+    const data = Buffer.from(await response.arrayBuffer());
+    assert.equal(data.subarray(0, 4).toString(), 'RIFF', name);
+    assert.equal(data.subarray(8, 12).toString(), 'WEBP', name);
+  }
+  assert.equal((await fetch(`${base}/backgrounds/nope.webp`)).status, 404);
+  assert.equal((await fetch(`${base}/backgrounds/..%2Fpackage.json`)).status, 404);
+});
+
 test('PWA: the app page allows exactly its own import map; the offline page has its own policy', async (t) => {
   const base = await serve(t);
   const response = await fetch(`${base}/`);

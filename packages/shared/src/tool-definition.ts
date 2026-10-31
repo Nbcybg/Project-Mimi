@@ -15,6 +15,8 @@ export interface ToolContext {
   traceId: string;
   thread: string;
   agent: string;
+  /** The task this tool call belongs to, when a recipe is running. */
+  taskId?: string;
   /** Folder allowlist for file/shell access; the first entry is the default working folder. */
   allowedDirs: string[];
   signal?: AbortSignal;

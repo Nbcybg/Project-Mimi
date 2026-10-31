@@ -6,6 +6,7 @@ export * from './oauth.ts';
 export * from './permissions.ts';
 export * from './protocol.ts';
 export * from './speech.ts';
+export * from './tasks.ts';
 export * from './tool-definition.ts';
 export * from './tools.ts';
 export * from './workflows.ts';

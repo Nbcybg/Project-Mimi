@@ -57,8 +57,13 @@ test('PC agent folders: only inside the OS account home, never the home itself o
   assert.match(lib.folderProblem('relative/path', home)!, /absolute/);
   // A link inside the home that leads out of it does not count as inside.
   const link = path.join(home, 'escape');
-  fs.symlinkSync(os.tmpdir(), link);
-  assert.match(lib.folderProblem(link, home)!, /ในโฮม/);
+  try {
+    fs.symlinkSync(os.tmpdir(), link, 'dir');
+    assert.match(lib.folderProblem(link, home)!, /ในโฮม/);
+  } catch (error) {
+    // Windows only lets an elevated or developer-mode process make links.
+    if ((error as NodeJS.ErrnoException).code !== 'EPERM') throw error;
+  }
 });
 
 test('config: defaults are off; bad values from the file are dropped', () => {
@@ -68,7 +73,7 @@ test('config: defaults are off; bad values from the file are dropped', () => {
   assert.deepEqual(fresh.pcAgent.folders, [path.join(home, 'Mimi-Workspace')]);
 
   lib.writeConfig(file, { ...fresh, server: 'https://mimi.example.com', autoLockMinutes: 15, pcAgent: { enabled: true, shell: true, folders: [path.join(home, 'work')] } });
-  assert.equal(fs.statSync(file).mode & 0o077, 0, 'readable by its owner only');
+  if (process.platform !== 'win32') assert.equal(fs.statSync(file).mode & 0o077, 0, 'readable by its owner only');
   const saved = lib.readConfig(file, home);
   assert.deepEqual({ server: saved.server, lock: saved.autoLockMinutes, pc: saved.pcAgent }, {
     server: 'https://mimi.example.com',

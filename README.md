@@ -35,11 +35,14 @@ PC agent ───────────────────────�
 - **แชตกับ agent หลายตัว** — แชตเดี่ยวและแชตกลุ่ม, @mention เป็นคิว, agent คุย/ส่งงานต่อกันได้, แก้ prompt และโมเดลแยกต่อ agent
 - **ตัวละคร 3D** — VRM/VRoid พร้อมท่าทาง สีหน้า และ lip-sync, ชุดและฉากหลัง, โหมดมือถือแบบเต็มจอ
 - **เสียงและสื่อ** — ข้อความเสียง ถอดเสียง ถ่ายรูป แนบไฟล์ วิดีโอ PDF และคำบรรยายรายรูป
+- **Mimiamp** — เครื่องเล่นเพลงประกอบสไตล์ Winamp ในหน้าจอใหม่ ผู้ใช้เปิดเองหรือให้ agent เปิดเป็นหน้าต่างลอย (picture-in-picture) ก็ได้ แตะเพื่อขยายเต็มจอ (เพลงอยู่ใน `packages/core/src/server/web/mimiamp/`)
 - **ความจำและ session** — memory หลายชั้น, สรุปบทสนทนาอัตโนมัติ, context meter, งบ token/ค่าใช้จ่าย
 - **Workflow engine** — trigger ตามเวลา/webhook, expression, code node ที่แยก process, run history, approval, retry และ idempotency
 - **Connectors** — 50 บริการ native / 214 operations, Google (Gmail, Calendar, Drive, Sheets, Docs, YouTube), Microsoft (Outlook, Calendar, To Do, OneDrive), MCP, custom HTTP/code/shell tools
 - **นำเข้า workflow** — n8n, Make, Zapier และ OpenAPI (สร้างเป็น draft พร้อม report)
 - **PC agent** — ให้ agent ใช้เครื่องของคุณผ่านโฟลเดอร์ที่อนุญาต, เบราว์เซอร์ของ agent และ shell (ปิดเป็นค่าเริ่มต้น)
+- **Task ที่ตรวจสอบได้** — recipe แบบ deterministic, แผนก่อนลงมือ, อนุมัติครั้งเดียวทั้งงาน, ใบเสร็จ และ undo (เริ่มด้วย `file-organizer` ที่ย้ายไฟล์ตามชนิดโดยไม่ลบไฟล์)
+- **Workspace / Developer task** — ตรวจ repo, รันเทสต์ที่ fail, checkpoint, ให้ agent แก้โค้ด, รันเทสต์ซ้ำ, แสดง diff และ undo โดยไม่ commit/push/merge
 - **เบราว์เซอร์ในแอป (เดสก์ท็อป)** — Chromium ที่มากับแอป เก็บคุกกี้แยกโปรไฟล์ agent สั่งเปิดหน้า คลิก พิมพ์ และอ่านเนื้อหาผ่านเครื่องมือ `browser_*` ได้จริง
 - **แจ้งเตือน** — in-app, Web Push, กระดิ่ง, อีเมลเฝ้าดู และ widget บน Android
 - **หลายผู้ใช้** — โหมด gateway + core แยกต่อคน (แยก container/volume ต่อผู้ใช้)
@@ -170,6 +173,7 @@ node --test --test-timeout=60000 packages/core/src/test/<file>.test.ts
 | `MIMI_CONFIG` | `mimi.json` | ไฟล์ตั้งค่าโมเดล/compaction/memory |
 | `MIMI_TIMEZONE` | `Asia/Bangkok` | timezone ของ scheduler และ trigger |
 | `ALLOWED_DIRS` | `<user>/workspace` | โฟลเดอร์ที่ file/shell tools เข้าถึงได้ คั่นด้วย `;` |
+| `MIMI_MUSIC_DIR` | `<app>/packages/core/src/server/web/mimiamp` | โฟลเดอร์เพลงของ Mimiamp |
 | `MIMI_LOCAL_PC_TOOLS` | `1` | `0` = ให้ file/shell tools ทำงานผ่าน PC agent เท่านั้น (เหมาะกับ cloud) |
 | `MIMI_CORE_URL` | `ws://127.0.0.1:8787/ws` | ที่อยู่ core สำหรับ PC agent |
 | `MIMI_PUBLIC_URL` | — | URL สาธารณะของ core ใช้สร้าง OAuth redirect (`/oauth/callback`) |

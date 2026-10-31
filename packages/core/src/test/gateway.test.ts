@@ -181,7 +181,7 @@ test('accounts: salted scrypt passwords, hashed session tokens, encrypted core t
   assert.notEqual(a, b, 'a salt per account');
   assert.equal(sessions.length, 1);
   assert.ok(!sessions[0]!.token_hash.includes(token) && sessions[0]!.token_hash.length === 64, 'only a hash of the session token');
-  assert.equal(fs.statSync(booted.dbFile).mode & 0o077, 0, 'the database is readable by its owner only');
+  if (process.platform !== 'win32') assert.equal(fs.statSync(booted.dbFile).mode & 0o077, 0, 'the database is readable by its owner only');
 
   // Without the gateway secret the stored core tokens are useless.
   const other = new AccountStore(booted.dbFile, 'a-different-secret-of-enough-length-000');
@@ -401,7 +401,7 @@ test('admin CLI: accounts are made with a password from stdin; the core token is
 
   const copy = path.join(dir, 'copy', 'accounts.db');
   assert.equal(cli(['backup', copy]).status, 0);
-  assert.equal(fs.statSync(copy).mode & 0o077, 0, 'the copy is readable by its owner only');
+  if (process.platform !== 'win32') assert.equal(fs.statSync(copy).mode & 0o077, 0, 'the copy is readable by its owner only');
   assert.equal(cli(['backup', copy]).status, 1, 'an existing file is not overwritten');
   const restored = new AccountStore(copy, SECRET);
   assert.deepEqual(restored.list().map((account) => account.username), ['carol']);

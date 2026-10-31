@@ -94,6 +94,32 @@
   ตอนนี้ในแอป Mac ปิดเป็นค่าเริ่มต้น เปิดได้ที่เมนู "อนุญาตให้รันคำสั่งบนเครื่องนี้ (shell)" (มีคำเตือน) ทุกคำสั่งยังต้องกดอนุญาตในแชต
   `npm run pc-agent` แบบเดิมยังเปิดอยู่ (ตั้ง `MIMI_PC_SHELL=0` เพื่อปิด)
 
+## 7. Task runner, session grants และ local consent (Sprint 1)
+
+- Task เป็น object ชั้นแรก: `id`, goal, recipe, level, steps, gates, verification, receipt, trace id, thread และ timestamps เก็บในตาราง `tasks` (migration 022)
+- Recipe เป็น deterministic: model ส่งได้แค่อินพุต; ลำดับขั้น, interface ที่อนุญาต (`pc` / `core` / `browser` / `api`) และ gate มาจาก recipe — model ตั้ง level เองไม่ได้
+- **Session grant**: `PermissionGate` เก็บ grant ตาม `traceId + tool family` อายุ 30 นาที; server ออก grant เมื่อผู้ใช้เลือก `scope: "task"` เท่านั้น; override `deny` ใน settings ชนะ grant เสมอ; ค่า timeout ของ permission ใน assist mode เพิ่มเป็น 15 นาที
+- **Local consent**: PC agent ถามบนเครื่องจริงก่อนทุก tool ที่ไม่ใช่ `read`; ถ้าเป็นงาน (มี `taskId`) จำการอนุญาตต่อ task + tool family 30 นาที, งานทั่วไปถามทุกครั้ง
+  - เปิดจาก desktop app: PC agent ส่งคำถามผ่าน stdio ให้ Electron แสดง dialog (ไม่ผ่าน core ที่อาจอยู่คนละเครื่อง)
+  - headless: Windows ใช้ MessageBox ผ่าน PowerShell, macOS ใช้ `osascript`; ถ้าเปิด dialog ไม่ได้/ไม่ตอบ = ปฏิเสธ
+  - organizer plan/verify (อ่านโฟลเดอร์และเขียนเฉพาะ journal ของตัวเอง) ไม่ถามซ้ำ; apply และ undo ที่ย้ายไฟล์จริงถาม
+  - `MIMI_LOCAL_CONSENT=0` ปิดได้เฉพาะเมื่อเจ้าของเครื่องยอมรับความเสี่ยงนั้น (ไม่ใช่ค่าเริ่มต้น)
+- **file-organizer invariants**: dry-run เป็นค่าเริ่มต้น, apply ต้องใช้ journal จาก dry-run, ไม่ลบไฟล์, overwrite ย้ายไฟล์เดิมไป `.mimi-organize/backups`, path guard ทุก path, ข้าม symlink/ไฟล์ซ่อน/ไฟล์ชั่วคราว, จำกัดไฟล์ต่อรอบ, ปฏิเสธ path นอก allowed dirs
+- การตรวจสอบ: task จะ `completed` เมื่อ verification ผ่านเท่านั้น; receipt และ undo journal ถูกเก็บ; UI มีปุ่ม undo และ task id สำหรับ audit
+- Tests: `tasks.test.ts` (plan → confirm → apply → verify → undo, denial, cancel, pause/resume), `file-organizer.test.ts` (conflict policies, max files, path guard), `local-consent.test.ts`, `permission-gate.test.ts`; CI matrix macOS + Windows รัน typecheck และ test
+- ยังเปิด: การทดสอบ dialog จริงบน macOS/Windows ด้วยคน, การเก็บ receipt เป็นข้อความถาวรในประวัติแชต (ตอนนี้เป็น live task card), admin audit export และ policy รายองค์กร (Sprint 6), การควบคุมหน้าต่างที่ elevated/UAC
+
+## 8. Workspace / developer task (Sprint 2)
+
+- `workspace_run` รันคำสั่งใน cwd ที่ผ่าน path guard, ใช้ environment แบบ allowlist (ไม่ส่ง API key/token/MIMI_*), จำกัด output และ timeout, และฆ่า process tree เมื่อหมดเวลาหรือถูกหยุด
+- policy: บล็อก `git push`, `git merge`, `git rebase`, `git commit`, publish และ push container เสมอ; คำสั่งทำลายข้อมูล (`rm -rf`, `git reset --hard`, `git clean -f`, `git restore`, `Remove-Item -Recurse -Force` ฯลฯ) ต้องมี `allow_destructive` และยังผ่าน permission gate
+- `workspace_checkpoint` สร้าง commit ใต้ `refs/mimi/checkpoints/*` ผ่าน temporary index — ไม่เปลี่ยน HEAD และไม่แตะ index ของผู้ใช้; `.mimi-workspace/` ถูก exclude
+- `workspace_undo` สำรองไฟล์ที่เปลี่ยน/เพิ่ม/untracked ไป `.mimi-workspace/undo/<timestamp>/` ก่อน แล้ว `read-tree` + `checkout-index` จาก checkpoint; ไม่ลบไฟล์ถาวรและไม่ใช้ `git reset --hard`/`git clean`
+- git repository root ต้องอยู่ใน allowed folders; path นอก allowlist ถูกปฏิเสธ
+- developer recipe ใช้ nested agent ที่มี tool allowlist (`workspace_*`, read/write/edit/list/find) และไม่ได้รับ `task_run`/`task_undo` เพื่อกันการเรียกซ้ำ; permission ทุกครั้งยังผ่าน gate เดียวกัน และ session grant ครอบ family `files.workspace` (workspace tools + write/edit)
+- test command ตรวจจับจาก package.json/Cargo/go/pytest/Makefile; ถ้าไม่พบต้องให้ผู้ใช้ระบุ
+- ยังเปิด: app allowlist ของคำสั่ง (Sprint 6), sandbox ของ process (ตอนนี้เป็น process ปกติภายใต้สิทธิ์ผู้ใช้), manual OS matrix
+
 ## สิ่งที่ยังไม่ได้ตรวจ
 
 deploy จริงบน Railway (header `Host`, `*.railway.internal`, IPv6), Android จริง/FCM, iPhone, Apple Silicon, Windows,

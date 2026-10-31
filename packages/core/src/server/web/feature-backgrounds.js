@@ -16,62 +16,32 @@
   const isChatImage = (item) => /^chatbg-\d+-/.test(item.id);
   const sceneItems = () => items().filter((item) => !isChatImage(item));
 
-  // ---------- the built-in placeholders ----------
-  // Stand-ins until real art arrives: an image, not a gradient, so the four choices stay
-  // distinct and an uploaded picture can replace any of them without changing the UI.
+  // ---------- the built-in backgrounds ----------
   const PRESETS = [
-    {
-      id: 'night',
-      name: 'กลางคืน',
-      colors: ['#0b1026', '#1c2b4a'],
-      art: '<circle cx="1280" cy="170" r="82" fill="#f2e6c2" opacity=".92"/><circle cx="1180" cy="92" r="4" fill="#fff" opacity=".7"/><circle cx="1390" cy="250" r="3" fill="#fff" opacity=".6"/><circle cx="1060" cy="210" r="2.5" fill="#fff" opacity=".7"/><path d="M0 690 L240 590 420 660 660 540 900 640 1180 560 1380 620 1600 560V900H0Z" fill="#101a30" opacity=".85"/><path d="M0 760 L280 720 520 770 810 700 1120 760 1400 710 1600 750V900H0Z" fill="#0a1224"/>',
-    },
-    {
-      id: 'cafe',
-      name: 'คาเฟ่',
-      colors: ['#2b1c15', '#6a4530'],
-      art: '<rect x="130" y="130" width="340" height="300" rx="10" fill="#f3cf8a" opacity=".18"/><rect x="150" y="150" width="300" height="260" rx="6" fill="#ffdda0" opacity=".22"/><rect x="1130" y="150" width="330" height="270" rx="10" fill="#f3cf8a" opacity=".14"/><circle cx="800" cy="150" r="16" fill="#ffdda0" opacity=".9"/><path d="M800 166V280" stroke="#e0b46a" stroke-width="5" opacity=".65"/><ellipse cx="800" cy="292" rx="62" ry="18" fill="#ffdda0" opacity=".5"/><path d="M0 720H1600V900H0Z" fill="#24150f" opacity=".8"/>',
-    },
-    {
-      id: 'forest',
-      name: 'ป่า',
-      colors: ['#0f241a', '#2c5134'],
-      art: '<path d="M160 780 L300 300 440 780Z" fill="#16351f"/><path d="M380 800 L560 220 740 800Z" fill="#1d4326"/><path d="M680 790 L840 320 1000 790Z" fill="#16351f"/><path d="M950 790 L1130 260 1310 790Z" fill="#1d4326"/><path d="M1220 800 L1380 330 1540 800Z" fill="#15311e"/><path d="M0 740 Q400 690 800 740 T1600 730V900H0Z" fill="#0b1b12" opacity=".9"/>',
-    },
-    {
-      id: 'room',
-      name: 'ห้อง',
-      colors: ['#241d19', '#4a3a31'],
-      art: '<rect x="980" y="120" width="420" height="320" rx="8" fill="#9fc6df" opacity=".25"/><path d="M1190 120V440M980 280H1400" stroke="#e5c8a0" stroke-width="8" opacity=".35"/><rect x="160" y="600" width="360" height="180" rx="18" fill="#150f0c" opacity=".55"/><path d="M0 760H1600V900H0Z" fill="#170f0c" opacity=".72"/><circle cx="330" cy="180" r="38" fill="#ffd79a" opacity=".4"/>',
-    },
-    {
-      id: 'ocean',
-      name: 'ทะเล',
-      colors: ['#082633', '#145a68'],
-      art: '<circle cx="1260" cy="190" r="70" fill="#fff2c7" opacity=".55"/><path d="M0 600 Q200 560 400 600 T800 600 T1200 600 T1600 600V900H0Z" fill="#0b3d4a" opacity=".7"/><path d="M0 690 Q250 650 500 690 T1000 690 T1600 690V900H0Z" fill="#092f3a" opacity=".85"/><path d="M0 780 Q300 750 600 780 T1200 780 T1600 780V900H0Z" fill="#07252e"/>',
-    },
-    {
-      id: 'sunset',
-      name: 'พระอาทิตย์ตก',
-      colors: ['#37162a', '#a34c2f'],
-      art: '<circle cx="800" cy="590" r="150" fill="#ffd28a" opacity=".8"/><path d="M0 650 L260 520 520 630 790 500 1080 640 1330 540 1600 640V900H0Z" fill="#2a1220" opacity=".82"/><path d="M0 760 L320 720 640 770 980 710 1300 760 1600 730V900H0Z" fill="#1c0b14" opacity=".92"/>',
-    },
+    { id: 'floral', name: 'ลายดอกไม้', file: 'floral.webp' },
+    { id: 'mint', name: 'มินต์', file: 'mint.webp' },
+    { id: 'blush', name: 'ชมพู', file: 'blush.webp' },
+    { id: 'sky', name: 'ฟ้า', file: 'sky.webp' },
+    { id: 'grid', name: 'ตาราง', file: 'grid.webp' },
+    { id: 'starlight', name: 'แสงดาว', file: 'starlight.webp' },
+    { id: 'dawn', name: 'รุ่งอรุณ', file: 'dawn.webp' },
+    { id: 'ember', name: 'เมฆแดงเข้ม', file: 'ember.webp' },
+    { id: 'crimson', name: 'เมฆชาด', file: 'crimson.webp' },
+    { id: 'waves', name: 'คลื่นทะเล', file: 'waves.webp' },
+    { id: 'confetti', name: 'คอนเฟตติ', file: 'confetti.webp' },
   ];
   const presetById = (id) => PRESETS.find((preset) => preset.id === id);
-  const presetUrls = new Map();
+  const LEGACY_PRESETS = { night: 'starlight', cafe: 'crimson', forest: 'mint', room: 'blush', ocean: 'waves', sunset: 'dawn' };
+  const presetId = (id) => LEGACY_PRESETS[id] || id;
   function presetUrl(id) {
-    if (presetUrls.has(id)) return presetUrls.get(id);
-    const preset = presetById(id) || PRESETS[0];
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900"><defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${preset.colors[0]}"/><stop offset="1" stop-color="${preset.colors[1]}"/></linearGradient></defs><rect width="1600" height="900" fill="url(#g)"/>${preset.art}</svg>`;
-    const url = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
-    presetUrls.set(id, url);
-    return url;
+    const preset = presetById(presetId(id)) || PRESETS[0];
+    return `/backgrounds/${preset.file}?v=1`;
   }
 
   // ---------- a chat's own background ----------
   const BG_KEY = (chatId) => `mimi.chat.${chatId}.background`;
   const BG_RULES_KEY = (chatId) => `mimi.chat.${chatId}.backgroundRules`;
-  const DEFAULT_BG = { type: 'none', color: '#1b1d22', from: '#1b1d22', to: '#3a2d28', angle: 135, preset: 'night', upload: '' };
+  const DEFAULT_BG = { type: 'none', color: '#1b1d22', from: '#1b1d22', to: '#3a2d28', angle: 135, preset: 'floral', upload: '' };
   const BG_TYPES = new Set(['none', 'solid', 'gradient', 'preset', 'upload']);
   const RULE_TYPES = new Set(['default', 'solid', 'gradient', 'preset', 'upload']);
   const COLOR = /^#[0-9a-f]{6}$/i;
@@ -102,13 +72,14 @@
   function normalizeBg(raw) {
     const bg = raw && typeof raw === 'object' ? raw : {};
     const type = BG_TYPES.has(bg.type) ? bg.type : 'none';
+    const preset = presetId(String(bg.preset || ''));
     return {
       type,
       color: COLOR.test(String(bg.color || '')) ? String(bg.color) : DEFAULT_BG.color,
       from: COLOR.test(String(bg.from || '')) ? String(bg.from) : DEFAULT_BG.from,
       to: COLOR.test(String(bg.to || '')) ? String(bg.to) : DEFAULT_BG.to,
       angle: Number.isFinite(Number(bg.angle)) ? Math.min(360, Math.max(0, Number(bg.angle))) : DEFAULT_BG.angle,
-      preset: presetById(String(bg.preset || '')) ? String(bg.preset) : DEFAULT_BG.preset,
+      preset: presetById(preset) ? preset : DEFAULT_BG.preset,
       upload: typeof bg.upload === 'string' ? bg.upload : '',
     };
   }
@@ -121,12 +92,13 @@
   }
   function normalizeRule(raw, index) {
     const rule = raw && typeof raw === 'object' ? raw : {};
+    const preset = presetId(String(rule.preset || ''));
     return {
       id: typeof rule.id === 'string' && rule.id ? rule.id : `rule-${index}-${Date.now()}`,
       from: cleanClock(rule.from) || '18:00',
       to: cleanClock(rule.to) || '06:00',
       type: RULE_TYPES.has(rule.type) ? rule.type : 'default',
-      preset: presetById(String(rule.preset || '')) ? String(rule.preset) : DEFAULT_BG.preset,
+      preset: presetById(preset) ? preset : DEFAULT_BG.preset,
       upload: typeof rule.upload === 'string' ? rule.upload : '',
     };
   }
@@ -177,7 +149,7 @@
     if (bg.type === 'solid') return { key: `solid:${bg.color}`, css: bg.color };
     if (bg.type === 'gradient') return { key: `gradient:${bg.from}:${bg.to}:${bg.angle}`, css: `linear-gradient(${bg.angle}deg, ${bg.from}, ${bg.to})` };
     if (bg.type === 'preset') {
-      const preset = presetById(bg.preset);
+      const preset = presetById(presetId(bg.preset));
       return preset ? { key: `preset:${preset.id}`, src: presetUrl(preset.id) } : null;
     }
     if (bg.type === 'upload') {

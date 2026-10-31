@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { PcAgent } from './client.ts';
+import { LineReader, LocalConsent, StdioConsentPrompt } from './local-consent.ts';
 import { closeBrowserSession } from './tools/browser.ts';
 
 // npm run pc-agent
@@ -11,6 +12,8 @@ import { closeBrowserSession } from './tools/browser.ts';
 //                   starts it so: a token in the environment is visible to other programs)
 //   MIMI_PC_NAME    how this PC shows up in Mimi (default: the computer's name)
 //   MIMI_PC_SHELL=0 offer no tool that runs with the OS account's full rights (shell, power, MCP)
+//   MIMI_LOCAL_CONSENT=0  do not ask on this machine before non-read tools (not recommended)
+//   MIMI_CONSENT_STDIO=1  ask through the desktop app over stdin/stdout instead of an OS dialog
 const url = process.env.MIMI_CORE_URL ?? `ws://127.0.0.1:${process.env.MIMI_PORT ?? 8787}/ws`;
 const allowedDirs = (process.env.ALLOWED_DIRS ?? '')
   .split(';')
@@ -18,17 +21,12 @@ const allowedDirs = (process.env.ALLOWED_DIRS ?? '')
   .filter(Boolean)
   .map((dir) => path.resolve(dir));
 
-function readToken(): Promise<string | undefined> {
-  if (process.env.MIMI_TOKEN_STDIN !== '1') return Promise.resolve(process.env.MIMI_TOKEN);
-  return new Promise((resolve) => {
-    let text = '';
-    process.stdin.setEncoding('utf8');
-    process.stdin.on('data', (chunk: string) => {
-      text += chunk;
-      if (text.includes('\n')) resolve(text.split('\n')[0]!.trim() || undefined);
-    });
-    process.stdin.on('end', () => resolve(text.trim() || undefined));
-  });
+// The first line carries the token; later lines answer the desktop app's consent dialogs.
+const stdinLines = process.env.MIMI_TOKEN_STDIN === '1' ? new LineReader(process.stdin) : undefined;
+
+async function readToken(): Promise<string | undefined> {
+  if (!stdinLines) return process.env.MIMI_TOKEN;
+  return (await stdinLines.next(30_000))?.trim() || undefined;
 }
 
 const token = await readToken();
@@ -45,7 +43,21 @@ for (const dir of allowedDirs) fs.mkdirSync(dir, { recursive: true });
 console.log(`PC agent - allowed folders: ${allowedDirs.join('; ')}${process.env.MIMI_PC_SHELL === '0' ? ' (no shell commands)' : ''}`);
 // MIMI_PC_SHELL=0: no commands with the OS account's full rights, only files in ALLOWED_DIRS and the browser.
 const shell = process.env.MIMI_PC_SHELL !== '0';
-const agent = new PcAgent({ url, token, allowedDirs, shell, name: process.env.MIMI_PC_NAME || undefined, log: (line) => console.log(`[pc-agent] ${line}`) });
+const consent =
+  process.env.MIMI_LOCAL_CONSENT === '0'
+    ? false
+    : stdinLines && process.env.MIMI_CONSENT_STDIO === '1'
+      ? new LocalConsent({ prompt: new StdioConsentPrompt(stdinLines, (line) => process.stdout.write(line)) })
+      : new LocalConsent();
+const agent = new PcAgent({
+  url,
+  token,
+  allowedDirs,
+  shell,
+  consent,
+  name: process.env.MIMI_PC_NAME || undefined,
+  log: (line) => console.log(`[pc-agent] ${line}`),
+});
 agent.start();
 
 let stopping = false;

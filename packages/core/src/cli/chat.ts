@@ -80,9 +80,9 @@ class Renderer {
         const { usage } = event;
         const hitRate = usage.inputTokens > 0 ? Math.round((usage.cachedTokens / usage.inputTokens) * 100) : 0;
         const stats = `${event.rounds} round(s) | in ${usage.inputTokens} (cache hit ${hitRate}%) | out ${usage.outputTokens} | context ${event.contextTokens} | $${usage.costUsd.toFixed(5)}`;
-        if (event.reason === 'error') this.line(`  [error] ${event.error}`);
+        if (event.reason === 'error') this.line(`  [error ${event.errorCode || 'E-INTERNAL'}] ${event.error}`);
         else if (event.reason === 'handoff') this.line(`  [handed off to ${event.handoff?.to}]`);
-        else if (event.reason !== 'stop') this.line(`  [stopped: ${event.reason}${event.error ? ` - ${event.error}` : ''}]`);
+        else if (event.reason !== 'stop') this.line(`  [stopped: ${event.reason}${event.error ? ` - [${event.errorCode || 'E-INTERNAL'}] ${event.error}` : ''}]`);
         this.line(`  (${stats})`);
         break;
       }

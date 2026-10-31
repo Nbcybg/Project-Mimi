@@ -37,3 +37,26 @@
   ไม่มีเมนูแบบเบราว์เซอร์, ไม่มี zoom, คลิกขวาเฉพาะช่องข้อความ, ลิงก์ภายนอกเปิดในเบราว์เซอร์ปกติ, ขออนุญาตเฉพาะไมค์/กล้อง/แจ้งเตือน
 - launcher ↔ หน้าต่างคุยกันทาง node IPC (โปรแกรม GUI บน Windows ไม่มี stdin ที่ใช้ได้)
 - ราคาที่ต้องจ่าย: Electron ~100 MB+ ในแพ็กเกจ และต้องตามอัปเดตความปลอดภัยของ Chromium; ยังไม่ได้ทำ: เริ่มพร้อม Windows, ลงนามโค้ด, อัปเดตอัตโนมัติ
+- **PC agent ในแพ็กเกจ**: Node 24 ไม่ยอม strip TypeScript ใต้ `node_modules` (`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`) ทำให้แพ็กเกจเก่าเปิด PC agent ไม่ขึ้นทั้งที่ติ๊กแล้ว
+  `scripts/pack-pc-agent.mjs` จึงคัดลอก `pc-agent` และ `shared` ไปไว้ข้างแอป (`resources/app/pc-agent`, `resources/app/shared`) แล้ว rewrite import `@mimi/shared` เป็น relative
+  `remote.cjs` เลือก entry ที่ `resources/app/pc-agent/src/main.ts` ก่อน — อย่าย้ายกลับเข้า `node_modules`
+
+## 6. Task model และ deterministic runner (Sprint 1)
+
+- `packages/shared/src/tasks.ts` นิยาม `TaskView`, steps, gates, plan, verification, receipt และ task events ที่ไหลผ่าน `AgentEvent` เดียวกับ run ปกติ
+- `packages/core/src/db/022-tasks.sql` + `tasks/repo.ts`: task เก็บใน SQLite เป็น JSON columns; `undo` descriptor ไม่ส่งออก UI
+- `tasks/recipes.ts` + `tasks/file-organizer.ts`: recipe ประกาศ level (`L3`), input schema (zod), interface (`pc`) และขั้น plan → confirm → apply → verify; recipe เรียก PC tools ผ่าน executor เดียวกับ agent loop
+- `tasks/runner.ts`: async generator ที่ emit `task-start` / `task-step` / `task-plan` / `task-receipt` / `task-update` / `task-finish`; รองรับ pause/resume/cancel ผ่าน `task-control`, ผูก `AbortSignal` ของ turn, ถือว่าจบเฉพาะเมื่อ verification ผ่าน, และ undo จาก journal
+- `tasks/tools.ts`: `task_run` (risk `read` เพราะ orchestration; gate อยู่ที่ recipe) และ `task_undo` (risk `write`) ถูกเพิ่มให้ทุก agent ผ่าน `extraTools` โดยไม่ต้องแก้ไฟล์ agent
+- `packages/pc-agent/src/tools/organize.ts`: planner/apply/verify/undo ในไฟล์เดียว, journal ใต้ `.mimi-organize`; `local-consent.ts` + `client.ts` เพิ่มการถามบนเครื่อง
+- Server: `permission-response` รับ `scope` เพื่อสร้าง grant; `task-control` และ `task-undo` ส่ง events กลับเข้าแชต; web client วาดการ์ดงาน/แผน/ใบเสร็จและปุ่ม undo
+- Tests: `packages/core/src/test/tasks.test.ts`, `file-organizer.test.ts`, `local-consent.test.ts`, `permission-gate.test.ts`, `pc-stdin.test.ts` (token ทาง stdin และ layout ของแพ็กเกจ); รัน `npm run typecheck && npm test` (matrix macOS/Windows ใน `.github/workflows/test.yml`)
+
+## 7. Workspace / developer recipe (Sprint 2)
+
+- `packages/pc-agent/src/process.ts`: shell adapter เดียว (PowerShell บน Windows, sh บน macOS), timeout, output cap, kill process tree, sanitized environment
+- `packages/pc-agent/src/tools/workspace.ts`: `workspace_create`, `workspace_info`, `workspace_run`, `workspace_checkpoint`, `workspace_diff`, `workspace_undo`; git checkpoint เก็บใน `refs/mimi/checkpoints/*` ผ่าน temporary index, undo มี backup ใน `.mimi-workspace/undo`
+- `packages/core/src/tasks/developer.ts`: recipe inspect → confirm → prepare → reproduce → checkpoint → fix → verify → diff → report; fix ใช้ `TaskStepContext.runAgent`
+- `TaskRunnerDeps.runAgentStep` + `RunInput.noTaskTools`: nested agent ใช้ tool allowlist, thread `task-<id>`, ส่ง events กลับเป็น `agent-activity`, ไม่ให้เริ่ม task ซ้อน
+- session grant family `files.workspace` ครอบ workspace tools + `write_file`/`edit_file`
+- Tests: `workspace.test.ts` (temp repo, policy, checkpoint/diff/undo), `developer.test.ts` (failing test → agent edit → pass → diff → undo); `npm run typecheck && npm test`

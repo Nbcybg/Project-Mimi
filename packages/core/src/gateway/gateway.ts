@@ -190,7 +190,7 @@ export async function startGateway(options: GatewayOptions): Promise<Gateway> {
   const handle = async (request: http.IncomingMessage, response: http.ServerResponse) => {
     const url = new URL(request.url ?? '/', 'http://localhost');
     const method = request.method ?? 'GET';
-    if (method === 'GET' && serveWebFile(url.pathname, response)) return;
+    if (method === 'GET' && serveWebFile(url.pathname, response, request.headers.range)) return;
     if (serveAssetLinks(method, url.pathname, response)) return;
     if (method === 'GET' && url.pathname === '/health') {
       sendJson(response, 200, { ok: true, version: APP_VERSION, accounts: true });

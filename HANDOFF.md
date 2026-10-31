@@ -1,7 +1,9 @@
-# Mimi handoff — 2026-10-31
+# Mimi handoff — 2026-11-01
 
 ## สถานะ
 
+- Commit ล่าสุด: `9b24e39` (docs), `0e7edf2` (Google Drive connector), `991e291` (Overseer ชั้น 1),
+  `a4b20a3` (MCP/workflow/permissions/secret/git)
 - Typecheck ผ่านทั้ง `shared`, `pc-agent`, `core`
 - Full test suite ผ่าน **684 tests**
 - UI smoke test ผ่าน 7/7 ในรอบก่อน และรอบนี้ผ่านเพิ่ม: agent permission matrix (6 rows, ค่า policy ที่บันทึกไว้แสดงถูก)

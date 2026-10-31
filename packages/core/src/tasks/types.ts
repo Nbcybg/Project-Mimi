@@ -61,4 +61,6 @@ export interface TaskRecipe<Input = unknown> {
   inputSchema: z.ZodType<Input>;
   interfaces: TaskInterface[];
   steps: TaskStep<Input>[];
+  /** A background/restart resume may rerun this recipe from its stored input. */
+  resumable?: boolean;
 }

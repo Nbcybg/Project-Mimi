@@ -670,6 +670,8 @@ export async function createCore(
     overrides: settings.permission,
   });
   const tasks = new TaskRepo(db);
+  const interruptedTasks = tasks.markInterrupted();
+  if (interruptedTasks > 0) console.error(`tasks: marked ${interruptedTasks} interrupted task(s) paused; resume or cancel them.`);
   /** Assigned once `deps` exists; a developer step calls back into the agent loop. */
   let taskAgentStep: ((input: TaskAgentStepInput) => Promise<string>) | undefined;
   const taskRunner = new TaskRunner({
@@ -692,6 +694,14 @@ export async function createCore(
       if (!taskAgentStep) throw new Error('The agent loop is not ready for this task.');
       return taskAgentStep(input);
     },
+    notify: (task) =>
+      notify({
+        kind: 'task-result',
+        title: `Task ${task.recipe}`,
+        body: task.receipt?.summary ?? task.error ?? `Task ${task.status}`,
+        ...(task.chatId !== undefined ? { chatId: task.chatId } : {}),
+        agent: task.agent,
+      }),
   });
   const deps: AgentLoopDeps = {
     budgetCheck: () => budgetCheck(),

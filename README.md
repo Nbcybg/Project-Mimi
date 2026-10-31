@@ -46,6 +46,7 @@ PC agent ───────────────────────�
 - **คัดรูป (Photo cull)** — หารูปซ้ำ/เบลอ, contact sheet, คัดลอก keep/reject ไปโฟลเดอร์ใหม่, vision แบบสุ่มตามงบ และ undo โดยต้นฉบับไม่ถูกแก้
 - **Browser task / YouTube** — อัปโหลดไฟล์ผ่าน CDP, รอข้อความ/selector/URL, handoff login/2FA/CAPTCHA ให้ผู้ใช้ทำเอง และ gate ก่อนเผยแพร่ public
 - **Native desktop / Mail** — ควบคุมแอปผ่าน accessibility tree แบบ ref, app allowlist, ปฏิเสธ secure field และ recipe ช่วยตั้งค่า POP3 โดยให้ผู้ใช้พิมพ์รหัสผ่านเอง
+- **Autonomy / Audit** — background task แบบ opt-in, task resume หลัง restart, inbox notification, task list, JSONL audit export และ kill switch
 - **เบราว์เซอร์ในแอป (เดสก์ท็อป)** — Chromium ที่มากับแอป เก็บคุกกี้แยกโปรไฟล์ agent สั่งเปิดหน้า คลิก พิมพ์ และอ่านเนื้อหาผ่านเครื่องมือ `browser_*` ได้จริง
 - **แจ้งเตือน** — in-app, Web Push, กระดิ่ง, อีเมลเฝ้าดู และ widget บน Android
 - **หลายผู้ใช้** — โหมด gateway + core แยกต่อคน (แยก container/volume ต่อผู้ใช้)

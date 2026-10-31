@@ -948,6 +948,9 @@ export async function startServer(
           core.taskRunner.control(message.taskId, message.action);
         }
         break;
+      case 'task-kill':
+        core.taskRunner.cancelAll();
+        break;
       case 'task-undo': {
         const task = core.tasks.get(message.taskId);
         if (!task) throw new Error(`No task "${message.taskId}".`);

@@ -55,6 +55,8 @@ export function createTaskTools(deps: TaskToolDeps) {
       blur_threshold: z.number().min(0).max(10_000).optional().describe('Photo-cull: sharpness below this is blurry'),
       vision_samples: z.number().int().min(0).max(200).optional().describe('Photo-cull: optional vision samples'),
       max_cost_usd: z.number().min(0).max(100).optional().describe('Photo-cull: vision cost cap'),
+      background: z.boolean().optional().describe('Run as an opt-in background job and notify when done'),
+      notify: z.boolean().optional().describe('Send a task-result notification when it finishes'),
       app: z.enum(['apple-mail', 'outlook', 'thunderbird']).optional().describe('Mail-pop3: the mail app'),
       email: z.string().email().optional().describe('Mail-pop3: the email address'),
       provider: z.enum(['gmail', 'outlook', 'yahoo', 'icloud', 'other']).optional().describe('Mail-pop3: provider preset'),
@@ -104,6 +106,9 @@ export function createTaskTools(deps: TaskToolDeps) {
           ...(input.policy ? { policy: input.policy } : {}),
           ...(input.max_files ? { max_files: input.max_files } : {}),
         } as Record<string, unknown>);
+      if (input.background && process.env.MIMI_ALLOW_BACKGROUND_TASKS !== '1') {
+        throw new Error('Background tasks are opt-in only. Ask the user to set MIMI_ALLOW_BACKGROUND_TASKS=1, or run the task interactively.');
+      }
       if (Object.keys(recipeInput).length === 0) throw new Error('This task recipe needs an input.');
 
       const chatId = deps.chatIdForThread?.(context.thread);
@@ -115,6 +120,7 @@ export function createTaskTools(deps: TaskToolDeps) {
         thread: context.thread,
         agent: context.agent,
         ...(chatId !== undefined ? { chatId } : {}),
+        notify: input.background === true || input.notify === true,
         ...(context.signal ? { signal: context.signal } : {}),
       });
 
@@ -155,5 +161,76 @@ export function createTaskTools(deps: TaskToolDeps) {
     },
   });
 
-  return [run, undo];
+  const list = defineTool({
+    name: 'task_list',
+    description: 'List recent tasks with their status, recipe, receipt summary and verification. Read-only.',
+    risk: 'read',
+    target: 'core',
+    inputSchema: z.object({
+      thread: z.string().optional(),
+      limit: z.number().int().min(1).max(200).optional(),
+    }),
+    summarize: (input) => `List tasks${input.thread ? ` in ${input.thread}` : ''}`,
+    async execute(input) {
+      const tasks = deps.repo.list(input.thread, input.limit ?? 20).map((task) => {
+        const { undo: _undo, ...view } = task;
+        return view;
+      });
+      return JSON.stringify({ ok: true, tasks }, null, 2);
+    },
+  });
+
+  const resume = defineTool({
+    name: 'task_resume',
+    description:
+      'Resume a paused or interrupted task from its stored input. Only recipes marked resumable can do this; it creates a new task and keeps the old one for audit.',
+    risk: 'write',
+    target: 'core',
+    inputSchema: z.object({ task_id: z.string().min(1) }),
+    summarize: (input) => `Resume task ${input.task_id}`,
+    async execute(input, context) {
+      const generator = deps.runner.resumeTask(input.task_id, {
+        traceId: context.traceId,
+        thread: context.thread,
+        agent: context.agent,
+        ...(context.signal ? { signal: context.signal } : {}),
+      });
+      let next = await generator.next();
+      while (!next.done) {
+        context.emit?.(next.value);
+        next = await generator.next();
+      }
+      return taskSummary(next.value);
+    },
+  });
+
+  const audit = defineTool({
+    name: 'task_audit',
+    description: 'Export task audit rows as JSONL (one task per line), newest first. Read-only.',
+    risk: 'read',
+    target: 'core',
+    inputSchema: z.object({
+      thread: z.string().optional(),
+      limit: z.number().int().min(1).max(1_000).optional(),
+    }),
+    summarize: (input) => `Export task audit${input.thread ? ` for ${input.thread}` : ''}`,
+    async execute(input) {
+      return deps.repo.exportJsonl({ ...(input.thread ? { thread: input.thread } : {}), ...(input.limit ? { limit: input.limit } : {}) }) || '(no tasks)';
+    },
+  });
+
+  const kill = defineTool({
+    name: 'task_kill',
+    description: 'Stop every running task now (the kill switch). Background jobs stop at their next step or signal boundary.',
+    risk: 'write',
+    target: 'core',
+    inputSchema: z.object({}),
+    summarize: () => 'Stop all running tasks',
+    async execute() {
+      const stopped = deps.runner.cancelAll();
+      return `Stopped ${stopped} running task(s).`;
+    },
+  });
+
+  return [run, undo, list, resume, audit, kill];
 }

@@ -150,6 +150,15 @@
 - audit: ทุก tool call ผ่าน PC agent log/chat permission; task receipt มีขั้นตอนและผล
 - ยังเปิด: manual OS matrix จริง, ความแม่นยำของ accessibility tree ในแอปแต่ละเวอร์ชัน, และการทดสอบกับ mail provider จริง
 
+## 12. Autonomy / audit (Sprint 6)
+
+- background/L4 ปิดโดยค่าเริ่มต้น: `task_run` ที่ `background: true` ต้องมี `MIMI_ALLOW_BACKGROUND_TASKS=1`; งานยังใช้ daily budget และ trace budget เดิม
+- restart recovery: task ที่ค้าง `running` / `awaiting_confirmation` / `paused` ถูกทำเป็น `paused` ตอนเปิด core; `task_resume` ทำได้เฉพาะ recipe ที่ประกาศ `resumable` และสร้าง task ใหม่ โดยเก็บ task เก่าไว้ audit
+- kill switch: `task_kill` tool และ `task-kill` WebSocket message เรียก `cancelAll()`; task ที่ถูกยกเลิกจะไม่ทำงานต่อ
+- notifications: งาน background ที่ `notify`/`background` จะส่ง `task-result` เข้า inbox ตาม preference/mute เดิม
+- audit: `task_audit` export JSONL จากตาราง tasks; `task_list` แสดงสถานะ/receipt; ไม่มี telemetry
+- ยังเปิด: admin policy รายองค์กร, audit retention อัตโนมัติ, UI สำหรับ task list/kill switch, และการทดสอบ background ข้าม restart จริง
+
 ## สิ่งที่ยังไม่ได้ตรวจ
 
 deploy จริงบน Railway (header `Host`, `*.railway.internal`, IPv6), Android จริง/FCM, iPhone, Apple Silicon, Windows,

@@ -42,6 +42,8 @@ export interface TaskRunnerDeps {
   execute(tool: string, input: unknown, context: TaskExecutorContext): Promise<string>;
   /** The core supplies this; a recipe step may use it for work that needs a model. */
   runAgentStep?: (input: TaskAgentStepInput) => Promise<string>;
+  /** Background tasks announce their result in the inbox. */
+  notify?: (task: TaskView) => void;
   now?: () => Date;
 }
 
@@ -54,6 +56,8 @@ export interface TaskRunOptions {
   agent: string;
   chatId?: number;
   signal?: AbortSignal;
+  /** Background/L4 opt-in: send a task-result notification when it finishes. */
+  notify?: boolean;
 }
 
 interface ActiveTask {
@@ -82,6 +86,54 @@ export class TaskRunner {
 
   recipe(name: string): TaskRecipe<any> | undefined {
     return this.deps.recipes.get(name);
+  }
+
+  /** Stops every running task (the kill switch). Returns how many were stopped. */
+  cancelAll(): number {
+    let stopped = 0;
+    for (const active of this.active.values()) {
+      active.paused = false;
+      active.controller.abort(new TaskStoppedError('All tasks were stopped by the user.'));
+      for (const wake of active.waiters) wake();
+      active.waiters.clear();
+      stopped++;
+    }
+    return stopped;
+  }
+
+  /** Re-runs a paused, resumable task from its stored input as a new task. */
+  async *resumeTask(
+    taskId: string,
+    options: { traceId?: string; thread?: string; agent?: string; signal?: AbortSignal } = {},
+  ): AsyncGenerator<AgentEvent, TaskView> {
+    const task = this.deps.repo.get(taskId);
+    if (!task) throw new Error(`No task "${taskId}".`);
+    if (task.status !== 'paused' && task.status !== 'failed') {
+      throw new Error(`Task ${taskId} is ${task.status}; only a paused or failed task can resume.`);
+    }
+    const recipe = this.deps.recipes.get(task.recipe);
+    if (!recipe?.resumable) throw new Error(`Recipe "${task.recipe}" cannot be resumed safely; start a new task.`);
+    const generator = this.run({
+      recipe: task.recipe,
+      goal: `Resume: ${task.goal}`,
+      input: task.input,
+      traceId: options.traceId ?? task.traceId,
+      thread: options.thread ?? task.thread,
+      agent: options.agent ?? task.agent,
+      ...(task.chatId !== undefined ? { chatId: task.chatId } : {}),
+      notify: true,
+      ...(options.signal ? { signal: options.signal } : {}),
+    });
+    let next = await generator.next();
+    while (!next.done) {
+      yield next.value;
+      next = await generator.next();
+    }
+    task.status = 'cancelled';
+    task.error = `Resumed as task ${next.value.id}.`;
+    task.finishedAt = this.now().toISOString();
+    this.deps.repo.save(task);
+    return next.value;
   }
 
   /** Stops, pauses or resumes a running task. Returns false when it is not running. */
@@ -302,6 +354,7 @@ export class TaskRunner {
         record.status = 'running';
         this.deps.repo.save(record);
         yield { type: 'task-step', taskId: record.id, step: { ...viewStep } };
+        if (controller.signal.aborted) throw new TaskStoppedError('The task was stopped.');
 
         try {
           const detail = yield* stream(Promise.resolve().then(() => step.run(context)));
@@ -340,6 +393,7 @@ export class TaskRunner {
       record.error = record.verification.ok ? undefined : record.verification.summary;
       record.finishedAt = this.now().toISOString();
       this.deps.repo.save(record);
+      if (options.notify) this.deps.notify?.(taskView(record));
       yield {
         type: 'task-finish',
         taskId: record.id,
@@ -363,6 +417,7 @@ export class TaskRunner {
       }
       record.finishedAt = this.now().toISOString();
       this.deps.repo.save(record);
+      if (options.notify) this.deps.notify?.(taskView(record));
       yield {
         type: 'task-finish',
         taskId: record.id,

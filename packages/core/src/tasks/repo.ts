@@ -202,4 +202,25 @@ export class TaskRepo {
       | undefined;
     return row && toRecord(row);
   }
+
+  /** Tasks a restart interrupted: running, waiting for a person, or paused. */
+  markInterrupted(): number {
+    const stamp = this.now().toISOString();
+    const rows = this.db
+      .prepare(`SELECT id FROM tasks WHERE status IN ('running', 'awaiting_confirmation', 'paused')`)
+      .all() as Array<{ id: string }>;
+    for (const row of rows) {
+      this.db
+        .prepare(`UPDATE tasks SET status = 'paused', error = ?, updated_at = ? WHERE id = ?`)
+        .run('Interrupted by a restart; resume or cancel it.', stamp, row.id);
+    }
+    return rows.length;
+  }
+
+  /** Audit export: one JSON object per task, without the local undo descriptor. */
+  exportJsonl(options: { thread?: string; limit?: number } = {}): string {
+    return this.list(options.thread, options.limit ?? 1_000)
+      .map((task) => JSON.stringify(taskView(task)))
+      .join('\n');
+  }
 }

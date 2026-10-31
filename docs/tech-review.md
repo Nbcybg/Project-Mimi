@@ -88,3 +88,12 @@
 - Desktop passes `pcAgent.apps` as `MIMI_ALLOWED_APPS`; default is empty (deny)
 - Tests: `computer-layer.test.ts` with a recorded tree/adapter (refs, secure refusal, allowlist, screenshot/highlight), `mail-pop3.test.ts` with a scripted computer executor; real macOS/Windows UI is manual
 - `npm run typecheck && npm test`
+
+## 11. Autonomy / audit (Sprint 6)
+
+- `TaskRepo.markInterrupted()` turns unfinished rows into paused on core start; `TaskRunner.resumeTask()` re-runs only recipes with `resumable: true` as a new task
+- `TaskRunner.cancelAll()` + `task-kill` WebSocket message / `task_kill` tool; `TaskRunnerDeps.notify` sends a task-result inbox notification
+- `task_list` and `task_audit` (JSONL) tools; `task_run` accepts `background`/`notify` and background requires `MIMI_ALLOW_BACKGROUND_TASKS=1`
+- background scheduling uses the existing triggers/workflows; daily and trace budgets still apply
+- Tests: `autonomy.test.ts` (interrupt marking, JSONL, notification, resume, kill switch, opt-in)
+- `npm run typecheck && npm test`

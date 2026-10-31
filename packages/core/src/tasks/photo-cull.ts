@@ -155,6 +155,7 @@ export const photoCullRecipe: TaskRecipe<PhotoInput> = {
   level: 'L3',
   inputSchema,
   interfaces: ['pc'],
+  resumable: true,
   steps: [
     {
       id: 'scan',

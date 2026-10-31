@@ -43,6 +43,9 @@
   allowlist, active-app checks and secure-field refusal.
 - Mail: `mail-pop3` guided recipe for Apple Mail, Outlook and Thunderbird; it fills non-secret fields, hands the
   password to the user, tests the connection and sends one test mail after a separate confirmation.
+- Autonomy: background tasks are opt-in (`MIMI_ALLOW_BACKGROUND_TASKS=1`), unfinished tasks pause after a
+  restart, `task_resume` restarts resumable recipes, `task_list` / `task_audit` expose JSONL records, task results
+  notify the inbox and `task_kill` stops every running task.
 
 ### 0.7.7-prototype
 

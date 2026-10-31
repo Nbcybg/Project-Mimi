@@ -99,3 +99,11 @@ Mimi คือผู้ช่วย AI ส่วนตัว: คุยกับ
 - Windows: ควบคุมได้เฉพาะหน้าต่างระดับผู้ใช้ปกติ; หน้าต่าง elevated/UAC ต้องให้ผู้ใช้ทำเอง
 - `computer_screenshot` / `computer_highlight` ส่งภาพเข้าห้องแชต; ภาพอาจมีข้อมูลลับบนจอ
 - **Mail POP3 recipe**: ช่วยตั้งค่า Apple Mail / Outlook / Thunderbird — เติมชื่อ อีเมล เซิร์ฟเวอร์/พอร์ตให้، คุณพิมพ์รหัสผ่านเอง، ทดสอบการเชื่อมต่อ และส่งเมลทดสอบเมื่อยืนยัน
+
+## งานเบื้องหลัง / Audit (Autonomy)
+
+- งานแบบ background ต้องเปิด opt-in: `MIMI_ALLOW_BACKGROUND_TASKS=1` และ agent ต้องส่ง `background: true`; Mimi จะแจ้งผลใน inbox เมื่อจบ
+- งานที่ถูก interrupt ตอน core restart จะถูกทำเป็น `paused`; ใช้ `task_resume` กับ recipe ที่ resume ได้ (file-organizer, photo-cull) หรือเริ่มงานใหม่
+- `task_list` ดูงานล่าสุด, `task_audit` export JSONL (หนึ่ง task ต่อบรรทัด), `task_kill` หยุดทุกงานที่กำลังรัน
+- งบประมาณรายวันและ budget ของแต่ละ run ยังใช้กับงาน background; ไม่มี telemetry โดยค่าเริ่มต้น
+- **หมายเหตุ**: การตั้งเวลา background ใช้ trigger/workflow ที่มีอยู่ แล้วให้ agent เรียก `task_run` ด้วย `background: true`

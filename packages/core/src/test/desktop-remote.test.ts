@@ -16,7 +16,7 @@ interface Where {
 interface Config {
   server: string;
   autoLockMinutes: number;
-  pcAgent: { enabled: boolean; shell: boolean; folders: string[] };
+  pcAgent: { enabled: boolean; shell: boolean; folders: string[]; apps: string[] };
   window: Record<string, unknown>;
 }
 const lib = createRequire(import.meta.url)('../../../desktop/remote-lib.cjs') as {

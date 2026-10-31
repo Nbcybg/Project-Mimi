@@ -594,6 +594,8 @@ export type ClientMessage =
   | { type: 'task-control'; taskId: string; action: 'pause' | 'resume' | 'cancel' }
   /** Restores the files a finished task moved, from its journal. */
   | { type: 'task-undo'; taskId: string }
+  /** The global kill switch: stop every running task. */
+  | { type: 'task-kill' }
   | { type: 'history'; beforeId?: number; limit?: number }
   /** Asks for the active triggers so the device can set its own alarms. */
   | { type: 'triggers-sync' }

@@ -57,6 +57,7 @@ export const fileOrganizerRecipe: TaskRecipe<FileOrganizerInput> = {
   level: 'L3',
   inputSchema,
   interfaces: ['pc'],
+  resumable: true,
   steps: [
     {
       id: 'plan',

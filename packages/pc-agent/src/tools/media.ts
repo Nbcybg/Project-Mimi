@@ -747,6 +747,46 @@ export const mediaTransformTool = defineTool({
   },
 });
 
+export const mediaMuxCoverTool = defineTool({
+  name: 'media_mux_cover',
+  description: 'Make an uploadable MP4 from an audio file and a cover image with ffmpeg. The source files are never changed.',
+  risk: 'write',
+  target: 'pc',
+  inputSchema: z.object({
+    audio: z.string().min(1),
+    cover: z.string().min(1),
+    output: z.string().min(1).describe('New .mp4 path'),
+  }),
+  summarize: (input) => `Mux ${path.basename(input.audio)} with cover`,
+  async execute(input, context) {
+    const audio = resolveAllowedPath(input.audio, context.allowedDirs);
+    const cover = resolveAllowedPath(input.cover, context.allowedDirs);
+    const output = resolveAllowedPath(input.output, context.allowedDirs);
+    const tools = await detectMediaTools();
+    requireTool(tools.ffmpeg, 'ffmpeg');
+    await fs.mkdir(path.dirname(output), { recursive: true });
+    const result = await runMedia(
+      'ffmpeg',
+      [
+        '-v', 'error',
+        '-loop', '1',
+        '-i', cover,
+        '-i', audio,
+        '-c:v', 'libx264',
+        '-tune', 'stillimage',
+        '-c:a', 'aac',
+        '-b:a', '192k',
+        '-shortest',
+        '-pix_fmt', 'yuv420p',
+        '-y', output,
+      ],
+      { cwd: path.dirname(audio), timeoutMs: 300_000, maxOutput: 2 * 1024 * 1024, ...(context.signal ? { signal: context.signal } : {}) },
+    );
+    if (result.exitCode !== 0) throw new Error(`ffmpeg could not mux the cover: ${result.output.trim() || `exit ${result.exitCode}`}`);
+    return JSON.stringify({ ok: true, output, summary: `Wrote ${output}` }, null, 2);
+  },
+});
+
 export const mediaTools = [
   mediaProbeTool,
   photoScanTool,
@@ -755,4 +795,5 @@ export const mediaTools = [
   photoVerifyTool,
   mediaContactSheetTool,
   mediaTransformTool,
+  mediaMuxCoverTool,
 ];

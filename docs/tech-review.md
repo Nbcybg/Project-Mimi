@@ -70,3 +70,12 @@
 - TaskRunner supplies the batch progress/pause/cancel/resume; photo scan enforces `max_cost_usd` before any vision step
 - Tests: `photo-pipeline.test.ts` with ffmpeg-generated fixtures (exact duplicate, blur, contact sheet, transform, apply/verify/undo); skipped when ffmpeg/ffprobe are absent
 - `npm run typecheck && npm test`
+
+## 9. Browser task layer / YouTube (Sprint 4)
+
+- `packages/pc-agent/src/browser/session.ts`: `upload` (DOM.getDocument/querySelector/setFileInputFiles), `focus`, `waitFor`; snapshot scans password/OTP/CAPTCHA and returns `handoff`
+- `packages/pc-agent/src/tools/browser.ts`: `browser_upload`, `browser_wait`, `browser_focus`, `browser_check`; upload path guard with `context.allowedDirs`
+- `packages/core/src/tasks/youtube-upload.ts`: validate/mux → confirm → open → handoff → upload → details → public publish gate → final button → verify URL → receipt (no undo)
+- session grant family `browser.task` covers open/upload/click/type/select/press/focus/wait
+- Tests: `browser-task.test.ts` (fake CDP upload/wait/focus/handoff), `youtube-upload.test.ts` (unlisted/public/login handoff with a scripted browser executor); real YouTube needs a manual run
+- `npm run typecheck && npm test`

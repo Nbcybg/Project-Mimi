@@ -44,6 +44,7 @@ export { isOrganizerReadOnly, organizeFilesTool, organizeTools, undoOrganizeTool
 export {
   detectMediaTools,
   mediaContactSheetTool,
+  mediaMuxCoverTool,
   mediaProbeTool,
   mediaTools,
   mediaTransformTool,

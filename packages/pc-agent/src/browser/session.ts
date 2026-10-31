@@ -52,6 +52,11 @@ export interface PageItem {
   disabled?: boolean;
 }
 
+export interface PageHandoff {
+  kind: 'login' | '2fa' | 'captcha';
+  detail: string;
+}
+
 export interface PageSnapshot {
   url: string;
   title: string;
@@ -59,6 +64,8 @@ export interface PageSnapshot {
   truncated: boolean;
   items: PageItem[];
   scroll: { y: number; height: number; view: number };
+  /** Set when the page needs the user: a password, a one-time code or a CAPTCHA. */
+  handoff?: PageHandoff;
 }
 
 export interface TabInfo {
@@ -96,9 +103,22 @@ const SNAPSHOT_SCRIPT = `(() => {
     });
   }
   const text = ((document.body && document.body.innerText) || '').replace(/\\n{3,}/g, '\\n\\n').trim();
+  const lower = text.toLowerCase();
+  const password = [...document.querySelectorAll('input[type=password]')].some(shown);
+  const captcha = /recaptcha|hcaptcha|captcha|cf-turnstile/i.test(lower) ||
+    [...document.querySelectorAll('iframe')].some((frame) => /recaptcha|hcaptcha|captcha/i.test(String(frame.src)));
+  const twoFactor = /verification code|one-time code|two-factor|2fa|authenticator/i.test(lower);
+  const handoff = captcha
+    ? { kind: 'captcha', detail: 'The page shows a CAPTCHA. The user must solve it in the browser window.' }
+    : twoFactor
+      ? { kind: '2fa', detail: 'The page asks for a one-time code. The user must enter it in the browser window.' }
+      : password
+        ? { kind: 'login', detail: 'The page asks for a password. The user must sign in in the browser window.' }
+        : undefined;
   return JSON.stringify({
     url: location.href, title: document.title, text: text.slice(0, MAX_TEXT), truncated: text.length > MAX_TEXT, items,
     scroll: { y: Math.round(scrollY), height: document.documentElement.scrollHeight, view: innerHeight },
+    ...(handoff ? { handoff } : {}),
   });
 })()`;
 
@@ -324,6 +344,55 @@ export class BrowserSession {
     await this.call('Input.insertText', { text });
     if (options.submit) await this.pressKey('Enter');
     return this.settle();
+  }
+
+  /** Puts files into a file input. The caller has already checked the path allowlist. */
+  async upload(ref: string, files: string[]): Promise<{ url: string; title: string; newTab: boolean; files: number }> {
+    await this.call('DOM.enable');
+    const target = await this.find(ref);
+    if (target.tag !== 'input' || target.type !== 'file') {
+      throw new Error(`${ref} is a ${target.tag}${target.type ? `(${target.type})` : ''}, not a file input. Take a new snapshot and use the input(file) ref.`);
+    }
+    const document = (await this.call('DOM.getDocument', { depth: -1 })) as { root: { nodeId: number } };
+    const found = (await this.call('DOM.querySelector', {
+      nodeId: document.root.nodeId,
+      selector: `[data-mimi-ref="${ref}"]`,
+    })) as { nodeId?: number };
+    if (!found.nodeId) throw new Error(`No file input ${ref} on the page now.`);
+    await this.call('DOM.setFileInputFiles', { nodeId: found.nodeId, files });
+    await this.evaluate(`(() => {
+      const el = document.querySelector('[data-mimi-ref="${ref}"]');
+      if (el) el.dispatchEvent(new Event('change', { bubbles: true }));
+    })()`);
+    return { ...(await this.settle()), files: files.length };
+  }
+
+  /** Focuses an element by ref (useful before pressing keys). */
+  async focus(ref: string): Promise<{ url: string; title: string; target: string }> {
+    const target = await this.find(ref);
+    await this.evaluate(`(() => { const el = document.querySelector('[data-mimi-ref="${ref}"]'); if (el) el.focus(); })()`);
+    const info = await this.evaluate<{ url: string; title: string }>('({ url: location.href, title: document.title })');
+    return { ...info, target: `${target.tag}${target.name ? ` "${target.name}"` : ''}` };
+  }
+
+  /** Polls until text/selector/url is visible, the timeout ends, or the page asks for the user. */
+  async waitFor(options: { text?: string; selector?: string; url?: string; timeoutMs: number; pollMs: number }): Promise<PageSnapshot> {
+    const deadline = Date.now() + options.timeoutMs;
+    while (true) {
+      const snapshot = await this.snapshot();
+      if (options.text && snapshot.text.includes(options.text)) return snapshot;
+      if (options.url && snapshot.url.includes(options.url)) return snapshot;
+      if (options.selector) {
+        const found = await this.evaluate<boolean>(`Boolean(document.querySelector(${JSON.stringify(options.selector)}))`);
+        if (found) return snapshot;
+      }
+      if (snapshot.handoff) return snapshot;
+      if (Date.now() >= deadline) {
+        const parts = [options.text ? `text "${options.text}"` : '', options.selector ? `selector "${options.selector}"` : '', options.url ? `URL "${options.url}"` : ''].filter(Boolean);
+        throw new Error(`Waited ${Math.round(options.timeoutMs / 1000)}s for ${parts.join(' or ') || 'the page'}, but it did not appear. Last page: ${snapshot.title || snapshot.url}`);
+      }
+      await this.sleep(options.pollMs);
+    }
   }
 
   async select(ref: string, value: string): Promise<{ url: string; title: string; newTab: boolean }> {

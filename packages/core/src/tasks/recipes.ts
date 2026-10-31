@@ -2,6 +2,7 @@ import type { TaskRecipeView } from '@mimi/shared';
 import { developerRecipe } from './developer.ts';
 import { fileOrganizerRecipe } from './file-organizer.ts';
 import { photoCullRecipe } from './photo-cull.ts';
+import { youtubeUploadRecipe } from './youtube-upload.ts';
 import type { TaskRecipe } from './types.ts';
 
 /** The recipes this build knows how to run. */
@@ -33,5 +34,9 @@ export class RecipeRegistry {
 }
 
 export function createDefaultRecipes(): RecipeRegistry {
-  return new RecipeRegistry().register(fileOrganizerRecipe).register(developerRecipe).register(photoCullRecipe);
+  return new RecipeRegistry()
+    .register(fileOrganizerRecipe)
+    .register(developerRecipe)
+    .register(photoCullRecipe)
+    .register(youtubeUploadRecipe);
 }

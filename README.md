@@ -44,6 +44,7 @@ PC agent ───────────────────────�
 - **Task ที่ตรวจสอบได้** — recipe แบบ deterministic, แผนก่อนลงมือ, อนุมัติครั้งเดียวทั้งงาน, ใบเสร็จ และ undo (เริ่มด้วย `file-organizer` ที่ย้ายไฟล์ตามชนิดโดยไม่ลบไฟล์)
 - **Workspace / Developer task** — ตรวจ repo, รันเทสต์ที่ fail, checkpoint, ให้ agent แก้โค้ด, รันเทสต์ซ้ำ, แสดง diff และ undo โดยไม่ commit/push/merge
 - **คัดรูป (Photo cull)** — หารูปซ้ำ/เบลอ, contact sheet, คัดลอก keep/reject ไปโฟลเดอร์ใหม่, vision แบบสุ่มตามงบ และ undo โดยต้นฉบับไม่ถูกแก้
+- **Browser task / YouTube** — อัปโหลดไฟล์ผ่าน CDP, รอข้อความ/selector/URL, handoff login/2FA/CAPTCHA ให้ผู้ใช้ทำเอง และ gate ก่อนเผยแพร่ public
 - **เบราว์เซอร์ในแอป (เดสก์ท็อป)** — Chromium ที่มากับแอป เก็บคุกกี้แยกโปรไฟล์ agent สั่งเปิดหน้า คลิก พิมพ์ และอ่านเนื้อหาผ่านเครื่องมือ `browser_*` ได้จริง
 - **แจ้งเตือน** — in-app, Web Push, กระดิ่ง, อีเมลเฝ้าดู และ widget บน Android
 - **หลายผู้ใช้** — โหมด gateway + core แยกต่อคน (แยก container/volume ต่อผู้ใช้)

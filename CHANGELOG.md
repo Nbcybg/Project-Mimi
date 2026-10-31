@@ -34,6 +34,10 @@
 - Media: `photo_scan`, `photo_apply`, `photo_undo`, `photo_verify`, `media_contact_sheet` and `media_transform`
   with ffmpeg/ffprobe detection, exact and perceptual duplicate grouping, blur scores, EXIF, a sampled vision
   budget (`max_cost_usd`), read-only originals and backup-safe undo; `photo-cull` task recipe.
+- Browser: `browser_upload` (CDP file inputs, allowed folders), `browser_wait`, `browser_focus` and
+  `browser_check`; login/OTP/CAPTCHA become a handoff instead of being bypassed.
+- YouTube: `youtube-upload` task recipe with optional audio+cover mux, metadata, a second confirmation for a
+  public publish, URL verification and a receipt; passwords are never typed.
 
 ### 0.7.7-prototype
 

@@ -129,6 +129,16 @@
 - contact sheet และ transform เขียนเฉพาะ output folder ใหม่
 - ยังเปิด: decoder ของ ffmpeg กับไฟล์ที่ถูกออกแบบมาโจมตี, การทดสอบกับไลบรารีรูปจริงบน macOS/Windows, และการจัดกลุ่ม near-duplicate ที่แม่นยำกว่านี้
 
+## 10. Browser task layer / YouTube (Sprint 4)
+
+- `browser_upload` ใช้ CDP `DOM.setFileInputFiles`; path ต้องอยู่ใน allowed folders และต้องเป็นไฟล์จริง
+- `browser_wait` และ `browser_focus` ทำงานบน session เดียวกับ browser tools เดิม; ทุก call ผ่าน queue เดียว
+- snapshot ตรวจ password field, OTP/2FA text และ CAPTCHA: ถ้าพบจะคืน `handoff` และเครื่องมือ upload จะไม่อัปโหลด; ไม่มีการพิมพ์รหัสผ่าน/OTP หรือแก้ CAPTCHA
+- YouTube recipe: validate file → confirm → open → handoff check → upload → metadata → public publish gate → verify URL; unlisted/private อนุมัติครั้งเดียว, public ต้องอนุมัติครั้งที่สอง
+- public publish เป็น irreversible action: gate บังคับ; ไม่มี undo สำหรับ upload
+- browser tools ยังเป็น third-party content (`untrustedInput`) และถูกแยกจาก shell ตามกฎเดิม เว้น browser ที่ผู้ใช้ดูหน้าต่าง
+- ยังเปิด: การทดสอบกับ YouTube จริง (UI เปลี่ยนบ่อย), CAPTCHA/2FA ทุกผู้ให้บริการ, และ selector ที่เปราะบาง; ต้อง manual test
+
 ## สิ่งที่ยังไม่ได้ตรวจ
 
 deploy จริงบน Railway (header `Host`, `*.railway.internal`, IPv6), Android จริง/FCM, iPhone, Apple Silicon, Windows,

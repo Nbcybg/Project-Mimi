@@ -41,6 +41,15 @@ const TOOL_FAMILIES: Record<string, string> = {
   photo_verify: 'media.photos',
   media_contact_sheet: 'media.photos',
   media_transform: 'media.photos',
+  media_mux_cover: 'media.photos',
+  browser_open: 'browser.task',
+  browser_upload: 'browser.task',
+  browser_click: 'browser.task',
+  browser_type: 'browser.task',
+  browser_select: 'browser.task',
+  browser_press: 'browser.task',
+  browser_focus: 'browser.task',
+  browser_wait: 'browser.task',
 };
 
 export function toolFamily(tool: string): string {

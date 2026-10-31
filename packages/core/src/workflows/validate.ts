@@ -18,7 +18,12 @@ export function validateWorkflowNode(node: WorkflowNode, agent: string, context:
   if ((node.type === 'agent' || node.type === 'agent_call') && !isDynamic(node.config.agent) && !context.hasAgent(String(node.config.agent ?? ''))) {
     throw new Error(`${where}: agent "${String(node.config.agent ?? '')}" does not exist.`);
   }
-  if ((node.type === 'chat' || node.type === 'approval' || node.type === 'tool') && node.config.agent && !isDynamic(node.config.agent) && !context.hasAgent(String(node.config.agent))) {
+  if (
+    (node.type === 'chat' || node.type === 'notify' || node.type === 'approval' || node.type === 'tool') &&
+    node.config.agent &&
+    !isDynamic(node.config.agent) &&
+    !context.hasAgent(String(node.config.agent))
+  ) {
     throw new Error(`${where}: agent "${String(node.config.agent)}" does not exist.`);
   }
   if (node.type === 'tool' && !isDynamic(node.config.tool) && !context.hasTool(String(node.config.tool ?? ''))) {

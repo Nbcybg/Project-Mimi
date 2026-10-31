@@ -1,4 +1,4 @@
-import { NODE_TYPES, type CustomToolSpec, type ToolPreset, type WorkflowView } from '@mimi/shared';
+import { NODE_TYPES, type CustomToolSpec, type OAuthAccountView, type ToolPreset, type WorkflowView } from '@mimi/shared';
 import { z } from 'zod';
 import { MODEL_KEYS } from '../app/app-settings.ts';
 import type { AgentCatalog, AgentDefinition } from '../agents/loader.ts';
@@ -35,6 +35,10 @@ export interface OverseerToolDeps {
   triggerPool: TriggerPool;
   workflowRuns: WorkflowRunStore;
   versions: VersionStore;
+  /** OAuth accounts (views never contain a client secret). */
+  oauthAccounts?(): OAuthAccountView[];
+  /** Starts one account's sign-in and returns the page the user must open. */
+  startOAuth?(accountId: string): Promise<{ url: string }>;
   /** Tool call counts and failures, for run_log. */
   toolStats?(days: number): ToolStat[];
   /** Records a tool call (tool_test included) for the Overseer's run_log. */
@@ -380,9 +384,9 @@ export function createOverseerTools(deps: OverseerToolDeps): ToolDefinition<any>
         customNodes: deps.nodes.list().map((node) => ({ name: node.name, label: node.label, description: node.description })),
         secrets: deps.secrets.names(),
         rules: {
-          reservedAgent: OVERSEER_NAME,
+          reservedAgent: `${OVERSEER_NAME} may be updated, never renamed or duplicated`,
           drive: 'Google Drive is read-only here (drive_search). Writing/uploading needs a new OAuth scope and the user\'s consent.',
-          workflows: 'Workflows are always saved disabled; the user enables them.',
+          workflows: 'workflow_save always lands disabled; workflow_enable is a separate write step the user approves.',
           secrets: 'Only names are shown. Put values in the vault; use {{secret.NAME}} in tools.',
           errors: 'Chat errors, tool_test and agent_message carry a stable code (E-AUTH-401, E-RATE-429, E-CONTEXT, E-NETWORK, E-CONFIG, E-BUDGET, ...). Call error_codes when the user reports one; it explains the cause and the next step.',
           nodes: 'Custom nodes are files under user/nodes. Each one is a real node type "custom:<name>" (and still works through the "plugin" node). Create them with node_save; they may read items and $config and must return items. Never put secrets in a custom node.',
@@ -485,13 +489,22 @@ export function createOverseerTools(deps: OverseerToolDeps): ToolDefinition<any>
     summarize: (input) => `Save agent ${input.name}`,
     async execute(input) {
       const name = input.name.trim();
-      if (name === OVERSEER_NAME) throw new Error('"overseer" is reserved for the AI Overseer.');
       const exists = deps.agents.names().includes(name);
+      if (name === OVERSEER_NAME && !exists) throw new Error('The AI Overseer is created by the app; it cannot be created here.');
       const current = exists ? deps.agents.get(name) : undefined;
       if (!exists && !input.systemPrompt?.trim()) throw new Error('A new agent needs a systemPrompt.');
 
       const tools = applyList(current?.tools ?? [], input.tools, input.addTools, input.removeTools);
       deps.tools.select(tools);
+      if (name === OVERSEER_NAME) {
+        // The built-in capabilities already include run_shell; keep the untrusted/shell rule.
+        for (const tool of tools) {
+          const definition = deps.tools.get(tool);
+          if (definition?.untrustedInput && !definition.allowWithShell) {
+            throw new Error(`The Overseer always has run_shell, so "${tool}" (third-party content) cannot be added to it. Use browser_open for web pages.`);
+          }
+        }
+      }
 
       const knownSkills = deps.skills().map((skill) => skill.name);
       const skills = applyList(current?.skills ?? [], input.skills, input.addSkills, input.removeSkills);
@@ -1296,6 +1309,84 @@ export function createOverseerTools(deps: OverseerToolDeps): ToolDefinition<any>
     },
   });
 
+  const secretSet: ToolDefinition<any> = defineTool({
+    name: 'secret_set',
+    description:
+      'Store one value in the machine\'s vault under a secret name. The value is written once and is never shown again; use the name as {{secret.NAME}} in tools, MCP servers and workflows. Ask the user to paste the value only when they are ready for it to be stored.',
+    risk: 'write',
+    target: 'core',
+    inputSchema: z.object({
+      name: z.string().min(1).describe('Secret name, e.g. SERPER_API_KEY'),
+      value: z.string().min(1).describe('The value to store; it is hidden from permission cards and chat history'),
+    }),
+    summarize: (input) => `Store vault secret "${input.name}" (value hidden)`,
+    redactInput: (input) => ({ ...input, value: '[redacted]' }),
+    async execute(input) {
+      const name = input.name.trim();
+      deps.secrets.set(name, input.value);
+      return `Stored secret "${name}" in the vault. Its value is never shown again; reference it as {{secret.${name}}}.`;
+    },
+  });
+
+  const secretDelete: ToolDefinition<any> = defineTool({
+    name: 'secret_delete',
+    description: 'Remove one secret from the vault. Tools that reference it will fail until a new value is stored.',
+    risk: 'write',
+    target: 'core',
+    inputSchema: z.object({ name: z.string().min(1) }),
+    summarize: (input) => `Delete vault secret "${input.name}"`,
+    async execute(input) {
+      const name = input.name.trim();
+      if (!deps.secrets.names().includes(name)) throw new Error(`No secret "${name}" in the vault.`);
+      deps.secrets.remove(name);
+      return `Removed secret "${name}" from the vault.`;
+    },
+  });
+
+  const oauthAccounts: ToolDefinition<any> = defineTool({
+    name: 'oauth_accounts',
+    description: 'List the Google and Microsoft accounts with whether each is connected. Client secrets are never returned.',
+    risk: 'read',
+    target: 'core',
+    inputSchema: z.object({ service: z.enum(['google', 'microsoft']).optional() }),
+    summarize: (input) => `List OAuth accounts${input.service ? ` (${input.service})` : ''}`,
+    async execute(input) {
+      const accounts = (deps.oauthAccounts?.() ?? []).filter((account) => !input.service || account.service === input.service);
+      return accounts.length === 0 ? 'No OAuth accounts yet. Add one in Settings > Accounts first.' : pretty(accounts);
+    },
+  });
+
+  const oauthStart: ToolDefinition<any> = defineTool({
+    name: 'oauth_start',
+    description:
+      'Start the sign-in of a Google or Microsoft account and return the page the user must open. The user still types the password and approves the consent screen; when they finish, the account is connected for every tool and workflow.',
+    risk: 'write',
+    target: 'core',
+    inputSchema: z.object({
+      account: z.string().optional().describe('Account id or name; omit for the default account of the service'),
+      service: z.enum(['google', 'microsoft']).optional().describe('Which service when no account is named'),
+    }),
+    summarize: (input) => `Start OAuth sign-in${input.account ? ` for ${input.account}` : input.service ? ` for ${input.service}` : ''}`,
+    async execute(input) {
+      if (!deps.startOAuth || !deps.oauthAccounts) throw new Error('OAuth sign-in is not available in this build.');
+      const accounts = deps.oauthAccounts();
+      const wanted = input.account?.trim().toLowerCase();
+      const account = wanted
+        ? accounts.find((entry) => entry.id.toLowerCase() === wanted || entry.name.toLowerCase() === wanted)
+        : accounts.find((entry) => entry.default && (!input.service || entry.service === input.service)) ??
+          accounts.find((entry) => !input.service || entry.service === input.service);
+      if (!account) {
+        throw new Error(
+          wanted
+            ? `No OAuth account "${input.account}". Call oauth_accounts to see the ids.`
+            : `No ${input.service ?? 'Google or Microsoft'} account is set up. Add one in Settings > Accounts first.`,
+        );
+      }
+      const { url } = await deps.startOAuth(account.id);
+      return `Open this link, sign in as ${account.name} (${account.service}) and approve the consent screen:\n${url}\nThe account is connected automatically when the browser comes back.`;
+    },
+  });
+
   const configDiffTool: ToolDefinition<any> = defineTool({
     name: 'config_diff',
     description:
@@ -1455,6 +1546,10 @@ export function createOverseerTools(deps: OverseerToolDeps): ToolDefinition<any>
     workflowRuns,
     runLog,
     secretAudit,
+    secretSet,
+    secretDelete,
+    oauthAccounts,
+    oauthStart,
     configDiffTool,
     configRollback,
     errorCodes,

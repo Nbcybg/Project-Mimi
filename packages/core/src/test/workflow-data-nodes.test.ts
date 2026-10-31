@@ -191,6 +191,29 @@ test('assert, json_schema, debug, custom:<name> and $secret work in a node', asy
   assert.equal(secret.outputs.main![0]!.json.token, 's3cret');
 });
 
+test('notify node: sends through notify_user, redacts vault values and passes items on', async () => {
+  const sent: Array<{ agent: string; text: string; title?: string }> = [];
+  const result = await run(
+    node('notify', { title: 'Hi {{ $json.name }}', text: 'Token {{ $secret.API_TOKEN }} for {{ $json.name }}' }),
+    [{ json: { name: 'Mimi' } }],
+    deps({
+      secretNames: () => ['API_TOKEN'],
+      secret: (name) => (name === 'API_TOKEN' ? 'secret-value-1234' : undefined),
+      notify: (agent, text, title) => {
+        sent.push({ agent, text, ...(title ? { title } : {}) });
+        return { chatId: 7 };
+      },
+    }),
+  );
+  assert.equal(result.ok, true, result.error);
+  assert.deepEqual(sent, [{ agent: 'mimi', text: 'Token [redacted] for Mimi', title: 'Hi Mimi' }]);
+  assert.deepEqual(result.outputs.main![0]!.json, { name: 'Mimi', notified: true, chatId: 7 });
+
+  const empty = await run(node('notify', {}), [{ json: {} }], deps({ notify: () => ({}) }));
+  assert.equal(empty.ok, false);
+  assert.match(empty.error ?? '', /message is empty/);
+});
+
 test('core: extract_file reads a PDF with the agent vision model', async () => {
   const target = await makeTestCore({ small: replyingModel([{ text: 'ใบเสร็จ: 99 บาท' }]) });
   const folder = target.core.deps.allowedDirs[0]!;

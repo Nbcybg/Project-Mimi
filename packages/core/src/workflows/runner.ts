@@ -66,6 +66,8 @@ export interface WorkflowRunnerDeps {
    * a tool's "attachment id: …" answer) or paths in the allowed folders. Throws when one is not found.
    */
   speak(agentName: string | null, text: string, files?: string[]): void;
+  /** Posts into the agent's chat and raises an inbox notification (the `notify` node). */
+  notify?(agentName: string, text: string, title?: string): { chatId?: number };
   mail: {
     list(
       source: 'google' | 'microsoft' | 'imap' | 'pop3',
@@ -580,6 +582,21 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
         const text = asText(config.text).trim() || (files.length > 0 ? '' : asText(item.json.text));
         if (text || files.length > 0) deps.speak(agent, text, files);
         out.push(item);
+      }
+      return { main: out };
+    }
+    case 'notify': {
+      if (!deps.notify) throw new Error('notify node: notifications are not available here');
+      const out: FlowItem[] = [];
+      const known = secretValuesOf(deps);
+      for (const [index, item] of items.entries()) {
+        const config = (await resolveValue(node.config, contextAt(ctx, item, index, items))) as { agent?: JsonValue; title?: JsonValue; text?: JsonValue };
+        const text = asText(config.text).trim() || asText(item.json.text).trim();
+        if (!text) throw new Error('notify node: the message is empty');
+        const title = asText(config.title).trim();
+        const agent = asText(config.agent) || workflow.agent;
+        const sent = deps.notify(agent, redactText(text, known), title ? redactText(title, known) : undefined);
+        out.push({ json: { ...item.json, notified: true, ...(sent.chatId !== undefined ? { chatId: sent.chatId } : {}) } });
       }
       return { main: out };
     }

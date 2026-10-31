@@ -59,7 +59,7 @@ test('author tools: schema names triggers, node types, tools and rules', async (
     assert.match(text, /"form"/);
     assert.match(text, /"http"/);
     assert.match(text, /"web_search"/);
-    assert.match(text, /Saved workflows are always disabled/);
+    assert.match(text, /workflow_save always saves disabled/);
     const onlyHttp = String(await tool('workflow_schema').execute({ nodeType: 'http' }, context));
     assert.match(onlyHttp, /"type": "http"/);
     assert.doesNotMatch(onlyHttp, /"type": "set"/);
@@ -84,6 +84,25 @@ test('author tools: save always lands disabled, keeps the webhook key, and signa
     assert.equal(second.title, 'Daily report v2');
     assert.equal(second.webhookKey, first.webhookKey, 'replacing a workflow keeps its URL');
     assert.deepEqual(changed, ['mimi/daily-report', 'mimi/daily-report']);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('author tools: enabling is a separate write step after saving', async () => {
+  const { root, workflows, changed, tool, context } = setup();
+  try {
+    await tool('workflow_save').execute({ workflow: draft }, context);
+    assert.equal(workflows.get('mimi', 'daily-report')!.enabled, false);
+
+    const enabled = await tool('workflow_enable').execute({ name: 'daily-report' }, context);
+    assert.match(String(enabled), /Enabled workflow "daily-report"/);
+    assert.equal(workflows.get('mimi', 'daily-report')!.enabled, true);
+    assert.equal(changed.at(-1), 'mimi/daily-report');
+
+    await tool('workflow_disable').execute({ name: 'daily-report' }, context);
+    assert.equal(workflows.get('mimi', 'daily-report')!.enabled, false);
+    assert.match(String(await tool('workflow_schema').execute({}, context)), /workflow_enable/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

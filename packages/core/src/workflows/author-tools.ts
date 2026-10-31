@@ -116,6 +116,16 @@ function saveView(deps: WorkflowAuthorDeps, input: WorkflowInput | string, agent
   return `Saved workflow "${saved.name}" for agent "${saved.agent}" (${saved.nodes.length} nodes). It is disabled until the user reviews and enables it in Workflows.`;
 }
 
+/** Enables or disables a saved workflow; saving always starts disabled, this is the second step. */
+function setEnabled(deps: WorkflowAuthorDeps, input: { name: string; agent?: string }, enabled: boolean): string {
+  const agent = ownerOf(deps, input.agent);
+  const view = ownWorkflow(deps, input.name, agent);
+  if (deps.versions) deps.versions.save('workflow', `${agent}/${view.name}`, workflowSnapshot(view));
+  deps.workflows.save({ ...view, enabled });
+  deps.changed(`${agent}/${view.name}`);
+  return `${enabled ? 'Enabled' : 'Disabled'} workflow "${view.name}" for agent "${agent}".${enabled ? ' The user approved this step; its trigger runs from now on.' : ''}`;
+}
+
 /** Tools an agent uses to inspect, write and test its own workflows. */
 export function createWorkflowAuthorTools(deps: WorkflowAuthorDeps): ToolDefinition<any>[] {
   const schema: ToolDefinition<any> = defineTool({
@@ -154,7 +164,8 @@ export function createWorkflowAuthorTools(deps: WorkflowAuthorDeps): ToolDefinit
             links: 'Each node links outputs to node ids, e.g. {"main":["next"]}; if/switch use true/false/case0/fallback; links must not point at unknown or unreachable nodes.',
             expressions: 'Strings may use {{ $json.field }}, {{ $node["Title"].json.field }}, {{ $trigger.json.field }}, {{ $vars.name }}, {{ $execution.id }}, {{ $today }}, {{ $now }}. Vault values are available as {{ $secret.NAME }} in every node; never write the value itself.',
             trigger: 'Pick a trigger from the trigger list and put its settings in trigger.config. A manual trigger is best for testing.',
-            safety: 'Saved workflows are always disabled. Use workflow_run to test; the user must review and enable it.',
+            safety:
+              'workflow_save always saves disabled. Use workflow_run to test; after the user reviews, workflow_enable is a separate write step that needs their approval. workflow_disable pauses one.',
           },
           tools: deps.tools().map((tool) => ({
             name: tool.name,
@@ -245,7 +256,7 @@ export function createWorkflowAuthorTools(deps: WorkflowAuthorDeps): ToolDefinit
   const save: ToolDefinition<any> = defineTool({
     name: 'workflow_save',
     description:
-      'Create or replace a workflow. Always saves disabled; the user enables it after reviewing. Include every node and link in the full workflow object.',
+      'Create or replace a workflow. Always saves disabled; after the user reviews, call workflow_enable as a separate approved step. Include every node and link in the full workflow object.',
     risk: 'write',
     target: 'core',
     inputSchema: z.object({ workflow: z.union([workflowInput, z.string()]), agent: agentInput }),
@@ -259,6 +270,31 @@ export function createWorkflowAuthorTools(deps: WorkflowAuthorDeps): ToolDefinit
     },
     async execute(input) {
       return saveView(deps, input.workflow, ownerOf(deps, input.agent));
+    },
+  });
+
+  const enable: ToolDefinition<any> = defineTool({
+    name: 'workflow_enable',
+    description:
+      'Enable a saved workflow after the user has reviewed it, so its trigger runs. This is a separate write step: workflow_save always lands disabled and the user must approve enabling.',
+    risk: 'write',
+    target: 'core',
+    inputSchema: z.object({ name: z.string().min(1), agent: agentInput }),
+    summarize: (input) => `Enable workflow ${input.name}`,
+    async execute(input) {
+      return setEnabled(deps, input, true);
+    },
+  });
+
+  const disable: ToolDefinition<any> = defineTool({
+    name: 'workflow_disable',
+    description: 'Disable a workflow so its trigger stops running. Use it when the user asks to pause an automation.',
+    risk: 'write',
+    target: 'core',
+    inputSchema: z.object({ name: z.string().min(1), agent: agentInput }),
+    summarize: (input) => `Disable workflow ${input.name}`,
+    async execute(input) {
+      return setEnabled(deps, input, false);
     },
   });
 
@@ -323,5 +359,5 @@ export function createWorkflowAuthorTools(deps: WorkflowAuthorDeps): ToolDefinit
     },
   });
 
-  return [schema, list, get, validate, save, remove, run];
+  return [schema, list, get, validate, save, enable, disable, remove, run];
 }

@@ -2,14 +2,14 @@
 
 ## สถานะ
 
-- งานทั้งหมดในรอบนี้ยัง **ไม่ commit**; working tree มี 93 ไฟล์ที่แก้/เพิ่ม
 - Typecheck ผ่านทั้ง `shared`, `pc-agent`, `core`
-- Full test suite ผ่าน **679 tests**
+- Full test suite ผ่าน **683 tests**
 - UI smoke test ผ่าน 7/7 ในรอบก่อน (Settings project roots + always grants, agent permissions/lazy, MCP `sse`,
   custom node multi-output, plan/todo tool row) — รอบนี้ยังไม่ได้ smoke test permission matrix/per-agent grants
 - DB schema ล่าสุด: **version 23** (`023-tool-calls.sql`)
 - รอบล่าสุด: run_log coverage, MCP reconnect/backoff, config rollback (skill/preset/workflow),
-  secret redaction, git secret-file guard, permission matrix + per-agent always grants
+  secret redaction, git secret-file guard, permission matrix + per-agent always grants,
+  Overseer ชั้น 1 (machine/web tools, mail/notify, cron, vault, OAuth, workflow enable, self-edit, notify node)
 
 ## ทำเสร็จแล้ว
 
@@ -71,6 +71,20 @@
   - `$secret.NAME` ใช้ได้ในทุก expression และ code node
   - `try/catch`/retry เดิมใช้ `onError` + `retries`; pin/mock เดิมใช้ `pinned`
 
+### Overseer ชั้น 1
+
+- Machine/web: `read_file`, `run_shell` / `shell_output` / `shell_stop`,
+  `browser_open` / `browser_snapshot` / `browser_check` / `browser_screenshot` / `browser_wait` / `browser_close`,
+  `computer_screenshot` (browser tools เป็นข้อยกเว้นที่อยู่กับ shell ได้)
+- ติดต่อผู้ใช้: `notify_user`, `gmail_send`, `outlook_send`, `smtp_send`
+- ตั้งเวลาให้ตัวเอง/agent อื่น: `create_trigger`, `list_triggers`, `cancel_trigger`, `update_trigger`
+- Vault: `secret_set` / `secret_delete`; ค่า secret ถูกซ่อนจาก permission card, chat tool row และ history
+- OAuth: `oauth_accounts` / `oauth_start` (ผู้ใช้ยังกรอกรหัสและกด consent เอง); core รับ receiver จาก server
+- Workflow: `workflow_enable` / `workflow_disable` เป็นขั้นแยกหลัง `workflow_save` และต้องผ่าน approval
+- แก้ agent `overseer` ได้ (model/budget/prompt/tools) แต่สร้างใหม่/เปลี่ยนชื่อไม่ได้; กันการเพิ่ม `web_search`
+  เพราะมี `run_shell` อยู่แล้ว
+- Workflow node ใหม่: `notify` (notification + โพสต์ในแชต, redact secret)
+
 ### Integrations
 
 - Google Calendar: `calendar_update`, `calendar_delete`
@@ -122,16 +136,9 @@
 - PDF แก้ไฟล์เดิมในที่, ตัดต่อรูป/วิดีโอขั้นสูง (native PDF/รูป/วิดีโอทำได้แต่เขียนไฟล์ใหม่เท่านั้น)
 - LINE/Telegram ต้องมี token ( connector มีอยู่แล้วถ้าเชื่อมบัญชี )
 
-### Overseer ชั้น 1 ที่ยังไม่มี
+### Overseer ชั้น 1
 
-- `run_shell`, `read_file`, เปิดเว็บ/ค้นเว็บ, ถ่ายจอ
-- ส่งเมล/ข้อความ/แจ้งเตือน
-- ตั้ง cron ให้ตัวเอง
-- เขียนค่า secret ลง vault (เห็นแค่ชื่อ)
-- ทำ OAuth แทนผู้ใช้
-- เปิด workflow (ยังบังคับ disabled)
-- แตะ agent `overseer`
-- เพิ่ม node type นอกเหนือ `custom:<name>`
+ทำครบแล้ว (ดูหัวข้อ "Overseer ชั้น 1" ด้านบน) เหลือเพียง UI smoke test ของหน้าจอใหม่
 
 ## ตรวจสอบ
 
@@ -155,6 +162,6 @@ npm test
 
 1. อ่าน `HANDOFF.md` นี้
 2. `git status` และ `git diff --stat`
-3. งานในลิสต์เดิมทำครบแล้ว (679 tests); ต่อไปเลือกจาก **Layer 2** หรือ **Overseer ชั้น 1** ด้านบน
+3. งานในลิสต์เดิมและ Overseer ชั้น 1 ทำครบแล้ว (683 tests); ต่อไปเหลือ **Layer 2** และ UI smoke test
 4. ก่อนแก้ อย่าลืมว่า DB schema เป็น 23 และเทสต์บางตัวผูก version นี้
-5. ห้าม commit จนกว่าผู้ใช้จะสั่ง
+5. commit ได้ตามที่ผู้ใช้สั่ง; ตรวจ `git log --oneline` ก่อนเริ่มงานใหม่

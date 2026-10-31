@@ -231,6 +231,19 @@ export function makeHarness(model: MockLanguageModelV4, options: HarnessOptions 
       return `echo: ${input.text}`;
     },
   });
+  const sensitive = defineTool({
+    name: 'sensitive',
+    description: 'Pretend to store a value that must stay out of the transcript',
+    risk: 'read',
+    target: 'core',
+    inputSchema: z.object({ text: z.string() }),
+    summarize: () => 'Store a sensitive value (hidden)',
+    redactInput: (input) => ({ ...input, text: '[redacted]' }),
+    async execute(input) {
+      executed.push({ tool: 'sensitive', input });
+      return `stored ${input.text.length} characters`;
+    },
+  });
   const danger = defineTool({
     name: 'danger',
     description: 'Pretend to change something',
@@ -254,7 +267,7 @@ export function makeHarness(model: MockLanguageModelV4, options: HarnessOptions 
       memory,
       usage: new UsageLogger(db),
       models: fakeModels({ ...options, chat: model }),
-      tools: new ToolRegistry().register(echo, danger, ...createMemoryTools(memory, messages)),
+      tools: new ToolRegistry().register(echo, danger, sensitive, ...createMemoryTools(memory, messages)),
       executor: new LocalExecutor(),
       gate: new PermissionGate(broker, { timeoutMs: options.permissionTimeoutMs ?? 1_000 }),
       agentPermissions: () => options.agentPermissions,

@@ -12,6 +12,7 @@ const NODE_TYPES = [
   'agent',
   'agent_call',
   'chat',
+  'notify',
   'if',
   'switch',
   'set',

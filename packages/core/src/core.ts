@@ -35,6 +35,7 @@ import { ThreadRepo } from './db/thread-repo.ts';
 import { GoogleAuth } from './google/auth.ts';
 import { gmailListUnread, gmailMarkRead } from './google/tools.ts';
 import { OAuthAccounts } from './oauth/accounts.ts';
+import type { ReceiverFactory } from './oauth/callback.ts';
 import { ConnectorConnections } from './oauth/connections.ts';
 import { type AgentLoopDeps, runAgent, type RunInput } from './loop/agent-loop.ts';
 import { buildPromptVars } from './loop/prompt-vars.ts';
@@ -135,6 +136,8 @@ export interface CoreListeners {
   nodesChanged?: () => void;
   /** A skill file was added, changed or removed. */
   skillsChanged?: () => void;
+  /** An OAuth sign-in finished (the account now has a fresh token). */
+  oauthChanged?: () => void;
   /** An agent asked the Mimiamp player to do something; returns how many apps were told. */
   mimiampCommand?: (command: MimiampCommand) => number;
 }
@@ -246,6 +249,10 @@ export interface Core {
   microsoft: MicrosoftAuth;
   /** Every OAuth account: list, add, connect, remove, choose the default. */
   oauth: OAuthAccounts;
+  /** The server's hosted OAuth callback receiver, set after start; absent on a computer. */
+  setOAuthReceiver(receiver?: ReceiverFactory): void;
+  /** Starts one account's sign-in and returns the URL the user has to open. */
+  startOAuth(accountId: string): Promise<{ url: string }>;
   /** Native connector credentials (API key, bot token, PAT and OAuth2 refresh). */
   connections: ConnectorConnections;
   compactor: Compactor;
@@ -435,6 +442,21 @@ export async function createCore(
   const triggerSync = triggerFiles.reconcile(triggers);
   const mesh = new MeshRouter({ db, agents, messages, settings: settings.mesh });
   const listeners: CoreListeners = {};
+  // Filled by the server when it runs on a public address; a computer uses a loopback port.
+  let oauthReceiver: ReceiverFactory | undefined;
+
+  async function startOAuthAccount(accountId: string): Promise<{ url: string }> {
+    const flow = await oauth.startConnect(accountId, oauthReceiver);
+    // The user finishes in a browser; keep the receiver alive and refresh the screens after.
+    flow.done.then(
+      () => {
+        oauth.reset(accountId);
+        listeners.oauthChanged?.();
+      },
+      (error: Error) => console.error(`oauth ${accountId} failed: ${error.message}`),
+    );
+    return { url: flow.url };
+  }
 
   // The persona is read once per start. Skills are read on demand, so one added in the app
   // works right away; a file broken by hand must not stop every agent, so the last good
@@ -528,15 +550,18 @@ export async function createCore(
   // Assigned just below; tool calls only happen after this core is built.
   let mailWatch: MailWatch;
 
+  /** Posts into an agent's chat and raises one inbox notification; shared by tools and workflows. */
+  const notifyUser = (agent: string, message: string, title?: string): { chatId?: number } => {
+    const { chatId } = postAs(agent, message, `notify:${randomUUID()}`);
+    const name = agents.names().includes(agent) ? agents.get(agent).displayName || agent : agent;
+    notify({ kind: 'message', title: title ?? name, body: message, agent, ...(chatId !== undefined ? { chatId } : {}) });
+    if (chatId !== undefined) listeners.chatChanged?.(chatId);
+    return { chatId };
+  };
+
   const tools = createToolRegistry({
     mail: () => mailWatch,
-    notifyUser: (agent, message, title) => {
-      const { chatId } = postAs(agent, message, `notify:${randomUUID()}`);
-      const name = agents.names().includes(agent) ? agents.get(agent).displayName || agent : agent;
-      notify({ kind: 'message', title: title ?? name, body: message, agent, ...(chatId !== undefined ? { chatId } : {}) });
-      if (chatId !== undefined) listeners.chatChanged?.(chatId);
-      return { chatId };
-    },
+    notifyUser,
     gallery,
     knowledge,
     profile,
@@ -802,6 +827,8 @@ export async function createCore(
               versions: overseerVersions,
               toolStats: (days) => usage.toolStats(days),
               logTool: (record) => usage.logToolCall(record),
+              oauthAccounts: () => oauth.views(),
+              startOAuth: (accountId) => startOAuthAccount(accountId),
               timezone: config.timezone,
               allowedDirs: config.allowedDirs,
               projectRoots: config.projectRoots,
@@ -896,6 +923,35 @@ export async function createCore(
         run: (name, input) => runOwnedWorkflow(agent.name, name, input),
         changed: workflowChanged,
       });
+      // The setup helper works on the machine itself: read files, run commands, look at the
+      // web, take a screenshot, notify and schedule itself. Browser tools are the shell-safe
+      // exception, so the Overseer can use them next to run_shell.
+      const overseerCapabilities =
+        agent.name === OVERSEER_NAME
+          ? [
+              'read_file',
+              'run_shell',
+              'shell_output',
+              'shell_stop',
+              'browser_open',
+              'browser_snapshot',
+              'browser_check',
+              'browser_screenshot',
+              'browser_wait',
+              'browser_close',
+              'computer_screenshot',
+              'notify_user',
+              'gmail_send',
+              'outlook_send',
+              'smtp_send',
+              'create_trigger',
+              'list_triggers',
+              'cancel_trigger',
+              'update_trigger',
+            ]
+              .map((name) => toolPool.get(name))
+              .filter((tool): tool is NonNullable<typeof tool> => tool !== undefined)
+          : [];
       const taskTools = runInput.noTaskTools
         ? []
         : createTaskTools({
@@ -911,6 +967,7 @@ export async function createCore(
       return [
         ...taskTools,
         ...overseer,
+        ...overseerCapabilities,
         ...workTools,
         ...(own.length > 0 ? [createUseSkillTool(own, runSkill)] : []),
         ...flows,
@@ -981,6 +1038,7 @@ export async function createCore(
     runAgent: runWorkflowAgent,
     tool: (name) => toolPool.get(name),
     connector: connectors,
+    notify: notifyUser,
     speak: (agentName, text, files = []) => {
       const speaker = agentName ?? defaultAgentName() ?? 'system';
       // Resolved first: a missing file fails the node before anything is posted.
@@ -1759,6 +1817,10 @@ export async function createCore(
       return oauth.microsoft();
     },
     oauth,
+    setOAuthReceiver: (receiver) => {
+      oauthReceiver = receiver;
+    },
+    startOAuth: startOAuthAccount,
     connections,
     compactor,
     jobs,

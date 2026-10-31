@@ -395,6 +395,7 @@ export async function startServer(
   const publicUrl = publicBaseUrl(process.env);
   const hostedCallbacks = publicUrl ? new HostedCallbacks(publicUrl) : undefined;
   const oauthReceiver = hostedCallbacks?.receiver;
+  core.setOAuthReceiver(oauthReceiver);
 
   /** What the settings screen shows. Keys themselves are never sent back to a client. */
   const settingsView = (): SettingsView => {    const defaultAgent = core.defaultAgentName();
@@ -906,6 +907,10 @@ export async function startServer(
   };
   core.listeners.nodesChanged = () => {
     broadcast({ type: 'workflows', workflows: core.workflows.list(), pool: core.triggerPool.list(), nodeTypes: nodeTypesView(), customNodes: core.customNodes.names() });
+  };
+  core.listeners.oauthChanged = () => {
+    broadcast({ type: 'oauth-accounts', accounts: core.oauth.views() });
+    broadcast({ type: 'settings', settings: settingsView() });
   };
   core.listeners.skillsChanged = () => {
     broadcast({

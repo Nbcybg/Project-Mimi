@@ -84,8 +84,9 @@ test('overseer: created on first use, then authors agents, tools, presets and sk
     assert.equal(core.tools.get('vat7'), undefined);
     assert.ok(!core.agents.get('tim').tools.includes('vat7-main'));
 
-    // The reserved id cannot be created or renamed through the authoring tool.
-    await assert.rejects(() => run('agent_save', { name: OVERSEER_NAME, systemPrompt: 'nope' }), /reserved/);
+    // The reserved id can be updated in place, but not created or renamed.
+    await run('agent_save', { name: OVERSEER_NAME, description: 'Updated setup helper' });
+    assert.equal(core.agents.get(OVERSEER_NAME).description, 'Updated setup helper');
 
     // The skill delete path also cleans up agent references.
     await run('skill_delete', { name: 'tax-helper' });

@@ -197,6 +197,39 @@ test('overseer: skill, preset and workflow versions diff and roll back', async (
   }
 });
 
+test('overseer: machine tools, self-edit, vault, oauth and workflow enable are available', async () => {
+  const testCore = await makeTestCore();
+  try {
+    const { core, config } = testCore;
+    const overseer = ensureOverseer(config.agentsDir);
+    const tools = core.deps.extraTools?.(overseer, { agent: overseer }) ?? [];
+    const run = async (name: string, input: unknown) => {
+      const tool = tools.find((entry) => entry.name === name) as ToolDefinition<any> | undefined;
+      assert.ok(tool, `tool ${name}`);
+      return tool.execute(input, context);
+    };
+    const names = tools.map((tool) => tool.name);
+    for (const name of ['read_file', 'run_shell', 'browser_open', 'browser_screenshot', 'computer_screenshot', 'notify_user', 'create_trigger', 'secret_set', 'oauth_start', 'workflow_enable']) {
+      assert.ok(names.includes(name), `the Overseer has ${name}`);
+    }
+
+    await run('agent_save', { name: 'overseer', description: 'Updated helper' });
+    assert.equal(core.agents.get('overseer').description, 'Updated helper');
+    await assert.rejects(run('agent_save', { name: 'overseer', addTools: ['web_search'] }), /always has run_shell/);
+
+    const stored = String(await run('secret_set', { name: 'OVERSEER_TEST', value: 'supersecret123' }));
+    assert.doesNotMatch(stored, /supersecret123/);
+    assert.equal(core.secrets.get('OVERSEER_TEST'), 'supersecret123');
+    await run('secret_delete', { name: 'OVERSEER_TEST' });
+    assert.equal(core.secrets.get('OVERSEER_TEST'), undefined);
+
+    assert.match(String(await run('oauth_accounts', {})), /No OAuth accounts/);
+    await assert.rejects(run('oauth_start', {}), /No .*account/);
+  } finally {
+    await testCore.cleanup();
+  }
+});
+
 test('overseer: workflow_runs shows the newest run and its error state', async () => {
   const testCore = await makeTestCore();
   try {

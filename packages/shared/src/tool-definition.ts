@@ -39,6 +39,11 @@ export interface ToolDefinition<Input = unknown> extends ToolSpec {
   /** One line shown in permission prompts. */
   summarize(input: Input): string;
   /**
+   * What the user may see of the input: permission cards, chat tool-call rows and stored
+   * history. Use it for values that must not be kept in clear text (a secret).
+   */
+  redactInput?(input: Input): unknown;
+  /**
    * Returns the text handed back to the model. Throw to report a failure.
    * `settings` are the values of the preset this tool runs as, when there is one.
    */

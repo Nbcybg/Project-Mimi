@@ -117,6 +117,20 @@ test('tool call: runs the tool, feeds the result back, then answers', async () =
   assert.deepEqual(storedRoles(harness.db), ['user', 'assistant', 'tool', 'assistant']);
 });
 
+test('sensitive tool inputs are hidden from events and stored history', async () => {
+  const model = scriptedModel([toolStep('sensitive', { text: 'super-secret-value' }), textStep('done')]);
+  const harness = makeHarness(model);
+
+  const events = await collect(runAgent(harness.deps, { agent: makeAgent({ tools: ['sensitive'] }), userText: 'store it' }));
+
+  const call = eventsOf(events, 'tool-call')[0]!;
+  assert.deepEqual(call.call.input, { text: '[redacted]' });
+  assert.deepEqual(harness.executed, [{ tool: 'sensitive', input: { text: 'super-secret-value' } }]);
+  const row = harness.db.prepare(`SELECT content FROM messages WHERE role = 'assistant' ORDER BY id LIMIT 1`).get() as { content: string };
+  assert.doesNotMatch(row.content, /super-secret-value/);
+  assert.match(row.content, /\[redacted\]/);
+});
+
 test('lazy tools: tool_search loads a declared tool into the run', async () => {
   const model = scriptedModel([
     toolStep('tool_search', { query: 'echo' }),

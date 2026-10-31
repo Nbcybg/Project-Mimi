@@ -41,6 +41,25 @@ import {
   withCacheBreakpoints,
 } from './prompt-builder.ts';
 
+/** The call as the user may see it: a secret-bearing input is hidden before storage or display. */
+function redactedCall(call: ToolCall, tools: ToolDefinition[]): ToolCall {
+  const definition = tools.find((candidate) => candidate.name === call.name);
+  return definition?.redactInput ? { ...call, input: definition.redactInput(call.input) } : call;
+}
+
+/** The content of an assistant message with sensitive tool inputs hidden. */
+function redactedContent(content: unknown, tools: ToolDefinition[]): unknown {
+  if (!Array.isArray(content)) return content;
+  return content.map((part) => {
+    if (!part || typeof part !== 'object' || (part as { type?: unknown }).type !== 'tool-call') return part;
+    const call = part as { toolName?: unknown; input?: unknown };
+    if (typeof call.toolName !== 'string') return part;
+    const definition = tools.find((candidate) => candidate.name === call.toolName);
+    if (!definition?.redactInput) return part;
+    return { ...part, input: definition.redactInput(call.input) };
+  });
+}
+
 /** Supplies the agent-to-agent tools (`send_to`, `reply`) for a run. */
 export interface MeshToolProvider {
   toolsFor(agent: AgentDefinition, mesh: MeshContext | undefined): ToolDefinition<any>[];
@@ -189,7 +208,7 @@ async function* runToolCall(
   context: ToolContext,
 ): AsyncGenerator<AgentEvent, ToolResult> {
   const definition = tools.find((candidate) => candidate.name === call.name);
-  yield { type: 'tool-call', call, risk: definition?.risk ?? null };
+  yield { type: 'tool-call', call: redactedCall(call, tools), risk: definition?.risk ?? null };
 
   const finish = (ok: boolean, output: string): ToolResult => ({
     callId: call.id,
@@ -221,7 +240,7 @@ async function* runToolCall(
         agent: context.agent,
         tool: definition.name,
         risk: definition.risk,
-        input: parsed.data,
+        input: definition.redactInput ? definition.redactInput(parsed.data) : parsed.data,
         summary: definition.summarize(parsed.data),
       });
       yield { type: 'permission-request', request };
@@ -473,7 +492,8 @@ export async function* runAgent(deps: AgentLoopDeps, input: RunInput): AsyncGene
         const message: ModelMessage = clean.content === raw.content ? raw : ({ ...raw, content: clean.content } as ModelMessage);
         messages.push(message);
         if (message.role === 'system') continue;
-        const storedId = persist(message.role, message.content, undefined, clean.speech);
+        const storedContent = message.role === 'assistant' ? redactedContent(message.content, tools) : message.content;
+        const storedId = persist(message.role, storedContent as typeof message.content, undefined, clean.speech);
         // Files a tool of this round sends are shown under the message that called it.
         if (message.role === 'assistant') toolContext.messageId = storedId;
         if (message.role !== 'tool') continue;
@@ -532,7 +552,7 @@ export async function* runAgent(deps: AgentLoopDeps, input: RunInput): AsyncGene
           loadSearchedTools(result.output);
           continue;
         }
-        yield { type: 'tool-call', call, risk: null };
+        yield { type: 'tool-call', call: redactedCall(call, tools), risk: null };
         yield {
           type: 'tool-result',
           result: { callId: call.id, name: call.name, ok: false, output: rejection },

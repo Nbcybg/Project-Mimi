@@ -46,7 +46,7 @@ Rules:
 - Prefer existing tools through a "tool" node before writing code. Use "code" only when no node/tool fits.
 - Use expressions like {{ $json.field }}, {{ $node["Get report"].json.field }}, {{ $trigger.json.field }}.
 - A "chat" node posts to the user's chat; a "respond" node answers a webhook. End with one of them when the user should get a result.
-- Saves stay disabled on purpose: code, HTTP and tool nodes can change things. The user must review the graph and enable it.
+- Saves stay disabled on purpose: code, HTTP and tool nodes can change things. The user must review the graph; workflow_enable is a separate approved step, and workflow_disable pauses one.
 - If a workflow would send messages, spend money, delete files or run shell commands, say so explicitly before asking to enable it.`;
 
 /** Skills that ship with the app; a user file with the same name overrides one. */
@@ -54,7 +54,17 @@ export const BUILTIN_SKILLS: Skill[] = [
   {
     name: 'workflow-builder',
     description: 'Build, test and repair this agent\'s workflows: triggers, nodes, expressions, validation and safe enabling.',
-    tools: ['workflow_schema', 'workflow_list', 'workflow_get', 'workflow_validate', 'workflow_save', 'workflow_run', 'workflow_delete'],
+    tools: [
+      'workflow_schema',
+      'workflow_list',
+      'workflow_get',
+      'workflow_validate',
+      'workflow_save',
+      'workflow_enable',
+      'workflow_disable',
+      'workflow_run',
+      'workflow_delete',
+    ],
     file: '(builtin:workflow-builder)',
     body: WORKFLOW_BUILDER,
     builtin: true,

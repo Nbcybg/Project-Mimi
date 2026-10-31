@@ -11,6 +11,7 @@ export type NodeTypeName =
   | 'agent'
   | 'agent_call'
   | 'chat'
+  | 'notify'
   | 'if'
   | 'switch'
   | 'set'
@@ -300,6 +301,17 @@ export const NODE_TYPES: NodeTypeView[] = [
         placeholder: '{{ $json.files[0].id }}',
         description: 'ใส่ผลของ tool generate_image / text_to_speech / send_file ทั้งก้อนได้เลย ระบบหา "attachment id" ในข้อความเอง',
       },
+    ],
+    outputs: [{ key: 'main', label: 'main' }],
+  },
+  {
+    type: 'notify',
+    label: 'แจ้งเตือน (notify)',
+    description: 'ส่ง notification ให้ผู้ใช้และโพสต์ในแชตของ agent (เหมือน notify_user) แล้วส่ง item ต่อไป',
+    fields: [
+      { key: 'agent', label: 'agent (เว้นว่าง = เจ้าของ workflow)', type: 'string' },
+      { key: 'title', label: 'หัวข้อ', type: 'string', placeholder: '{{ $json.Subject }}' },
+      { key: 'text', label: 'ข้อความ', type: 'text', required: true, placeholder: '{{ $json.text }}' },
     ],
     outputs: [{ key: 'main', label: 'main' }],
   },

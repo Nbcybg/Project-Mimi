@@ -21,14 +21,21 @@
   `plan_read` and `todo_write` / `todo_read` track long work, with the checklist shown open in the chat.
 - Custom workflow nodes are first-class node types (`custom:<name>`) as well as the older plugin node, and may declare
   several outputs; an item's `$output` chooses one.
-- Workflow nodes: `assert`, `debug`, `json_schema`, `agent_call` and `mcp`; `$secret.NAME` works in every expression
-  (and in the code node) without writing the value into the workflow.
+- Workflow nodes: `assert`, `debug`, `json_schema`, `agent_call`, `mcp` and `notify`; `$secret.NAME` works in every
+  expression (and in the code node) without writing the value into the workflow. The notify node posts to the agent's
+  chat and raises one inbox notification, with vault values redacted.
 - AI Overseer: `agent_test` (alias of `agent_message`), `secret_audit`, `config_diff` / `config_rollback` (agents,
   tools, presets, skills and workflows; writes are snapshotted first), and `run_log` (tool call counts, failures
   and duration, backed by migration 023; chat tools plus workflow `tool`, `mcp`, `connector` and `sheets` nodes are
   logged, and `tool_test` records the tool it tested).
+- AI Overseer, layer 1: it can read files, run shell commands (`run_shell` / `shell_output` / `shell_stop`), use the
+  built-in browser and take screenshots, notify the user, send mail, schedule reminders or recurring tasks for itself,
+  write secrets through `secret_set` (the value is hidden from cards and history), start Google/Microsoft sign-in with
+  `oauth_start`, enable or disable a reviewed workflow with `workflow_enable` / `workflow_disable`, and update its own
+  agent (never rename or duplicate it).
 - Secrets: workflow run history, debug output, errors and the run result redact the actual vault values, not just
-  credential-shaped text. `git_commit` refuses `.env`, key and credential files unless `allow_secrets` is set.
+  credential-shaped text; a tool may hide its own input with `redactInput`. `git_commit` refuses `.env`, key and
+  credential files unless `allow_secrets` is set.
 - Calendar, contacts and files: Google Calendar events can be updated and deleted next to list/create; Google
   Contacts and Outlook Contacts can be searched, created and updated; Google Drive gains `drive_share` and
   `drive_update_metadata` next to `drive_upload` (multipart, up to 50 MB) and OneDrive gains `onedrive_upload`

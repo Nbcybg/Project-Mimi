@@ -38,7 +38,8 @@
   credential files unless `allow_secrets` is set.
 - Calendar, contacts and files: Google Calendar events can be updated and deleted next to list/create; Google
   Contacts and Outlook Contacts can be searched, created and updated; Google Drive gains `drive_share` and
-  `drive_update_metadata` next to `drive_upload` (multipart, up to 50 MB) and OneDrive gains `onedrive_upload`
+  `drive_update_metadata` next to `drive_upload` (multipart, up to 50 MB), and the `google_drive` connector gains
+  `upload_file` (base64), `rename_file`, `share_file` and `share_anyone`; OneDrive gains `onedrive_upload`
   (Files.ReadWrite, up to 50 MB). `media_trim` cuts video/audio to a new file without touching the original.
   Google and Microsoft accounts must be reconnected once to grant the contacts / file-write scopes.
 - Media editing: `pdf_merge`, `pdf_split`, `pdf_delete_pages` and `pdf_rotate` (pdf-lib), `image_crop` /

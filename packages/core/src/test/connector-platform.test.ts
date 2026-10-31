@@ -8,10 +8,10 @@ import { fakeFetch } from './helpers/fake-fetch.ts';
 
 const registry = new ConnectorRegistry(connectorSpecs);
 
-test('platform: fifty services and two hundred fourteen operations are installed', () => {
+test('platform: fifty services and two hundred eighteen operations are installed', () => {
   assert.equal(connectorSpecs.length, 50);
-  assert.equal(connectorSpecs.reduce((total, spec) => total + spec.operations.length, 0), 214);
-  assert.equal(registry.toolNames().length, 214);
+  assert.equal(connectorSpecs.reduce((total, spec) => total + spec.operations.length, 0), 218);
+  assert.equal(registry.toolNames().length, 218);
   assert.deepEqual(
     connectorSpecs.map((spec) => spec.key),
     [
@@ -150,8 +150,8 @@ test('platform: OAuth2 specs name their endpoints and scopes', () => {
 
 test('platform: every operation becomes one tool without name collisions', () => {
   const tools = connectorTools(registry, new ConnectorRuntimeImpl({ registry, auth: { resolve: () => undefined } }));
-  assert.equal(tools.length, 214);
-  assert.equal(new Set(tools.map((tool) => tool.name)).size, 214);
+  assert.equal(tools.length, 218);
+  assert.equal(new Set(tools.map((tool) => tool.name)).size, 218);
   for (const tool of tools) {
     assert.ok(tool.connector && tool.operation && tool.familyLabel, `${tool.name} metadata`);
     assert.ok(tool.connectorCategory, `${tool.name} category`);

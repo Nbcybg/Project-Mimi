@@ -3,13 +3,14 @@
 ## สถานะ
 
 - Typecheck ผ่านทั้ง `shared`, `pc-agent`, `core`
-- Full test suite ผ่าน **683 tests**
-- UI smoke test ผ่าน 7/7 ในรอบก่อน (Settings project roots + always grants, agent permissions/lazy, MCP `sse`,
-  custom node multi-output, plan/todo tool row) — รอบนี้ยังไม่ได้ smoke test permission matrix/per-agent grants
+- Full test suite ผ่าน **684 tests**
+- UI smoke test ผ่าน 7/7 ในรอบก่อน และรอบนี้ผ่านเพิ่ม: agent permission matrix (6 rows, ค่า policy ที่บันทึกไว้แสดงถูก)
+  + Settings จัดกลุ่ม always grants ตาม agent (รันผ่าน BrowserSession/Edge headless, ไม่ได้เพิ่มเป็น test ใน repo)
 - DB schema ล่าสุด: **version 23** (`023-tool-calls.sql`)
 - รอบล่าสุด: run_log coverage, MCP reconnect/backoff, config rollback (skill/preset/workflow),
   secret redaction, git secret-file guard, permission matrix + per-agent always grants,
-  Overseer ชั้น 1 (machine/web tools, mail/notify, cron, vault, OAuth, workflow enable, self-edit, notify node)
+  Overseer ชั้น 1 (machine/web tools, mail/notify, cron, vault, OAuth, workflow enable, self-edit, notify node),
+  Google Drive connector upload/rename/share
 
 ## ทำเสร็จแล้ว
 
@@ -89,6 +90,7 @@
 
 - Google Calendar: `calendar_update`, `calendar_delete`
 - Google Drive: `drive_upload` (multipart, <= 50 MB), `drive_share`, `drive_update_metadata`
+  - connector `google_drive` มี `upload_file` (base64), `rename_file`, `share_file`, `share_anyone`
 - Google Contacts: `contacts_search`, `contacts_create`, `contacts_update`
 - Outlook Contacts: `outlook_contacts_search`, `outlook_contacts_create`, `outlook_contacts_update`
 - OneDrive: `onedrive_upload` (`Files.ReadWrite`, <= 50 MB)
@@ -132,9 +134,8 @@
 - ธนาคาร / statement / จ่ายเงิน
 - พิมพ์รหัสผ่านหรือข้อมูลบัตรในเว็บ (ตั้งใจบล็อก)
 - ติดตั้ง/อัปเดตแอปแทนผู้ใช้
-- Google Drive share/upload ผ่าน **connector operations** (native `drive_share`/`drive_upload` ทำแล้ว แต่ connector `google_drive` ยังไม่มี operation เหล่านี้)
 - PDF แก้ไฟล์เดิมในที่, ตัดต่อรูป/วิดีโอขั้นสูง (native PDF/รูป/วิดีโอทำได้แต่เขียนไฟล์ใหม่เท่านั้น)
-- LINE/Telegram ต้องมี token ( connector มีอยู่แล้วถ้าเชื่อมบัญชี )
+- LINE/Telegram ต้องมี token (connector มีอยู่แล้วถ้าเชื่อมบัญชี; ไม่มีอะไรค้าง)
 
 ### Overseer ชั้น 1
 
@@ -162,6 +163,6 @@ npm test
 
 1. อ่าน `HANDOFF.md` นี้
 2. `git status` และ `git diff --stat`
-3. งานในลิสต์เดิมและ Overseer ชั้น 1 ทำครบแล้ว (683 tests); ต่อไปเหลือ **Layer 2** และ UI smoke test
+3. งานในลิสต์เดิมและ Overseer ชั้น 1 ทำครบแล้ว (684 tests); ต่อไปเหลือ **Layer 2** และ UI smoke test
 4. ก่อนแก้ อย่าลืมว่า DB schema เป็น 23 และเทสต์บางตัวผูก version นี้
 5. commit ได้ตามที่ผู้ใช้สั่ง; ตรวจ `git log --oneline` ก่อนเริ่มงานใหม่

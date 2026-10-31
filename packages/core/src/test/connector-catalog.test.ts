@@ -87,7 +87,7 @@ test('catalog: no connector tool shadows a builtin tool', async () => {
     const connectors = views.filter((view) => view.connector);
     const builtins = views.filter((view) => !view.connector && !view.mcp);
     const mcp = views.filter((view) => view.mcp);
-    assert.equal(connectors.length, 214);
+    assert.equal(connectors.length, 218);
     assert.ok(builtins.length > 0, 'the core registers builtin tools');
     assert.equal(new Set(builtins.map((view) => view.name)).size, builtins.length, 'builtin names are unique');
     const names = new Set(builtins.map((view) => view.name));

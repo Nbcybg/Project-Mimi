@@ -50,6 +50,16 @@ const TOOL_FAMILIES: Record<string, string> = {
   browser_press: 'browser.task',
   browser_focus: 'browser.task',
   browser_wait: 'browser.task',
+  computer_observe: 'computer.desktop',
+  computer_click: 'computer.desktop',
+  computer_type: 'computer.desktop',
+  computer_key: 'computer.desktop',
+  computer_scroll: 'computer.desktop',
+  computer_app: 'computer.desktop',
+  computer_menu: 'computer.desktop',
+  computer_wait: 'computer.desktop',
+  computer_screenshot: 'computer.desktop',
+  computer_highlight: 'computer.desktop',
 };
 
 export function toolFamily(tool: string): string {

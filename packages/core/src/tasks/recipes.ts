@@ -1,6 +1,7 @@
 import type { TaskRecipeView } from '@mimi/shared';
 import { developerRecipe } from './developer.ts';
 import { fileOrganizerRecipe } from './file-organizer.ts';
+import { mailPop3Recipe } from './mail-pop3.ts';
 import { photoCullRecipe } from './photo-cull.ts';
 import { youtubeUploadRecipe } from './youtube-upload.ts';
 import type { TaskRecipe } from './types.ts';
@@ -38,5 +39,6 @@ export function createDefaultRecipes(): RecipeRegistry {
     .register(fileOrganizerRecipe)
     .register(developerRecipe)
     .register(photoCullRecipe)
-    .register(youtubeUploadRecipe);
+    .register(youtubeUploadRecipe)
+    .register(mailPop3Recipe);
 }

@@ -68,7 +68,7 @@ function defaultConfig(home) {
     server: '',
     autoLockMinutes: 0,
     // shell: tools with the OS account's full rights (commands, power, MCP); off unless chosen.
-    pcAgent: { enabled: false, shell: false, folders: [path.join(home, 'Mimi-Workspace')] },
+    pcAgent: { enabled: false, shell: false, folders: [path.join(home, 'Mimi-Workspace')], apps: [] },
     window: { bounds: null, maximized: false, hideOnBlur: false, onTop: false },
   };
 }
@@ -82,6 +82,7 @@ function readConfig(file, home) {
     return base;
   }
   const folders = Array.isArray(saved.pcAgent?.folders) ? saved.pcAgent.folders.filter((dir) => folderProblem(dir, home) === null) : base.pcAgent.folders;
+  const apps = Array.isArray(saved.pcAgent?.apps) ? saved.pcAgent.apps.map((name) => String(name).trim()).filter(Boolean) : [];
   let server = '';
   try {
     server = saved.server ? normalizeServerUrl(saved.server) : '';
@@ -95,6 +96,7 @@ function readConfig(file, home) {
       enabled: saved.pcAgent?.enabled === true,
       shell: saved.pcAgent?.shell === true,
       folders: folders.length > 0 ? folders : base.pcAgent.folders,
+      apps,
     },
     window: { ...base.window, ...(saved.window && typeof saved.window === 'object' ? saved.window : {}) },
   };

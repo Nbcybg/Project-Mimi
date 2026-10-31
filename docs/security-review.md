@@ -139,6 +139,17 @@
 - browser tools ยังเป็น third-party content (`untrustedInput`) และถูกแยกจาก shell ตามกฎเดิม เว้น browser ที่ผู้ใช้ดูหน้าต่าง
 - ยังเปิด: การทดสอบกับ YouTube จริง (UI เปลี่ยนบ่อย), CAPTCHA/2FA ทุกผู้ให้บริการ, และ selector ที่เปราะบาง; ต้อง manual test
 
+## 11. Native desktop layer / mail (Sprint 5)
+
+- app allowlist: `MIMI_ALLOWED_APPS` (หรือ `pcAgent.apps` ใน config ของเดสก์ท็อป) ค่าเริ่มต้นว่าง = ปฏิเสธทุกแอป; `*` ต้องตั้งโดยเจตนา
+- ref-based actions: `computer_observe` สร้าง ref จาก accessibility tree; click/type ต้องมี ref และแอปต้อง active; observe ใหม่หลังการเปลี่ยนแปลง
+- secure fields: node ที่เป็น password (`IsPassword` / `AXSecureTextField`) ถูกปฏิเสธทั้งที่ tool และ adapter; ไม่มีการพิมพ์ password/OTP, ไม่แก้ CAPTCHA/2FA/UAC
+- screenshots/highlight เป็นไฟล์ในแชต; เตือนว่าจออาจมีข้อมูลลับ; local consent ถามก่อน action ที่ไม่ใช่ read
+- macOS: ต้องมี TCC Accessibility, Screen Recording, Automation; Windows: UIA + SendInput ใช้สิทธิ์ผู้ใช้ปัจจุบัน, ไม่ควบคุมหน้าต่าง elevated
+- mail-pop3: เติมเฉพาะ field ที่ไม่ใช่ secret; รหัสผ่านผู้ใช้พิมพ์เอง; test mail ต้องยืนยันแยก; ไม่มี undo สำหรับการเพิ่มบัญชี
+- audit: ทุก tool call ผ่าน PC agent log/chat permission; task receipt มีขั้นตอนและผล
+- ยังเปิด: manual OS matrix จริง, ความแม่นยำของ accessibility tree ในแอปแต่ละเวอร์ชัน, และการทดสอบกับ mail provider จริง
+
 ## สิ่งที่ยังไม่ได้ตรวจ
 
 deploy จริงบน Railway (header `Host`, `*.railway.internal`, IPv6), Android จริง/FCM, iPhone, Apple Silicon, Windows,

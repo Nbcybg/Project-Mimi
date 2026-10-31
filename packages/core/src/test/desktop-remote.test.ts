@@ -72,13 +72,18 @@ test('config: defaults are off; bad values from the file are dropped', () => {
   assert.deepEqual({ server: fresh.server, lock: fresh.autoLockMinutes, pc: fresh.pcAgent.enabled, shell: fresh.pcAgent.shell }, { server: '', lock: 0, pc: false, shell: false });
   assert.deepEqual(fresh.pcAgent.folders, [path.join(home, 'Mimi-Workspace')]);
 
-  lib.writeConfig(file, { ...fresh, server: 'https://mimi.example.com', autoLockMinutes: 15, pcAgent: { enabled: true, shell: true, folders: [path.join(home, 'work')] } });
+  lib.writeConfig(file, {
+    ...fresh,
+    server: 'https://mimi.example.com',
+    autoLockMinutes: 15,
+    pcAgent: { enabled: true, shell: true, folders: [path.join(home, 'work')], apps: ['Mail', 'Thunderbird'] },
+  });
   if (process.platform !== 'win32') assert.equal(fs.statSync(file).mode & 0o077, 0, 'readable by its owner only');
   const saved = lib.readConfig(file, home);
   assert.deepEqual({ server: saved.server, lock: saved.autoLockMinutes, pc: saved.pcAgent }, {
     server: 'https://mimi.example.com',
     lock: 15,
-    pc: { enabled: true, shell: true, folders: [path.join(home, 'work')] },
+    pc: { enabled: true, shell: true, folders: [path.join(home, 'work')], apps: ['Mail', 'Thunderbird'] },
   });
 
   fs.writeFileSync(file, JSON.stringify({ server: 'http://evil.example', autoLockMinutes: 7, pcAgent: { enabled: 'yes', shell: 'yes', folders: ['/etc', home] } }));

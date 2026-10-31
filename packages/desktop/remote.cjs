@@ -219,6 +219,7 @@ function startPcAgent() {
     MIMI_PC_SHELL: config.pcAgent.shell ? '1' : '0',
     MIMI_CORE_URL: lib.wsUrl(config.server),
     ALLOWED_DIRS: folders.join(';'),
+    MIMI_ALLOWED_APPS: (config.pcAgent.apps || []).join(';'),
     MIMI_BROWSER_PROFILE: lib.agentBrowserDir(where.cache, config.server, current.username),
     ...builtInBrowserEnv(),
     MIMI_PC_NAME: `${os.userInfo().username}@${os.hostname()}`,

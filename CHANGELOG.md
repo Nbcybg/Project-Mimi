@@ -38,6 +38,11 @@
   `browser_check`; login/OTP/CAPTCHA become a handoff instead of being bypassed.
 - YouTube: `youtube-upload` task recipe with optional audio+cover mux, metadata, a second confirmation for a
   public publish, URL verification and a receipt; passwords are never typed.
+- Native desktop: `computer_observe` / `click` / `type` / `key` / `scroll` / `app` / `menu` / `wait` /
+  `screenshot` / `highlight` with Windows UI Automation and macOS System Events, ref-based actions, an app
+  allowlist, active-app checks and secure-field refusal.
+- Mail: `mail-pop3` guided recipe for Apple Mail, Outlook and Thunderbird; it fills non-secret fields, hands the
+  password to the user, tests the connection and sends one test mail after a separate confirmation.
 
 ### 0.7.7-prototype
 

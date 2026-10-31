@@ -85,3 +85,17 @@ Mimi คือผู้ช่วย AI ส่วนตัว: คุยกับ
 - ถ้าเลือก **public** จะมีคำขอยืนยันเพิ่มอีกครั้งก่อนกดเผยแพร่; unlisted/private ใช้การยืนยันครั้งแรก
 - ไฟล์ต้นฉบับไม่ถูกแก้; ถ้าเป็นเพลง/เสียงอย่างเดียวและมีรูปปก Mimi จะ mux เป็น MP4 ให้ก่อนอัปโหลด (ต้องมี ffmpeg)
 - หน้า YouTube อาจเปลี่ยนได้; ถ้า Mimi หาช่องไม่พบ จะบอกให้คุณช่วยกรอกในหน้าต่างเบราว์เซอร์
+
+## ควบคุมแอปบนเดสก์ท็อป (Native layer)
+
+- ใช้เมื่อแอปไม่มี API: `computer_observe`, `computer_click`, `computer_type`, `computer_key`, `computer_scroll`, `computer_app`, `computer_menu`, `computer_wait`, `computer_screenshot`, `computer_highlight`
+- ต้องเปิด PC agent และกำหนด **รายชื่อแอปที่อนุญาต** ก่อน:
+  - ค่าเริ่มต้นคือว่าง = ควบคุมแอปไม่ได้เลย
+  - ค่าจาก environment: `MIMI_ALLOWED_APPS=Mail;Microsoft Outlook;Thunderbird` (คั่นด้วย `;`, ใช้ `*` เพื่ออนุญาตทั้งหมด)
+  - แอปเดสก์ท็อป: ใส่ `pcAgent.apps` ใน `%APPDATA%\Mimi\config.json` (Windows) หรือ `~/Library/Application Support/Mimi/config.json` (macOS) แล้วเปิดแอปใหม่
+- Mimi อ่าน accessibility tree และอ้างอิงด้วย ref จาก `computer_observe`; ต้อง observe ใหม่หลังหน้าเปลี่ยน
+- **Mimi ไม่พิมพ์รหัสผ่าน/OTP ในช่อง secure** และไม่แก้ CAPTCHA/2FA/UAC; จะหยุดให้คุณทำเอง
+- macOS: ต้องอนุญาต Accessibility, Screen Recording และ Automation ให้ Mimi ใน System Settings → Privacy & Security
+- Windows: ควบคุมได้เฉพาะหน้าต่างระดับผู้ใช้ปกติ; หน้าต่าง elevated/UAC ต้องให้ผู้ใช้ทำเอง
+- `computer_screenshot` / `computer_highlight` ส่งภาพเข้าห้องแชต; ภาพอาจมีข้อมูลลับบนจอ
+- **Mail POP3 recipe**: ช่วยตั้งค่า Apple Mail / Outlook / Thunderbird — เติมชื่อ อีเมล เซิร์ฟเวอร์/พอร์ตให้، คุณพิมพ์รหัสผ่านเอง، ทดสอบการเชื่อมต่อ และส่งเมลทดสอบเมื่อยืนยัน

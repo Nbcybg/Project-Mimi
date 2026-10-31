@@ -79,3 +79,12 @@
 - session grant family `browser.task` covers open/upload/click/type/select/press/focus/wait
 - Tests: `browser-task.test.ts` (fake CDP upload/wait/focus/handoff), `youtube-upload.test.ts` (unlisted/public/login handoff with a scripted browser executor); real YouTube needs a manual run
 - `npm run typecheck && npm test`
+
+## 10. Native desktop layer / mail (Sprint 5)
+
+- `packages/pc-agent/src/computer/types.ts` defines the adapter; `windows.ts` uses UI Automation + SendInput, `macos.ts` uses System Events (JXA) + screencapture
+- `packages/pc-agent/src/tools/computer.ts`: observe/click/type/key/scroll/app/menu/wait/screenshot/highlight; ref checking, app allowlist, active-app checks, secure-field refusal, re-observe after actions
+- `packages/core/src/tasks/mail-pop3.ts`: app activation → menu → non-secret fields → password handoff → connection test → confirmed test mail → receipt
+- Desktop passes `pcAgent.apps` as `MIMI_ALLOWED_APPS`; default is empty (deny)
+- Tests: `computer-layer.test.ts` with a recorded tree/adapter (refs, secure refusal, allowlist, screenshot/highlight), `mail-pop3.test.ts` with a scripted computer executor; real macOS/Windows UI is manual
+- `npm run typecheck && npm test`

@@ -1,6 +1,6 @@
 # Connector Auth Matrix — Phase 3
 
-สถานะ: ใช้กับ connector **50 service / 214 operation** ใน `packages/core/src/connectors/services/`
+สถานะ: ใช้กับ connector **50 service / 218 operation** ใน `packages/core/src/connectors/services/`
 เจ้าของ: Agent `P1-SERVICES` / `P1-CONNECTIONS` (10) + `P3-CONN-E` / `P3-CONN-F` (40)
 อัปเดตล่าสุด: Phase 3 (50 services)
 
@@ -120,4 +120,4 @@ legacy vault/env           fallback สำหรับการติดตั�
 - write/delete operation ต้องมี consent ทุกครั้งที่รัน workflow เว้นแต่ permission ตั้งเป็น `allow`
 - OAuth2 generic ทดสอบ authorization-code + refresh ด้วย token ปลอม และตรวจว่าไม่รั่ว client secret / refresh token ใน error
 - test ที่ครอบ auth: `connector-auth.test.ts`, `connector-runtime.test.ts`, `connector-runtime-hardening.test.ts`,
-  `connector-batch-a`…`f.test.ts`, `connector-catalog.test.ts`; ทั้ง suite 528 tests ผ่านใน Phase 3
+  `connector-batch-a`…`f.test.ts`, `connector-catalog.test.ts`; ทั้ง suite 749 tests ผ่าน (2026-11-01)

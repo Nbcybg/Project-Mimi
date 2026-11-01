@@ -81,7 +81,7 @@ import { WsBroker } from './ws-broker.ts';
 import { agentPresets } from '../agents/presets.ts';
 import { QuickTunnel } from '../app/tunnel.ts';
 import { PACK_CATALOG } from '../packs/catalog.ts';
-import { PackInstaller } from '../packs/packs.ts';
+import { type MimiPack, PackInstaller, parsePackList } from '../packs/packs.ts';
 
 export interface MimiServer {
   core: Core;
@@ -126,6 +126,29 @@ function decisionsIn(event: AgentEvent): Array<Extract<AgentEvent, { type: 'perm
  * `/ws` and authenticate with the shared token in their first frame; the built-in
  * web client is served at `/`.
  */
+async function loadRemotePacks(env: NodeJS.ProcessEnv): Promise<MimiPack[]> {
+  const url = env.MIMI_PACK_CATALOG_URL?.trim();
+  if (!url) return [];
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'https:') throw new Error('MIMI_PACK_CATALOG_URL must use https');
+    const response = await fetch(parsed, { signal: controller.signal, headers: { accept: 'application/json' } });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const text = await response.text();
+    if (Buffer.byteLength(text, 'utf8') > 4 * 1024 * 1024) throw new Error('the catalog is larger than 4 MB');
+    const result = parsePackList(JSON.parse(text), PACK_CATALOG.map((pack) => pack.id));
+    for (const error of result.errors) console.warn(`remote pack catalog: ${error}`);
+    return result.packs;
+  } catch (error) {
+    console.warn(`remote pack catalog skipped: ${(error as Error).message}`);
+    return [];
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function startServer(
   config: CoreConfig & { token: string },
   coreOptions: CoreOptions = {},
@@ -403,6 +426,7 @@ export async function startServer(
   const validateWorkflow = (view: WorkflowView) => validateWorkflowView(view, workflowRules);
 
   /** Packs: catalog and installed records (user/packs), installed through the same checks as the editors. */
+  const remotePacks = await loadRemotePacks(process.env);
   const packs = new PackInstaller(
     {
       dir: path.join(config.userDir, 'packs'),
@@ -413,11 +437,53 @@ export async function startServer(
       saveAgent: (view) => {
         saveAgentView(view);
       },
+      deleteAgent: (name) => {
+        if (!deleteAgent(config.agentsDir, name)) return false;
+        core.chats.forgetAgent(name);
+        core.status.forget(name);
+        core.memos.forget(name);
+        core.profile.forgetAgent(name);
+        core.backgrounds.forgetAgent(name);
+        images.forget(name);
+        assets.forget(name);
+        for (const workflow of core.workflows.forgetAgent(name)) {
+          core.clearWorkflowSchedule(`${name}/${workflow}`);
+          core.workflowRuns.forget(`${name}/${workflow}`);
+          core.parkedRuns.forget(`${name}/${workflow}`);
+        }
+        return true;
+      },
       hasTrigger: (pool) => core.triggerPool.get(pool) !== undefined,
       workflowNames: (agent) => core.workflows.names(agent),
       saveWorkflow: (view) => {
         validateWorkflow(view);
         core.syncWorkflowSchedule(core.workflows.save(view));
+      },
+      deleteWorkflow: (agent, name) => {
+        const id = `${agent}/${name}`;
+        if (!core.workflows.delete(agent, name)) return false;
+        core.clearWorkflowSchedule(id);
+        core.workflowRuns.forget(id);
+        core.parkedRuns.forget(id);
+        return true;
+      },
+      deleteConnector: (key) => core.importedConnectors.remove(key),
+      connectorInUse: (key, ignore) => {
+        const prefix = `${key}_`;
+        const skippedWorkflows = new Set(ignore.workflows ?? []);
+        for (const workflow of core.workflows.list()) {
+          if (skippedWorkflows.has(`${workflow.agent}/${workflow.name}`)) continue;
+          for (const node of workflow.nodes) {
+            if (node.type === 'connector' && node.config?.connector === key) return true;
+            if (node.type === 'tool' && typeof node.config?.tool === 'string' && node.config.tool.startsWith(prefix)) return true;
+          }
+        }
+        const skippedAgents = new Set(ignore.agents ?? []);
+        for (const agent of core.agents.names()) {
+          if (skippedAgents.has(agent)) continue;
+          if (core.agents.get(agent).tools.some((tool) => tool.startsWith(prefix))) return true;
+        }
+        return false;
       },
       credentialOk: (kind, key) => {
         if (kind === 'provider') return core.registry.available().length > 0;
@@ -427,6 +493,7 @@ export async function startServer(
       },
     },
     PACK_CATALOG,
+    remotePacks,
   );
   const packsMessage = (): ServerMessage => ({ type: 'packs', catalog: packs.catalogViews(), installed: packs.installed() });
 
@@ -445,8 +512,16 @@ export async function startServer(
     : config.token.length < 16
       ? 'รหัสผ่านของ Mimi (MIMI_TOKEN) สั้นเกินไปสำหรับเปิดให้เข้าจากอินเทอร์เน็ต: ตั้งให้ยาวอย่างน้อย 16 ตัวก่อน'
       : undefined;
+  const namedTunnel = (() => {
+    const name = process.env.MIMI_CLOUDFLARED_TUNNEL?.trim();
+    if (!name) return undefined;
+    const config = process.env.MIMI_CLOUDFLARED_CONFIG?.trim();
+    const url = process.env.MIMI_CLOUDFLARED_URL?.trim();
+    return { name, ...(config ? { config } : {}), ...(url ? { url } : {}) };
+  })();
   const tunnel = new QuickTunnel({
     port: () => listenPort,
+    ...(namedTunnel ? { named: namedTunnel } : {}),
     onChange: (view) => {
       core.setTunnelUrl(view.state === 'on' ? (view.url ?? null) : null);
       broadcast({ type: 'settings', settings: settingsView() });
@@ -1891,6 +1966,29 @@ export async function startServer(
         }
         break;
       }
+      case 'pack-remove-preview':
+      case 'pack-remove': {
+        const apply = message.type === 'pack-remove';
+        const reqId = Number(message.reqId) || 0;
+        const result = packs.remove(String(message.id ?? ''), apply);
+        reply({
+          type: 'pack-remove-report',
+          reqId,
+          action: apply ? 'remove' : 'preview',
+          ok: result.errors.length === 0,
+          ...(result.report ? { report: result.report } : {}),
+          errors: result.errors,
+        });
+        if (result.removed) {
+          broadcast(agentsMessage());
+          broadcast({ type: 'settings', settings: settingsView() });
+          broadcast(toolsMessage());
+          broadcast(connectionsMessage());
+          broadcast({ type: 'workflows', workflows: core.workflows.list(), pool: core.triggerPool.list(), nodeTypes: nodeTypesView(), customNodes: core.customNodes.names() });
+          broadcast(packsMessage());
+        }
+        break;
+      }
       case 'agent-presets':
         reply({ type: 'agent-presets', presets: agentPresets((name) => Boolean(core.tools.get(name))) });
         break;
@@ -1975,6 +2073,24 @@ export async function startServer(
           (error: Error) => reply({ type: 'error', message: (error as Error).message }),
         );
         break;
+      case 'calendar-calendars': {
+        const account = String(message.account ?? '');
+        void core.calendarSync.calendars(account).then(
+          (calendars) => reply({ type: 'calendar-calendars', account, calendars, errors: [] }),
+          (error: Error) => reply({ type: 'calendar-calendars', account, calendars: [], errors: [(error as Error).message] }),
+        );
+        break;
+      }
+      case 'calendar-set': {
+        const result = core.calendarSync.setCalendar(String(message.account ?? ''), String(message.calendarId ?? ''));
+        reply({
+          type: 'calendar-sync',
+          calendar: core.calendarSync.view(),
+          saved: result.ok,
+          ...(result.error ? { error: result.error } : {}),
+        });
+        break;
+      }
       default:
         reply({ type: 'error', message: 'Unknown message type' });
     }
@@ -2275,6 +2391,7 @@ export async function startServer(
     server.listen(config.port, config.host, resolve);
   });
   listenPort = (server.address() as AddressInfo).port;
+  if (namedTunnel && !tunnelUnavailable && process.env.MIMI_CLOUDFLARED_AUTOSTART !== '0') tunnel.start();
   core.scheduler.start();
   // Push mail: Gmail / Outlook / IMAP / POP3 watched for new unread messages.
   core.mailWatch.start(Math.max(5, Number(process.env.MIMI_MAIL_WATCH_MINUTES ?? 10)) * 60_000);

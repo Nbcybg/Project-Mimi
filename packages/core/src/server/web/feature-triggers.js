@@ -302,6 +302,79 @@
     return form;
   }
 
+  /** { account, label, current } while the Google calendar picker is open. */
+  let calendarPicker = null;
+
+  function openCalendarPicker(account) {
+    calendarPicker = {
+      account: account.account,
+      label: account.name || account.account,
+      service: account.service,
+      current: account.calendarId || (account.service === 'google' ? 'primary' : 'all'),
+    };
+    M().send({ type: 'calendar-calendars', account: account.account });
+    const dialog = el('div', 'dialog form');
+    dialog.append(el('h3', '', `เลือกปฏิทิน: ${calendarPicker.label}`), el('p', 'hint', 'กำลังโหลดรายการปฏิทิน…'));
+    const foot = el('div', 'foot');
+    foot.append(el('span', 'msg'), button('btn ghost', 'ปิด', () => {
+      calendarPicker = null;
+      M().closeOverlay();
+    }));
+    dialog.append(foot);
+    M().overlay(dialog);
+  }
+
+  function showCalendarPicker(message) {
+    if (!calendarPicker || message.account !== calendarPicker.account) return;
+    const picker = calendarPicker;
+    const dialog = el('div', 'dialog form');
+    dialog.append(el('h3', '', `เลือกปฏิทิน: ${picker.label}`));
+    const select = el('select');
+    if (picker.service === 'microsoft') {
+      const all = el('option', '', 'ทุกปฏิทินของบัญชี');
+      all.value = 'all';
+      if (picker.current === 'all') all.selected = true;
+      select.append(all);
+    }
+    for (const calendar of message.calendars || []) {
+      const option = el('option', '', `${calendar.summary}${calendar.primary ? ' (ค่าเริ่มต้น)' : ''}`);
+      option.value = calendar.id;
+      if (calendar.id === picker.current) option.selected = true;
+      select.append(option);
+    }
+    const manual = M().textInput(picker.current, 'Calendar ID');
+    if (select.options.length) {
+      if (![...select.options].some((option) => option.value === picker.current)) {
+        const current = el('option', '', `${picker.current} (ปัจจุบัน)`);
+        current.value = picker.current;
+        current.selected = true;
+        select.append(current);
+      }
+      dialog.append(M().labelled('ปฏิทิน', select));
+    } else {
+      dialog.append(el('p', 'hint', 'โหลดรายการไม่ได้ — พิมพ์ Calendar ID เองได้ (ค่าเริ่มต้น primary)'));
+      dialog.append(M().labelled('Calendar ID', manual));
+    }
+    for (const error of message.errors || []) dialog.append(el('p', 'hint badtxt', error));
+    const foot = el('div', 'foot');
+    foot.append(
+      el('span', 'msg'),
+      button('btn ghost', 'ปิด', () => {
+        calendarPicker = null;
+        M().closeOverlay();
+      }),
+      button('btn pri', 'ใช้ปฏิทินนี้', () => {
+        const calendarId = (select.options.length ? select.value : manual.value || '').trim();
+        if (!calendarId) return M().toast('ยังไม่ได้เลือกปฏิทิน', 'เลือกจากรายการหรือพิมพ์ Calendar ID', true);
+        calendarPicker = null;
+        M().closeOverlay();
+        M().send({ type: 'calendar-set', account: picker.account, calendarId });
+      }),
+    );
+    dialog.append(foot);
+    M().overlay(dialog);
+  }
+
   function calendarPanel() {
     const panel = el('div', 'panel');
     const calendar = M().state.calendar || (M().state.settings || {}).calendar;
@@ -327,13 +400,17 @@
     for (const account of calendar.accounts || []) {
       const row = el('div');
       const name = el('span', 'nm2');
-      name.append(el('b', '', account.name || account.account), el('small', 'muted', ` · ${account.service}${account.connected ? '' : ' (ยังไม่เชื่อมต่อ)'}`));
+      name.append(
+        el('b', '', account.name || account.account),
+        el('small', 'muted', ` · ${account.service} · ${!account.calendarId || account.calendarId === 'all' ? (account.service === 'google' ? 'primary' : 'ทุกปฏิทิน') : account.calendarId}${account.connected ? '' : ' (ยังไม่เชื่อมต่อ)'}`),
+      );
       const mode = el('span');
       mode.append(el('span', `pill ${account.push ? 'ok' : 'todo'}`, account.push ? 'push' : 'poll'));
       const expires = el('span', 'mono', account.subscriptionExpiresAt ? M().fmtDate(account.subscriptionExpiresAt) : '—');
       const last = el('span', 'mono', account.lastSyncAt ? M().fmtDate(account.lastSyncAt) : '—');
       if (account.lastError) last.title = account.lastError;
       const actions = el('span', 'hstack');
+      actions.append(button('btn ghost', 'เลือกปฏิทิน', () => openCalendarPicker(account)));
       actions.append(button('btn ghost', 'Sync ตอนนี้', () => M().send({ type: 'calendar-sync-now' })));
       row.append(name, mode, expires, last, actions);
       rows.append(row);
@@ -350,8 +427,14 @@
   }
 
   function onMessage(message) {
+    if (message.type === 'calendar-calendars') {
+      showCalendarPicker(message);
+      return;
+    }
     if (message.type === 'calendar-sync') {
       M().state.calendar = message.calendar;
+      if (message.error) M().toast('เลือกปฏิทินไม่ได้', message.error, true);
+      else if (message.saved) M().toast('เปลี่ยนปฏิทินแล้ว', 'กำลังเริ่ม sync ปฏิทินใหม่');
       if (M().state.view === 'hub' && M().ui.hubTab === 'triggers' && !M().ui.triggerDirty) M().renderHub();
       return;
     }

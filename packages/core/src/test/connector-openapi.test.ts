@@ -189,3 +189,71 @@ test('openapi: auth fields never carry values', () => {
   }
   assert.equal(JSON.stringify(spec).includes('X-API-Key-secret-value'), false);
 });
+
+test('openapi: pagination is inferred from common query/response names and x-mimi-rate-limit is read', () => {
+  const paged = importOpenApi({
+    openapi: '3.0.3',
+    info: { title: 'Paged API', version: '1.0.0' },
+    servers: [{ url: 'https://api.example.com' }],
+    'x-mimi-rate-limit': { requests: 10, perMs: 1000, burst: 2 },
+    paths: {
+      '/items': {
+        get: {
+          operationId: 'listItems',
+          parameters: [
+            { name: 'page', in: 'query', schema: { type: 'integer' } },
+            { name: 'per_page', in: 'query', schema: { type: 'integer' } },
+          ],
+          responses: {
+            '200': { description: 'ok', content: { 'application/json': { schema: { type: 'array', items: { type: 'object' } } } } },
+          },
+        },
+      },
+    },
+  });
+  assert.deepEqual(paged.spec.pagination, { mode: 'page', pageParam: 'page', sizeParam: 'per_page' });
+  assert.equal(paged.spec.operations[0]!.paginated, true);
+  assert.deepEqual(paged.spec.rateLimit, { requests: 10, perMs: 1000, burst: 2 });
+  assert.match(paged.report.warnings.join('\n'), /pagination inferred: page \+ per_page/);
+  assert.doesNotThrow(() => new ConnectorRegistry([paged.spec]));
+
+  const cursored = importOpenApi({
+    openapi: '3.0.3',
+    info: { title: 'Cursor API', version: '1.0.0' },
+    servers: [{ url: 'https://api.example.com' }],
+    paths: {
+      '/items': {
+        get: {
+          operationId: 'listItems',
+          parameters: [
+            { name: 'pageToken', in: 'query', schema: { type: 'string' } },
+            { name: 'per_page', in: 'query', schema: { type: 'integer' } },
+          ],
+          responses: {
+            '200': {
+              description: 'ok',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: { items: { type: 'array', items: { type: 'object' } }, nextPageToken: { type: 'string' } },
+                    'x-mimi-items-path': 'items',
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+  assert.deepEqual(cursored.spec.pagination, {
+    mode: 'nextPageToken',
+    cursorParam: 'pageToken',
+    sizeParam: 'per_page',
+    itemsPath: 'items',
+    nextPath: 'nextPageToken',
+  });
+  assert.equal(cursored.spec.operations[0]!.paginated, true);
+  assert.doesNotThrow(() => new ConnectorRegistry([cursored.spec]));
+});

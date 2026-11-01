@@ -5,6 +5,7 @@ import type {
   ConnectorSpec,
   JsonValue,
   PackCredentialView,
+  PackRemoveView,
   PackReportView,
   PackSummaryView,
   ToolDefinition,
@@ -79,10 +80,18 @@ export interface PackDeps {
   tool(name: string): ToolDefinition | undefined;
   agentNames(): string[];
   saveAgent(view: AgentView): void;
+  /** Removes an agent and everything that belongs to it; false when it was already gone. */
+  deleteAgent(name: string): boolean;
   hasTrigger(pool: string): boolean;
   workflowNames(agent: string): string[];
   /** Validates, stores and schedules; throws when the workflow is not valid. */
   saveWorkflow(view: WorkflowView): void;
+  /** Removes one workflow and its schedules/runs; false when it was already gone. */
+  deleteWorkflow(agent: string, name: string): boolean;
+  /** Removes an imported connector and its tools; native connectors throw. */
+  deleteConnector(key: string): void;
+  /** True when a workflow or agent other than `ignore` still uses a tool of this connector. */
+  connectorInUse(key: string, ignore: { workflows?: string[]; agents?: string[] }): boolean;
   credentialOk(kind: PackCredentialView['kind'], key: string): boolean;
 }
 
@@ -93,11 +102,25 @@ export interface PackPlan {
   installed?: boolean;
 }
 
+export interface PackRemovePlan {
+  report?: PackRemoveView;
+  errors: string[];
+  /** Remove only: something was deleted. */
+  removed?: boolean;
+}
+
+interface PackCreated {
+  agents: string[];
+  connectors: string[];
+  workflows: Array<{ agent: string; name: string }>;
+}
+
 interface StoredPack {
   format: number;
   installedAt: string;
   builtin: boolean;
   pack: MimiPack;
+  created?: PackCreated;
 }
 
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -197,6 +220,26 @@ export function parsePack(source: unknown): MimiPack {
   };
 }
 
+/** Reads a remote catalog: a JSON array of packs or `{ "packs": [...] }`. */
+export function parsePackList(source: unknown, reserved: Iterable<string> = []): { packs: MimiPack[]; errors: string[] } {
+  const list = Array.isArray(source) ? source : isObject(source) && Array.isArray(source.packs) ? source.packs : undefined;
+  if (!list) return { packs: [], errors: ['a pack catalog is a JSON array or {"packs": [...]}'] };
+  const ids = new Set(reserved);
+  const packs: MimiPack[] = [];
+  const errors: string[] = [];
+  for (const [index, raw] of list.entries()) {
+    try {
+      const pack = parsePack(raw);
+      if (ids.has(pack.id)) throw new Error(`"${pack.id}" is already in the catalog`);
+      ids.add(pack.id);
+      packs.push(pack);
+    } catch (error) {
+      errors.push(`packs[${index}]: ${(error as Error).message}`);
+    }
+  }
+  return { packs, errors };
+}
+
 /** Which account a built-in tool works through, judged by its name. */
 function accountOfTool(name: string): 'google' | 'microsoft' | null {
   if (/^(gmail|calendar|contacts|drive|sheets)_/.test(name)) return 'google';
@@ -223,26 +266,33 @@ export function packSummary(pack: MimiPack, builtin: boolean, installedAt?: stri
 export class PackInstaller {
   private readonly deps: PackDeps;
   private readonly catalog: Map<string, MimiPack>;
+  private readonly builtinIds: Set<string>;
+  private readonly remoteIds: Set<string>;
 
-  constructor(deps: PackDeps, catalog: MimiPack[] = []) {
+  constructor(deps: PackDeps, catalog: MimiPack[] = [], remote: MimiPack[] = []) {
     this.deps = deps;
-    this.catalog = new Map(catalog.map((pack) => [pack.id, pack]));
+    this.builtinIds = new Set(catalog.map((pack) => pack.id));
+    this.remoteIds = new Set(remote.map((pack) => pack.id));
+    this.catalog = new Map([...catalog, ...remote].map((pack) => [pack.id, pack]));
   }
 
   catalogViews(): PackSummaryView[] {
-    return [...this.catalog.values()].map((pack) => packSummary(pack, true));
+    return [...this.catalog.values()].map((pack) => ({
+      ...packSummary(pack, this.builtinIds.has(pack.id)),
+      ...(this.remoteIds.has(pack.id) ? { remote: true } : {}),
+    }));
   }
 
   /** A catalog pack by id, or a pack from JSON text; throws when neither works. */
   resolve(input: { id?: string; source?: string }): { pack: MimiPack; builtin: boolean } {
     if (input.source !== undefined) {
       const pack = parsePack(input.source);
-      if (this.catalog.has(pack.id)) throw new Error(`"${pack.id}" is the id of a built-in pack; give the file its own id`);
+      if (this.catalog.has(pack.id)) throw new Error(`"${pack.id}" is the id of a built-in pack or a remote catalog pack; give the file its own id`);
       return { pack, builtin: false };
     }
     const pack = this.catalog.get(String(input.id ?? ''));
     if (!pack) throw new Error(`no pack "${String(input.id ?? '')}" in the catalog`);
-    return { pack, builtin: true };
+    return { pack, builtin: this.builtinIds.has(pack.id) };
   }
 
   private credentials(pack: MimiPack, workflows: PackWorkflow[], toolNames: string[], plannedConnectors: Map<string, ConnectorSpec>): PackCredentialView[] {
@@ -388,11 +438,18 @@ export class PackInstaller {
     const plan = this.plan(pack);
     if (!plan.report || plan.errors.length > 0) return plan;
     const errors: string[] = [];
+    const previous = this.readStored(pack.id)?.created;
+    const created: PackCreated = {
+      agents: [...new Set(previous?.agents ?? [])],
+      connectors: [...new Set(previous?.connectors ?? [])],
+      workflows: [...(previous?.workflows ?? [])],
+    };
     for (const entry of pack.connectors ?? []) {
       const row = plan.report.connectors.find((connector) => connector.key === entry.key);
       if (row?.action !== 'import') continue;
       const saved = this.deps.imported.save(JSON.stringify(entry.openapi), { key: entry.key, ...(entry.label ? { label: entry.label } : {}) });
       errors.push(...saved.errors.map((error) => `connector "${entry.key}": ${error}`));
+      if (saved.errors.length === 0 && !created.connectors.includes(entry.key)) created.connectors.push(entry.key);
     }
     for (const agent of pack.agents ?? []) {
       if (plan.report.agents.find((row) => row.name === agent.name)?.action !== 'create') continue;
@@ -407,6 +464,7 @@ export class PackInstaller {
           canMessage: [],
           budgets: { maxRounds: 12, maxTokens: 200_000 },
         });
+        if (!created.agents.includes(agent.name)) created.agents.push(agent.name);
       } catch (error) {
         errors.push(`agent "${agent.name}": ${(error as Error).message}`);
       }
@@ -426,11 +484,14 @@ export class PackInstaller {
           ...(workflow.vars ? { vars: workflow.vars } : {}),
           ...(workflow.notes ? { notes: workflow.notes } : {}),
         });
+        if (!created.workflows.some((entry) => entry.agent === row.agent && entry.name === row.name)) {
+          created.workflows.push({ agent: row.agent, name: row.name });
+        }
       } catch (error) {
         errors.push(`workflow "${row.name}": ${(error as Error).message}`);
       }
     }
-    const stored: StoredPack = { format: PACK_FORMAT, installedAt: new Date().toISOString(), builtin, pack };
+    const stored: StoredPack = { format: PACK_FORMAT, installedAt: new Date().toISOString(), builtin, pack, created };
     fs.mkdirSync(this.deps.dir, { recursive: true });
     const file = path.join(this.deps.dir, `${pack.id}.json`);
     fs.writeFileSync(`${file}.tmp`, `${JSON.stringify(stored, null, 2)}\n`, 'utf8');
@@ -438,6 +499,101 @@ export class PackInstaller {
     // The checklist after installing: connectors that now exist may need a connection.
     const after = this.plan(pack).report;
     return { report: { ...plan.report, credentials: after?.credentials ?? plan.report.credentials }, errors, installed: true };
+  }
+
+  private readStored(id: string): StoredPack | undefined {
+    if (!PACK_ID.test(id)) return undefined;
+    try {
+      const stored = JSON.parse(fs.readFileSync(path.join(this.deps.dir, `${id}.json`), 'utf8')) as StoredPack;
+      parsePack(stored.pack);
+      return stored;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Lists what removing an installed pack would delete, or deletes it. Only items the pack
+   * created are touched; something another workflow or agent still uses is kept and listed.
+   */
+  remove(id: string, apply = false): PackRemovePlan {
+    if (!PACK_ID.test(id)) return { errors: [`"${id}" is not a pack id`] };
+    const stored = this.readStored(id);
+    if (!stored) return { errors: [`no installed pack "${id}"`] };
+    const pack = parsePack(stored.pack);
+    const report: PackRemoveView = { id: pack.id, name: pack.name, remove: { agents: [], connectors: [], workflows: [] }, kept: [] };
+    const errors: string[] = [];
+    if (!stored.created) {
+      report.legacy = true;
+      for (const agent of pack.agents ?? []) report.kept.push({ kind: 'agent', name: agent.name, reason: 'installed before removal tracked ownership; kept' });
+      for (const connector of pack.connectors ?? []) report.kept.push({ kind: 'connector', name: connector.key, reason: 'installed before removal tracked ownership; kept' });
+      for (const workflow of pack.workflows ?? []) report.kept.push({ kind: 'workflow', name: `${workflow.agent}/${workflow.name}`, reason: 'installed before removal tracked ownership; kept' });
+      if (apply) fs.rmSync(path.join(this.deps.dir, `${id}.json`), { force: true });
+      return { report, errors, removed: apply };
+    }
+
+    const existingAgents = new Set(this.deps.agentNames());
+    const names = new Map<string, string[]>();
+    const workflowNames = (agent: string): string[] => {
+      if (!names.has(agent)) names.set(agent, this.deps.workflowNames(agent));
+      return names.get(agent)!;
+    };
+    const planned = new Set<string>();
+    for (const workflow of stored.created.workflows) {
+      if (!workflowNames(workflow.agent).includes(workflow.name)) continue;
+      report.remove.workflows.push(workflow);
+      planned.add(`${workflow.agent}/${workflow.name}`);
+    }
+    const agents: string[] = [];
+    for (const agent of stored.created.agents) {
+      if (!existingAgents.has(agent)) continue;
+      const remaining = workflowNames(agent).filter((name) => !planned.has(`${agent}/${name}`));
+      if (remaining.length > 0) {
+        report.kept.push({ kind: 'agent', name: agent, reason: `still has workflow(s): ${remaining.join(', ')}` });
+        continue;
+      }
+      agents.push(agent);
+      report.remove.agents.push(agent);
+    }
+    const ignore = { workflows: [...planned], agents };
+    for (const key of stored.created.connectors) {
+      if (!this.deps.connector(key)) continue;
+      if (this.deps.connectorInUse(key, ignore)) {
+        report.kept.push({ kind: 'connector', name: key, reason: 'still used by another workflow or agent' });
+        continue;
+      }
+      report.remove.connectors.push(key);
+    }
+
+    if (!apply) return { report, errors };
+    for (const workflow of [...report.remove.workflows]) {
+      try {
+        this.deps.deleteWorkflow(workflow.agent, workflow.name);
+      } catch (error) {
+        errors.push(`workflow "${workflow.name}": ${(error as Error).message}`);
+      }
+    }
+    for (const agent of [...report.remove.agents]) {
+      try {
+        if (this.deps.workflowNames(agent).length > 0) {
+          report.remove.agents.splice(report.remove.agents.indexOf(agent), 1);
+          report.kept.push({ kind: 'agent', name: agent, reason: 'still has workflow(s) after removing the pack workflows' });
+          continue;
+        }
+        this.deps.deleteAgent(agent);
+      } catch (error) {
+        errors.push(`agent "${agent}": ${(error as Error).message}`);
+      }
+    }
+    for (const key of [...report.remove.connectors]) {
+      try {
+        this.deps.deleteConnector(key);
+      } catch (error) {
+        errors.push(`connector "${key}": ${(error as Error).message}`);
+      }
+    }
+    if (errors.length === 0) fs.rmSync(path.join(this.deps.dir, `${id}.json`), { force: true });
+    return { report, errors, removed: true };
   }
 
   /** Installed packs with their checklist as it is now; unreadable records are skipped. */

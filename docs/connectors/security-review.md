@@ -127,7 +127,7 @@ Test: `connector-openapi.test.ts` (`unsafe servers`).
 - `packages/core/src/test/connector-openapi.test.ts` - private server
   import checks.
 - `packages/core/src/test/connector-auth.test.ts` - refresh/sign-in flows.
-- `npm.cmd test` - full suite passing (528 tests).
+- `npm.cmd test` - full suite passing (749 tests, 2026-11-01).
 - `npm.cmd run typecheck` - clean.
 
 ## Manual checks still needed

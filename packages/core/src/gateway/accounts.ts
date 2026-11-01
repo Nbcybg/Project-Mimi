@@ -25,6 +25,7 @@ export const MIN_PASSWORD = 10;
 const MAX_PASSWORD = 256;
 /** A session's expiry is pushed forward at most this often, to keep writes rare. */
 const TOUCH_EVERY_MS = 10 * 60_000;
+const RECOVERY_CODES = 10;
 
 export interface AccountView {
   username: string;
@@ -82,6 +83,17 @@ export async function verifyPassword(password: string, stored: string): Promise<
 const sha256 = (value: string) => createHash('sha256').update(value).digest('hex');
 const newToken = () => randomBytes(32).toString('base64url');
 
+/** 80 random bits, shown in four groups the user can write down. */
+function newRecoveryCode(): string {
+  return randomBytes(10).toString('hex').match(/.{5}/g)!.join('-');
+}
+
+function normalizeRecoveryCode(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const clean = value.toLowerCase().replace(/[^a-f0-9]/g, '');
+  return clean.length === 20 ? clean : null;
+}
+
 export function normalizeUsername(raw: string): string {
   const username = raw.trim().toLowerCase();
   if (!USERNAME.test(username)) {
@@ -122,6 +134,7 @@ interface UserRow {
   totp_secret: string | null;
   totp_pending: string | null;
   totp_last_step: number | null;
+  recovery_codes: string | null;
 }
 
 export class AccountStore {
@@ -170,7 +183,7 @@ export class AccountStore {
     `);
     // Two-step sign-in came later; older databases get the columns on first open.
     const columns = new Set((this.db.prepare('PRAGMA table_info(users)').all() as Array<{ name: string }>).map((column) => column.name));
-    for (const [name, type] of [['totp_secret', 'TEXT'], ['totp_pending', 'TEXT'], ['totp_last_step', 'INTEGER']]) {
+    for (const [name, type] of [['totp_secret', 'TEXT'], ['totp_pending', 'TEXT'], ['totp_last_step', 'INTEGER'], ['recovery_codes', 'TEXT']]) {
       if (!columns.has(name!)) this.db.exec(`ALTER TABLE users ADD COLUMN ${name} ${type}`);
     }
     this.key = Buffer.from(hkdfSync('sha256', secret, 'mimi-gateway', 'core-token', 32));
@@ -300,7 +313,7 @@ export class AccountStore {
     if (!(await verifyPassword(password, row.password_hash))) return null;
     if (row.totp_secret !== null) {
       if (code === undefined || code === null || code === '') return { needsCode: true };
-      if (!this.useCode(row, row.totp_secret, code)) return null;
+      if (!this.useCode(row, row.totp_secret, code) && !this.useRecoveryCode(row, code)) return null;
     }
     const token = newToken();
     const id = randomBytes(12).toString('hex');
@@ -320,6 +333,50 @@ export class AccountStore {
     return true;
   }
 
+  /** Checks a recovery code and removes it, so it cannot be replayed. */
+  private useRecoveryCode(row: UserRow, code: unknown): boolean {
+    const normalized = normalizeRecoveryCode(code);
+    if (!normalized || !row.recovery_codes) return false;
+    let hashes: string[];
+    try {
+      const parsed = JSON.parse(row.recovery_codes) as unknown;
+      if (!Array.isArray(parsed) || !parsed.every((hash) => typeof hash === 'string')) return false;
+      hashes = parsed;
+    } catch {
+      return false;
+    }
+    const given = Buffer.from(sha256(normalized), 'hex');
+    const index = hashes.findIndex((hash) => {
+      const known = Buffer.from(hash, 'hex');
+      return known.length === given.length && timingSafeEqual(known, given);
+    });
+    if (index < 0) return false;
+    hashes.splice(index, 1);
+    const stored = hashes.length > 0 ? JSON.stringify(hashes) : null;
+    this.db.prepare('UPDATE users SET recovery_codes = ? WHERE id = ?').run(stored, row.id);
+    row.recovery_codes = stored;
+    return true;
+  }
+
+  private issueRecoveryCodes(row: UserRow): string[] {
+    const codes = Array.from({ length: RECOVERY_CODES }, () => newRecoveryCode());
+    const stored = JSON.stringify(codes.map((code) => sha256(normalizeRecoveryCode(code)!)));
+    this.db.prepare('UPDATE users SET recovery_codes = ? WHERE id = ?').run(stored, row.id);
+    row.recovery_codes = stored;
+    return codes;
+  }
+
+  recoveryCodesLeft(rawUsername: string): number {
+    const row = this.mustRow(rawUsername);
+    if (!row.recovery_codes) return 0;
+    try {
+      const parsed = JSON.parse(row.recovery_codes) as unknown;
+      return Array.isArray(parsed) ? parsed.length : 0;
+    } catch {
+      return 0;
+    }
+  }
+
   twoFactorEnabled(rawUsername: string): boolean {
     return this.mustRow(rawUsername).totp_secret !== null;
   }
@@ -337,11 +394,21 @@ export class AccountStore {
   }
 
   /** Turns two-step sign-in on once the app shows a right code for the pending secret. */
-  enableTwoFactor(rawUsername: string, code: unknown): boolean {
+  enableTwoFactor(rawUsername: string, code: unknown): { recoveryCodes: string[] } | null {
     const row = this.mustRow(rawUsername);
-    if (row.totp_pending === null || !this.useCode(row, row.totp_pending, code)) return false;
+    if (row.totp_pending === null || !this.useCode(row, row.totp_pending, code)) return null;
     this.db.prepare('UPDATE users SET totp_secret = totp_pending, totp_pending = NULL WHERE id = ?').run(row.id);
-    return true;
+    row.totp_secret = row.totp_pending;
+    row.totp_pending = null;
+    return { recoveryCodes: this.issueRecoveryCodes(row) };
+  }
+
+  /** Replaces the unused recovery codes; the password is needed. */
+  async regenerateRecoveryCodes(rawUsername: string, password: string): Promise<string[] | null> {
+    const row = this.mustRow(rawUsername);
+    if (row.totp_secret === null) return null;
+    if (typeof password !== 'string' || !(await verifyPassword(password.slice(0, MAX_PASSWORD), row.password_hash))) return null;
+    return this.issueRecoveryCodes(row);
   }
 
   /** Turns it off from the app: the password and a current code are both needed. */
@@ -357,8 +424,24 @@ export class AccountStore {
   /** For the administrator (CLI) when a phone is lost: removes it and signs out every device. */
   resetTwoFactor(rawUsername: string): void {
     const row = this.mustRow(rawUsername);
-    this.db.prepare('UPDATE users SET totp_secret = NULL, totp_pending = NULL, totp_last_step = NULL WHERE id = ?').run(row.id);
+    this.db.prepare('UPDATE users SET totp_secret = NULL, totp_pending = NULL, totp_last_step = NULL, recovery_codes = NULL WHERE id = ?').run(row.id);
     this.revokeAll(row.username);
+  }
+
+  /** Changes the password from the app; other devices are signed out, this session stays. */
+  async changePassword(rawUsername: string, current: string, next: string, keepSessionId?: string): Promise<boolean> {
+    const row = this.mustRow(rawUsername);
+    if (typeof current !== 'string' || !(await verifyPassword(current.slice(0, MAX_PASSWORD), row.password_hash))) return false;
+    checkPassword(next);
+    this.db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(await hashPassword(next, this.passwordCost), row.id);
+    if (keepSessionId) {
+      this.db
+        .prepare('UPDATE sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL AND id <> ?')
+        .run(this.iso(), row.id, keepSessionId);
+    } else {
+      this.revokeAll(row.username);
+    }
+    return true;
   }
 
   private target(row: UserRow, sessionId: string, expiresAt: string): SessionTarget {

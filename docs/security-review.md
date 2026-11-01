@@ -1,6 +1,6 @@
 # ทบทวนความปลอดภัยก่อนเปิดให้ผู้อื่นใช้ (Phase 5 ขั้น 5)
 
-ทบทวนจากโค้ดจริง ณ 2026-10-27 ครอบคลุม gateway (บัญชี/session), การแยกข้อมูลระหว่างผู้ใช้, ค่าลับ, แอป Mac, เว็บ/PWA และ PC agent
+ทบทวนจากโค้ดจริง ณ 2026-10-27 และอัปเดตสถานะ 0.7.9 เมื่อ 2026-11-01 ครอบคลุม gateway (บัญชี/session/2FA), การแยกข้อมูลระหว่างผู้ใช้, ค่าลับ, แอป Mac/Windows, เว็บ/PWA, PC agent, packs, OpenAPI import และ Cloudflare quick tunnel
 แต่ละข้อบอกว่า **แก้แล้ว** (มี test) หรือ **ยังเปิดอยู่** (พร้อมสิ่งที่แนะนำ)
 
 ## สรุป
@@ -13,10 +13,10 @@
 | กลาง | ปลายทาง push มาจากอุปกรณ์ core ส่ง POST ไปที่อยู่ภายในเครือข่ายเซิร์ฟเวอร์ได้ (SSRF) | แก้แล้ว (ขั้น 4) |
 | กลาง | PC agent: คำสั่ง shell/power/MCP ทำงานด้วยสิทธิ์เต็มของผู้ใช้ OS ไม่ถูกจำกัดด้วยโฟลเดอร์ที่อนุญาต | แก้แล้ว: ปิดเป็นค่าเริ่มต้นในแอป Mac |
 | กลาง | ล็อกอินพร้อมกันจำนวนมากกิน CPU ได้ไม่จำกัด (scrypt ตั้งใจให้ช้า) | แก้แล้ว |
-| กลาง | `undici` 7.30.0 (ผ่าน `@ai-sdk/provider-utils`) มีช่องโหว่ระดับ high ตาม `npm audit` | **ยังเปิด** — ต้องอัปเดต lockfile (รออนุมัติ) |
+| กลาง | `undici` 7.30.0 (ผ่าน `@ai-sdk/provider-utils`) มีช่องโหว่ระดับ high ตาม `npm audit` | แก้แล้ว (0.7.9): อัปเดตเป็น 7.30.1, `npm audit` 0 ช่องโหว่ (ตรวจ 2026-11-01) |
 | ต่ำ | `/auth/login` รับ body ทุก content-type | แก้แล้ว |
-| ต่ำ | ไม่มีอายุสูงสุดของ session, ไม่มี 2FA, ผู้ใช้เปลี่ยนรหัสผ่านเองไม่ได้ | ปิดบางส่วน (0.7.9): session หมดอายุ 90 วันหลังล็อกอิน (`MIMI_SESSION_MAX_DAYS`) และมี 2FA แบบ TOTP ต่อบัญชี; เปลี่ยนรหัสผ่านเองยังไม่มี |
-| ต่ำ | แอป Mac ลงนามแบบ ad hoc, Electron fuses ค่าเริ่มต้น | ยังเปิด |
+| ต่ำ | ไม่มีอายุสูงสุดของ session, ไม่มี 2FA, ผู้ใช้เปลี่ยนรหัสผ่านเองไม่ได้ | ปิดแล้ว: session หมดอายุ 90 วันหลังล็อกอิน (`MIMI_SESSION_MAX_DAYS`), 2FA แบบ TOTP ต่อบัญชีพร้อม recovery codes 10 รหัส, หน้าเปลี่ยนรหัสผ่านเอง และแจ้งเตือนอุปกรณ์อื่นเมื่อมีล็อกอินใหม่ |
+| ต่ำ | แอป Mac ลงนามแบบ ad hoc, Electron fuses ค่าเริ่มต้น | ดีขึ้น (0.7.9): build ลงนาม/notarize ได้เมื่อตั้ง cert, updater ตรวจ SHA-256 + publisher และ build ตั้ง Electron fuses แล้ว (RunAsNode เปิด, NODE_OPTIONS/CLI inspect ปิด); แต่ release จริงยังไม่ได้ตั้ง cert (unsigned/ad hoc) |
 
 ## 1. ล็อกอินและ session (gateway)
 
@@ -33,7 +33,8 @@
 - `/auth/login` รับเฉพาะ `application/json` (415 ถ้าไม่ใช่)
 - ตรวจรหัสผ่านพร้อมกันได้ 4 ตัว รอคิวได้ 32 ที่เหลือได้ 503 + `Retry-After` (test: 40 คำขอพร้อมกัน)
 
-ปิดแล้ว (0.7.9): อายุสูงสุดของ session (ค่าเริ่มต้น 90 วัน, `MIMI_SESSION_MAX_DAYS`) และ 2FA แบบ TOTP (ตั้งเองในตั้งค่า, secret เข้ารหัสด้วย key เดียวกับ token ของ core, รหัสหนึ่งใช้ได้ครั้งเดียว, ผิดนับรวมกับ limiter ของการล็อกอิน, admin ปิดให้ด้วย `2fa-reset`) · ยังเปิด: หน้าเปลี่ยนรหัสผ่านเอง, แจ้งเตือนเมื่อมีการล็อกอินใหม่, recovery code
+ปิดแล้ว (0.7.9): อายุสูงสุดของ session (ค่าเริ่มต้น 90 วัน, `MIMI_SESSION_MAX_DAYS`) และ 2FA แบบ TOTP (RFC 6238, 6 หลัก/30 วินาที, รับ clock drift ±1 step; ตั้งเองใน Settings → โปรไฟล์ของฉัน เฉพาะโหมด gateway, secret เข้ารหัสด้วย key เดียวกับ token ของ core, รหัสหนึ่งใช้ได้ครั้งเดียวเพราะเก็บ `totp_last_step`, ผิดนับรวมกับ limiter ของการล็อกอิน, admin ปิดให้ด้วย `2fa-reset`)
+เพิ่มภายหลัง: recovery codes 10 รหัส (80 บิต, เก็บเฉพาะ SHA-256, แสดงครั้งเดียว, ใช้ได้คนละครั้งและแทนที่ทั้งชุดได้ด้วยรหัสผ่าน), หน้าเปลี่ยนรหัสผ่านเอง (ต้องรู้รหัสเดิม; เพิกถอน session อื่นแต่เก็บ session ที่เปลี่ยน) และ `security-alert` แจ้งอุปกรณ์อื่นที่เปิดอยู่เมื่อมี session ใหม่ · ยังเปิด: ไม่มีประวัติ/อีเมลแจ้งเตือนล็อกอิน (อุปกรณ์ที่ปิดอยู่จะไม่เห็น)
 
 ## 2. การแยกข้อมูลระหว่างผู้ใช้
 
@@ -82,7 +83,9 @@
 - หน้าต่างใช้ partition ในหน่วยความจำ, `contextIsolation` + `sandbox`, preload รับคำสั่งเฉพาะจาก server ที่ตั้งไว้/หน้า connect, นำทางออกนอก server ไม่ได้
 - token เก็บด้วย safeStorage (Keychain); ออกจากระบบ/ล็อกอัตโนมัติ = เพิกถอน + ล้าง + เริ่มใหม่ (ทดสอบ 27 ข้อ)
 - แอปที่ build แล้วไม่ยอมเปิดเมื่อมี `--remote-debugging-port`
-- ยังเปิด: ลงนาม Developer ID + notarize, Electron fuses (`RunAsNode` ต้องเปิดไว้เพราะ PC agent ใช้)
+- ลงนาม/notarize: โค้ดพร้อมแล้ว (`scripts/signing.mjs`, `.github/workflows/release.yml`; updater ตรวจ SHA-256 + publisher ใน `packages/desktop/updater.cjs`) แต่ยังไม่ได้ตั้ง certificate/secrets จริง — build ที่ปล่อยจึงยัง unsigned (Windows) / ad hoc (macOS)
+- Electron fuses: build ตั้งแล้ว (`scripts/fuses.mjs`): `RunAsNode` เปิดไว้เพราะ PC agent/Workspace terminal ใช้, `NODE_OPTIONS` และ `--inspect` ปิด
+- ยังเปิด: ยังไม่ได้ทดสอบ signed/notarized build จริง และยังไม่ได้ตั้ง certificate
 
 ## 6. PC agent (การเข้าถึงไฟล์บนเครื่องผู้ใช้)
 
@@ -168,7 +171,23 @@
 - `browser_fill_secret`: core อ่าน vault ตามชื่อที่ agent ส่ง, ส่งค่าลง PC ผ่าน internal tool ที่ agent ไม่เห็น schema, และไม่คืนค่าในผลลัพธ์; รับเฉพาะ password/payment field; snapshot ซ่อนค่า; task/session/always grant ใช้ไม่ได้; workflow และ `tool_test` ปฏิเสธ; local consent ของ PC ยังถามอีกชั้น
 - ยังเปิด: การทดสอบกับหน้า checkout จริงที่ใช้ iframe/shadow DOM, การยืนยันตัวตนของผู้ใช้ก่อนอนุมัติ (ผู้ใช้ต้องตรวจ URL เอง), และ native secure fields ซึ่งยังบล็อกตามเดิม
 
+## 14. 0.7.9: setup wizard, packs, OpenAPI import, tunnel และ 2FA
+
+- **Setup wizard**: ใช้ message ปกติทั้งหมด (`provider-connect`, `settings-save`, `agent-save`, `chat-create`) จึงไม่สร้างทางเขียนข้อมูลใหม่; preset มาจาก server และถูกตัดเหลือเฉพาะ tool ที่ build นี้มี; preset ที่อ่านเว็บ/อีเมลไม่มี shell; ค่า API key ที่ผู้ใช้กรอกไปทางเดียวกับการตั้งค่าเดิม (vault/secrets) และ `mimi.setupDone` เป็นเพียงธงว่าตั้งค่าเสร็จแล้ว
+- **Packs**: เป็นข้อมูล JSON ล้วน ไม่พก credential; ตรวจชื่อ agent/connector/tool/trigger กับของจริง, ห้ามชน id แพ็กในเครื่อง, ห้าม agent ที่ผสมเนื้อหาภายนอกกับ shell, workflow ถูกบันทึกแบบปิด; ติดตั้งไม่ทับของเดิมและบันทึกว่าใส่อะไรไว้ที่ `user/packs/<id>.json`
+  - ถอนได้แล้ว: ลบเฉพาะ agent/connector/workflow ที่แพ็กสร้างและยังมีอยู่; ของที่ workflow/agent อื่นใช้อยู่จะถูกเก็บไว้; record ที่ติดตั้งก่อนมีระบบติดตามลบได้แต่ของยังอยู่ (แจ้งใน UI)
+  - remote catalog (`MIMI_PACK_CATALOG_URL`) มีแล้ว: จำกัด https, 5 วินาที, 4 MB และตรวจแพ็กทุกตัว; **ยังไม่มีลายเซ็น** — แพ็กจากคนอื่นจึงเทียบเท่าโค้ดที่กระทำการแทนผู้ใช้ได้ ต้องอ่าน prompt/เครื่องมือ/workflow ในหน้า preview ก่อนติดตั้ง
+- **OpenAPI import**: JSON เท่านั้น ไม่เกิน 2 MB, server ต้องเป็น https และไม่ใช่ LAN/local, ห้ามชน native key หรือชื่อ tool เดิม, สูงสุด 50 imported connectors / 200 operations; ทุก operation เป็น `untrustedInput`, risk ตาม method, ไม่มี trigger, ไม่ใช้ absolute URL หรือยืม Google token; ไฟล์ที่เสียถูกข้ามพร้อม log และลบ/แทนที่ได้จาก UI
+  - pagination (page/cursor/nextPageToken) และ `x-mimi-rate-limit` ถูก derive แล้ว; **ยังเปิด**: trigger และ `itemsPath` นอก `x-mimi-items-path` ไม่ถูก derive และยังไม่ได้ทดสอบกับ spec จริงจำนวนมาก
+- **Cloudflare tunnel**: quick tunnel เปิด https ชั่วคราวให้ webhook/calendar push; named tunnel (`MIMI_CLOUDFLARED_TUNNEL` + URL/config) ให้ URL คงที่และเริ่มเองได้; ต้องมี `MIMI_TOKEN` ≥ 16 ตัว, ปฏิเสธเมื่อ core มี public address อยู่แล้ว, ปฏิเสธ ChatGPT plan ระหว่างเปิด, limiter นับ `cf-connecting-ip`, cloudflared ได้ environment ที่ไม่มี secret; ใครรู้ URL จะเห็นหน้าเข้าสู่ระบบแต่ยังต้องผ่านรหัสผ่าน/2FA
+  - **ยังเปิด**: ไม่มี UI/Cloudflare Access ในตัว, named tunnel ต้องตั้ง env/config เอง, cloudflared เป็น binary ที่ผู้ใช้ติดตั้งเอง (supply chain ของเครื่องนั้น) และยังไม่ได้ทดสอบกับ Cloudflare จริงในรอบนี้
+- **2FA และรหัสผ่าน**: recovery codes 10 รหัสถูกเก็บแบบ SHA-256 และใช้ได้ครั้งละรหัส; การสร้างชุดใหม่ต้องใช้รหัสผ่านและทำให้รหัสเก่าที่เหลือใช้ไม่ได้; หน้าเปลี่ยนรหัสผ่านเพิกถอน session อื่น; gateway ส่ง `security-alert` ไปยังอุปกรณ์อื่นที่เปิดอยู่เมื่อมี session ใหม่ (ไม่มีประวัติ/อีเมล) — UI smoke ของการเปิด/ปิด 2FA, recovery codes และ alert ยังไม่ได้ทำ
+
 ## สิ่งที่ยังไม่ได้ตรวจ
 
 deploy จริงบน Railway (header `Host`, `*.railway.internal`, IPv6), Android จริง/FCM, iPhone, Apple Silicon, Windows,
-การทดสอบเจาะระบบโดยบุคคลภายนอก, การทบทวน dependency ทั้งหมด (ทำแค่ `npm audit`)
+การทดสอบเจาะระบบโดยบุคคลภายนอก, การทบทวน dependency ทั้งหมด (ทำแค่ `npm audit`), UI smoke ของ setup wizard / packs /
+OpenAPI import / tunnel / 2FA, tunnel จริงกับ Cloudflare + calendar push จริง, TOTP กับ authenticator app จริง,
+signed/notarized build และ Android release signing, OpenAPI import กับ spec จริง, packs ที่ใช้ credential จริง,
+การถอนแพ็กกับข้อมูลจริง, recovery codes และการเปลี่ยนรหัสผ่านผ่าน UI จริง, security alert กับอุปกรณ์จริง,
+manual OS matrix และ real Gmail/Outlook/YouTube

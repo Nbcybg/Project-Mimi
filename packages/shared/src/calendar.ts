@@ -35,6 +35,8 @@ export interface CalendarAccountSyncView {
   name: string;
   service: CalendarSource;
   connected: boolean;
+  /** Google only: the calendar this account watches (default `primary`). */
+  calendarId?: string;
   /** A push channel is active; false means the 15-minute poll is doing the work. */
   push: boolean;
   subscriptionExpiresAt: string | null;

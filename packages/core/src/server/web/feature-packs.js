@@ -13,6 +13,8 @@
   let packs = null;
   /** { id?, source?, label, reqId, busy, report? } while the review dialog is open. */
   let review = null;
+  /** { id, label, reqId, busy, report?, errors, done } while the removal dialog is open. */
+  let removing = null;
   let reqSeq = 0;
 
   function checklist(items) {
@@ -53,6 +55,58 @@
   function openReview(target) {
     review = { ...target, reqId: 0, busy: false, report: null, errors: [], installed: false };
     send(false);
+  }
+
+  function sendRemove(apply) {
+    if (!removing || removing.busy) return;
+    removing.busy = true;
+    removing.reqId = ++reqSeq;
+    M().send({ type: apply ? 'pack-remove' : 'pack-remove-preview', reqId: removing.reqId, id: removing.id });
+    showRemove();
+  }
+
+  function openRemove(pack) {
+    removing = { id: pack.id, label: pack.name, reqId: 0, busy: false, report: null, errors: [], done: false };
+    sendRemove(false);
+  }
+
+  function showRemove() {
+    if (!removing) return;
+    const dialog = el('div', 'dialog form');
+    dialog.append(el('h3', '', removing.done ? `ถอน ${removing.label} แล้ว` : `ถอนการติดตั้ง: ${removing.label}`));
+    if (removing.busy) dialog.append(el('p', 'hint', 'กำลังตรวจ…'));
+    const report = removing.report;
+    if (report) {
+      if (report.legacy) {
+        dialog.append(el('p', 'hint badtxt', 'แพ็กนี้ติดตั้งก่อนมีระบบติดตามรายการ จึงลบได้เฉพาะรายการติดตั้ง — agent / connector / workflow ที่มีอยู่จะถูกเก็บไว้ ให้ลบเองจากหน้าของแต่ละอย่าง'));
+      }
+      const removed = [
+        ...report.remove.agents.map((name) => `agent ${name}`),
+        ...report.remove.connectors.map((key) => `connector ${key}`),
+        ...report.remove.workflows.map((workflow) => `workflow ${workflow.agent}/${workflow.name}`),
+      ];
+      dialog.append(el('h4', '', removing.done ? 'ลบแล้ว' : 'จะลบ'));
+      if (removed.length === 0) dialog.append(el('p', 'hint', 'ไม่มีอะไรต้องลบ'));
+      for (const item of removed) dialog.append(el('p', 'hint mono', item));
+      if (report.kept.length > 0) {
+        dialog.append(el('h4', '', 'เก็บไว้'));
+        for (const item of report.kept) dialog.append(el('p', 'hint', `${item.kind} ${item.name} · ${item.reason}`));
+      }
+      if (!removing.done && removed.length > 0) {
+        dialog.append(el('p', 'hint badtxt', 'agent ที่แพ็กสร้างจะถูกลบพร้อมทุก workflow ของมัน; ถ้ามี workflow อื่นอยู่ ระบบจะเก็บ agent นั้นไว้'));
+      }
+    }
+    for (const error of removing.errors) dialog.append(el('p', 'hint badtxt', error));
+    const foot = el('div', 'foot');
+    foot.append(el('span', 'msg'), button('btn ghost', removing.done ? 'เสร็จ' : 'ปิด', () => {
+      removing = null;
+      M().closeOverlay();
+    }));
+    if (report && !removing.done && !removing.busy && removing.errors.length === 0) {
+      foot.append(button('btn pri', 'ยืนยันถอนการติดตั้ง', () => sendRemove(true)));
+    }
+    dialog.append(foot);
+    M().overlay(dialog);
   }
 
   function showReview() {
@@ -123,7 +177,7 @@
     const card = el('div', 'item');
     const info = el('div');
     const top = el('div', 'hstack');
-    top.append(el('b', '', pack.name), el('span', 'badge', pack.builtin ? 'มากับแอป' : 'ไฟล์'), ...(pack.tags || []).map((tag) => el('span', 'chip', tag)));
+    top.append(el('b', '', pack.name), el('span', 'badge', pack.remote ? 'ระยะไกล' : pack.builtin ? 'มากับแอป' : 'ไฟล์'), ...(pack.tags || []).map((tag) => el('span', 'chip', tag)));
     info.append(top, el('p', 'hint', pack.description));
     const parts = [
       pack.agents.length ? `agent: ${pack.agents.join(', ')}` : '',
@@ -135,6 +189,7 @@
       const missing = (pack.credentials || []).filter((item) => !item.ok);
       info.append(el('p', `pill ${missing.length ? 'todo' : 'ok'}`, missing.length ? `ยังขาด ${missing.length} อย่าง` : 'ตั้งค่าครบแล้ว'));
       if (missing.length) info.append(checklist(pack.credentials));
+      info.append(button('btn ghost', 'ถอนการติดตั้ง', () => openRemove(pack)));
     } else {
       info.append(button('btn', 'ดูและติดตั้ง', () => openReview({ id: pack.id, label: pack.name })));
     }
@@ -152,7 +207,7 @@
     const catalog = el('div', 'panel');
     catalog.append(
       el('h3', '', 'แพ็กสำเร็จรูป'),
-      el('p', 'hint', 'ชุด agent + connector + workflow ที่ใช้คู่กัน ติดตั้งทีเดียว · ไม่ทับของเดิม (agent/connector ที่มีอยู่จะใช้ตัวเดิม, workflow ชื่อซ้ำได้ชื่อใหม่) · workflow ถูกบันทึกแบบปิดไว้ให้ตรวจก่อนเปิด · แพ็กไม่มี credential ติดมา'),
+      el('p', 'hint', 'ชุด agent + connector + workflow ที่ใช้คู่กัน ติดตั้งทีเดียว · ไม่ทับของเดิม (agent/connector ที่มีอยู่จะใช้ตัวเดิม, workflow ชื่อซ้ำได้ชื่อใหม่) · workflow ถูกบันทึกแบบปิดไว้ให้ตรวจก่อนเปิด · แพ็กไม่มี credential ติดมา · แพ็ก "ระยะไกล" มาจาก MIMI_PACK_CATALOG_URL และยังไม่มีลายเซ็น ต้องตรวจก่อนติดตั้ง'),
     );
     for (const pack of packs.catalog) catalog.append(packCard(pack, false));
     const file = el('input');
@@ -192,6 +247,18 @@
     showReview();
   }
 
+  function onRemoveReport(message) {
+    if (!removing || message.reqId !== removing.reqId) return;
+    removing.busy = false;
+    removing.report = message.report || null;
+    removing.errors = message.errors || [];
+    if (message.action === 'remove' && !message.errors?.length) {
+      removing.done = true;
+      M().toast(`ถอน ${removing.label} แล้ว`, 'ลบเฉพาะรายการที่แพ็กสร้างไว้');
+    }
+    showRemove();
+  }
+
   window.MimiHooks = window.MimiHooks || {};
-  window.MimiHooks.packs = { render, onPacks, onReport };
+  window.MimiHooks.packs = { render, onPacks, onReport, onRemoveReport };
 })();

@@ -2,7 +2,34 @@
 
 ## Unreleased
 
-### 0.7.9-prototype
+- Packs: an installed pack can be removed. Hub > แพ็ก shows a preview of the agents, OpenAPI connectors and
+  workflows the pack created and deletes only those; items another workflow or agent still uses are kept and
+  listed. Reused agents and connectors are never removed. Packs installed before ownership tracking only lose
+  their record, and their items stay.
+- Accounts: two-step sign-in now issues 10 one-time recovery codes when it is enabled (80 random bits, stored
+  hashed, shown once), accepts one in the code field, and can replace the unused set from Settings with the
+  password. Settings also has a password change that signs out the other devices but keeps the current session.
+  The other open devices of an account get a "new sign-in" alert when a session is created.
+- Calendar: Microsoft Graph subscriptions now ask for lifecycle notifications. A removed subscription is
+  recreated on the next pass, a missed notification triggers a delta pass, and an expired authorization shows
+  in the Calendar sync panel until the Microsoft account is reconnected. Google and Microsoft accounts can
+  also pick which calendar to watch (Hub > Trigger > Calendar sync > เลือกปฏิทิน; the list comes from the
+  provider, or an id can be typed; Microsoft also offers "all calendars"). Switching stops the old push
+  channel/subscription and starts a fresh baseline.
+- Tunnel: a named Cloudflare tunnel can be configured beside the quick one (`MIMI_CLOUDFLARED_TUNNEL` with
+  `MIMI_CLOUDFLARED_URL` or a hostname in `MIMI_CLOUDFLARED_CONFIG`). Its address stays the same across
+  restarts and the core starts it by itself unless `MIMI_CLOUDFLARED_AUTOSTART=0`; the settings screen shows
+  the mode and name.
+- Connectors: OpenAPI import now infers pagination for common list endpoints (page + size parameter, or a
+  cursor/page token with `nextPageToken`/`nextCursor`/`paging.next`/`links.next`) and reads an
+  `x-mimi-rate-limit` extension as `{ requests, perMs, burst? }`. Triggers are still never derived.
+- Desktop: the packaged apps flip Electron fuses before signing (`scripts/fuses.mjs`): RunAsNode stays on for
+  the PC agent and Workspace terminal, while NODE_OPTIONS and CLI inspect arguments are disabled.
+- Packs: `MIMI_PACK_CATALOG_URL` can add a remote catalog (an https JSON array or `{ "packs": [...] }`) to
+  Hub > แพ็ก. Entries are validated like pack files, shown with a "remote" badge, and the fetch is capped at
+  4 MB / 5 seconds. There is no signature; only use a source you trust.
+
+## 0.7.9-prototype - 2026-11-01
 
 - Packs: Hub > แพ็ก installs ready-made sets of agents, OpenAPI connectors and workflows in one go, with a
   credential checklist (model provider, connector connections, Google / Microsoft accounts and vault secrets the
@@ -60,7 +87,7 @@
   settings panel has a close button, and the Settings header counts its real tabs.
 - Dependencies: `undici` updated to 7.30.1 (`npm audit` clean).
 
-### 0.7.8-prototype
+## 0.7.8-prototype - 2026-10-31
 
 - MCP: the legacy HTTP+SSE transport is supported next to stdio and Streamable HTTP; a refresh also records the
   server's health latency. A dropped transport reconnects at once, then backs off (1 s doubling to 60 s, five
@@ -169,7 +196,7 @@
   public HTTPS tunnel still works; the new calendar workflow trigger turns created/updated/deleted events into
   items on Google or Outlook accounts.
 
-### 0.7.7-prototype
+## 0.7.7-prototype - 2026-10-30
 
 - Themes: a warm rose / plum palette with light and dark modes (Settings → หน้าตา), and
   each chat can keep its own theme. The status chip is centred, the composer's blurred
@@ -188,7 +215,7 @@
   16px so Android no longer zooms on focus, the Thai line-break rule is set at load, and
   messages far off screen are only laid out when they scroll into view.
 
-### 0.7.6-prototype
+## 0.7.6-prototype - 2026-10-30
 
 - Sounds: every app sound plays at 30 % volume. On Android the three chat sounds are bundled
   in the app and loaded once, so they start at once instead of being fetched per tap; on the
@@ -201,7 +228,7 @@
 - A sent message no longer disappears when its stored echo arrives (it was wrongly kept
   marked as pending).
 
-### 0.7.5-prototype
+## 0.7.5-prototype - 2026-10-30
 
 - Mail: besides Gmail / Outlook, any IMAP or POP3 mailbox can be watched, with optional SMTP
   sending; passwords are typed in Hub → Mail but kept only in the machine's vault.
@@ -212,7 +239,7 @@
 - Desktop: a built-in browser window with its own profile, driven by the PC agent.
 - Android: notification icon and push-service / widget fixes.
 
-### 0.7.4-prototype
+## 0.7.4-prototype - 2026-10-30
 
 - The header and the chat list say "กำลังตอบ…" (was "กำลังพิมพ์…") while an agent answers.
 - Voice messages: the transcript is written in the language of the app (Thai or
@@ -235,7 +262,7 @@
 - Sounds: chat_1 when you send, chat_2 when an agent finishes answering, chat_3 when
   an agent asks for permission (same on/off switch and quiet hours as before).
 
-### 0.7.3-prototype
+## 0.7.3-prototype - 2026-10-30
 
 - Auto-update works again: the apps look at GitHub's "latest release", which skips
   pre-releases, and v0.7.1 / v0.7.2 had been published as pre-releases. Tags like
@@ -257,7 +284,7 @@
 - Typing on a phone: no blur behind the message box, and the character redraws at
   ~15 fps while a text field has focus. The chat-settings card scrolls as a whole.
 
-### 0.7.2-prototype
+## 0.7.2-prototype - 2026-10-29
 
 - Each picture in a batch can carry its own caption ("คำบรรยายรูปนี้"): it shows
   over the picture in the chat and reaches the model with the file, apart from
@@ -279,7 +306,7 @@
 - Settings and the other pages scroll properly on phones (dynamic viewport,
   safe areas, and the keyboard resizing the page).
 
-### 0.7.1-prototype
+## 0.7.1-prototype - 2026-10-29
 
 - "Push mail": watches the connected Google and Microsoft accounts and any IMAP /
   POP3 mailbox for new unread mail and raises a notification for each.
@@ -290,7 +317,7 @@
   (database schema 18).
 - Android app: sync and widget fixes.
 
-### 0.7.0-prototype
+## 0.7.0-prototype - 2026-10-29
 
 - Chat sounds: a short "pop" when a message goes out and two notes when the
   agent finishes its reply (made in code, per device; Settings has a switch and

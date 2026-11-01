@@ -661,3 +661,52 @@ test('packs: preview changes nothing; install adds connectors and switched-off w
     fs.rmSync(parts.root, { recursive: true, force: true });
   }
 });
+
+test('packs: removal deletes only what the pack created and previews it first', async () => {
+  const parts = testCoreParts();
+  const server = await startServer({ ...parts.config, token: TOKEN, host: '127.0.0.1', port: 0, localPcTools: false }, parts.coreOptions);
+  try {
+    const client = await Client.open(`ws://127.0.0.1:${server.port}/ws`);
+    await client.waitFor(isType('welcome'));
+    const report = (reqId: number) => (message: ServerMessage): message is Extract<ServerMessage, { type: 'pack-remove-report' }> =>
+      message.type === 'pack-remove-report' && message.reqId === reqId;
+
+    client.send({ type: 'packs-list' });
+    await client.waitFor(isType('packs'));
+    client.send({ type: 'pack-install', reqId: 1, id: 'morning-brief' });
+    const installed = await client.waitFor((message): message is Extract<ServerMessage, { type: 'pack-report' }> => message.type === 'pack-report' && message.reqId === 1);
+    assert.equal(installed.ok, true, installed.errors.join('\n'));
+    assert.ok(server.core.connectors.get('open_meteo'));
+    assert.ok(server.core.workflows.list().some((workflow) => workflow.name === 'morning-weather'));
+
+    client.send({ type: 'pack-remove-preview', reqId: 2, id: 'morning-brief' });
+    const preview = await client.waitFor(report(2));
+    assert.equal(preview.ok, true, preview.errors.join('\n'));
+    assert.deepEqual(preview.report?.remove.workflows, [{ agent: 'mimi', name: 'morning-weather' }]);
+    assert.deepEqual(preview.report?.remove.connectors, ['open_meteo']);
+    assert.deepEqual(preview.report?.remove.agents, [], 'a reused agent is never removed');
+    assert.ok(server.core.connectors.get('open_meteo'), 'preview changes nothing');
+
+    client.send({ type: 'pack-remove', reqId: 3, id: 'morning-brief' });
+    const removed = await client.waitFor(report(3));
+    assert.equal(removed.ok, true, removed.errors.join('\n'));
+    assert.equal(server.core.connectors.get('open_meteo'), undefined);
+    assert.equal(server.core.workflows.list().some((workflow) => workflow.name === 'morning-weather'), false);
+    await client.waitFor((message): message is Extract<ServerMessage, { type: 'packs' }> => message.type === 'packs' && message.installed.length === 0);
+
+    const source = JSON.stringify({ format: 1, id: 'buddy', name: 'Buddy', description: 'Test pack', agents: [{ name: 'packbuddy', description: 'x', systemPrompt: 'x', tools: ['web_search'] }] });
+    client.send({ type: 'pack-install', reqId: 4, source });
+    const made = await client.waitFor((message): message is Extract<ServerMessage, { type: 'pack-report' }> => message.type === 'pack-report' && message.reqId === 4);
+    assert.equal(made.ok, true, made.errors.join('\n'));
+    assert.ok(server.core.agents.names().includes('packbuddy'));
+
+    client.send({ type: 'pack-remove', reqId: 5, id: 'buddy' });
+    const gone = await client.waitFor(report(5));
+    assert.equal(gone.ok, true, gone.errors.join('\n'));
+    assert.equal(server.core.agents.names().includes('packbuddy'), false);
+    client.close();
+  } finally {
+    await server.close();
+    fs.rmSync(parts.root, { recursive: true, force: true });
+  }
+});

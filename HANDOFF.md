@@ -2,180 +2,163 @@
 
 ## สถานะ
 
-- Commit Layer 2: `8edf589`; ก่อนหน้า: `22eb64e` (docs/HANDOFF), `5386801` (docs), `9b24e39` (docs),
-  `0e7edf2` (Google Drive connector), `991e291` (Overseer ชั้น 1), `a4b20a3` (MCP/workflow/permissions/secret/git)
-- Layer 2 ถูก commit แล้วใน `8edf589` (in-place/apps/statements/vault fill); ต่อมาเพิ่ม realtime calendar sync
-  ใน working tree (ยังไม่ commit)
-- branch `main` นำ `origin/main` และยังไม่ push (ดูจำนวนจริงด้วย `git status -sb`)
-- ตรวจซ้ำรอบปิดงาน Layer 2 (2026-11-01): typecheck ผ่านทั้ง `shared`, `pc-agent`, `core`
-- Full test suite ผ่าน **707 tests** (fail 0, skipped 0) รวม calendar-sync 7 tests + gateway calendar push 1 test
-  และ typecheck ผ่านทั้ง `shared`, `pc-agent`, `core`
-- UI smoke test ผ่าน 7/7 ในรอบก่อน และรอบนี้ผ่านเพิ่ม: agent permission matrix (6 rows, ค่า policy ที่บันทึกไว้แสดงถูก)
-  + Settings จัดกลุ่ม always grants ตาม agent (รันผ่าน BrowserSession/Edge headless, ไม่ได้เพิ่มเป็น test ใน repo)
-- DB schema ล่าสุด: **version 23** (`023-tool-calls.sql`) — calendar sync ใช้ไฟล์ JSON ไม่เพิ่ม migration
-- รอบล่าสุด: run_log coverage, MCP reconnect/backoff, config rollback (skill/preset/workflow),
-  secret redaction, git secret-file guard, permission matrix + per-agent always grants,
-  Overseer ชั้น 1 (machine/web tools, mail/notify, cron, vault, OAuth, workflow enable, self-edit, notify node),
-  Google Drive connector upload/rename/share, **Layer 2 (in-place media, install apps, statements/payment guard, vault fills)**,
-  **realtime calendar sync (Google/Outlook)**
+- HEAD `d722831` (packs); branch `main` นำ `origin/main` **7 commits** และยังไม่ push
+  (ตรวจจำนวนจริงด้วย `git status -sb`)
+- Calendar sync ถูก commit แล้วตั้งแต่ `a353f2e` (0.7.8) — ไม่มีงาน calendar ค้างใน working tree
+- Working tree ที่ยังไม่ commit: Workspace terminal/browser ของเดสก์ท็อป
+  (`packages/desktop/workspace-*`, `scripts/build-mac.mjs`, `scripts/build-win.mjs`,
+  `package-lock.json`) และไฟล์ใหม่ `scripts/pack-terminal.mjs`; ดู `git status` ก่อนเริ่มงาน
+- Full test suite ผ่าน **749 tests** (fail 0, skipped 0) และ typecheck ผ่านทั้ง
+  `shared`, `pc-agent`, `core` เมื่อ 2026-11-01
+- DB schema ล่าสุด: **version 23** (`023-tool-calls.sql`); calendar sync ใช้ไฟล์ JSON
+  (`user/data/calendar-sync.json`) ไม่เพิ่ม migration
+- เวอร์ชันใน `package.json` ทุกแพ็กเกจเป็น **0.7.9-prototype**; ยังไม่มี tag
+  `v0.7.9-prototype` (`git tag --list`)
+- ฟีเจอร์ 0.7.9 ที่ทำแล้ว: first-run setup wizard, OpenAPI import ในแอป, session maximum age +
+  TOTP 2FA, Cloudflare tunnel (quick/named), signed/checked desktop updates, packs
+- งานใหม่ใน working tree (ยังไม่ commit): ถอนแพ็กพร้อม preview, TOTP recovery codes,
+  หน้าเปลี่ยนรหัสผ่านเอง, แจ้งเตือนล็อกอินใหม่, Graph lifecycle notifications,
+  เลือกปฏิทิน Google/Microsoft, OpenAPI pagination/rate-limit inference,
+  named tunnel, Electron fuses และ remote pack catalog — เอกสารและ test อัปเดตแล้ว
 
 ## ทำเสร็จแล้ว
 
-### P0
+### 0.7.9 (commits `b8cd476` → `d722831`)
 
-- MCP client: `stdio`, Streamable HTTP และ HTTP+SSE (`McpLink`/`SseLink`)
-  - tools ชื่อ `mcp_<server>_<tool>`
-  - `{{secret.NAME}}` ใน env/headers/url
-  - refresh แล้วบันทึก `latencyMs` เป็น health figure
-  - core ตรวจสุขภาพทุก 15 นาทีผ่าน connection เดิม
-  - transport หลุด = reconnect ทันที แล้ว backoff 1s → 60s สูงสุด 5 ครั้ง (`reconnect` option)
-  - SSE stream ที่จบแจ้ง `onClose`; `SseLink` retry ตอนเปิด stream 2 ครั้ง
-- Per-agent permission:
-  - `agent.md` มี `permissions: { tool: allow|ask|deny }`
-  - ใช้ใน chat agent loop, task gates และ workflow tool/mcp/connector/sheets node
-  - approval card มี once / task / session / always (เครื่องมือ `alwaysAsk` เช่น `browser_fill_secret` และ payment ops แสดงแค่ครั้งนี้/ปฏิเสธ)
-  - always grants เก็บใน app settings **แยกตาม agent** และลบได้จาก Settings
-  - grant เก่าแบบ flat list ยังใช้ได้ และถูกอ่านเป็น `*` (ทุก agent)
-- UI agent editor: permission matrix (มี filter) แทน textarea, checkbox `Lazy tools`
+- **Setup wizard** — เปิดอัตโนมัติเมื่อเริ่มครั้งแรกแล้วยังแชตไม่ได้: ผู้ให้บริการ (Claude plan,
+  ChatGPT plan หรือ API key + โมเดลหลัก) → starter agent (เลขาส่วนตัว / นักค้นคว้า /
+  ผู้ช่วยจัดการเครื่อง / ผู้ช่วยเขียนโค้ด) → โฟลเดอร์ที่อนุญาต → PC agent → ทดสอบแชต
+  - ใช้ message ปกติ (`provider-connect`, `settings-save`, `agent-save`, `chat-create`)
+    จึงได้ผลเหมือนตั้งค่าเองทุกอย่าง; `mimi.setupDone` ถูก sync ข้ามอุปกรณ์
+  - เปิดใหม่ได้ที่ปุ่ม **ตัวช่วยตั้งค่า** ในหน้า Settings; preset ที่อ่านเว็บ/อีเมลไม่มี shell
+  - โค้ด: `packages/core/src/server/web/feature-setup.js`,
+    `packages/core/src/agents/presets.ts`
+- **OpenAPI import ในแอป** — Hub → Node & Tools → **+ นำเข้า OpenAPI**
+  - preview ก่อน ไม่เขียนอะไร; ยืนยันแล้วเก็บที่ `user/connectors/imported/<key>.json`
+    และเพิ่ม tools ทันทีโดยไม่ต้องรีสตาร์ท; แก้ทับ/ลบได้
+  - JSON เท่านั้น (2 MB), server ต้องเป็น https และไม่ใช่ LAN/local,
+    สูงสุด 50 imported connectors / 200 operations ต่อ connector
+  - operation ที่นำเข้าเป็น `untrustedInput` ทั้งหมด, risk ตาม method, เพิ่ม trigger ไม่ได้,
+    ใช้ absolute URL หรือยืม Google token ไม่ได้
+  - derive pagination จากชื่อ param/response ที่พบบ่อย (page + size, cursor/pageToken + next)
+    และอ่าน `x-mimi-rate-limit` (requests, perMs, burst); trigger และ `itemsPath` นอก
+    `x-mimi-items-path` ยังไม่ derive
+  - โค้ด: `packages/core/src/connectors/{openapi,imported}.ts`,
+    `packages/core/src/server/web/feature-tools.js`, `docs/connectors/openapi-import.md`
+- **Accounts gateway: session maximum age + 2FA** —
+  - session หมดอายุ `MIMI_SESSION_MAX_DAYS` (ค่าเริ่มต้น 90) หลังล็อกอิน แม้ใช้งานต่อเนื่อง
+  - TOTP ต่อบัญชี (RFC 6238, 6 หลัก, 30 วินาที, รับ clock drift ±1 step):
+    ตั้งใน Settings → โปรไฟล์ของฉัน (เฉพาะโหมด gateway), secret เข้ารหัสด้วย
+    `MIMI_GATEWAY_SECRET`, รหัสใช้ได้ครั้งเดียว (`totp_last_step`), รหัสผิดนับรวมกับ limiter
+  - recovery codes 10 รหัสตอนเปิด 2FA (80 บิต, SHA-256, แสดงครั้งเดียว, ใช้ได้คนละครั้ง;
+    สร้างชุดใหม่ได้ด้วยรหัสผ่าน) และหน้าเปลี่ยนรหัสผ่านเอง (ออกจากระบบเครื่องอื่น)
+  - admin ปิดให้ด้วย `node packages/core/src/cli/accounts.ts 2fa-reset <ชื่อ>` (ออกจากระบบทุกเครื่อง)
+  - แจ้งเตือนอุปกรณ์อื่นที่เปิดอยู่เมื่อมี session ใหม่ (`security-alert`)
+  - โค้ด: `packages/core/src/gateway/{accounts,totp,gateway}.ts`,
+    `packages/core/src/server/web/app.js` (`twoFactorPanel`, `passwordPanel`)
+- **Cloudflare tunnel** — Settings → แอปและระบบ → **เข้าจากอินเทอร์เน็ต (Cloudflare Tunnel)**
+  - เรียก `cloudflared tunnel --url http://127.0.0.1:<port>`; หา binary จาก PATH,
+    โฟลเดอร์ติดตั้งปกติ หรือ `MIMI_CLOUDFLARED`
+  - URL เป็น `https://<random>.trycloudflare.com` และ **เปลี่ยนทุกครั้งที่เริ่ม**;
+    ใช้กับ webhook และ calendar push อัตโนมัติเมื่อยังไม่ได้ตั้ง public URL
+  - ปฏิเสธเมื่อ core มี public address อยู่แล้ว หรือ `MIMI_TOKEN` สั้นกว่า 16 ตัว;
+    ระหว่างเปิด tunnel เชื่อม ChatGPT plan ไม่ได้; limiter นับ `cf-connecting-ip`;
+    cloudflared ไม่ได้รับ secret ใน environment
+  - named tunnel: ตั้ง `MIMI_CLOUDFLARED_TUNNEL` + `_URL` หรือ `_CONFIG` (อ่าน hostname
+    จาก ingress) → URL คงที่ และเริ่มเองตอนเปิด core เว้น `MIMI_CLOUDFLARED_AUTOSTART=0`
+  - ไม่ได้ bundle cloudflared (ผู้ใช้ต้องติดตั้งเอง) และไม่มี UI สร้าง tunnel ใน Cloudflare
+  - โค้ด: `packages/core/src/app/tunnel.ts`, `packages/shared/src/protocol.ts`,
+    `packages/core/src/server/web/app.js` (`tunnelPanel`)
+- **Signed builds + checked updates** — `scripts/signing.mjs` และ `release.yml`
+  - Windows Authenticode (`WIN_CSC_*`, signtool), macOS Developer ID + hardened runtime
+    (`APPLE_SIGN_IDENTITY`), notarize (`APPLE_ID`, `APPLE_APP_PASSWORD`, `APPLE_TEAM_ID`)
+  - ทุก release มี `SHA256SUMS.txt`; updater ตรวจขนาด + SHA-256 และถ้าแอปเดิมลงนามแล้ว
+    ตัวใหม่ต้องลงนามโดย publisher เดียวกัน (Authenticode subject / Team ID)
+  - **ยังไม่ได้ตั้ง certificate/secrets จริง** จึงยังได้ build แบบ unsigned (Windows) /
+    ad hoc (macOS)
+  - Electron fuses ตั้งก่อนลงนาม (`scripts/fuses.mjs`): RunAsNode เปิด, NODE_OPTIONS/CLI inspect ปิด
+  - โค้ด: `scripts/signing.mjs`, `scripts/fuses.mjs`, `scripts/build-{mac,win}.mjs`,
+    `packages/desktop/updater.cjs`, `.github/workflows/release.yml`
+- **Packs** — Hub → แพ็ก; ชุด agent + OpenAPI connector + workflow พร้อม credential checklist
+  - 3 แพ็กในเครื่อง: `morning-brief` (Open-Meteo), `fx-watch` (Frankfurter),
+    `mail-digest` (Gmail) — สองตัวแรกไม่ต้องใช้คีย์
+  - preview ไม่เปลี่ยนอะไร; ติดตั้งตามลำดับ connector → agent → workflow;
+    workflow ถูกบันทึกแบบปิดทุกตัว; ชื่อซ้ำไม่ทับ; บันทึกสถานะที่ `user/packs/<id>.json`
+  - รับไฟล์แพ็ก `format: 1` (JSON ≤ 4 MB, agent ≤ 8, connector ≤ 8, workflow ≤ 20)
+  - **ถอนการติดตั้งได้แล้ว** (working tree): preview ก่อนลบ, ลบเฉพาะของที่แพ็กสร้างและยังมีอยู่,
+    เก็บของที่ workflow/agent อื่นใช้; record เก่าที่ไม่มีข้อมูล ownership ลบได้แต่ของยังอยู่
+  - remote catalog ผ่าน `MIMI_PACK_CATALOG_URL` (https, 5 วินาที, 4 MB, ตรวจทุกแพ็ก,
+    ไม่มีลายเซ็น); catalog ในเครื่องยังเป็น 3 แพ็ก
+  - โค้ด: `packages/core/src/packs/{packs,catalog}.ts`,
+    `packages/core/src/server/web/feature-packs.js`, `docs/packs.md`
 
-### P1
+### ก่อนหน้า (0.7.8 และเก่ากว่า)
 
-- Coding tools:
-  - `grep`
-  - `apply_patch` หลายไฟล์, validate ก่อนเขียน, rollback ถ้าเขียนพลาด
-  - `git_status`, `git_diff`, `git_log`, `git_commit`
-  - `run_shell` แบบ `background: true`, `shell_output`, `shell_stop`
-  - rewind snapshot รองรับ `apply_patch`
-  - project allowlist: `projectRoots` ตั้งได้ใน Settings ใช้จำกัด cwd ของ `run_shell`
-    - core ส่ง `projectRoots` ไปกับ `tool-exec`
-    - PC agent ตัดกับ allowedDirs ของเครื่อง (intersection) — core ขยายสิทธิ์เองไม่ได้
-    - ว่าง = ใช้ allowedDirs เดิม; ถ้าตั้งไว้แต่ไม่มี root ที่เครื่องนี้อนุญาต จะ fail closed
-- Secret safety:
-  - workflow run history, debug node, run result และ error redact ค่า secret จริงจาก vault (ไม่ใช่แค่ pattern)
-- Git safety:
-  - `git_commit` ไม่ stage `.env`, key, credentials; ต้องส่ง `allow_secrets: true` ถ้าตั้งใจ
-- Subagent:
-  - `send_to` จำกัด `max_rounds` / `max_tokens`
-  - `send_agents` รันพร้อมกันได้สูงสุด 8 ตัว
-- Plan/todo:
-  - `plan_set`, `plan_read`, `todo_write`, `todo_read`
-  - ถูกเพิ่มให้ agent อัตโนมัติถ้ายังไม่มีใน tool list
-  - tool row ของ plan/todo แสดง open ในแชต
-- UI smoke test: ผ่านทุกจุดที่ค้างไว้ (Settings, agent editor, MCP form, custom node, plan/todo row)
-
-### P2 / Overseer / Workflow
-
-- `lazy_tools` + `tool_search`: schema ถูกโหลดเมื่อ model ขอ
-- Custom node เป็น type จริง `custom:<name>` และประกาศหลาย output ได้; item ใช้ `$output` เลือก output
-- Overseer:
-  - `agent_test` (alias ของ `agent_message`)
-  - `secret_audit`
-  - `config_diff` รองรับ agent/tool/preset/skill/workflow (มี list add/remove สำหรับ tools/skills/canMessage)
-  - `config_rollback` รองรับ agent/tool/preset/skill/workflow; save ก่อนเขียนทับอัตโนมัติ
-  - `run_log` อ่าน `tool_calls` (migration 023); log แล้วทั้ง chat tools,
-    workflow `tool`/`mcp`/`connector`/`sheets` และ tool ที่ถูกเรียกผ่าน `tool_test`
-- Workflow nodes:
-  - `assert`, `debug`, `json_schema`, `mcp`, `agent_call`
-  - `$secret.NAME` ใช้ได้ในทุก expression และ code node
-  - `try/catch`/retry เดิมใช้ `onError` + `retries`; pin/mock เดิมใช้ `pinned`
-
-### Overseer ชั้น 1
-
-- Machine/web: `read_file`, `run_shell` / `shell_output` / `shell_stop`,
-  `browser_open` / `browser_snapshot` / `browser_check` / `browser_screenshot` / `browser_wait` / `browser_close`,
-  `computer_screenshot` (browser tools เป็นข้อยกเว้นที่อยู่กับ shell ได้)
-- ติดต่อผู้ใช้: `notify_user`, `gmail_send`, `outlook_send`, `smtp_send`
-- ตั้งเวลาให้ตัวเอง/agent อื่น: `create_trigger`, `list_triggers`, `cancel_trigger`, `update_trigger`
-- Vault: `secret_set` / `secret_delete`; ค่า secret ถูกซ่อนจาก permission card, chat tool row และ history
-- OAuth: `oauth_accounts` / `oauth_start` (ผู้ใช้ยังกรอกรหัสและกด consent เอง); core รับ receiver จาก server
-- Workflow: `workflow_enable` / `workflow_disable` เป็นขั้นแยกหลัง `workflow_save` และต้องผ่าน approval
-- แก้ agent `overseer` ได้ (model/budget/prompt/tools) แต่สร้างใหม่/เปลี่ยนชื่อไม่ได้; กันการเพิ่ม `web_search`
-  เพราะมี `run_shell` อยู่แล้ว
-- Workflow node ใหม่: `notify` (notification + โพสต์ในแชต, redact secret)
-
-### Layer 2 (รอบนี้)
-
-- In-place editing:
-  - `pdf_delete_pages`, `pdf_rotate`, `image_crop`, `image_rotate`, `media_trim`, `media_subtitle` รับ `in_place: true`
-  - เขียน temp ในโฟลเดอร์เดียวกันก่อน แล้ว rename ทับเมื่อสำเร็จ; ค่าเริ่มต้นเก็บ `<name>.mimi-backup<ext>`
-  - `media_subtitle` เพิ่ม `mode: "burn"` (MP4/MKV/MOV) และ `media_extract_audio` (mp3/m4a/wav/ogg/opus)
-  - merge/split/transform ที่มีหลาย input/output ยังเขียนไฟล์ใหม่เท่านั้น
-- Apps:
-  - `install_app` (install/update) ผ่าน winget/brew/choco/scoop/apt
-  - รับเฉพาะ package id; ใช้ `execFile` ไม่มี shell; เป็น `shell` risk + local consent
-  - Overseer ใช้ได้; `tool_test` ยังปฏิเสธ shell-risk ตามเดิม
-- Statements / payments:
-  - `statement_read` อ่าน CSV/TSV, OFX/QFX, QIF (หัวตารางไทย/อังกฤษ), normalize transactions + totals, read-only, cap 20 MB
-  - Stripe `create_payment_link` / `refund_payment` มี `confirmPhrase` และ `alwaysAsk`; ต้องพิมพ์วลีตรงและอนุมัติทุกครั้ง
-  - audit ผ่าน `tool_calls`/`run_log`; ไม่มี direct bank transfer/API
-- Vault fills:
-  - core tool `browser_fill_secret` รับชื่อ secret จาก vault, agent ไม่เห็นค่า
-  - PC internal `browser_fill_secret` (ไม่อยู่ใน `pcTools`) เติมเฉพาะ password/payment field
-  - snapshot ซ่อนค่า secret field; `alwaysAsk` ไม่รับ task/session/always grant; workflow และ `tool_test` ปฏิเสธ
-  - UI permission card แสดงเฉพาะ "ครั้งนี้" กับ "ปฏิเสธ" เมื่อ `noGrant`
-
-### Realtime calendar sync (รอบนี้)
-
-- `CalendarSync` ต่อบัญชี Google / Microsoft เก็บ state ใน `user/data/calendar-sync.json`
-  (push token, channel/subscription, sync token / delta link, last sync, last error, recent changes, dedupe keys)
-- Google: `events.watch` (primary calendar, 7 วัน) → `GET events?syncToken=` แบบเพิ่มทีละหน้า; 410 = resync baseline
-- Microsoft: `POST /subscriptions` resource `/me/events` (created,updated,deleted, ~3 วัน) → PATCH renew เมื่อเหลือ < 12 ชั่วโมง
-  → `GET /me/events/delta` ตาม `@odata.nextLink` / `@odata.deltaLink`; 410 = resync baseline
-- Endpoint `GET/POST /api/calendar/push/<token>` เปิดให้ provider เรียกโดยไม่มี token ของแอป:
-  - Graph `?validationToken=` → ตอบ text/plain ตามค่าเดิมทันที
-  - Google ตรวจ `x-goog-channel-token` + `x-goog-channel-id` และตัด notification ซ้ำด้วย `x-goog-message-number`
-  - Graph ตรวจ `clientState` ของทุก notification; ผิด = 401
-  - ตอบ provider ก่อน แล้วค่อย sync เบื้องหลัง; dedupe change keys ระหว่าง push กับ poll
-- Public HTTPS: ใช้ `MIMI_CALENDAR_PUBLIC_URL` ก่อน แล้ว fallback `MIMI_PUBLIC_URL` / Railway domain
-  - local-first ต้องมี tunnel (cloudflared/ngrok/tailscale funnel) หรือ gateway `/h/<route-id>`
-  - ถ้าไม่มี public URL: ไม่สร้าง subscription แต่ยัง delta poll ทุก 15 นาที (`MIMI_CALENDAR_SYNC_MINUTES`)
-- Gateway เปิดเส้นทาง `/h/<id>/api/calendar/push/<token>`; ไม่ต้องมี session
-- Workflow: trigger pool ชนิดใหม่ `calendar` + node `trigger_calendar` (source google/microsoft, account,
-  changeTypes, maxEvents) → items `Id, Source, Action, Summary, Start, End, AllDay, Location, Organizer,
-  Attendees, Link, Status, UpdatedAt, ReceivedAt, Account, Key`
-  - push มาถึง = ยิง workflow ที่ตรง source/account ทันที; schedule ทุก 15 นาทีเป็น safety net
-  - `WorkflowState.seen` + lock ต่อ workflow กัน push/poll ซ้ำ
-- UI: Hub → Trigger มี panel "Calendar sync" (push/poll ต่อบัญชี, วันหมดอายุ, last sync, error, ปุ่ม Sync ตอนนี้);
-  Settings ส่ง `calendar` view มาด้วย
-- ปิดได้ด้วย `MIMI_CALENDAR_SYNC=0`
-
-### Integrations
-
-- Google Calendar: `calendar_update`, `calendar_delete`
-- Google Drive: `drive_upload` (multipart, <= 50 MB), `drive_share`, `drive_update_metadata`
-  - connector `google_drive` มี `upload_file` (base64), `rename_file`, `share_file`, `share_anyone`
-- Google Contacts: `contacts_search`, `contacts_create`, `contacts_update`
-- Outlook Contacts: `outlook_contacts_search`, `outlook_contacts_create`, `outlook_contacts_update`
-- OneDrive: `onedrive_upload` (`Files.ReadWrite`, <= 50 MB)
-- Media: `media_trim` ตัดวิดีโอ/เสียงเป็นไฟล์ใหม่
-- PDF: `pdf_merge`, `pdf_split`, `pdf_delete_pages`, `pdf_rotate` (pdf-lib; ต้นฉบับไม่ถูกแก้)
-- รูป/วิดีโอ: `image_crop`, `image_rotate`, `video_merge`, `media_subtitle` (soft SRT)
-- Scope: Google `contacts`, `drive` (เต็ม); Microsoft `Contacts.ReadWrite`, `Files.ReadWrite`
-  - ผู้ใช้ต้อง reconnect Google/Microsoft หนึ่งครั้ง
-- Packaging: `pdf-lib` เป็น dependency ของ `@mimi/pc-agent`
-  - `scripts/pack-pc-agent.mjs` มี `copyPcAgentPackages()` คัดลอก zod/pdf-lib/pako/tslib/@pdf-lib
-  - build-win/build-mac และ test `pc-stdin` ใช้ตัวเดียวกันแล้ว
+- MCP: stdio, Streamable HTTP, HTTP+SSE; `mcp_<server>_<tool>`; `{{secret.NAME}}`;
+  health check ทุก 15 นาที; reconnect + backoff 1s → 60s สูงสุด 5 ครั้ง
+- Per-agent permission matrix (`permissions` ใน `agent.md`), approval แบบ
+  once/task/session/always, always grants แยกตาม agent, grant เก่าแบบ flat list
+- Coding tools: `grep`, multi-file `apply_patch`, `git_status/diff/log/commit`,
+  background `run_shell` + `shell_output/shell_stop`, rewind รองรับ `apply_patch`,
+  project allowlist (core narrowing, PC agent intersect)
+- Secret safety: redact ค่า vault จริงจาก run history/debug/error; `git_commit`
+  ปฏิเสธไฟล์ secret เว้น `allow_secrets: true`
+- Subagent (`send_to` cap, `send_agents` ≤ 8), plan/todo tools, `lazy_tools` + `tool_search`
+- Custom node `custom:<name>` หลาย output; workflow nodes `assert`, `debug`,
+  `json_schema`, `mcp`, `agent_call`, `notify`; `$secret.NAME` ในทุก expression
+- Overseer ชั้น 1: machine/web tools, mail/notify, trigger control, vault, OAuth,
+  workflow enable/disable, self-edit (สร้าง/เปลี่ยนชื่อไม่ได้)
+- Layer 2: in-place PDF/image/media (temp + rename, backup), `install_app` ผ่าน
+  winget/brew/choco/scoop/apt, `statement_read` (CSV/TSV/OFX/QFX/QIF), Stripe
+  payment/refund พร้อม `confirmPhrase` + `alwaysAsk`, `browser_fill_secret`
+- Realtime calendar sync Google/Microsoft: watch/subscription, sync token/delta link,
+  `GET/POST /api/calendar/push/<token>`, gateway `/h/<id>`, trigger `calendar`,
+  dedupe + lock, poll ทุก 15 นาทีเป็น safety net, ปิดด้วย `MIMI_CALENDAR_SYNC=0`
+  - Google watch ปฏิทินที่เลือก (ค่าเริ่มต้น primary); Graph ใช้ `/me/events`
+    หรือ `/me/calendars/<id>/events` ตามที่เลือก
+- Integrations: Google Calendar update/delete, Drive upload/share/metadata,
+  Contacts (Google/Outlook), OneDrive upload, PDF merge/split/delete/rotate,
+  image crop/rotate, video merge, subtitle (soft/burn), extract audio
+- Packaging: `pdf-lib` เป็น dependency ของ `@mimi/pc-agent`;
+  `scripts/pack-pc-agent.mjs` คัดลอก zod/pdf-lib/pako/tslib/@pdf-lib;
+  build-win/build-mac/test `pc-stdin` ใช้ตัวเดียวกัน
 
 ## ไฟล์สำคัญ
 
-- MCP: `packages/pc-agent/src/mcp/client.ts`, `packages/core/src/mcp/hub.ts`
+- Setup wizard: `packages/core/src/server/web/feature-setup.js`,
+  `packages/core/src/agents/presets.ts`
+- Packs: `packages/core/src/packs/{packs,catalog}.ts`,
+  `packages/core/src/server/web/feature-packs.js`, `docs/packs.md`
+- OpenAPI import: `packages/core/src/connectors/{openapi,imported}.ts`,
+  `packages/core/src/server/web/feature-tools.js`, `docs/connectors/openapi-import.md`
+- Tunnel: `packages/core/src/app/tunnel.ts`, `packages/shared/src/protocol.ts`,
+  `packages/core/src/core.ts` (calendar follow), `packages/core/src/server/web/app.js`
+- Signing/update: `scripts/signing.mjs`, `scripts/fuses.mjs`, `scripts/build-{mac,win}.mjs`,
+  `packages/desktop/updater.cjs`, `.github/workflows/release.yml`, `docs/admin.md`
+- Gateway/2FA: `packages/core/src/gateway/{accounts,totp,main,gateway}.ts`,
+  `packages/core/src/cli/accounts.ts`, `packages/core/src/server/web/app.js`
 - Calendar sync: `packages/core/src/calendar/{sync,api,push}.ts`,
-  `packages/core/src/server/server.ts` (push route/listeners), `packages/core/src/gateway/gateway.ts` (`/h` route),
-  `packages/core/src/workflows/runner.ts` (calendar trigger items), `packages/shared/src/calendar.ts`
-- Permissions: `packages/core/src/permissions/gate.ts`, `packages/core/src/loop/agent-loop.ts`, `packages/core/src/tasks/runner.ts`, `packages/core/src/workflows/runner.ts`
+  `packages/core/src/server/server.ts` (push route/listeners),
+  `packages/core/src/gateway/gateway.ts` (`/h` route),
+  `packages/core/src/workflows/runner.ts` (calendar trigger items),
+  `packages/shared/src/calendar.ts`
+- MCP: `packages/pc-agent/src/mcp/client.ts`, `packages/core/src/mcp/hub.ts`
+- Permissions: `packages/core/src/permissions/gate.ts`,
+  `packages/core/src/loop/agent-loop.ts`, `packages/core/src/tasks/runner.ts`,
+  `packages/core/src/workflows/runner.ts`
 - Agent flags: `packages/core/src/agents/loader.ts`
 - Coding tools: `packages/pc-agent/src/tools/{search,patch,git,background,run-shell}.ts`
 - In-place output: `packages/pc-agent/src/tools/output-target.ts`
 - Apps: `packages/pc-agent/src/tools/apps.ts`
 - Statements: `packages/pc-agent/src/tools/statement.ts`
-- Vault fills: `packages/pc-agent/src/tools/secret-fill.ts`, `packages/core/src/tools/browser-secret-tools.ts`,
-  `packages/pc-agent/src/tools/browser/session.ts` (`typeSecret`, secret fields)
+- Vault fills: `packages/pc-agent/src/tools/secret-fill.ts`,
+  `packages/core/src/tools/browser-secret-tools.ts`,
+  `packages/pc-agent/src/tools/browser/session.ts`
 - Payment guard: `packages/core/src/connectors/{runtime,tool-adapter,registry}.ts`,
   `packages/core/src/connectors/services/stripe.ts`
-- Permissions: `packages/shared/src/permissions.ts` (`alwaysAsk`, `noGrant`), `packages/core/src/permissions/gate.ts`,
-  `packages/core/src/server/web/app.js` (approval card), `packages/core/src/workflows/runner.ts` (unattended guard)
-- PDF/media editing: `packages/pc-agent/src/tools/pdf.ts`, `packages/pc-agent/src/tools/media.ts`
-- Drive/contacts: `packages/core/src/google/{tools,sheets}.ts`, `packages/core/src/microsoft/tools.ts`
+- PDF/media editing: `packages/pc-agent/src/tools/{pdf,media}.ts`
+- Drive/contacts: `packages/core/src/google/{tools,sheets}.ts`,
+  `packages/core/src/microsoft/tools.ts`
 - Lazy tools: `packages/core/src/tools/tool-search.ts`
 - Plan/todo: `packages/core/src/chat/plan-tools.ts`
 - Workflow runner: `packages/core/src/workflows/runner.ts`
@@ -184,36 +167,60 @@
 - Custom nodes: `packages/core/src/workflows/custom-nodes.ts`
 - Overseer: `packages/core/src/overseer/{tools,diagnostics,versions}.ts`
 - Tool log: `packages/core/src/usage/logger.ts`, `packages/core/src/db/023-tool-calls.sql`
-- Google/Microsoft APIs: `packages/core/src/google/{auth,tools,sheets}.ts`, `packages/core/src/microsoft/{auth,tools,drive}.ts`
+- Google/Microsoft APIs: `packages/core/src/google/{auth,tools,sheets}.ts`,
+  `packages/core/src/microsoft/{auth,tools,drive}.ts`
 - UI: `packages/core/src/server/web/app.js`, `feature-tools.js`, `feature-agent-tools.js`
 
 ## งานที่เหลือ
 
-### ควรเก็บ
+### ฟีเจอร์/ขอบเขตที่ยังขาด (ตรวจจากโค้ด 2026-11-01)
 
-ไม่มีงานค้างในลิสต์เดิมแล้ว (config rollback, permission UX, secret redaction, git safety,
-Overseer ชั้น 1, UI smoke, Google Drive connector ทำครบ) และ Layer 2 ทั้ง 4 ข้อทำเสร็จ
-realtime calendar sync ทำครบ 5 ข้อของ Overseer (public endpoint, Google watch/delta, Graph subscription/delta,
-trigger + state + renewal + dedupe, 15-minute poll) แต่ยังไม่ได้ commit
+- **Packs**: remote catalog ผ่าน `MIMI_PACK_CATALOG_URL` มีแล้ว (working tree) แต่ยังไม่มี
+  ลายเซ็น/central marketplace — ต้องเลือก URL ที่ไว้ใจ; catalog ในเครื่องยังเป็น 3 แพ็ก
+- **TOTP**: recovery codes, หน้าเปลี่ยนรหัสผ่าน และแจ้งเตือนอุปกรณ์อื่นเมื่อมีล็อกอินใหม่มีแล้ว
+  (working tree); ยังไม่มีประวัติ/อีเมลแจ้งเตือนสำหรับอุปกรณ์ที่ปิดอยู่
+- **Tunnel**: quick tunnel ยังเป็นค่าเริ่มต้น (URL เปลี่ยนทุกครั้ง); named tunnel
+  ใช้ได้ผ่าน `MIMI_CLOUDFLARED_TUNNEL` + `_URL`/`_CONFIG` และเริ่มเองได้
+  (working tree) — แต่ยังไม่มี UI สร้าง/ล็อกอิน Cloudflare และต้องติดตั้ง cloudflared เอง
+- **Signing**: โค้ด/runtime พร้อม (`scripts/signing.mjs`, `release.yml`, `SHA256SUMS.txt`,
+  publisher check) และ Electron fuses ตั้งแล้ว (`scripts/fuses.mjs`) แต่ยังไม่ได้ตั้ง
+  certificate/secrets จริง; build ที่ปล่อยจึงยัง unsigned/ad hoc
+- **OpenAPI import**: JSON only (แอป), 2 MB, 50 connectors / 200 operations;
+  pagination (page/cursor/nextPageToken) และ `x-mimi-rate-limit` ทำแล้ว (working tree);
+  ยังไม่ derive triggers และ `itemsPath` นอก `x-mimi-items-path`; operation ที่ import
+  เป็น untrusted และใช้ร่วมกับ shell ไม่ได้
+- **Calendar**: ทั้ง Google และ Microsoft เลือกปฏิทินได้แล้ว (working tree: list/พิมพ์ id,
+  Microsoft มีตัวเลือก "ทุกปฏิทิน"; เปลี่ยนแล้วหยุด subscription/channel เก่าและเริ่ม baseline ใหม่)
+  — Graph lifecycle notifications ทำแล้ว (`subscriptionRemoved` สร้างใหม่, `missed` ทำให้ sync,
+  `reauthorizationRequired` แจ้งให้ reconnect)
+- **Strategic (ตั้งใจยังไม่ทำ)**: RBAC/SSO/audit retention, voice realtime,
+  IDE extension/repo index, iOS native, local model runtime
+
+### การตรวจที่ยังไม่ได้ทำ
+
+- UI smoke: setup wizard, packs install/remove, OpenAPI import, tunnel start/stop,
+  2FA enable/disable, recovery codes, เปลี่ยนรหัสผ่าน และแจ้งเตือนล็อกอินใหม่
+- Tunnel จริงกับ Cloudflare (quick + named) + calendar push จริง (end-to-end กับ Google/Graph)
+- เลือกปฏิทิน Google/Microsoft และ Graph lifecycle notifications กับบัญชีจริง
+- TOTP กับ authenticator app จริง (Google Authenticator/1Password/Authy)
+- Signed + notarized desktop build, ตรวจ fuses ในไฟล์ที่ build แล้ว และ Android release signing
+- OpenAPI import กับ spec จริง และ packs ที่ต้องใช้ credential จริง
+- Manual OS matrix (macOS/Windows), real Gmail/Outlook/YouTube
+- Backup/restore และ multi-user gateway บน deploy จริง (Railway headers, IPv6)
 
 ### สิ่งที่ต้องตัดสินใจก่อนเริ่มงานใหม่
 
-- branch `main` มี commits ที่ยังไม่ push + calendar sync ใน working tree — push/commit เมื่อผู้ใช้สั่งเท่านั้น
+- branch `main` มี 7 commits ที่ยังไม่ push + งาน Workspace terminal ใน working tree —
+  commit/push เมื่อผู้ใช้สั่งเท่านั้น
 - DB schema เป็น 23; เทสต์บางตัวผูก version นี้ ถ้าจะเพิ่ม migration ต้องอัปเดตเทสต์ด้วย
 - calendar sync ใช้ไฟล์ `calendar-sync.json` ไม่มี migration; การแก้ schema ไฟล์ต้องรองรับของเก่า
-- push ต้องมี public HTTPS จริง (tunnel/gateway) ถึงจะทดสอบ end-to-end กับ Graph/Google ได้; เทสต์ใน repo ใช้ fake fetch
-- UI smoke test (permission matrix / Settings grouped grants) รันมือผ่าน headless browser
-  ไม่ได้อยู่ในชุดเทสต์อัตโนมัติ จึงไม่ถูกรันซ้ำโดย `npm test`
-
-### ขอบเขตที่ยังตั้งใจไม่ทำ
-
-- โอนเงินผ่าน API ธนาคารโดยตรง / bank feed: `statement_read` อ่านไฟล์เท่านั้น; จ่ายเงินได้ผ่าน connector ที่มีอยู่ (Stripe) และต้องยืนยันวลี
-- Secure fields ของแอป native: `computer_type` ยังปฏิเสธ password; `browser_fill_secret` ใช้ได้เฉพาะเว็บ
-- ตัดต่อวิดีโอระดับ multi-track/transition/effect และ in-place ของ merge/split ที่มีหลาย input
-- LINE/Telegram ต้องมี token (connector มีอยู่แล้วถ้าเชื่อมบัญชี; ไม่มีอะไรค้าง)
-- Calendar push: Google watch เฉพาะ `primary` calendar; Graph ใช้ `/me/events` (ทุกปฏิทินของบัญชี) — ยังไม่มี UI เลือกปฏิทินทีละใบ
-- Calendar subscription lifecycle notifications ของ Graph (subscription removed) ไม่ได้สมัคร; renewal job สร้างใหม่เมื่อ PATCH คืน 403/404
-- ไม่มี tunnel ในตัวแอป: ผู้ใช้ต้องตั้ง `MIMI_CALENDAR_PUBLIC_URL` เอง (cloudflared/ngrok/funnel/gateway)
+- push ต้องมี public HTTPS จริง (tunnel/gateway) ถึงจะทดสอบ end-to-end กับ Graph/Google ได้;
+  เทสต์ใน repo ใช้ fake fetch
+- UI smoke ของฟีเจอร์ 0.7.9 (setup wizard / packs / OpenAPI import / tunnel / 2FA /
+  recovery codes / เปลี่ยนรหัสผ่าน / security alert) ยังไม่ได้รัน; ไม่มีในชุดเทสต์อัตโนมัติ
+  จึงไม่ถูกตรวจซ้ำโดย `npm test`
+- ก่อน tag `v0.7.9-prototype` ต้อง commit งาน Workspace terminal และตัดสินใจเรื่อง
+  CHANGELOG (ปัจจุบัน 0.7.9 มีหัวข้อของตัวเองแล้ว)
 
 ## ตรวจสอบ
 
@@ -233,16 +240,20 @@ npm run typecheck
 npm test
 ```
 
+ผลล่าสุด (2026-11-01): typecheck ผ่านทั้ง 3 แพ็กเกจ, **749 tests pass** (fail 0, skipped 0),
+connector E2E 3/3, connector performance 5/5
+
 ## จุดเริ่มของ session ถัดไป
 
 1. อ่าน `HANDOFF.md` นี้
-2. `git status` และ `git diff --stat`
-3. งานในลิสต์เดิม, Overseer ชั้น 1, UI smoke, Drive connector, Layer 2 และ realtime calendar sync ทำครบแล้ว
-   (707 tests, typecheck ผ่าน); ที่เหลือคือขอบเขตที่ระบุว่า "ยังตั้งใจไม่ทำ"
+2. `git status` และ `git diff --stat` (มีงาน Workspace terminal ที่ยังไม่ commit)
+3. เลือกงานจาก "ฟีเจอร์/ขอบเขตที่ยังขาด" หรือ "การตรวจที่ยังไม่ได้ทำ" — งานที่ปิดไปแล้ว
+   ไม่ต้องทำซ้ำ
 4. ก่อนแก้ อย่าลืมว่า DB schema เป็น 23 และเทสต์บางตัวผูก version นี้
-5. Layer 2 commit แล้วใน `8edf589`; calendar sync ยัง uncommitted — ตรวจ `git log --oneline` ก่อนเริ่มงานใหม่
-6. commits บน `main` ยังไม่ push — รอคำสั่งผู้ใช้ก่อน
-7. ถ้าทดสอบ `browser_fill_secret` ต้องอัปเดต PC agent ฝั่งเครื่องให้มี internal tool นี้ก่อน
+5. อย่า push/commit/tag จนกว่าผู้ใช้จะสั่ง; ตรวจ `git log --oneline` ก่อนเริ่มงานใหม่
+6. ถ้าทดสอบ `browser_fill_secret` ต้องอัปเดต PC agent ฝั่งเครื่องให้มี internal tool นี้ก่อน
    (core เก่า + PC ใหม่ หรือกลับกัน จะได้ error ว่า PC ไม่มี tool)
-8. Payment ops ของ Stripe ต้องส่ง `confirm: "CONFIRM PAYMENT"` หรือ `"CONFIRM REFUND"` ให้ตรง
-   และจะถูกบังคับให้ถามทุกครั้ง; ถ้าเพิ่ม connector ที่เคลื่อนเงิน ให้ใส่ `confirmPhrase` ใน spec
+7. Payment ops ของ Stripe ต้องส่ง `confirm: "CONFIRM PAYMENT"` หรือ `"CONFIRM REFUND"`
+   ให้ตรง และจะถูกบังคับให้ถามทุกครั้ง; ถ้าเพิ่ม connector ที่เคลื่อนเงิน ให้ใส่ `confirmPhrase`
+8. Quick tunnel ทดสอบกับ Cloudflare จริงได้ แต่ URL เปลี่ยนทุกครั้ง; อย่าใช้แทน
+   `MIMI_PUBLIC_URL` สำหรับงานถาวร

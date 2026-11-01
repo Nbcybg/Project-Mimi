@@ -60,7 +60,33 @@ webhook จากบริการภายนอกจะเข้าไม่
 ข้อจำกัด: ที่อยู่เปลี่ยนทุกครั้งที่เปิดใหม่ (ต้องแก้ URL ที่ตั้งไว้ในบริการภายนอก), Cloudflare ไม่รับประกันความพร้อมของ
 quick tunnel, ไม่มี Cloudflare Access กั้นหน้า (ยังต้องใช้รหัสผ่านของ Mimi), ใช้ไม่ได้เมื่อ core มี `MIMI_PUBLIC_URL`
 อยู่แล้ว และต้องมี `MIMI_TOKEN` ยาวอย่างน้อย 16 ตัว ระหว่างเปิด tunnel เชื่อม ChatGPT plan ไม่ได้ · limiter ของการใส่รหัสผิด
-นับแยกตามผู้เรียกจริง (`cf-connecting-ip`) · ใช้ถาวรให้ทำแบบ B
+นับแยกตามผู้เรียกจริง (`cf-connecting-ip`)
+
+### Named tunnel (URL คงที่)
+
+ถ้าต้องการ URL เดิมทุกครั้ง ให้สร้าง named tunnel ในบัญชี Cloudflare ก่อน:
+
+```bash
+cloudflared tunnel login
+cloudflared tunnel create mimi
+cloudflared tunnel route dns mimi mimi.example.com
+```
+
+จากนั้นตั้ง env ของ core (ไม่ต้องรัน `cloudflared run` เอง):
+
+```dotenv
+MIMI_CLOUDFLARED_TUNNEL=mimi
+MIMI_CLOUDFLARED_URL=https://mimi.example.com
+# หรือปล่อย URL ว่างแล้วให้อ่าน hostname จาก config:
+# MIMI_CLOUDFLARED_CONFIG=C:\Users\you\.cloudflared\config.yml
+```
+
+- core จะเริ่ม named tunnel ให้เองตอนเปิด (ปิดด้วย `MIMI_CLOUDFLARED_AUTOSTART=0`) หรือกดเปิดใน Settings
+- URL ไม่เปลี่ยนเมื่อรีสตาร์ท; webhook และ calendar push ใช้ URL นี้
+- ยังต้องมี `MIMI_TOKEN` ยาวอย่างน้อย 16 ตัว และใช้ไม่ได้เมื่อ core มี `MIMI_PUBLIC_URL` อยู่แล้ว
+- named tunnel ไม่ได้ติดตั้ง cloudflared ให้: ต้องมี binary และ config/credential ของ tunnel นั้นในเครื่อง
+
+ใช้แบบ B ด้านล่างเมื่อต้องการรัน cloudflared เองแยกจาก Mimi
 
 ## B. เครื่องที่บ้าน + Cloudflare Tunnel
 
@@ -320,7 +346,7 @@ node packages/core/src/cli/accounts.ts backup /app/user/backups/accounts-<วั
 แอปเวอร์ชันเก่าที่รัน core ในเครื่องเก็บข้อมูลไว้ที่ `~/Documents/Mimi`, `~/Library/Application Support/Electron` และ `~/Library/Logs/Mimi.log`
 แอปใหม่ไม่แตะที่เหล่านี้ ถ้าย้ายขึ้นเซิร์ฟเวอร์แล้วให้ `npm run backup` ก่อน แล้วลบเองเมื่อแน่ใจ
 
-ยังไม่ได้ทำ: ลงนามด้วย Developer ID / notarize (ตอนนี้ลงนามแบบ ad hoc ครั้งแรกต้องคลิกขวา → Open)
+การลงนามมีโค้ดพร้อมแล้ว (`scripts/signing.mjs`): ตั้ง certificate/secrets แล้ว build จะลงนาม Developer ID + notarize ให้เอง; ปัจจุบันยังไม่ได้ตั้ง จึงยังลงนามแบบ ad hoc (ครั้งแรกต้องคลิกขวา → Open) — ดูรายละเอียดที่ [`admin.md`](admin.md) หัวข้อ "การลงนามแอปเดสก์ท็อป"
 
 ## Release และอัปเดตอัตโนมัติ
 
@@ -344,7 +370,7 @@ git push origin v0.6.0
 (`build:desktop` แบบเดิมที่รัน core บนเครื่องนี้ยังอยู่ สำหรับคนที่ไม่ใช้เซิร์ฟเวอร์)
 
 - ติดตั้ง: แตก zip ไว้ในที่ถาวร (เช่น `%LOCALAPPDATA%\Programs\Mimi`) แล้วดับเบิลคลิก `install.cmd` ได้ทางลัดบน Desktop และ Start menu
-- ยังไม่ได้ลงนาม: SmartScreen เตือนครั้งแรก กด "More info" → "Run anyway" · ไอคอนของไฟล์ `.exe` ยังเป็นของ Electron (หน้าต่างและถาดเป็นไอคอน Mimi)
+- ถ้าไม่ได้ตั้ง `WIN_CSC_*`: ยังไม่ลงนาม SmartScreen เตือนครั้งแรก กด "More info" → "Run anyway" · ไอคอนของไฟล์ `.exe` ยังเป็นของ Electron (หน้าต่างและถาดเป็นไอคอน Mimi)
 - เก็บบนเครื่อง: `%APPDATA%\Mimi\config.json` (ที่อยู่เซิร์ฟเวอร์, ตัวเลือก), `%APPDATA%\Mimi\session.bin` (token เข้ารหัสด้วย DPAPI ของผู้ใช้ Windows นั้น),
   `%APPDATA%\Mimi\chromium\` (ล้างทุกครั้งที่เริ่ม), `%LOCALAPPDATA%\Mimi\` (โปรไฟล์เบราว์เซอร์ของ PC agent ลบตอนออกจากระบบ)
 - PC agent เลือกโฟลเดอร์ได้เฉพาะในโฟลเดอร์ผู้ใช้ ค่าเริ่มต้น `%USERPROFILE%\Mimi-Workspace`

@@ -41,7 +41,7 @@ node --test packages/core/src/test/connector-performance.test.ts
 
 | Measurement | Result | Notes |
 | --- | --- | --- |
-| 50 connectors register/list | 4.5ms | 214 operations/routes listed |
+| 50 connectors register/list | 4.5ms | 218 operations/routes listed |
 | 100-node graph x 1,000 items | 852.8ms | All 100 nodes executed; 97.3MB heap delta; final node processed 1,000 items |
 | Pagination: 20 pages / 1,000 items | 28.1ms | 20 HTTP calls via fake fetch |
 | Queue: 100 runs | 167.9ms | Peak concurrency 8, all 100 completed in order |

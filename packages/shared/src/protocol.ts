@@ -319,7 +319,11 @@ export interface OverseerView {
 /** The one-click Cloudflare quick tunnel of a core on a computer. */
 export interface TunnelView {
   state: 'off' | 'starting' | 'on' | 'error' | 'missing';
-  /** The public https address while `on`; it changes every start. */
+  /** Quick tunnels get a new address every start; a named tunnel keeps its hostname. */
+  mode?: 'quick' | 'named';
+  /** The Cloudflare tunnel name when `mode` is `named`. */
+  name?: string;
+  /** The public https address while `on`. */
   url?: string;
   since?: string;
   error?: string;
@@ -353,6 +357,8 @@ export interface PackSummaryView {
   connectors: string[];
   workflows: string[];
   builtin: boolean;
+  /** Fetched from MIMI_PACK_CATALOG_URL rather than shipped with this app. */
+  remote?: boolean;
   installedAt?: string;
   /** Installed packs only: what is still missing. */
   credentials?: PackCredentialView[];
@@ -368,6 +374,22 @@ export interface PackReportView {
   workflows: Array<{ name: string; agent: string; title: string; trigger: string }>;
   credentials: PackCredentialView[];
   warnings: string[];
+}
+
+/** What removing a pack would remove or did remove. Only items the pack created are touched. */
+export interface PackRemoveView {
+  id: string;
+  name: string;
+  /** Created items that still exist and would be (or were) removed. */
+  remove: {
+    agents: string[];
+    connectors: string[];
+    workflows: Array<{ agent: string; name: string }>;
+  };
+  /** Created items left alone because something else still uses them. */
+  kept: Array<{ kind: 'agent' | 'connector' | 'workflow'; name: string; reason: string }>;
+  /** The installed record predates ownership tracking: only the record can be removed. */
+  legacy?: boolean;
 }
 
 /** A starter agent the first-run wizard offers; saved as an ordinary agent. */
@@ -732,6 +754,8 @@ export type ClientMessage =
   | { type: 'packs-list' }
   /** Checks (preview) or installs a catalog pack (`id`) or a pack file (`source`, JSON); answered with `pack-report`. */
   | { type: 'pack-preview' | 'pack-install'; reqId?: number; id?: string; source?: string }
+  /** Lists what removing an installed pack would delete, or removes it; answered with `pack-remove-report`. */
+  | { type: 'pack-remove-preview' | 'pack-remove'; reqId?: number; id: string }
   /** Starter agents for the first-run wizard; answered with `agent-presets`. */
   | { type: 'agent-presets' }
   /** The built-in AI Overseer; created on first use. */
@@ -878,7 +902,10 @@ export type ClientMessage =
   | { type: 'mail-account-test'; id: string }
   /** Calendar push subscriptions and delta state; check now runs one sync pass. */
   | { type: 'calendar-sync' }
-  | { type: 'calendar-sync-now' };
+  | { type: 'calendar-sync-now' }
+  /** Google only: lists the account's calendars or switches the one being watched. */
+  | { type: 'calendar-calendars'; account: string }
+  | { type: 'calendar-set'; account: string; calendarId: string };
 
 /** Sent by the PC agent. */
 export type PcMessage =
@@ -940,6 +967,8 @@ export type ServerMessage =
   | { type: 'packs'; catalog: PackSummaryView[]; installed: PackSummaryView[] }
   /** `errors` says why a pack was refused (preview) or which parts failed (install). */
   | { type: 'pack-report'; reqId?: number; action: 'preview' | 'install'; ok: boolean; report?: PackReportView; errors: string[] }
+  /** What removing an installed pack would remove (preview) or did remove. */
+  | { type: 'pack-remove-report'; reqId?: number; action: 'preview' | 'remove'; ok: boolean; report?: PackRemoveView; errors: string[] }
   /** What an OpenAPI import found or stored; `errors` lists why it was refused (then nothing was saved). */
   | {
       type: 'connector-import-report';
@@ -1056,7 +1085,11 @@ export type ServerMessage =
       test?: { id: string; ok: boolean; error?: string; message?: string };
     }
   /** Calendar push subscriptions, delta state and the poll fallback. */
-  | { type: 'calendar-sync'; calendar: CalendarSyncView; saved?: boolean; checked?: { found: number; at: string } };
+  | { type: 'calendar-sync'; calendar: CalendarSyncView; saved?: boolean; error?: string; checked?: { found: number; at: string } }
+  /** Google calendars of one account, for the picker. */
+  | { type: 'calendar-calendars'; account: string; calendars: Array<{ id: string; summary: string; primary: boolean }>; errors: string[] }
+  /** Sent by the accounts gateway to the other open devices when a new session signs in. */
+  | { type: 'security-alert'; kind: 'new-signin'; at: string };
 
 /** How a mail client opens its connection: implicit TLS, STARTTLS, or plain (never for passwords). */
 export type MailSecurityMode = 'tls' | 'starttls' | 'none';

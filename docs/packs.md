@@ -26,7 +26,25 @@ Open-Meteo และ Frankfurter ไม่ต้องใช้คีย์ จ�
 3. บันทึกสิ่งที่ติดตั้งไว้ที่ `user/packs/<id>.json` เพื่อแสดง checklist ในหัวข้อ "ติดตั้งแล้ว" (กด "ตรวจ checklist อีกครั้ง"
    หลังตั้งค่าบัญชีเสร็จ)
 
-ไม่มีการถอนการติดตั้งอัตโนมัติ: ลบ workflow / agent / connector ที่ไม่ใช้ได้จากหน้าของแต่ละอย่าง
+## ถอนการติดตั้ง
+
+Hub → แพ็ก → การ์ดที่ติดตั้งแล้ว → **ถอนการติดตั้ง** จะตรวจก่อนว่าจะลบอะไร แล้วค่อยยืนยัน
+
+- ลบเฉพาะสิ่งที่แพ็ก **สร้าง** ตอนติดตั้ง (agent / OpenAPI connector / workflow) และเฉพาะที่ยังมีอยู่
+- agent หรือ connector ที่ใช้ของเดิมอยู่แล้วไม่ถูกแตะ; ของที่ workflow/agent อื่นยังใช้จะถูกเก็บไว้และแสดงเหตุผล
+- workflow ของแพ็กถูกลบ; agent ที่แพ็กสร้างจะถูกลบเมื่อไม่มี workflow อื่นเหลืออยู่ (ถ้ามี จะเก็บ agent ไว้)
+- แพ็กที่ติดตั้งก่อนมีระบบติดตามรายการ: ลบได้เฉพาะรายการติดตั้ง ของที่ติดตั้งไว้ยังอยู่ ต้องลบเองจากหน้าของแต่ละอย่าง
+- ไม่มี rollback ย้อนสถานะก่อนติดตั้ง เพราะการติดตั้งไม่เคยทับของเดิม; ถ้าอยากเก็บ workflow ไว้ ให้ทำสำเนาก่อนถอน
+
+## Remote catalog
+
+ตั้ง `MIMI_PACK_CATALOG_URL` เป็น JSON แบบ https (อาร์เรย์ของแพ็ก หรือ `{ "packs": [...] }`) เพื่อเพิ่มแพ็กจากภายนอก
+ตอนเปิด core:
+
+- จำกัด 5 วินาทีและ 4 MB; รายการที่ผิดรูปแบบหรือ id ซ้ำกับแพ็กในเครื่องจะถูกข้ามพร้อม log
+- แพ็กที่มาจาก remote แสดงป้าย **ระยะไกล** และติดตั้งผ่านกฎเดียวกับแพ็กไฟล์
+- **ไม่มีลายเซ็นหรือ central marketplace**: ผู้ดูแลต้องเลือก URL ที่ไว้ใจ; อ่าน prompt/เครื่องมือ/workflow ก่อนติดตั้งเสมอ
+- ต้องรีสตาร์ท core เพื่อโหลด catalog ใหม่
 
 ## Checklist
 
@@ -91,3 +109,5 @@ Open-Meteo และ Frankfurter ไม่ต้องใช้คีย์ จ�
 | `packs-list` | `packs { catalog, installed }` (installed มี `credentials` ปัจจุบัน) |
 | `pack-preview { reqId, id \| source }` | `pack-report { reqId, action: 'preview', ok, report, errors }` |
 | `pack-install { reqId, id \| source }` | `pack-report { action: 'install', … }` แล้ว broadcast agents / settings / tools / connections / workflows / packs |
+| `pack-remove-preview { reqId, id }` | `pack-remove-report { action: 'preview', report, errors }` (ไม่เปลี่ยนอะไร) |
+| `pack-remove { reqId, id }` | `pack-remove-report { action: 'remove', report, errors }` แล้ว broadcast เหมือน install |

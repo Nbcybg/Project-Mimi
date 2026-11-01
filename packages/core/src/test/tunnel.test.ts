@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import type { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import type { TunnelView } from '@mimi/shared';
@@ -81,4 +84,43 @@ test('tunnel: missing binary, a crash and a silent start are reported', async ()
   assert.equal(slow.status().state, 'error');
   assert.match(slow.status().error ?? '', /no address/);
   assert.equal(silent.child().exitCode, 0, 'the silent process was stopped');
+});
+
+test('tunnel: a named tunnel keeps its address and can read the hostname from config', async () => {
+  const fake = fakeProcess();
+  const named = new QuickTunnel({
+    port: () => 8787,
+    named: { name: 'mimi', url: 'https://mimi.example.com/' },
+    find: () => '/usr/bin/cloudflared',
+    spawnFn: fake.spawnFn,
+    env: { PATH: '/usr/bin', MIMI_TOKEN: 'secret-token' },
+  });
+  assert.equal(named.status().mode, 'named');
+  assert.equal(named.start().state, 'on');
+  assert.deepEqual(fake.calls[0]!.args, ['tunnel', '--no-autoupdate', 'run', 'mimi']);
+  assert.equal(fake.calls[0]!.env.MIMI_TOKEN, undefined);
+  assert.equal(named.url(), 'https://mimi.example.com');
+  named.stop();
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mimi-tunnel-'));
+  const config = path.join(dir, 'config.yml');
+  fs.writeFileSync(config, 'tunnel: mimi\ningress:\n  - hostname: mimi.example.net\n    service: http://127.0.0.1:8787\n  - service: http_status:404\n');
+  const fromConfig = fakeProcess();
+  const tunnel = new QuickTunnel({
+    port: () => 8787,
+    named: { name: 'mimi', config },
+    find: () => 'cloudflared',
+    spawnFn: fromConfig.spawnFn,
+    env: {},
+  });
+  assert.equal(tunnel.start().state, 'on');
+  assert.deepEqual(fromConfig.calls[0]!.args, ['tunnel', '--no-autoupdate', '--config', config, 'run', 'mimi']);
+  assert.equal(tunnel.url(), 'https://mimi.example.net');
+  tunnel.stop();
+  fs.rmSync(dir, { recursive: true, force: true });
+
+  const broken = new QuickTunnel({ port: () => 8787, named: { name: 'mimi' }, find: () => 'cloudflared', spawnFn: fakeProcess().spawnFn, env: {} });
+  const view = broken.start();
+  assert.equal(view.state, 'error');
+  assert.match(view.error ?? '', /MIMI_CLOUDFLARED_URL/);
 });

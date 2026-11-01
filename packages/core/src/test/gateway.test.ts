@@ -234,7 +234,7 @@ test('HTTP: a session reaches only its own core; the core token never leaves the
 
   const me = await fetch(`${booted.http}/auth/session`, authed(alice));
   const body = await me.text();
-  assert.deepEqual(Object.keys(JSON.parse(body) as object).sort(), ['expiresAt', 'twoFactor', 'username', 'webhookBase']);
+  assert.deepEqual(Object.keys(JSON.parse(body) as object).sort(), ['expiresAt', 'recoveryCodes', 'twoFactor', 'username', 'webhookBase']);
   for (const person of Object.values(booted.people)) assert.ok(!body.includes(person.coreToken));
 
   assert.deepEqual(await (await fetch(`${booted.http}/health`)).json(), { ok: true, version: JSON.parse(fs.readFileSync('package.json', 'utf8')).version, accounts: true });
@@ -509,6 +509,16 @@ test('two-step sign-in: set up with the password and a first code, then every si
   assert.equal((await signIn()).status, 200);
 });
 
+test('a new sign-in alerts the other open devices of the same account', async (t) => {
+  const booted = await boot(t);
+  const device = new Device(booted.ws, await session(booted, 'alice'));
+  await device.waitFor('welcome');
+  assert.equal((await login(booted, 'alice')).status, 200);
+  const alert = await device.waitFor('security-alert');
+  assert.equal(alert.kind, 'new-signin');
+  assert.ok(Number.isFinite(Date.parse(alert.at)));
+});
+
 test('sessions end at the maximum age even when used every day; the admin reset removes 2FA and signs out', async () => {
   let now = Date.parse('2026-05-01T00:00:00Z');
   const store = new AccountStore(':memory:', SECRET, { idleDays: 5, maxDays: 10, now: () => now, passwordCost: 1024 });
@@ -554,4 +564,56 @@ test('totp: RFC 6238 vectors, a one-step window and no reuse', () => {
   assert.equal(verifyTotp(secret, '81804', at), null);
   assert.equal(verifyTotp(secret, 81804, at), null);
   assert.equal(newTotpSecret().length, 32);
+});
+
+test('recovery codes sign in once; a password change keeps this session and signs out the others', async (t) => {
+  let now = Date.parse('2026-04-01T00:00:00Z');
+  const booted = await boot(t, { now: () => now });
+  const token = await session(booted, 'alice');
+  const post = (path: string, body: unknown, bearer = token) =>
+    fetch(`${booted.http}${path}`, authed(bearer, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }));
+  const signIn = (password: string, code: string) =>
+    fetch(`${booted.http}/auth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-real-ip': freshIp() },
+      body: JSON.stringify({ username: 'alice', password, code }),
+    });
+
+  const setup = await post('/auth/2fa/setup', { password: PASSWORD.alice });
+  const { secret } = (await setup.json()) as { secret: string };
+  const enabled = await post('/auth/2fa/enable', { code: totpCode(secret, totpStep(now)) });
+  assert.equal(enabled.status, 200);
+  const { recoveryCodes } = (await enabled.json()) as { recoveryCodes: string[] };
+  assert.equal(recoveryCodes.length, 10);
+  assert.equal(new Set(recoveryCodes).size, 10);
+  for (const code of recoveryCodes) assert.match(code, /^[0-9a-f]{5}-[0-9a-f]{5}-[0-9a-f]{5}-[0-9a-f]{5}$/);
+  const status = (await (await fetch(`${booted.http}/auth/session`, authed(token))).json()) as { recoveryCodes: number };
+  assert.equal(status.recoveryCodes, 10);
+
+  assert.equal((await signIn(PASSWORD.alice, recoveryCodes[0]!.replace(/-/g, '').toUpperCase())).status, 200);
+  assert.equal((await signIn(PASSWORD.alice, recoveryCodes[0]!)).status, 401, 'a recovery code works once');
+  const afterUse = (await (await fetch(`${booted.http}/auth/session`, authed(token))).json()) as { recoveryCodes: number };
+  assert.equal(afterUse.recoveryCodes, 9);
+
+  assert.equal((await post('/auth/2fa/recovery', { password: 'wrong-password-1' })).status, 400);
+  const regenerated = await post('/auth/2fa/recovery', { password: PASSWORD.alice });
+  assert.equal(regenerated.status, 200);
+  const replacement = ((await regenerated.json()) as { recoveryCodes: string[] }).recoveryCodes;
+  assert.equal(replacement.length, 10);
+  assert.equal((await signIn(PASSWORD.alice, recoveryCodes[1]!)).status, 401, 'old recovery codes stop working');
+
+  now += 30_000;
+  const other = await signIn(PASSWORD.alice, totpCode(secret, totpStep(now)));
+  assert.equal(other.status, 200);
+  const otherToken = ((await other.json()) as { token: string }).token;
+  assert.equal((await post('/auth/password', { current: 'wrong-password-1', next: 'alice-password-2' })).status, 400);
+  assert.equal((await post('/auth/password', { current: PASSWORD.alice, next: 'short' })).status, 400);
+  assert.equal((await post('/auth/password', { current: PASSWORD.alice, next: 'alice-password-2' })).status, 200);
+  assert.equal((await fetch(`${booted.http}/auth/session`, authed(token))).status, 200, 'this session stays');
+  assert.equal((await fetch(`${booted.http}/auth/session`, authed(otherToken))).status, 401, 'other devices are signed out');
+
+  now += 30_000;
+  assert.equal((await signIn(PASSWORD.alice, totpCode(secret, totpStep(now)))).status, 401, 'the old password stops working');
+  now += 30_000;
+  assert.equal((await signIn('alice-password-2', totpCode(secret, totpStep(now)))).status, 200);
 });

@@ -51,6 +51,28 @@ export async function googleStopChannel(auth: GoogleAuth | CalendarRequester, ch
   await auth.request(`${GOOGLE_CALENDAR}/channels/stop`, { method: 'POST', body: { id: channel.id, resourceId: channel.resourceId } });
 }
 
+export interface CalendarEntry {
+  id: string;
+  summary: string;
+  primary: boolean;
+}
+
+/** Every calendar in the account's list, for the picker. */
+export async function googleCalendars(auth: GoogleAuth | CalendarRequester): Promise<CalendarEntry[]> {
+  const body = await auth.request<{ items?: Array<{ id?: string; summary?: string; primary?: boolean }> }>(
+    `${GOOGLE_CALENDAR}/users/me/calendarList?maxResults=250`,
+  );
+  return (body.items ?? []).flatMap((item) => (item.id ? [{ id: item.id, summary: item.summary?.trim() || item.id, primary: item.primary === true }] : []));
+}
+
+/** Every calendar in the Microsoft account, for the picker. */
+export async function graphCalendars(auth: MicrosoftAuth | CalendarRequester): Promise<CalendarEntry[]> {
+  const body = await auth.request<{ value?: Array<{ id?: string; name?: string; isDefault?: boolean }> }>(
+    '/me/calendars?$select=id,name,isDefault',
+  );
+  return (body.value ?? []).flatMap((item) => (item.id ? [{ id: item.id, summary: item.name?.trim() || item.id, primary: item.isDefault === true }] : []));
+}
+
 export interface GoogleCalendarEvent {
   id: string;
   status?: string;
@@ -135,6 +157,8 @@ export interface GraphSubscription {
 
 export interface GraphSubscriptionInput {
   notificationUrl: string;
+  /** Receives subscription lifecycle events (removed, missed, reauthorization required). */
+  lifecycleNotificationUrl?: string;
   /** Compared with every notification's `clientState`. */
   clientState: string;
   /** UTC ISO-8601; Graph caps `/me/events` at 4230 minutes. */
@@ -149,6 +173,7 @@ export async function graphCreateSubscription(auth: MicrosoftAuth | CalendarRequ
     body: {
       changeType: 'created,updated,deleted',
       notificationUrl: input.notificationUrl,
+      ...(input.lifecycleNotificationUrl ? { lifecycleNotificationUrl: input.lifecycleNotificationUrl } : {}),
       resource: input.resource ?? '/me/events',
       expirationDateTime: input.expirationDateTime,
       clientState: input.clientState,
@@ -208,12 +233,13 @@ const MAX_DELTA_PAGES = 50;
 export async function graphEventChanges(
   auth: MicrosoftAuth | CalendarRequester,
   deltaLink: string | undefined,
+  resource?: string,
 ): Promise<GraphEventPage> {
   try {
-    return await readGraphDelta(auth, deltaLink);
+    return await readGraphDelta(auth, deltaLink, resource);
   } catch (error) {
     // Graph forgot the delta state (410): start over with a fresh baseline.
-    if (deltaLink && /Microsoft Graph error 410\b/.test((error as Error).message)) return readGraphDelta(auth, undefined);
+    if (deltaLink && /Microsoft Graph error 410\b/.test((error as Error).message)) return readGraphDelta(auth, undefined, resource);
     throw error;
   }
 }
@@ -221,11 +247,12 @@ export async function graphEventChanges(
 async function readGraphDelta(
   auth: MicrosoftAuth | CalendarRequester,
   deltaLink: string | undefined,
+  resource?: string,
 ): Promise<GraphEventPage> {
   const baseline = !deltaLink;
   const select = 'id,subject,start,end,location,organizer,attendees,webLink,isAllDay,isCancelled,createdDateTime,lastModifiedDateTime';
   let next: string | undefined =
-    deltaLink ?? `/me/events/delta?$select=${select}`;
+    deltaLink ?? `${resource ?? '/me/events'}/delta?$select=${select}`;
   const items: GraphCalendarEvent[] = [];
   let delta: string | null = null;
   for (let page = 0; next && page < MAX_DELTA_PAGES; page++) {

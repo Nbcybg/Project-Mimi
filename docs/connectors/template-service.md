@@ -130,7 +130,7 @@ call a real provider.
 - Tool adapter: input validation, risk and `untrustedInput`.
 
 Catalog expectations are exact: `packages/core/src/test/connector-catalog.test.ts`
-and the platform tests assert 50 services and 214 operations. When adding a new
+and the platform tests assert 50 services and 218 operations. When adding a new
 service, update those expected counts in the same change and keep the operation
 count accurate.
 

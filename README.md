@@ -37,9 +37,10 @@ PC agent ───────────────────────�
 - **เสียงและสื่อ** — ข้อความเสียง ถอดเสียง ถ่ายรูป แนบไฟล์ วิดีโอ PDF และคำบรรยายรายรูป
 - **Mimiamp** — เครื่องเล่นเพลงประกอบสไตล์ Winamp ในหน้าจอใหม่ ผู้ใช้เปิดเองหรือให้ agent เปิดเป็นหน้าต่างลอย (picture-in-picture) ก็ได้ แตะเพื่อขยายเต็มจอ (เพลงอยู่ใน `packages/core/src/server/web/mimiamp/`)
 - **ความจำและ session** — memory หลายชั้น, สรุปบทสนทนาอัตโนมัติ, context meter, งบ token/ค่าใช้จ่าย
+- **ใช้แผนรายเดือนแทน API key** — Claude Pro/Max ผ่าน Claude Code หรือ ChatGPT Plus/Pro ผ่าน "Sign in with ChatGPT" (ข้อจำกัดและเงื่อนไขเป็นไปตามผู้ให้บริการ)
 - **Workflow engine** — trigger ตามเวลา/webhook, expression, code node ที่แยก process, run history, approval, retry และ idempotency
 - **Connectors** — 50 บริการ native / 218 operations + นำเข้า API อื่นจาก OpenAPI 3.x (JSON) เป็น connector ได้เอง, Google (Gmail, Calendar, Drive, Sheets, Docs, YouTube), Microsoft (Outlook, Calendar, To Do, OneDrive), MCP, custom HTTP/code/shell tools
-- **แพ็ก** — ชุด agent + connector + workflow สำเร็จรูป ติดตั้งทีเดียวพร้อม checklist บัญชีที่ต้องตั้ง (Hub → แพ็ก, [`docs/packs.md`](docs/packs.md))
+- **แพ็ก** — ชุด agent + connector + workflow สำเร็จรูป ติดตั้งและถอนได้ทีละแพ็ก โดยลบเฉพาะของที่แพ็กสร้างและเก็บของที่ยังถูกใช้อยู่; เพิ่ม remote catalog ผ่าน `MIMI_PACK_CATALOG_URL` ได้ (Hub → แพ็ก, [`docs/packs.md`](docs/packs.md))
 - **นำเข้า** — workflow จาก n8n, Make, Zapier (เป็น draft พร้อม report) และ connector จาก OpenAPI (Hub → Node & Tools → นำเข้า OpenAPI)
 - **PC agent** — ให้ agent ใช้เครื่องของคุณผ่านโฟลเดอร์ที่อนุญาต, เบราว์เซอร์ของ agent และ shell (ปิดเป็นค่าเริ่มต้น)
 - **Task ที่ตรวจสอบได้** — recipe แบบ deterministic, แผนก่อนลงมือ, อนุมัติครั้งเดียวทั้งงาน, ใบเสร็จ และ undo (เริ่มด้วย `file-organizer` ที่ย้ายไฟล์ตามชนิดโดยไม่ลบไฟล์)
@@ -49,6 +50,10 @@ PC agent ───────────────────────�
 - **Native desktop / Mail** — ควบคุมแอปผ่าน accessibility tree แบบ ref, app allowlist, ปฏิเสธ secure field และ recipe ช่วยตั้งค่า POP3 โดยให้ผู้ใช้พิมพ์รหัสผ่านเอง
 - **Layer 2 tools** — แก้ PDF/รูป/วิดีโอในที่พร้อม backup, เผาซับ/แยกเสียง, ติดตั้งหรืออัปเดตแอปผ่าน winget/brew/choco/scoop/apt, อ่าน statement CSV/OFX/QIF, เติมรหัสผ่าน/ข้อมูลบัตรจาก vault ในเบราว์เซอร์ (อนุมัติทุกครั้ง) และ Stripe payment/refund ที่ต้องพิมพ์วลียืนยัน
 - **Autonomy / Audit** — background task แบบ opt-in, task resume หลัง restart, inbox notification, task list, JSONL audit export และ kill switch
+- **เริ่มใช้เร็ว** — first-run setup wizard พาเลือกผู้ให้บริการ (API key หรือแผน Claude/ChatGPT), สร้าง agent ตั้งต้น, ตั้งโฟลเดอร์, เชื่อม PC agent และทดสอบแชตในหน้าจอเดียว
+- **ความปลอดภัยบัญชี** — session หมดอายุสูงสุด 90 วัน (`MIMI_SESSION_MAX_DAYS`), 2FA แบบ TOTP พร้อม recovery codes 10 รหัส, เปลี่ยนรหัสผ่านเองได้ (ออกจากระบบเครื่องอื่น), แจ้งเตือนอุปกรณ์อื่นเมื่อมีล็อกอินใหม่ และ admin reset ได้ด้วย `accounts 2fa-reset`
+- **เข้าจากอินเทอร์เน็ต** — เปิด Cloudflare quick tunnel ใน Settings (URL เปลี่ยนทุกครั้ง) หรือตั้ง named tunnel ให้ URL คงที่และเริ่มเองตอนเปิด core (ต้องติดตั้ง `cloudflared` เอง)
+- **เดสก์ท็อปพร้อมอัปเดตตรวจสอบได้** — build ลงนาม Authenticode/Developer ID + notarize เมื่อตั้ง certificate; release มี `SHA256SUMS.txt`, updater ตรวจขนาด/SHA-256/publisher และ build ปิด Electron fuses ที่ไม่จำเป็นก่อนติดตั้ง
 - **เบราว์เซอร์ในแอป (เดสก์ท็อป)** — Chromium ที่มากับแอป เก็บคุกกี้แยกโปรไฟล์ agent สั่งเปิดหน้า คลิก พิมพ์ และอ่านเนื้อหาผ่านเครื่องมือ `browser_*` ได้จริง
 - **แจ้งเตือน** — in-app, Web Push, กระดิ่ง, อีเมลเฝ้าดู และ widget บน Android
 - **หลายผู้ใช้** — โหมด gateway + core แยกต่อคน (แยก container/volume ต่อผู้ใช้)
@@ -183,6 +188,9 @@ node --test --test-timeout=60000 packages/core/src/test/<file>.test.ts
 | `MIMI_LOCAL_PC_TOOLS` | `1` | `0` = ให้ file/shell tools ทำงานผ่าน PC agent เท่านั้น (เหมาะกับ cloud) |
 | `MIMI_CORE_URL` | `ws://127.0.0.1:8787/ws` | ที่อยู่ core สำหรับ PC agent |
 | `MIMI_PUBLIC_URL` | — | URL สาธารณะของ core ใช้สร้าง OAuth redirect (`/oauth/callback`) |
+| `MIMI_CLOUDFLARED` | — | path ของ cloudflared เมื่อไม่ได้อยู่ใน PATH |
+| `MIMI_CLOUDFLARED_TUNNEL` / `_URL` / `_CONFIG` / `_AUTOSTART` | — | named tunnel: ชื่อ tunnel, URL คงที่ (หรือ hostname ใน config), ไฟล์ config, และ `0` เพื่อไม่เริ่มเอง |
+| `MIMI_PACK_CATALOG_URL` | — | remote catalog ของแพ็ก (https JSON array หรือ `{ "packs": [...] }`, ไม่มีลายเซ็น) |
 | `MIMI_CLIENT_IP_HEADER` | — | header ที่ reverse proxy ใส่มา เช่น `x-real-ip` (Railway) |
 | `MIMI_PUSH_CONTACT` | `mailto:mimi@localhost` | ผู้ติดต่อสำหรับบริการ Web Push |
 | `DEEPSEEK_API_KEY` ฯลฯ | — | คีย์โมเดล; ปกติใส่ในหน้า Settings แทน |
@@ -198,7 +206,7 @@ node --test --test-timeout=60000 packages/core/src/test/<file>.test.ts
 ## Deploy
 
 - **เครื่องที่บ้าน + Tailscale** (แนะนำ) — ไม่เปิดสู่อินเทอร์เน็ต ได้ HTTPS และ Push
-- **Cloudflare Tunnel** — ได้ URL สวย ๆ และรับ webhook จากภายนอก
+- **Cloudflare Tunnel** — ได้ URL สวย ๆ และรับ webhook จากภายนอก; เปิด quick tunnel ชั่วคราวจาก Settings ได้ทันที หรือตั้ง named tunnel ใน `.env` เพื่อให้ URL คงที่
 - **VPS + Docker** — `docker compose up -d` แล้วเข้าผ่าน tunnel/proxy
 - **Railway** — ใช้ `Dockerfile` ในโปรเจกต์, mount volume ที่ `/app/user`, healthcheck `/health`, ตั้ง `MIMI_BACKUP_DIR` และ `MIMI_CLIENT_IP_HEADER`
 
@@ -242,7 +250,9 @@ Mimi ให้ agent ใช้เครื่องและบัญชีข�
 - ตั้ง token ยาวและสุ่มจริง โดยเฉพาะเมื่อ core เปิดจากภายนอก
 - อย่าเปิดพอร์ต `8787` สู่อินเทอร์เน็ตโดยตรง ใช้ HTTPS ผ่าน Tailscale, Cloudflare Tunnel หรือ reverse proxy
 - ผู้ที่เข้าถึงเซิร์ฟเวอร์/volume ได้สามารถอ่านข้อมูลของผู้ใช้ได้
-- workflow, tool, connector และ MCP ที่ได้จากคนอื่นมีสิทธิ์กระทำการแทนคุณได้ — อ่านก่อนเปิดใช้
+- เปิด 2FA ใน Settings (โหมด gateway) และปรับ `MIMI_SESSION_MAX_DAYS` ตามนโยบาย; เก็บ recovery codes ไว้ให้ดี ถ้าหมดให้ผู้ดูแลรัน `accounts 2fa-reset`
+- quick tunnel เปิดหน้าเข้าสู่ระบบให้ใครก็ตามที่รู้ URL — ใช้ชั่วคราวและปิดเมื่อเสร็จ; อย่าใช้แทน HTTPS/โดเมนถาวร
+- workflow, tool, connector, pack และ MCP ที่ได้จากคนอื่นมีสิทธิ์กระทำการแทนคุณได้ — อ่านก่อนเปิดใช้
 - รายละเอียดและสิ่งที่ยังไม่ปิดดูที่ [`docs/security-review.md`](docs/security-review.md)
 
 ## สถานะ

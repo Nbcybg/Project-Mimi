@@ -27,7 +27,7 @@
 | เครื่องหาย | `logout <ชื่อ>` (ทุกเครื่องหลุดภายใน ~30 วินาที) |
 | ย้าย core | `set-core <ชื่อ> <url>` |
 | เปลี่ยน token ของ core | `rotate-core-token <ชื่อ>` แล้วใส่ใน service ของคนนั้น → redeploy |
-| ผู้ใช้ทำมือถือที่มีแอป 2FA หาย | ยืนยันตัวตนกับเจ้าของบัญชีนอกระบบก่อน แล้ว `2fa-reset <ชื่อ>` (ปิด 2FA + ออกจากระบบทุกเครื่อง) ให้เขาเปิดใหม่ในตั้งค่า |
+| ผู้ใช้ทำมือถือที่มีแอป 2FA หาย | ให้ใช้ recovery code ที่ผู้ใช้เก็บไว้ก่อน; ถ้าไม่มี ให้ยืนยันตัวตนกับเจ้าของบัญชีนอกระบบ แล้ว `2fa-reset <ชื่อ>` (ปิด 2FA + ออกจากระบบทุกเครื่อง) ให้เขาเปิดใหม่ในตั้งค่า |
 | สำรองฐานข้อมูลบัญชี | `backup /app/user/backups/accounts-<วันที่>.db` |
 | ลบผู้ใช้ | `disable` → ให้ผู้ใช้ดาวน์โหลด backup ของตัวเอง (ถ้าต้องการ) → ลบ service + volume ในหน้า Railway |
 
@@ -91,6 +91,7 @@ railway volume files download /backups/<ไฟล์ล่าสุด>-auto.tar
 ### การลงนามแอปเดสก์ท็อป (ไม่บังคับ แต่ควรมี)
 
 ไม่ตั้งอะไร = Windows ไม่ได้ลงนาม (SmartScreen เตือน) และ Mac ลงนามแบบ ad hoc (ต้องคลิกขวา → Open ครั้งแรก)
+ทุก build ตั้ง Electron fuses ผ่าน `scripts/fuses.mjs` (เก็บ `RunAsNode` ไว้ให้ PC agent, ปิด `NODE_OPTIONS` และ CLI inspect)
 ตั้ง secret ใน GitHub repo แล้วการ build ใน release.yml จะลงนามให้เอง (โค้ดอยู่ที่ `scripts/signing.mjs`):
 
 | Secret | ใช้ทำอะไร |

@@ -5,9 +5,11 @@ import type { CalendarAccountSyncView, CalendarChangeAction, CalendarChangeView,
 import type { GoogleAuth } from '../google/auth.ts';
 import type { MicrosoftAuth } from '../microsoft/auth.ts';
 import {
+  googleCalendars,
   googleEventChanges,
   googleStopChannel,
   googleWatch,
+  graphCalendars,
   graphCreateSubscription,
   graphDeleteSubscription,
   graphEventChanges,
@@ -44,6 +46,7 @@ interface GoogleSubscriptionState {
   resourceId: string;
   token: string;
   address: string;
+  calendarId: string;
   expiration: string | null;
   messageNumber: number;
   syncToken: string | null;
@@ -53,6 +56,7 @@ interface MicrosoftSubscriptionState {
   subscriptionId: string;
   clientState: string;
   address: string;
+  resource: string;
   expiration: string | null;
   deltaLink: string | null;
 }
@@ -60,6 +64,8 @@ interface MicrosoftSubscriptionState {
 interface AccountState {
   account: string;
   source: CalendarSource;
+  /** Which calendar to watch: Google defaults to `primary`, Microsoft to all. */
+  calendarId?: string;
   pushToken: string;
   google?: GoogleSubscriptionState;
   microsoft?: MicrosoftSubscriptionState;
@@ -102,6 +108,8 @@ const GRAPH_TTL_MS = 4200 * 60_000;
 const GRAPH_RENEW_BEFORE_MS = 12 * 3600_000;
 const ACCOUNT_ID = /^[a-z0-9][a-z0-9_-]{2,80}$/;
 
+const validCalendarId = (value: string): boolean => value.length > 0 && value.length <= 200 && !/[\r\n]/.test(value);
+const microsoftResource = (calendarId?: string): string => (calendarId ? `/me/calendars/${encodeURIComponent(calendarId)}/events` : '/me/events');
 const nowIso = (now: () => Date) => now().toISOString();
 const headerOf = (headers: CalendarPushRequest['headers'], name: string): string => {
   const value = headers[name] ?? headers[name.toLowerCase()];
@@ -140,6 +148,7 @@ export class CalendarSync {
   private timer: NodeJS.Timeout | null = null;
   private firstTimer: NodeJS.Timeout | null = null;
   private ticking = false;
+  private queuedTick = false;
   private readonly syncing = new Set<string>();
   private readonly queued = new Set<Promise<unknown>>();
 
@@ -164,6 +173,7 @@ export class CalendarSync {
           accounts[id] = {
             account: id,
             source: value.source,
+            ...(typeof value.calendarId === 'string' && validCalendarId(value.calendarId) ? { calendarId: value.calendarId } : {}),
             pushToken: typeof value.pushToken === 'string' && value.pushToken.length >= 20 ? value.pushToken : newToken(),
             ...(value.google && typeof value.google === 'object' ? { google: value.google } : {}),
             ...(value.microsoft && typeof value.microsoft === 'object' ? { microsoft: value.microsoft } : {}),
@@ -237,7 +247,11 @@ export class CalendarSync {
 
   /** One full pass: renew subscriptions, then read every account's delta. */
   async tick(): Promise<number> {
-    if (!this.enabled || this.ticking) return 0;
+    if (!this.enabled) return 0;
+    if (this.ticking) {
+      this.queuedTick = true;
+      return 0;
+    }
     this.ticking = true;
     const fresh: CalendarChangeView[] = [];
     try {
@@ -255,6 +269,10 @@ export class CalendarSync {
       this.save();
     } finally {
       this.ticking = false;
+      if (this.queuedTick) {
+        this.queuedTick = false;
+        void this.tick().catch(() => {});
+      }
     }
     await this.emit(fresh);
     return fresh.length;
@@ -278,6 +296,7 @@ export class CalendarSync {
         account: account.id,
         name: account.name,
         service: account.service,
+        calendarId: state?.calendarId ?? (account.service === 'google' ? 'primary' : 'all'),
         connected: auth.isConfigured,
         push: this.subscriptionActive(state),
         subscriptionExpiresAt: state?.google?.expiration ?? state?.microsoft?.expiration ?? null,
@@ -293,6 +312,52 @@ export class CalendarSync {
       accounts,
       lastCheckedAt: this.data.lastCheckedAt,
     };
+  }
+
+  /** The account's calendars, for the picker. */
+  async calendars(accountId: string): Promise<Array<{ id: string; summary: string; primary: boolean }>> {
+    const account = this.deps.accounts.list().find((entry) => entry.id === accountId);
+    if (!account || (account.service !== 'google' && account.service !== 'microsoft')) throw new Error('Only calendar accounts can be listed.');
+    if (account.service === 'google') {
+      const auth = this.deps.accounts.google(accountId);
+      if (!auth.isConfigured) throw new Error('Reconnect the Google account first.');
+      return googleCalendars(auth);
+    }
+    const auth = this.deps.accounts.microsoft(accountId);
+    if (!auth.isConfigured) throw new Error('Reconnect the Microsoft account first.');
+    return graphCalendars(auth);
+  }
+
+  /** Switches the watched calendar and starts a fresh baseline. `all` = every Microsoft calendar. */
+  setCalendar(accountId: string, rawCalendarId: string): { ok: boolean; error?: string } {
+    const account = this.deps.accounts.list().find((entry) => entry.id === accountId);
+    if (!account || (account.service !== 'google' && account.service !== 'microsoft')) {
+      return { ok: false, error: 'Only a calendar account can choose a calendar.' };
+    }
+    const calendarId = String(rawCalendarId ?? '').trim();
+    const all = account.service === 'microsoft' && (calendarId === '' || calendarId === 'all');
+    if (!all && !validCalendarId(calendarId)) return { ok: false, error: 'A calendar id is 1-200 characters on one line.' };
+    const state = this.ensureState(account);
+    const current = state.calendarId ?? (account.service === 'google' ? 'primary' : 'all');
+    if (current === (all ? 'all' : calendarId)) return { ok: true };
+    const previousGoogle = state.google;
+    const previousMicrosoft = state.microsoft;
+    if (all || (account.service === 'google' && calendarId === 'primary')) delete state.calendarId;
+    else state.calendarId = calendarId;
+    state.google = undefined;
+    state.microsoft = undefined;
+    delete this.data.seen[state.account];
+    this.save();
+    if (previousGoogle && previousGoogle.channelId) {
+      const auth = this.deps.accounts.google(accountId);
+      void googleStopChannel(auth, { id: previousGoogle.channelId, resourceId: previousGoogle.resourceId }).catch(() => {});
+    }
+    if (previousMicrosoft) {
+      const auth = this.deps.accounts.microsoft(accountId);
+      void graphDeleteSubscription(auth, previousMicrosoft.subscriptionId).catch(() => {});
+    }
+    void this.tick().catch(() => {});
+    return { ok: true };
   }
 
   /** The URL providers call; null when no public base is configured. */
@@ -340,14 +405,32 @@ export class CalendarSync {
     if (entry.source === 'microsoft') {
       const subscription = entry.microsoft;
       if (!subscription) return { status: 404, contentType: 'text/plain; charset=utf-8', body: 'No Microsoft subscription.' };
-      let body: { value?: Array<{ clientState?: string }> } = {};
+      let body: { value?: Array<{ clientState?: string; lifecycleEvent?: string }> } = {};
       try {
         body = JSON.parse(request.body || '{}') as typeof body;
       } catch {
         return { status: 400, contentType: 'text/plain; charset=utf-8', body: 'Bad notification.' };
       }
-      const matched = (body.value ?? []).some((notification) => same(String(notification.clientState ?? ''), subscription.clientState));
-      if (!matched) return { status: 401, contentType: 'text/plain; charset=utf-8', body: 'Wrong client state.' };
+      const notifications = (body.value ?? []).filter((notification) => same(String(notification.clientState ?? ''), subscription.clientState));
+      if (notifications.length === 0) return { status: 401, contentType: 'text/plain; charset=utf-8', body: 'Wrong client state.' };
+      const lifecycle = notifications.map((notification) => notification.lifecycleEvent).filter((event): event is string => typeof event === 'string');
+      if (lifecycle.length > 0) {
+        let replace = false;
+        for (const event of lifecycle) {
+          if (event === 'subscriptionRemoved') {
+            delete entry.microsoft;
+            this.setError(entry, 'push subscription was removed by Microsoft; creating a new one');
+            replace = true;
+          } else if (event === 'reauthorizationRequired') {
+            this.setError(entry, 'authorization expired; reconnect the Microsoft account to keep calendar push');
+          } else if (event === 'missed') {
+            replace = true;
+          }
+        }
+        this.save();
+        if (replace) this.queue(entry.account);
+        return { status: 202, contentType: 'text/plain; charset=utf-8', body: 'ok' };
+      }
       this.queue(entry.account);
       return { status: 202, contentType: 'text/plain; charset=utf-8', body: 'ok' };
     }
@@ -431,13 +514,14 @@ export class CalendarSync {
     const now = this.now().getTime();
     if (state.source === 'google') {
       const existing = state.google;
+      const calendarId = state.calendarId ?? 'primary';
       const expiresSoon = existing ? parseDate(existing.expiration) - now < GOOGLE_RENEW_BEFORE_MS : true;
-      if (existing && !expiresSoon && existing.address === address) return;
+      if (existing && existing.calendarId === calendarId && !expiresSoon && existing.address === address) return;
       if (existing) {
         await googleStopChannel(auth as GoogleAuth, { id: existing.channelId, resourceId: existing.resourceId }).catch(() => {});
       }
       const token = existing?.token ?? newToken();
-      const channel = await googleWatch(auth as GoogleAuth, 'primary', {
+      const channel = await googleWatch(auth as GoogleAuth, calendarId, {
         channelId: `${state.account}-${randomBytes(9).toString('hex')}`,
         address,
         token,
@@ -448,19 +532,21 @@ export class CalendarSync {
         resourceId: channel.resourceId,
         token,
         address,
+        calendarId,
         expiration: channel.expiration ? new Date(Number(channel.expiration)).toISOString() : null,
         messageNumber: existing?.messageNumber ?? 0,
-        syncToken: existing?.syncToken ?? null,
+        syncToken: existing?.calendarId === calendarId ? (existing.syncToken ?? null) : null,
       };
       return;
     }
 
     const existing = state.microsoft;
+    const resource = microsoftResource(state.calendarId);
     const expiresSoon = existing ? parseDate(existing.expiration) - now < GRAPH_RENEW_BEFORE_MS : true;
-    if (existing && !expiresSoon && existing.address === address) return;
+    if (existing && existing.resource === resource && !expiresSoon && existing.address === address) return;
     const expirationDateTime = new Date(now + GRAPH_TTL_MS).toISOString();
     if (existing) {
-      if (existing.address === address) {
+      if (existing.address === address && existing.resource === resource) {
         try {
           const renewed = await graphRenewSubscription(auth as MicrosoftAuth, existing.subscriptionId, expirationDateTime);
           existing.expiration = renewed.expirationDateTime;
@@ -475,6 +561,8 @@ export class CalendarSync {
     const clientState = existing?.clientState ?? newToken();
     const subscription = await graphCreateSubscription(auth as MicrosoftAuth, {
       notificationUrl: address,
+      lifecycleNotificationUrl: address,
+      resource,
       clientState,
       expirationDateTime,
     });
@@ -482,13 +570,14 @@ export class CalendarSync {
       subscriptionId: subscription.id,
       clientState,
       address,
+      resource,
       expiration: subscription.expirationDateTime,
-      deltaLink: existing?.deltaLink ?? null,
+      deltaLink: existing?.resource === resource ? (existing.deltaLink ?? null) : null,
     };
   }
 
   private async pullGoogle(state: AccountState, auth: GoogleAuth): Promise<CalendarChangeView[]> {
-    const page = await googleEventChanges(auth, 'primary', state.google?.syncToken ?? undefined, { now: this.now });
+    const page = await googleEventChanges(auth, state.calendarId ?? 'primary', state.google?.syncToken ?? undefined, { now: this.now });
     state.google!.syncToken = page.syncToken;
     if (page.baseline) return [];
     const fresh: CalendarChangeView[] = [];
@@ -501,7 +590,7 @@ export class CalendarSync {
   }
 
   private async pullMicrosoft(state: AccountState, auth: MicrosoftAuth): Promise<CalendarChangeView[]> {
-    const page = await graphEventChanges(auth, state.microsoft?.deltaLink ?? undefined);
+    const page = await graphEventChanges(auth, state.microsoft?.deltaLink ?? undefined, microsoftResource(state.calendarId));
     state.microsoft!.deltaLink = page.deltaLink;
     if (page.baseline) return [];
     const fresh: CalendarChangeView[] = [];
@@ -574,11 +663,11 @@ export class CalendarSync {
 }
 
 function emptyGoogleState(): GoogleSubscriptionState {
-  return { channelId: '', resourceId: '', token: '', address: '', expiration: null, messageNumber: 0, syncToken: null };
+  return { channelId: '', resourceId: '', token: '', address: '', calendarId: 'primary', expiration: null, messageNumber: 0, syncToken: null };
 }
 
 function emptyMicrosoftState(): MicrosoftSubscriptionState {
-  return { subscriptionId: '', clientState: '', address: '', expiration: null, deltaLink: null };
+  return { subscriptionId: '', clientState: '', address: '', resource: '/me/events', expiration: null, deltaLink: null };
 }
 
 function eventTimes(start?: { dateTime?: string; date?: string }, end?: { dateTime?: string; date?: string }) {

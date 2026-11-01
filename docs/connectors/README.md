@@ -1,6 +1,6 @@
 # Connector platform
 
-Status: 50 native connectors / 214 operations, with workflow runs, run history,
+Status: 50 native connectors / 218 operations, with workflow runs, run history,
 connector versioning, guarded outbound HTTP, and n8n / Make / Zapier / OpenAPI
 import helpers. The schema is frozen at contract version 1; see
 [`contract.md`](contract.md).
@@ -95,9 +95,10 @@ All importers run locally and never call a provider or save during preview:
 - Credential values are never imported. Attach a connection after import.
 - Imported connector nodes start with `allow: false` for write operations.
 - OpenAPI import (Hub > Node & Tools) previews a JSON document, then stores it
-  in `user/connectors/imported/` and registers its tools. Imported operations
-  are always untrusted and get method-based risk; see
-  [`openapi-import.md`](openapi-import.md#importing-in-the-app).
+  in `user/connectors/imported/` and registers its tools. Common page/cursor
+  pagination is inferred, and `x-mimi-rate-limit` becomes a spec rate limit;
+  triggers are never derived. Imported operations are always untrusted and get
+  method-based risk; see [`openapi-import.md`](openapi-import.md#importing-in-the-app).
 
 ## Troubleshooting
 
@@ -125,6 +126,6 @@ node --test packages/core/src/test/e2e/connector-workflow.e2e.test.ts
 node --test packages/core/src/test/connector-performance.test.ts
 ```
 
-As of 2026-10-24: typecheck clean, full suite 528/528, E2E 3/3, performance
+As of 2026-11-01: typecheck clean, full suite 749/749, E2E 3/3, performance
 5/5. The release gate also requires macOS packaging, Docker verification and
 manual UI/security checks; see [`release-checklist.md`](release-checklist.md).

@@ -222,6 +222,54 @@ test('Graph: validation handshake, clientState check, delta and renewal', async 
   assert.ok(expires - now.getTime() >= 2.8 * 86_400_000, 'the new expiry is about three days out');
 });
 
+test('Graph lifecycle notifications report reauthorization and replace a removed subscription', async () => {
+  const dir = calendarDir('graph-lifecycle');
+  let creates = 0;
+  let createdBody: Record<string, unknown> | undefined;
+  const notices: string[] = [];
+  const auth = requester((url, init) => {
+    if (url === '/subscriptions' && init?.method === 'POST') {
+      creates++;
+      createdBody = init.body as Record<string, unknown>;
+      return { id: `sub-${creates}`, expirationDateTime: String((init.body as { expirationDateTime: string }).expirationDateTime) };
+    }
+    if (url.includes('/me/events/delta')) {
+      return { value: [], '@odata.deltaLink': 'https://graph.microsoft.com/v1.0/me/events/delta?$deltatoken=1' };
+    }
+    if (url.startsWith('/subscriptions/') && init?.method === 'DELETE') return {};
+    throw new Error(`unexpected ${url}`);
+  });
+  const sync = new CalendarSync({
+    dir,
+    accounts: hub([microsoftAccount(auth)]),
+    publicUrl: 'https://tunnel.example',
+    now: () => NOW,
+    notify: (title) => notices.push(title),
+  });
+  await sync.tick();
+  assert.equal(creates, 1);
+  assert.equal(createdBody?.lifecycleNotificationUrl, sync.pushUrl('microsoft-1'));
+
+  const pushUrl = new URL(String(sync.pushUrl('microsoft-1')));
+  const clientState = String(createdBody?.clientState);
+  const lifecycle = (event: string) =>
+    sync.handlePush({
+      method: 'POST',
+      url: pushUrl,
+      headers: {},
+      body: JSON.stringify({ value: [{ clientState, subscriptionId: 'sub-1', lifecycleEvent: event }] }),
+    });
+
+  assert.equal((await lifecycle('reauthorizationRequired')).status, 202);
+  assert.match(String(sync.view().accounts[0]?.lastError), /reconnect the Microsoft account/);
+  assert.ok(notices.length > 0, 'the user is told');
+
+  assert.equal((await lifecycle('subscriptionRemoved')).status, 202);
+  await sync.idle();
+  assert.equal(creates, 2, 'a new subscription is created');
+  assert.equal(sync.view().accounts[0]?.lastError, null, 'the next successful pass clears the error');
+});
+
 test('a change is not emitted twice when push and the safety-net poll race', async () => {
   const dir = calendarDir('race');
   let release: (() => void) | undefined;
@@ -352,4 +400,94 @@ test('core: a calendar workflow gets its 15-minute safety-net schedule and runs 
   assert.equal(target.core.triggers.get(schedule!.id)!.lastResult, 'no new calendar changes');
   assert.deepEqual(target.core.calendarSync.view().accounts, []);
   await target.cleanup();
+});
+
+test('Google: the watched calendar can be listed and changed, and the old channel is stopped', async () => {
+  const dir = calendarDir('google-calendar-pick');
+  const calls: string[] = [];
+  let stopped = 0;
+  const auth = requester((url, init) => {
+    if (url.includes('/users/me/calendarList')) {
+      return { items: [{ id: 'primary', summary: 'Main', primary: true }, { id: 'team@example.com', summary: 'Team' }] };
+    }
+    if (url.endsWith('/events/watch')) {
+      calls.push(`watch:${url}`);
+      return { id: `chan-${calls.length}`, resourceId: `res-${calls.length}`, expiration: String(NOW.getTime() + 7 * 86_400_000) };
+    }
+    if (url.includes('/channels/stop')) {
+      stopped++;
+      return {};
+    }
+    if (url.includes('/events?')) {
+      calls.push(`delta:${url}`);
+      return { items: [], nextSyncToken: `s${calls.length}` };
+    }
+    throw new Error(`unexpected ${url}`);
+  });
+  const sync = new CalendarSync({ dir, accounts: hub([googleAccount(auth)]), publicUrl: 'https://tunnel.example', now: () => NOW });
+  await sync.tick();
+  assert.ok(calls.some((call) => call.includes('calendars/primary/events')));
+  assert.deepEqual(await sync.calendars('google-1'), [
+    { id: 'primary', summary: 'Main', primary: true },
+    { id: 'team@example.com', summary: 'Team', primary: false },
+  ]);
+
+  assert.equal(sync.setCalendar('google-1', 'team@example.com').ok, true);
+  const deadline = Date.now() + 1000;
+  while (!calls.some((call) => call.includes('calendars/team%40example.com/events')) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.equal(sync.view().accounts[0]?.calendarId, 'team@example.com');
+  assert.ok(calls.some((call) => call.includes('calendars/team%40example.com/events')), calls.join('\n'));
+  assert.ok(stopped > 0, 'the old push channel is stopped');
+
+  assert.equal(sync.setCalendar('google-1', 'bad\ncalendar').ok, false);
+  assert.equal(sync.setCalendar('microsoft-1', 'primary').ok, false);
+});
+
+test('Graph: one calendar can be chosen and switching back to all restarts the subscription', async () => {
+  const dir = calendarDir('graph-calendar-pick');
+  const resources: string[] = [];
+  const deltas: string[] = [];
+  let stopped = 0;
+  const auth = requester((url, init) => {
+    if (url.startsWith('/me/calendars?') || url === '/me/calendars') {
+      return { value: [{ id: 'cal-1', name: 'Work', isDefault: true }, { id: 'cal-2', name: 'Family' }] };
+    }
+    if (url === '/subscriptions' && init?.method === 'POST') {
+      const body = init.body as { resource: string; expirationDateTime: string };
+      resources.push(body.resource);
+      return { id: `sub-${resources.length}`, expirationDateTime: body.expirationDateTime };
+    }
+    if (url.startsWith('/subscriptions/') && init?.method === 'DELETE') {
+      stopped++;
+      return {};
+    }
+    if (url.includes('/delta')) {
+      deltas.push(url);
+      return { value: [], '@odata.deltaLink': `https://graph.microsoft.com/v1.0${url.split('?')[0]}?$deltatoken=${deltas.length}` };
+    }
+    throw new Error(`unexpected ${url}`);
+  });
+  const sync = new CalendarSync({ dir, accounts: hub([microsoftAccount(auth)]), publicUrl: 'https://tunnel.example', now: () => NOW });
+  await sync.tick();
+  assert.deepEqual(resources, ['/me/events']);
+  assert.ok(deltas.some((url) => url.startsWith('/me/events/delta')));
+  assert.deepEqual(await sync.calendars('microsoft-1'), [
+    { id: 'cal-1', summary: 'Work', primary: true },
+    { id: 'cal-2', summary: 'Family', primary: false },
+  ]);
+
+  assert.equal(sync.setCalendar('microsoft-1', 'cal-2').ok, true);
+  const deadline = Date.now() + 1000;
+  while (!resources.includes('/me/calendars/cal-2/events') && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.deepEqual(resources, ['/me/events', '/me/calendars/cal-2/events']);
+  assert.equal(sync.view().accounts[0]?.calendarId, 'cal-2');
+  assert.ok(stopped > 0, 'the old subscription is deleted');
+
+  assert.equal(sync.setCalendar('microsoft-1', 'all').ok, true);
+  const allDeadline = Date.now() + 1000;
+  while (resources.filter((resource) => resource === '/me/events').length < 2 && Date.now() < allDeadline) await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(resources.at(-1), '/me/events');
+  assert.equal(sync.view().accounts[0]?.calendarId, 'all');
 });

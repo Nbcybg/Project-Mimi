@@ -5,6 +5,8 @@ import type {
   ConnectorField,
   ConnectorHttpMethod,
   ConnectorOperation,
+  ConnectorPagination,
+  ConnectorRateLimit,
   ConnectorSpec,
 } from '@mimi/shared';
 import { ConnectorRegistry } from './registry.ts';
@@ -58,6 +60,9 @@ const METHODS: Array<[string, ConnectorHttpMethod]> = [
 
 const RESERVED_HEADERS = new Set(['authorization', 'content-type', 'accept', 'cookie']);
 const JSON_TYPES = new Set(['string', 'number', 'integer', 'boolean', 'object', 'array']);
+const SIZE_PARAMS = ['per_page', 'pageSize', 'page_size', 'perPage', 'limit', 'maxResults', '$top'];
+const CURSOR_PARAMS = ['pageToken', 'page_token', 'cursor', 'after', 'start_cursor', 'starting_after', '$skiptoken'];
+const NEXT_KEYS = ['nextPageToken', 'next_page_token', 'nextCursor', 'next_cursor', 'nextToken', 'next', 'nextLink', 'next_link'];
 
 function isObject(value: unknown): value is JsonObject {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -256,6 +261,58 @@ function responseOf(
       type.startsWith('video/'),
   );
   return binary ? { binary: true } : undefined;
+}
+
+function successSchema(root: JsonObject, operation: JsonObject, where: string): JsonObject | undefined {
+  const responses = isObject(operation.responses) ? operation.responses : undefined;
+  if (!responses) return undefined;
+  const keys = Object.keys(responses);
+  const selected = keys
+    .filter((key) => /^2\d\d$/.test(key))
+    .sort((a, b) => Number(a) - Number(b))
+    .find((key) => key !== '204') ?? keys.find((key) => key === '204');
+  if (!selected) return undefined;
+  const response = deref(root, responses[selected], `${where} response ${selected}`);
+  if (!isObject(response)) return undefined;
+  const content = isObject(response.content) ? response.content : {};
+  const json = Object.keys(content).find((type) => type === 'application/json' || type.endsWith('+json'));
+  if (!json) return undefined;
+  const entry = content[json];
+  if (!isObject(entry)) return undefined;
+  const schema = deref(root, entry.schema, `${where} response schema`);
+  return isObject(schema) ? schema : undefined;
+}
+
+function nextPathOf(root: JsonObject, operation: JsonObject, where: string): string | undefined {
+  const schema = successSchema(root, operation, where);
+  const properties = isObject(schema?.properties) ? schema.properties : undefined;
+  if (!properties) return undefined;
+  for (const key of NEXT_KEYS) if (key in properties) return key;
+  const paging = isObject(properties.paging) ? deref(root, properties.paging, `${where} paging`) : undefined;
+  const pagingProperties = isObject(paging) && isObject(paging.properties) ? paging.properties : undefined;
+  if (pagingProperties && 'next' in pagingProperties) return 'paging.next';
+  const cursors = pagingProperties && isObject(pagingProperties.cursors) ? deref(root, pagingProperties.cursors, `${where} cursors`) : undefined;
+  if (isObject(cursors) && isObject(cursors.properties) && 'after' in cursors.properties) return 'paging.cursors.after';
+  const links = isObject(properties.links) ? deref(root, properties.links, `${where} links`) : undefined;
+  if (isObject(links) && isObject(links.properties) && 'next' in links.properties) return 'links.next';
+  return undefined;
+}
+
+function rateLimitOf(root: JsonObject, report: OpenApiImportReport): ConnectorRateLimit | undefined {
+  const raw = root['x-mimi-rate-limit'];
+  if (raw === undefined) return undefined;
+  if (!isObject(raw)) {
+    report.warnings.push('x-mimi-rate-limit must be an object; no rate limit was imported');
+    return undefined;
+  }
+  const requests = Number(raw.requests);
+  const perMs = Number(raw.perMs);
+  const burst = raw.burst === undefined ? undefined : Number(raw.burst);
+  if (!Number.isInteger(requests) || requests < 1 || !Number.isFinite(perMs) || perMs < 1 || (burst !== undefined && (!Number.isInteger(burst) || burst < 1))) {
+    report.warnings.push('x-mimi-rate-limit needs positive integer "requests", "perMs" and optional "burst"; no rate limit was imported');
+    return undefined;
+  }
+  return { requests, perMs, ...(burst === undefined ? {} : { burst }) };
 }
 
 function mapSecurityScheme(
@@ -473,6 +530,10 @@ export function importOpenApi(
   const auth = mapAuth(root, report);
   const usedKeys = new Set<string>();
   const operations: ConnectorOperation[] = [];
+  const paginationHints = new Map<
+    string,
+    { page?: true; size?: string; cursor?: string; nextPath?: string; itemsPath?: string; list: boolean }
+  >();
 
   for (const [template, rawPathItem] of Object.entries(paths)) {
     if (template.startsWith('x-')) continue;
@@ -612,6 +673,18 @@ export function importOpenApi(
 
       const summary = text(operation.summary) ?? text(operation.description);
       const operationResponse = responseOf(root, operation, where, report);
+      const queryKeys = new Set(query);
+      const size = SIZE_PARAMS.find((param) => queryKeys.has(param));
+      const cursor = CURSOR_PARAMS.find((param) => queryKeys.has(param));
+      const nextPath = nextPathOf(root, operation, where);
+      paginationHints.set(key, {
+        ...(method === 'GET' && queryKeys.has('page') ? { page: true as const } : {}),
+        ...(size ? { size } : {}),
+        ...(cursor ? { cursor } : {}),
+        ...(nextPath ? { nextPath } : {}),
+        ...(operationResponse?.itemsPath !== undefined ? { itemsPath: operationResponse.itemsPath } : {}),
+        list: Boolean(operationResponse && !operationResponse.binary && (operationResponse.itemsPath !== undefined || Object.keys(operationResponse).length === 0)),
+      });
       operations.push({
         key,
         label: summary ? humanize(summary).slice(0, 80) : humanize(key),
@@ -632,6 +705,39 @@ export function importOpenApi(
 
   if (operations.length === 0) throw new Error('OpenAPI import: the document has no supported operations');
 
+  const hints = operations.map((operation) => ({ operation, hint: paginationHints.get(operation.key)! }));
+  const cursorHint = hints.find(({ hint }) => hint.list && hint.cursor && hint.nextPath)?.hint;
+  const pageHint = hints.find(({ hint }) => hint.list && hint.page)?.hint;
+  let pagination: ConnectorPagination | undefined;
+  if (cursorHint) {
+    const mode: ConnectorPagination['mode'] = cursorHint.nextPath!.endsWith('nextPageToken') ? 'nextPageToken' : 'cursor';
+    pagination = {
+      mode,
+      cursorParam: cursorHint.cursor!,
+      ...(cursorHint.size ? { sizeParam: cursorHint.size } : {}),
+      ...(cursorHint.itemsPath !== undefined ? { itemsPath: cursorHint.itemsPath } : {}),
+      nextPath: cursorHint.nextPath!,
+    };
+    for (const { operation, hint } of hints) {
+      if (hint.list && hint.cursor === cursorHint.cursor && hint.nextPath === cursorHint.nextPath && hint.itemsPath === cursorHint.itemsPath) {
+        operation.paginated = true;
+      }
+    }
+    report.warnings.push(`pagination inferred: ${mode} via "${cursorHint.cursor}" and "${cursorHint.nextPath}"`);
+  } else if (pageHint) {
+    pagination = {
+      mode: 'page',
+      pageParam: 'page',
+      ...(pageHint.size ? { sizeParam: pageHint.size } : {}),
+      ...(pageHint.itemsPath !== undefined ? { itemsPath: pageHint.itemsPath } : {}),
+    };
+    for (const { operation, hint } of hints) {
+      if (hint.list && hint.page && hint.size === pageHint.size && hint.itemsPath === pageHint.itemsPath) operation.paginated = true;
+    }
+    report.warnings.push(`pagination inferred: page${pageHint.size ? ` + ${pageHint.size}` : ''}`);
+  }
+
+  const rateLimit = rateLimitOf(root, report);
   const spec: ConnectorSpec = {
     key: options.key?.trim() || slug(title, 'imported_api'),
     label: options.label?.trim() || title,
@@ -640,6 +746,8 @@ export function importOpenApi(
     ...(baseUrl === undefined ? {} : { baseUrl }),
     auth,
     operations,
+    ...(pagination === undefined ? {} : { pagination }),
+    ...(rateLimit === undefined ? {} : { rateLimit }),
   };
   if (options.validate !== false) new ConnectorRegistry([spec]);
   return { spec, report };

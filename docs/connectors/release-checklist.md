@@ -23,7 +23,7 @@ node --test packages/core/src/test/connector-performance.test.ts
 ```
 
 - [x] Typecheck is clean.
-- [x] Full suite passes. As of 2026-10-24 it is **528/528**.
+- [x] Full suite passes. As of 2026-11-01 it is **749/749**.
 - [x] E2E is **3/3**.
 - [x] Performance is **5/5**.
 - [x] No test calls a real provider; all network tests use `fakeFetch` or an
@@ -101,6 +101,13 @@ MCP/shell configuration. These do not replace the checks above.
 
 ## 7. Verification log
 
+**2026-11-01 (Windows)**
+
+- `npm run typecheck`: clean (`shared`, `pc-agent`, `core`).
+- Full suite: **749/749** passing.
+- Connector E2E: **3/3**; performance/stress: **5/5**.
+- `npm audit`: **0** vulnerabilities (`undici` 7.30.1).
+
 **2026-10-24 (Windows 10.0.26200, Node v24.18.0)**
 
 - `npm.cmd run typecheck`: clean.
@@ -122,9 +129,9 @@ MCP/shell configuration. These do not replace the checks above.
 
 | Gate | Result | Date / owner |
 | --- | --- | --- |
-| Typecheck | Pass | 2026-10-24 |
-| Full tests | Pass, 528/528 | 2026-10-24 |
-| E2E / performance | Pass, 3/3 and 5/5 | 2026-10-24 |
+| Typecheck | Pass | 2026-11-01 |
+| Full tests | Pass, 749/749 | 2026-11-01 |
+| E2E / performance | Pass, 3/3 and 5/5 | 2026-11-01 |
 | Windows package | Pass, build + fresh/existing smoke | 2026-10-24 |
 | macOS package | Blocked: needs macOS | |
 | Docker | Blocked: Docker not installed | |

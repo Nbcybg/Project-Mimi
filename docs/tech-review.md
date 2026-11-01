@@ -1,12 +1,12 @@
 # ทบทวนเทคโนโลยี (0.5.0): ภาษา, engine, ภาษาของ UI, หน้าต่างเนทีฟ
 
-สรุปว่าอะไรพอสำหรับต่อยอด อะไรควรจัดการก่อนโตกว่านี้ (เขียนจากโค้ดจริง ณ 0.5.0)
+สรุปว่าอะไรพอสำหรับต่อยอด อะไรควรจัดการก่อนโตกว่านี้ (เขียนจากโค้ดจริง ณ 0.5.0; อัปเดตตัวเลข/สถานะ ณ 0.7.9 เมื่อ 2026-11-01)
 
 ## 1. ภาษา / runtime
 - **TypeScript รันตรงบน Node 24** (type stripping, `erasableSyntaxOnly`, ไม่มีขั้น build) ทดสอบด้วย `node:test` ตรวจชนิดด้วย `tsc --noEmit`
   เหมาะกับโปรเจกต์นี้: ไฟล์ที่รันคือไฟล์ที่เขียน, dependency น้อย (ai SDK, better-sqlite3, ws, zod, yaml, croner, three)
   ข้อจำกัดที่ต้องรู้: ใช้ syntax ที่ลบชนิดแล้วรันได้เท่านั้น (ไม่มี enum / namespace / parameter property) และต้องมี Node ≥ 24 (แพ็กเกจพกพามี Node มาด้วยอยู่แล้ว)
-- **SQLite (better-sqlite3)** พอสำหรับผู้ใช้คนเดียว/หลายอุปกรณ์ที่คุยกับ core ตัวเดียว; migration เป็นไฟล์ลำดับ (`db/0NN-*.sql`, ตอนนี้ v15)
+- **SQLite (better-sqlite3)** พอสำหรับผู้ใช้คนเดียว/หลายอุปกรณ์ที่คุยกับ core ตัวเดียว; migration เป็นไฟล์ลำดับ (`db/0NN-*.sql`, ตอนนี้ v23)
   ถ้าจะมีหลายผู้ใช้หรือหลาย core ค่อยคิดเรื่อง Postgres ตอนนั้น
 - **ความเสี่ยงที่เลี่ยงไว้**: core ไม่ได้รันใน Electron แต่เป็นโปรเซส Node แยก (`launcher.ts`) จึงไม่ต้อง rebuild better-sqlite3 ให้ตรง ABI ของ Electron
   และ core ยังรันแบบไม่มีหน้าต่าง (Docker / VPS) แล้วเปิดจากมือถือผ่านเบราว์เซอร์ได้เหมือนเดิม
@@ -14,7 +14,7 @@
 ## 2. Engine แชต / agent loop
 - `ChatEngine` (chat/engine.ts, ~320 บรรทัด) รับ dependency ผ่าน interface (ไม่ผูกกับ DB/โมเดลจริง) ส่งผลเป็น async generator ของเหตุการณ์ ทำให้ test ง่ายและ client ใดก็ต่อได้ (เว็บ, CLI)
   กลุ่มแชตใช้ @mention เป็นคิว ไม่มี hierarchy ตายตัว
-- `AgentLoop` (loop/agent-loop.ts, ~480 บรรทัด) มีงบรอบ/token/ค่าใช้จ่าย, permission gate, parked run, retry เมื่อโมเดลตอบว่าง; มี 335 test คลุมทั้งชุด
+- `AgentLoop` (loop/agent-loop.ts, ~480 บรรทัด) มีงบรอบ/token/ค่าใช้จ่าย, permission gate, parked run, retry เมื่อโมเดลตอบว่าง; มี 749 test คลุมทั้งชุด (2026-11-01)
 - **จุดที่เริ่มบวม**: `core.ts` (~1270 บรรทัด, ประกอบทุกอย่าง) และ `server.ts` (~1420 บรรทัด, HTTP + WebSocket dispatch)
   แนวทาง: แยก handler ของ WebSocket ตามโดเมนแบบที่ `chat-api.ts` ทำไว้แล้ว (wardrobe / backgrounds / gallery / providers / hub) แล้วให้ `server.ts` เหลือแค่ routing และ auth
   ยังไม่จำเป็นต้องเปลี่ยน engine เอง
@@ -36,7 +36,9 @@
 - `packages/desktop/main.cjs` เป็นเปลือกบาง ๆ: หน้าต่างเดียวขนาดมือถือ (410×820) ย่อ/ขยายได้ จำขนาดและตำแหน่ง, กดปิด = ซ่อน (สถานะแชตอยู่ครบ), ไอคอน tray, notification, เมนู tray (เปิดแชต / Agent / Hub / ตั้งค่า / ซ่อนเมื่อคลิกที่อื่น / อยู่บนสุด / ออก)
   ไม่มีเมนูแบบเบราว์เซอร์, ไม่มี zoom, คลิกขวาเฉพาะช่องข้อความ, ลิงก์ภายนอกเปิดในเบราว์เซอร์ปกติ, ขออนุญาตเฉพาะไมค์/กล้อง/แจ้งเตือน
 - launcher ↔ หน้าต่างคุยกันทาง node IPC (โปรแกรม GUI บน Windows ไม่มี stdin ที่ใช้ได้)
-- ราคาที่ต้องจ่าย: Electron ~100 MB+ ในแพ็กเกจ และต้องตามอัปเดตความปลอดภัยของ Chromium; ยังไม่ได้ทำ: เริ่มพร้อม Windows, ลงนามโค้ด, อัปเดตอัตโนมัติ
+- ราคาที่ต้องจ่าย: Electron ~100 MB+ ในแพ็กเกจ และต้องตามอัปเดตความปลอดภัยของ Chromium
+- ลงนามโค้ดและอัปเดตอัตโนมัติทำแล้ว (0.7.9): `scripts/signing.mjs` ลงนาม Authenticode / Developer ID + notarize เมื่อตั้ง certificate, ทุก release มี `SHA256SUMS.txt`, updater ตรวจขนาด/SHA-256/publisher และแจ้งก่อนอัปเดต; `scripts/fuses.mjs` ปิด Electron fuses ที่ไม่จำเป็น (เก็บ `RunAsNode` ไว้ให้ PC agent) — **แต่ยังไม่ได้ตั้ง cert จริง** จึงยังได้ build unsigned/ad hoc
+- ยังไม่ได้ทำ: เริ่มพร้อม Windows (auto-start), การทดสอบ signed/notarized build จริง
 - **PC agent ในแพ็กเกจ**: Node 24 ไม่ยอม strip TypeScript ใต้ `node_modules` (`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`) ทำให้แพ็กเกจเก่าเปิด PC agent ไม่ขึ้นทั้งที่ติ๊กแล้ว
   `scripts/pack-pc-agent.mjs` จึงคัดลอก `pc-agent` และ `shared` ไปไว้ข้างแอป (`resources/app/pc-agent`, `resources/app/shared`) แล้ว rewrite import `@mimi/shared` เป็น relative
   `remote.cjs` เลือก entry ที่ `resources/app/pc-agent/src/main.ts` ก่อน — อย่าย้ายกลับเข้า `node_modules`

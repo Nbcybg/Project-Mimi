@@ -3587,19 +3587,43 @@
 
   // ---------- settings page ----------
   /** Two-step sign-in of a gateway account: on with the password plus a first code, off with both. */
+  function recoveryCodesBox(codes) {
+    const box = el('div', 'panel');
+    box.append(
+      el('p', 'hint badtxt', 'เก็บรหัสสำรองเหล่านี้ไว้ในที่ปลอดภัย — แสดงครั้งนี้ครั้งเดียว และแต่ละรหัสใช้ได้ครั้งเดียวเมื่อไม่มีมือถือ'),
+      el('pre', 'wjson', codes.join('\n')),
+    );
+    return box;
+  }
+
   function twoFactorPanel() {
     const panel = el('div', 'panel form');
     panel.append(el('h3', '', 'ยืนยันตัวตนสองขั้น (2FA)'));
     const body = el('div', 'stackv');
     panel.append(body);
-    const paint = (status, pending) => {
+    const paint = (state, pending, codes) => {
       body.replaceChildren();
-      if (status === null) {
+      if (state === undefined) {
         body.append(el('p', 'hint', 'กำลังตรวจสถานะ…'));
         return;
       }
-      if (status) {
-        body.append(el('p', 'pill ok', 'เปิดอยู่: เข้าสู่ระบบต้องใช้รหัสจากแอปยืนยันตัวตนทุกครั้ง'));
+      if (state.twoFactor) {
+        body.append(
+          el('p', 'pill ok', 'เปิดอยู่: เข้าสู่ระบบต้องใช้รหัสจากแอปยืนยันตัวตนทุกครั้ง'),
+          el('p', 'hint', `รหัสสำรองที่ยังใช้ได้: ${state.recoveryCodes ?? 0} รหัส`),
+        );
+        if (codes && codes.length > 0) body.append(recoveryCodesBox(codes));
+        const recoveryPassword = textInput('', 'รหัสผ่าน', 'password');
+        body.append(
+          labelled('สร้างรหัสสำรองชุดใหม่ (รหัสเก่าที่เหลือจะใช้ไม่ได้)', recoveryPassword),
+          button('btn', 'สร้าง recovery codes ใหม่', async () => {
+            const answer = await api('/auth/2fa/recovery', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: recoveryPassword.value }) });
+            if (!answer.ok) return toast('สร้างไม่ได้', answer.status === 429 ? 'ลองผิดหลายครั้งเกินไป รอสักครู่' : 'รหัสผ่านไม่ถูกต้อง', true);
+            const result = await answer.json();
+            toast('สร้าง recovery codes ใหม่แล้ว', 'เก็บรหัสใหม่ไว้ให้ดี รหัสเก่าใช้ไม่ได้แล้ว');
+            paint({ twoFactor: true, recoveryCodes: result.recoveryCodes?.length ?? 0 }, null, result.recoveryCodes);
+          }),
+        );
         const password = textInput('', 'รหัสผ่าน', 'password');
         const code = textInput('', 'รหัส 6 หลักตอนนี้');
         body.append(
@@ -3609,7 +3633,7 @@
             const answer = await api('/auth/2fa/disable', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: password.value, code: code.value }) });
             if (!answer.ok) return toast('ปิด 2FA ไม่ได้', answer.status === 429 ? 'ลองผิดหลายครั้งเกินไป รอสักครู่' : 'รหัสผ่านหรือรหัสจากแอปไม่ถูกต้อง', true);
             toast('ปิด 2FA แล้ว');
-            paint(false, null);
+            paint({ twoFactor: false }, null);
           }),
         );
         return;
@@ -3625,31 +3649,59 @@
         body.append(
           link,
           labelled('รหัสจากแอป', code),
+          el('p', 'hint', 'หลังยืนยันจะแสดงรหัสสำรอง 10 รหัส เก็บไว้ให้ดี'),
           button('btn pri', 'ยืนยันและเปิด 2FA', async () => {
             const answer = await api('/auth/2fa/enable', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: code.value }) });
             if (!answer.ok) return toast('รหัสไม่ถูกต้อง', 'ดูว่าเวลาในมือถือตรง แล้วใส่รหัสล่าสุดอีกครั้ง', true);
-            toast('เปิด 2FA แล้ว', 'ครั้งหน้าที่เข้าสู่ระบบจะถามรหัสจากแอป');
-            paint(true, null);
+            const result = await answer.json();
+            toast('เปิด 2FA แล้ว', 'เก็บรหัสสำรองไว้ให้ดี ครั้งหน้าที่เข้าสู่ระบบจะถามรหัสจากแอป');
+            paint({ twoFactor: true, recoveryCodes: result.recoveryCodes?.length ?? 0 }, null, result.recoveryCodes);
           }),
         );
         return;
       }
-      body.append(el('p', 'hint', 'ปิดอยู่ · เปิดแล้วการเข้าสู่ระบบบนเครื่องใหม่ต้องใช้รหัสจากแอปยืนยันตัวตนบนมือถือด้วย ถ้ามือถือหาย ให้ผู้ดูแลรัน "accounts 2fa-reset <ชื่อผู้ใช้>"'));
+      body.append(el('p', 'hint', 'ปิดอยู่ · เปิดแล้วการเข้าสู่ระบบบนเครื่องใหม่ต้องใช้รหัสจากแอปยืนยันตัวตนบนมือถือด้วย · ถ้ามือถือหาย ให้ใช้รหัสสำรองหรือให้ผู้ดูแลรัน "accounts 2fa-reset <ชื่อผู้ใช้>"'));
       const password = textInput('', 'รหัสผ่าน', 'password');
       body.append(
         labelled('รหัสผ่าน (เพื่อยืนยันว่าเป็นคุณ)', password),
         button('btn', 'เริ่มตั้งค่า 2FA', async () => {
           const answer = await api('/auth/2fa/setup', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: password.value }) });
           if (!answer.ok) return toast('เริ่มไม่ได้', answer.status === 429 ? 'ลองผิดหลายครั้งเกินไป รอสักครู่' : 'รหัสผ่านไม่ถูกต้อง', true);
-          paint(false, await answer.json());
+          paint({ twoFactor: false }, await answer.json());
         }),
       );
     };
-    paint(null, null);
+    paint(undefined, null);
     api('/auth/session')
       .then((answer) => (answer.ok ? answer.json() : null))
-      .then((session) => paint(Boolean(session && session.twoFactor), null))
+      .then((session) => paint({ twoFactor: Boolean(session && session.twoFactor), recoveryCodes: Number(session?.recoveryCodes ?? 0) }, null))
       .catch(() => body.replaceChildren(el('p', 'hint', 'ตรวจสถานะไม่ได้ ลองใหม่ภายหลัง')));
+    return panel;
+  }
+
+  function passwordPanel() {
+    const panel = el('div', 'panel form');
+    panel.append(el('h3', '', 'เปลี่ยนรหัสผ่าน'), el('p', 'hint', 'เปลี่ยนรหัสผ่านของบัญชีนี้ · อุปกรณ์อื่นจะถูกออกจากระบบ แต่เครื่องนี้ยังอยู่'));
+    const current = textInput('', 'รหัสผ่านปัจจุบัน', 'password');
+    const next = textInput('', 'รหัสผ่านใหม่ (อย่างน้อย 10 ตัวอักษร)', 'password');
+    const again = textInput('', 'รหัสผ่านใหม่อีกครั้ง', 'password');
+    panel.append(
+      labelled('รหัสผ่านปัจจุบัน', current),
+      labelled('รหัสผ่านใหม่', next),
+      labelled('ยืนยันรหัสผ่านใหม่', again),
+      button('btn pri', 'เปลี่ยนรหัสผ่าน', async () => {
+        if (next.value !== again.value) return toast('รหัสใหม่ไม่ตรงกัน', 'พิมพ์รหัสผ่านใหม่ให้ตรงกันทั้งสองช่อง', true);
+        const answer = await api('/auth/password', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ current: current.value, next: next.value }) });
+        if (!answer.ok) {
+          const problem = await answer.json().catch(() => ({}));
+          return toast('เปลี่ยนรหัสผ่านไม่ได้', problem.error || (answer.status === 429 ? 'ลองผิดหลายครั้งเกินไป รอสักครู่' : 'รหัสผ่านปัจจุบันไม่ถูกต้อง'), true);
+        }
+        current.value = '';
+        next.value = '';
+        again.value = '';
+        toast('เปลี่ยนรหัสผ่านแล้ว', 'อุปกรณ์อื่นถูกออกจากระบบแล้ว');
+      }),
+    );
     return panel;
   }
 
@@ -3657,14 +3709,18 @@
   function tunnelPanel() {
     const view = (state.settings && state.settings.tunnel) || { state: 'off' };
     const panel = el('div', 'panel form');
+    const named = view.mode === 'named';
     panel.append(
       el('h3', '', 'เข้าจากอินเทอร์เน็ต (Cloudflare Tunnel)'),
       el(
         'p',
         'hint',
-        'เปิดที่อยู่ https ชั่วคราวผ่าน Cloudflare ให้ webhook และ Google/Outlook Calendar ส่งเข้ามาที่ Mimi บนเครื่องนี้ได้ โดยไม่ต้องเปิดพอร์ตบนเราเตอร์ · ที่อยู่เปลี่ยนทุกครั้งที่เปิดใหม่ · ใครรู้ที่อยู่จะเห็นหน้าเข้าสู่ระบบ (ยังต้องใช้รหัสผ่าน) · ระหว่างเปิด เชื่อม ChatGPT plan ไม่ได้',
+        named
+          ? 'เปิดที่อยู่ https คงที่ผ่าน Cloudflare named tunnel ให้ webhook และ Google/Outlook Calendar ส่งเข้ามาที่ Mimi บนเครื่องนี้ได้ โดยไม่ต้องเปิดพอร์ตบนเราเตอร์ · URL ไม่เปลี่ยนเมื่อรีสตาร์ท · ใครรู้ที่อยู่จะเห็นหน้าเข้าสู่ระบบ (ยังต้องใช้รหัสผ่าน) · ระหว่างเปิด เชื่อม ChatGPT plan ไม่ได้'
+          : 'เปิดที่อยู่ https ชั่วคราวผ่าน Cloudflare ให้ webhook และ Google/Outlook Calendar ส่งเข้ามาที่ Mimi บนเครื่องนี้ได้ โดยไม่ต้องเปิดพอร์ตบนเราเตอร์ · ที่อยู่เปลี่ยนทุกครั้งที่เปิดใหม่ · ใครรู้ที่อยู่จะเห็นหน้าเข้าสู่ระบบ (ยังต้องใช้รหัสผ่าน) · ระหว่างเปิด เชื่อม ChatGPT plan ไม่ได้',
       ),
     );
+    if (named) panel.append(el('p', 'hint', `Named tunnel: ${view.name || '(ยังไม่ตั้งชื่อ)'} · ตั้งค่าที่ MIMI_CLOUDFLARED_TUNNEL / MIMI_CLOUDFLARED_URL หรือ config ของ cloudflared`));
     if (view.unavailable) {
       panel.append(el('p', 'hint', view.unavailable));
       return panel;
@@ -3908,7 +3964,7 @@
         button('btn', 'ออกจากระบบ', () => void signOut()),
       );
       stack.append(account);
-      if (accountsMode) stack.append(twoFactorPanel());
+      if (accountsMode) stack.append(twoFactorPanel(), passwordPanel());
 
       // This changes the app's own text, not the language the agents answer in: they read
       // the conversation and their system prompt for that.
@@ -4581,6 +4637,9 @@
       case 'pack-report':
         window.MimiHooks?.packs?.onReport?.(message);
         break;
+      case 'pack-remove-report':
+        window.MimiHooks?.packs?.onRemoveReport?.(message);
+        break;
       case 'status': {
         const agent = agentOf(message.agent);
         if (agent) agent.status = message.status;
@@ -4690,6 +4749,20 @@
         state.calendar = message.calendar;
         window.MimiHooks?.triggers?.onMessage?.(message);
         break;
+      case 'calendar-calendars':
+        window.MimiHooks?.triggers?.onMessage?.(message);
+        break;
+      case 'security-alert': {
+        toast('มีการเข้าสู่ระบบใหม่', 'มีอุปกรณ์อื่นเพิ่งเข้าสู่ระบบบัญชีนี้ ถ้าไม่ใช่คุณ ให้เปลี่ยนรหัสผ่านทันที', true);
+        if (window.Notification && Notification.permission === 'granted') {
+          const shown = new Notification('Mimi: มีการเข้าสู่ระบบใหม่', { body: 'มีอุปกรณ์อื่นเพิ่งเข้าสู่ระบบบัญชีนี้', tag: 'mimi-security' });
+          shown.onclick = () => {
+            window.focus();
+            shown.close();
+          };
+        }
+        break;
+      }
       case 'workflows':
         state.workflows = message.workflows || [];
         state.workflowPool = message.pool || [];

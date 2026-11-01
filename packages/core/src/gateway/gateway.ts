@@ -20,8 +20,10 @@ import type { AccountStore, SessionTarget } from './accounts.ts';
  *                                           (401 { twoFactor: true } when the account needs an authenticator code)
  *   GET  /auth/session                      Bearer token -> { username, expiresAt, webhookBase, twoFactor }
  *   POST /auth/2fa/setup                    Bearer + { password } -> { secret, uri } (pending until enabled)
- *   POST /auth/2fa/enable                   Bearer + { code } -> { twoFactor: true }
+ *   POST /auth/2fa/enable                   Bearer + { code } -> { twoFactor: true, recoveryCodes }
  *   POST /auth/2fa/disable                  Bearer + { password, code } -> { twoFactor: false }
+ *   POST /auth/2fa/recovery                 Bearer + { password } -> { recoveryCodes } (replaces the unused ones)
+ *   POST /auth/password                     Bearer + { current, next } -> { ok: true }
  *   POST /auth/logout                       Bearer token -> 204; open sockets of it are closed
  *   *    /api/*                             Bearer token -> the person's core
  *   *    /h/<id>/api/(workflow|webhook)/<k> webhooks of one person's core (no sign-in, like a core)
@@ -148,7 +150,7 @@ export async function startGateway(options: GatewayOptions): Promise<Gateway> {
     }
   };
   /** Open device sockets and the session each one belongs to. */
-  const live = new Map<WebSocket, string>();
+  const live = new Map<WebSocket, { sessionId: string; username: string }>();
 
   const authorize = (request: http.IncomingMessage): SessionTarget | null => {
     const address = addressOf(request);
@@ -160,8 +162,16 @@ export async function startGateway(options: GatewayOptions): Promise<Gateway> {
   };
 
   const endSockets = (sessionId: string | null) => {
-    for (const [socket, id] of live) {
-      if (sessionId ? id === sessionId : !accounts.sessionLive(id)) socket.close(4003, 'signed out');
+    for (const [socket, entry] of live) {
+      if (sessionId ? entry.sessionId === sessionId : !accounts.sessionLive(entry.sessionId)) socket.close(4003, 'signed out');
+    }
+  };
+
+  /** Tells the other open devices of this account that a new session signed in. */
+  const alertNewSession = (username: string, sessionId: string) => {
+    const frame = JSON.stringify({ type: 'security-alert', kind: 'new-signin', at: new Date().toISOString() });
+    for (const [socket, entry] of live) {
+      if (entry.username === username && entry.sessionId !== sessionId && socket.readyState === WebSocket.OPEN) socket.send(frame);
     }
   };
 
@@ -235,6 +245,7 @@ export async function startGateway(options: GatewayOptions): Promise<Gateway> {
       limiter.succeed(address);
       perAccount.succeed(opened.target.username);
       log(`gateway: ${opened.target.username} signed in from ${address}`);
+      alertNewSession(opened.target.username, opened.target.sessionId);
       const { username: name, expiresAt, webhookBase } = opened.target;
       sendJson(response, 200, { token: opened.token, username: name, expiresAt, webhookBase });
       return;
@@ -248,13 +259,14 @@ export async function startGateway(options: GatewayOptions): Promise<Gateway> {
           expiresAt: target.expiresAt,
           webhookBase: target.webhookBase,
           twoFactor: accounts.twoFactorEnabled(target.username),
+          recoveryCodes: accounts.recoveryCodesLeft(target.username),
         });
       }
       return;
     }
     if (url.pathname.startsWith('/auth/2fa/') && method === 'POST') {
       const action = url.pathname.slice('/auth/2fa/'.length);
-      if (!['setup', 'enable', 'disable'].includes(action)) {
+      if (!['setup', 'enable', 'disable', 'recovery'].includes(action)) {
         sendJson(response, 404, { error: 'Not found.' });
         return;
       }
@@ -275,7 +287,14 @@ export async function startGateway(options: GatewayOptions): Promise<Gateway> {
       }
       const result = await checkSlot(async () => {
         if (action === 'setup') return accounts.startTwoFactor(target.username, String(body.password ?? ''));
-        if (action === 'enable') return accounts.enableTwoFactor(target.username, body.code) ? { twoFactor: true } : null;
+        if (action === 'enable') {
+          const enabled = accounts.enableTwoFactor(target.username, body.code);
+          return enabled ? { twoFactor: true, recoveryCodes: enabled.recoveryCodes } : null;
+        }
+        if (action === 'recovery') {
+          const codes = await accounts.regenerateRecoveryCodes(target.username, String(body.password ?? ''));
+          return codes ? { recoveryCodes: codes } : null;
+        }
         return (await accounts.disableTwoFactor(target.username, String(body.password ?? ''), body.code)) ? { twoFactor: false } : null;
       });
       if (result === BUSY) {
@@ -286,11 +305,51 @@ export async function startGateway(options: GatewayOptions): Promise<Gateway> {
         // A wrong password or code here counts like a wrong sign-in.
         limiter.fail(address);
         perAccount.fail(target.username);
-        sendJson(response, 400, { error: action === 'setup' ? 'Wrong password.' : 'Wrong password or code.' });
+        sendJson(response, 400, { error: action === 'setup' || action === 'recovery' ? 'Wrong password.' : 'Wrong password or code.' });
         return;
       }
       log(`gateway: ${target.username} two-step sign-in ${action}`);
       sendJson(response, 200, result);
+      return;
+    }
+    if (url.pathname === '/auth/password' && method === 'POST') {
+      if (!/^application\/json\b/i.test(request.headers['content-type'] ?? '')) {
+        sendJson(response, 415, { error: 'Send JSON.' });
+        return;
+      }
+      const target = authorize(request);
+      if (!target) {
+        sendJson(response, 401, { error: 'Signed out.' });
+        return;
+      }
+      const body = (await readJson(request)) ?? {};
+      const address = addressOf(request);
+      if (perAccount.blocked(target.username)) {
+        sendJson(response, 429, { error: 'Too many wrong attempts. Try again later.' });
+        return;
+      }
+      let why = 'The current password is wrong.';
+      const result = await checkSlot(async () => {
+        try {
+          return await accounts.changePassword(target.username, String(body.current ?? ''), String(body.next ?? ''), target.sessionId);
+        } catch (error) {
+          why = (error as Error).message;
+          return false;
+        }
+      });
+      if (result === BUSY) {
+        sendJson(response, 503, { error: 'Busy. Try again in a moment.' });
+        return;
+      }
+      if (!result) {
+        limiter.fail(address);
+        perAccount.fail(target.username);
+        sendJson(response, 400, { error: why });
+        return;
+      }
+      log(`gateway: ${target.username} changed the password`);
+      endSockets(null);
+      sendJson(response, 200, { ok: true });
       return;
     }
     if (url.pathname === '/auth/logout' && method === 'POST') {
@@ -379,7 +438,7 @@ export async function startGateway(options: GatewayOptions): Promise<Gateway> {
       }
       limiter.succeed(address);
       clearTimeout(helloTimer);
-      live.set(socket, target.sessionId);
+      live.set(socket, { sessionId: target.sessionId, username: target.username });
       const core = new WebSocket(wsUrl(target.coreUrl), { maxPayload: MAX_FRAME, handshakeTimeout: 10_000 });
       upstream = core;
       core.on('open', () => {

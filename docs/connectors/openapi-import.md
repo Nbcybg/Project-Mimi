@@ -96,8 +96,15 @@ one field fails, so users can review the report and add missing pieces by hand.
   combines schemes is reported and the first scheme is used.
 - OAuth2 without a complete authorization-code flow is imported as a bearer
   access-token field, with a warning.
-- Pagination, rate limits, triggers and response `itemsPath` inference beyond
-  `x-mimi-items-path` are not derived from OpenAPI documents.
+- Pagination is inferred only for GET operations that look like lists (an array
+  response or `x-mimi-items-path`) and use common names: `page` plus a size
+  parameter (`per_page`, `pageSize`, `limit`, …), or a cursor/page token plus a
+  next path (`nextPageToken`, `nextCursor`, `paging.next`, `links.next`, …).
+  Anything more unusual must be added by hand.
+- Rate limits are read only from the `x-mimi-rate-limit` extension
+  (`{ requests, perMs, burst? }`); OpenAPI has no standard rate-limit field.
+- Triggers are still not derived from OpenAPI documents, and response
+  `itemsPath` inference beyond `x-mimi-items-path` is not done.
 
 ## Importing in the app
 

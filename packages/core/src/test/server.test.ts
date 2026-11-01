@@ -604,3 +604,60 @@ test('connectors: an OpenAPI import is previewed, saved, kept across a restart a
     fs.rmSync(parts.root, { recursive: true, force: true });
   }
 });
+
+test('packs: preview changes nothing; install adds connectors and switched-off workflows with a credential checklist', async () => {
+  const parts = testCoreParts();
+  const server = await startServer({ ...parts.config, token: TOKEN, host: '127.0.0.1', port: 0, localPcTools: false }, parts.coreOptions);
+  try {
+    const client = await Client.open(`ws://127.0.0.1:${server.port}/ws`);
+    await client.waitFor(isType('welcome'));
+    const report = (reqId: number) => (message: ServerMessage): message is Extract<ServerMessage, { type: 'pack-report' }> =>
+      message.type === 'pack-report' && message.reqId === reqId;
+
+    client.send({ type: 'packs-list' });
+    const list = await client.waitFor(isType('packs'));
+    assert.deepEqual(list.catalog.map((pack) => pack.id).sort(), ['fx-watch', 'mail-digest', 'morning-brief']);
+    assert.deepEqual(list.installed, []);
+
+    client.send({ type: 'pack-preview', reqId: 1, id: 'morning-brief' });
+    const preview = await client.waitFor(report(1));
+    assert.equal(preview.ok, true, preview.errors.join('\n'));
+    assert.deepEqual(preview.report?.agents.map((agent) => [agent.name, agent.action]), [['mimi', 'reuse']]);
+    assert.deepEqual(preview.report?.connectors.map((connector) => [connector.key, connector.action]), [['open_meteo', 'import']]);
+    assert.equal(server.core.connectors.get('open_meteo'), undefined, 'preview imports nothing');
+
+    client.send({ type: 'pack-install', reqId: 2, id: 'morning-brief' });
+    const installed = await client.waitFor(report(2));
+    assert.equal(installed.ok, true, installed.errors.join('\n'));
+    assert.equal(server.core.connectors.get('open_meteo')?.category, 'imported');
+    const workflow = server.core.workflows.list().find((entry) => entry.name === 'morning-weather');
+    assert.equal(workflow?.enabled, false, 'installed switched off');
+    assert.ok(installed.report?.credentials.some((item) => item.kind === 'provider'));
+    await client.waitFor((message): message is Extract<ServerMessage, { type: 'packs' }> => message.type === 'packs' && message.installed.length === 1);
+
+    // Again: the connector is reused and the workflow gets a new name instead of replacing the first.
+    client.send({ type: 'pack-install', reqId: 3, id: 'morning-brief' });
+    const again = await client.waitFor(report(3));
+    assert.equal(again.ok, true, again.errors.join('\n'));
+    assert.deepEqual(again.report?.connectors.map((connector) => connector.action), ['reuse']);
+    assert.deepEqual(again.report?.workflows.map((entry) => entry.name), ['morning-weather-2']);
+
+    client.send({ type: 'pack-preview', reqId: 4, id: 'mail-digest' });
+    const mail = await client.waitFor(report(4));
+    assert.deepEqual(mail.report?.credentials.filter((item) => item.kind === 'google').map((item) => item.ok), [false]);
+
+    // A pack file may not hand an agent both outside content and the shell, or name tools that do not exist.
+    const file = (agents: unknown[]) => JSON.stringify({ format: 1, id: 'mine', name: 'Mine', description: 'Test pack', agents });
+    client.send({ type: 'pack-install', reqId: 5, source: file([{ name: 'risky', description: 'x', systemPrompt: 'x', tools: ['web_search', 'run_shell'] }]) });
+    assert.match((await client.waitFor(report(5))).errors.join('\n'), /cannot share an agent with shell/);
+    client.send({ type: 'pack-install', reqId: 6, source: file([{ name: 'ghost', description: 'x', systemPrompt: 'x', tools: ['no_such_tool'] }]) });
+    assert.match((await client.waitFor(report(6))).errors.join('\n'), /unknown tools no_such_tool/);
+    client.send({ type: 'pack-install', reqId: 7, source: JSON.stringify({ format: 1, id: 'morning-brief', name: 'x', description: 'x' }) });
+    assert.match((await client.waitFor(report(7))).errors.join('\n'), /built-in pack/);
+    assert.equal(server.core.agents.names().includes('risky'), false);
+    client.close();
+  } finally {
+    await server.close();
+    fs.rmSync(parts.root, { recursive: true, force: true });
+  }
+});

@@ -80,6 +80,8 @@ import { PcHub } from './pc-hub.ts';
 import { WsBroker } from './ws-broker.ts';
 import { agentPresets } from '../agents/presets.ts';
 import { QuickTunnel } from '../app/tunnel.ts';
+import { PACK_CATALOG } from '../packs/catalog.ts';
+import { PackInstaller } from '../packs/packs.ts';
 
 export interface MimiServer {
   core: Core;
@@ -399,6 +401,34 @@ export async function startServer(
   };
   const validateNode = (node: WorkflowNode, agent: string) => validateWorkflowNode(node, agent, workflowRules);
   const validateWorkflow = (view: WorkflowView) => validateWorkflowView(view, workflowRules);
+
+  /** Packs: catalog and installed records (user/packs), installed through the same checks as the editors. */
+  const packs = new PackInstaller(
+    {
+      dir: path.join(config.userDir, 'packs'),
+      imported: core.importedConnectors,
+      connector: (key) => core.connectors.get(key),
+      tool: (name) => core.tools.get(name),
+      agentNames: () => core.agents.names(),
+      saveAgent: (view) => {
+        saveAgentView(view);
+      },
+      hasTrigger: (pool) => core.triggerPool.get(pool) !== undefined,
+      workflowNames: (agent) => core.workflows.names(agent),
+      saveWorkflow: (view) => {
+        validateWorkflow(view);
+        core.syncWorkflowSchedule(core.workflows.save(view));
+      },
+      credentialOk: (kind, key) => {
+        if (kind === 'provider') return core.registry.available().length > 0;
+        if (kind === 'connector') return core.connections.views().some((entry) => entry.connector === key && entry.connected);
+        if (kind === 'google' || kind === 'microsoft') return core.oauth.views().some((account) => account.service === kind && account.connected);
+        return Boolean(core.secrets.get(key) ?? process.env[key]);
+      },
+    },
+    PACK_CATALOG,
+  );
+  const packsMessage = (): ServerMessage => ({ type: 'packs', catalog: packs.catalogViews(), installed: packs.installed() });
 
   // On a server (MIMI_PUBLIC_URL or Railway's domain) OAuth providers send the browser back to
   // this core's own /oauth/callback; on a computer the sign-in uses a temporary local port.
@@ -1822,6 +1852,43 @@ export async function startServer(
       case 'trigger-pool-delete': {
         core.triggerPool.remove(String(message.name));
         broadcast({ type: 'workflows', workflows: core.workflows.list(), pool: core.triggerPool.list(), nodeTypes: nodeTypesView(), customNodes: core.customNodes.names() });
+        break;
+      }
+      case 'packs-list':
+        reply(packsMessage());
+        break;
+      case 'pack-preview':
+      case 'pack-install': {
+        const install = message.type === 'pack-install';
+        const reqId = Number(message.reqId) || 0;
+        let resolved: ReturnType<PackInstaller['resolve']>;
+        try {
+          resolved = packs.resolve({
+            ...(typeof message.id === 'string' ? { id: message.id } : {}),
+            ...(typeof message.source === 'string' ? { source: message.source } : {}),
+          });
+        } catch (error) {
+          reply({ type: 'pack-report', reqId, action: install ? 'install' : 'preview', ok: false, errors: [(error as Error).message] });
+          break;
+        }
+        const result = install ? packs.install(resolved.pack, resolved.builtin) : packs.plan(resolved.pack);
+        reply({
+          type: 'pack-report',
+          reqId,
+          action: install ? 'install' : 'preview',
+          ok: result.errors.length === 0,
+          ...(result.report ? { report: result.report } : {}),
+          errors: result.errors,
+        });
+        // A refused plan changed nothing; an install (even a partial one) did.
+        if (result.installed) {
+          broadcast(agentsMessage());
+          broadcast({ type: 'settings', settings: settingsView() });
+          broadcast(toolsMessage());
+          broadcast(connectionsMessage());
+          broadcast({ type: 'workflows', workflows: core.workflows.list(), pool: core.triggerPool.list(), nodeTypes: nodeTypesView(), customNodes: core.customNodes.names() });
+          broadcast(packsMessage());
+        }
         break;
       }
       case 'agent-presets':

@@ -3269,6 +3269,7 @@
     ['wardrobe', 'ตู้เสื้อผ้า'],
     ['backgrounds', 'ฉากหลัง'],
     ['links', 'MCP / CLI'],
+    ['packs', 'แพ็ก'],
   ];
   function renderHub() {
     const page = $('view-hub');
@@ -3294,7 +3295,8 @@
       return panel;
     };
     const mail = () => (window.MimiHooks && window.MimiHooks.mail ? window.MimiHooks.mail.render() : el('div'));
-    const body = { models: hubModels, skills: hubSkills, nodes: hubTools, accounts, secrets, mail, triggers: hubTriggers, knowledge, wardrobe, backgrounds, links: hubLinks }[ui.hubTab]();
+    const packs = () => (window.MimiHooks && window.MimiHooks.packs ? window.MimiHooks.packs.render() : el('div'));
+    const body = { models: hubModels, skills: hubSkills, nodes: hubTools, accounts, secrets, mail, triggers: hubTriggers, knowledge, wardrobe, backgrounds, links: hubLinks, packs }[ui.hubTab]();
     page.replaceChildren(pageHead('Hub', 'ของกลางที่ agent และ skill หยิบไปใช้: ตั้งค่าที่เดียว ใช้ได้ทุกตัว'), tabs, body);
   }
   const shown = (value) => (value === undefined || value === null ? '—' : String(value));
@@ -4572,6 +4574,12 @@
         break;
       case 'agent-presets':
         window.MimiHooks?.setup?.onPresets?.(message);
+        break;
+      case 'packs':
+        window.MimiHooks?.packs?.onPacks?.(message);
+        break;
+      case 'pack-report':
+        window.MimiHooks?.packs?.onReport?.(message);
         break;
       case 'status': {
         const agent = agentOf(message.agent);

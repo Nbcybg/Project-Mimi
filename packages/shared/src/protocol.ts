@@ -329,6 +329,47 @@ export interface TunnelView {
   unavailable?: string;
 }
 
+/** One thing a pack needs before it can work, and whether it is in place now. */
+export interface PackCredentialView {
+  kind: 'provider' | 'connector' | 'google' | 'microsoft' | 'secret';
+  /** Connector key, secret name, or "model" for the provider. */
+  key: string;
+  label: string;
+  why?: string;
+  /** Where to get it (the provider's page); only https links are kept. */
+  url?: string;
+  ok: boolean;
+}
+
+/** A pack in the catalog or installed: starter agents, OpenAPI connectors and workflows that go together. */
+export interface PackSummaryView {
+  id: string;
+  name: string;
+  description: string;
+  version: string;
+  author?: string;
+  tags: string[];
+  agents: string[];
+  connectors: string[];
+  workflows: string[];
+  builtin: boolean;
+  installedAt?: string;
+  /** Installed packs only: what is still missing. */
+  credentials?: PackCredentialView[];
+}
+
+/** What installing a pack does (preview) or did (install). */
+export interface PackReportView {
+  id: string;
+  name: string;
+  agents: Array<{ name: string; displayName: string; action: 'create' | 'reuse'; tools: string[]; risky: string[]; systemPrompt: string }>;
+  connectors: Array<{ key: string; label: string; action: 'import' | 'reuse' | 'native'; operations: number }>;
+  /** Workflows are saved switched off; `name` is the final name (renamed when taken). */
+  workflows: Array<{ name: string; agent: string; title: string; trigger: string }>;
+  credentials: PackCredentialView[];
+  warnings: string[];
+}
+
 /** A starter agent the first-run wizard offers; saved as an ordinary agent. */
 export interface AgentPresetView {
   id: string;
@@ -687,6 +728,10 @@ export type ClientMessage =
   /** Starts or stops the Cloudflare quick tunnel; the state comes back in `settings`. */
   | { type: 'tunnel-start' }
   | { type: 'tunnel-stop' }
+  /** The pack catalog and the installed packs; answered with `packs`. */
+  | { type: 'packs-list' }
+  /** Checks (preview) or installs a catalog pack (`id`) or a pack file (`source`, JSON); answered with `pack-report`. */
+  | { type: 'pack-preview' | 'pack-install'; reqId?: number; id?: string; source?: string }
   /** Starter agents for the first-run wizard; answered with `agent-presets`. */
   | { type: 'agent-presets' }
   /** The built-in AI Overseer; created on first use. */
@@ -892,6 +937,9 @@ export type ServerMessage =
   /** Result of testing one operation with stored credentials; never includes the credential. */
   | { type: 'connector-test-result'; ok: boolean; message: string }
   | { type: 'agent-presets'; presets: AgentPresetView[] }
+  | { type: 'packs'; catalog: PackSummaryView[]; installed: PackSummaryView[] }
+  /** `errors` says why a pack was refused (preview) or which parts failed (install). */
+  | { type: 'pack-report'; reqId?: number; action: 'preview' | 'install'; ok: boolean; report?: PackReportView; errors: string[] }
   /** What an OpenAPI import found or stored; `errors` lists why it was refused (then nothing was saved). */
   | {
       type: 'connector-import-report';

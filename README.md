@@ -39,6 +39,7 @@ PC agent ───────────────────────�
 - **ความจำและ session** — memory หลายชั้น, สรุปบทสนทนาอัตโนมัติ, context meter, งบ token/ค่าใช้จ่าย
 - **Workflow engine** — trigger ตามเวลา/webhook, expression, code node ที่แยก process, run history, approval, retry และ idempotency
 - **Connectors** — 50 บริการ native / 218 operations + นำเข้า API อื่นจาก OpenAPI 3.x (JSON) เป็น connector ได้เอง, Google (Gmail, Calendar, Drive, Sheets, Docs, YouTube), Microsoft (Outlook, Calendar, To Do, OneDrive), MCP, custom HTTP/code/shell tools
+- **แพ็ก** — ชุด agent + connector + workflow สำเร็จรูป ติดตั้งทีเดียวพร้อม checklist บัญชีที่ต้องตั้ง (Hub → แพ็ก, [`docs/packs.md`](docs/packs.md))
 - **นำเข้า** — workflow จาก n8n, Make, Zapier (เป็น draft พร้อม report) และ connector จาก OpenAPI (Hub → Node & Tools → นำเข้า OpenAPI)
 - **PC agent** — ให้ agent ใช้เครื่องของคุณผ่านโฟลเดอร์ที่อนุญาต, เบราว์เซอร์ของ agent และ shell (ปิดเป็นค่าเริ่มต้น)
 - **Task ที่ตรวจสอบได้** — recipe แบบ deterministic, แผนก่อนลงมือ, อนุมัติครั้งเดียวทั้งงาน, ใบเสร็จ และ undo (เริ่มด้วย `file-organizer` ที่ย้ายไฟล์ตามชนิดโดยไม่ลบไฟล์)

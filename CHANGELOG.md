@@ -4,6 +4,14 @@
 
 ### 0.7.9-prototype
 
+- Packs: Hub > แพ็ก installs ready-made sets of agents, OpenAPI connectors and workflows in one go, with a
+  credential checklist (model provider, connector connections, Google / Microsoft accounts and vault secrets the
+  workflows use) that is checked live and kept for installed packs (`user/packs/<id>.json`). Three packs ship with
+  the app: morning weather brief (Open-Meteo), USD/THB rates (Frankfurter), both without keys, and an evening Gmail
+  digest. Pack files (`format: 1`, JSON) can be installed too. Preview changes nothing; install never overwrites
+  (existing agents and connectors are reused, taken workflow names get a suffix), saves every workflow switched off,
+  imports connectors through the OpenAPI import rules, and refuses unknown tools, unknown triggers, a built-in pack
+  id and agents that would mix outside content with the shell. See `docs/packs.md`.
 - First run: a setup wizard opens over the app when nothing can chat yet: provider (Claude plan, ChatGPT plan or an
   API key, plus the default chat model), a starter agent (secretary, researcher, PC helper or coder, from the new
   `agent-presets` message), allowed folders, the PC agent and a test chat. Finishing or skipping is remembered across

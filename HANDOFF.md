@@ -2,10 +2,10 @@
 
 ## สถานะ
 
-- Commit ล่าสุด: `8edf589` (Layer 2), `22eb64e` (docs/HANDOFF), `5386801` (docs), `9b24e39` (docs),
+- Commit Layer 2: `8edf589`; ก่อนหน้า: `22eb64e` (docs/HANDOFF), `5386801` (docs), `9b24e39` (docs),
   `0e7edf2` (Google Drive connector), `991e291` (Overseer ชั้น 1), `a4b20a3` (MCP/workflow/permissions/secret/git)
 - Layer 2 ถูก commit แล้วใน `8edf589` (in-place/apps/statements/vault fill); working tree สะอาด
-- branch `main` นำ `origin/main` อยู่ 13 commits (รวม commit handoff นี้) และยังไม่ push
+- branch `main` นำ `origin/main` และยังไม่ push (ดูจำนวนจริงด้วย `git status -sb`)
 - ตรวจซ้ำรอบปิดงาน Layer 2 (2026-11-01): typecheck ผ่านทั้ง `shared`, `pc-agent`, `core`
 - Full test suite ผ่าน **699 tests** (fail 0, skipped 0)
 - UI smoke test ผ่าน 7/7 ในรอบก่อน และรอบนี้ผ่านเพิ่ม: agent permission matrix (6 rows, ค่า policy ที่บันทึกไว้แสดงถูก)
@@ -166,7 +166,7 @@ in-place media, install/update apps, statements/payment guard, vault-backed brow
 
 ### สิ่งที่ต้องตัดสินใจก่อนเริ่มงานใหม่
 
-- branch `main` นำ `origin/main` อยู่ 13 commits และยังไม่ push — push เมื่อผู้ใช้สั่งเท่านั้น
+- branch `main` มี commits ที่ยังไม่ push — push เมื่อผู้ใช้สั่งเท่านั้น
 - DB schema เป็น 23; เทสต์บางตัวผูก version นี้ ถ้าจะเพิ่ม migration ต้องอัปเดตเทสต์ด้วย
 - UI smoke test (permission matrix / Settings grouped grants) รันมือผ่าน headless browser
   ไม่ได้อยู่ในชุดเทสต์อัตโนมัติ จึงไม่ถูกรันซ้ำโดย `npm test`
@@ -204,7 +204,7 @@ npm test
    (699 tests, typecheck ผ่าน, ตรวจซ้ำแล้ว); ที่เหลือคือขอบเขตที่ระบุว่า "ยังตั้งใจไม่ทำ"
 4. ก่อนแก้ อย่าลืมว่า DB schema เป็น 23 และเทสต์บางตัวผูก version นี้
 5. Layer 2 commit แล้วใน `8edf589`; ตรวจ `git log --oneline` ก่อนเริ่มงานใหม่
-6. 13 commits บน `main` ยังไม่ push — รอคำสั่งผู้ใช้ก่อน
+6. commits บน `main` ยังไม่ push — รอคำสั่งผู้ใช้ก่อน
 7. ถ้าทดสอบ `browser_fill_secret` ต้องอัปเดต PC agent ฝั่งเครื่องให้มี internal tool นี้ก่อน
    (core เก่า + PC ใหม่ หรือกลับกัน จะได้ error ว่า PC ไม่มี tool)
 8. Payment ops ของ Stripe ต้องส่ง `confirm: "CONFIRM PAYMENT"` หรือ `"CONFIRM REFUND"` ให้ตรง

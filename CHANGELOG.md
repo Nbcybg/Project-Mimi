@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Workspace: a page that crashes or reloads no longer floods the log with "Render frame was disposed" while
+  its shell keeps printing; the shell (and anything it runs) stops with the page, and a crashed page reloads
+  itself once. Unsaved edits in the file preview are marked with ● and need a confirmation before another
+  file, Close or another folder drops them. The file filter keeps a folder visible when something inside it
+  matches. After the shell exits, Enter starts a new one.
 - Packs: an installed pack can be removed. Hub > แพ็ก shows a preview of the agents, OpenAPI connectors and
   workflows the pack created and deletes only those; items another workflow or agent still uses are kept and
   listed. Reused agents and connectors are never removed. Packs installed before ownership tracking only lose

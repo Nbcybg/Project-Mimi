@@ -53,7 +53,15 @@ function inside(rel) {
 }
 
 function send(channel, value) {
-  if (win && !win.isDestroyed()) win.webContents.send(channel, value);
+  if (!win || win.isDestroyed()) return;
+  const contents = win.webContents;
+  // A crashed or reloading page has no frame to send to ("Render frame was disposed").
+  if (contents.isDestroyed() || contents.isCrashed()) return;
+  try {
+    contents.send(channel, value);
+  } catch {
+    // the page is going away
+  }
 }
 
 function cleanOutput(text) {
@@ -245,6 +253,23 @@ function createWindow(options = {}) {
   win.removeMenu();
   win.loadFile(PAGE, { query: terminalAssets() });
   win.once('ready-to-show', () => win.show());
+  // The shell belongs to the page that started it: when that page crashes or reloads, the
+  // shell (and a dev server or ping -t it runs) goes too; the new page starts its own.
+  let lastRecovery = 0;
+  win.webContents.on('render-process-gone', (_event, details) => {
+    stopTerminal();
+    // A crashed page is a blank window; bring it back once, not in a loop.
+    if (details.reason === 'clean-exit' || Date.now() - lastRecovery < 10_000) return;
+    lastRecovery = Date.now();
+    setTimeout(() => {
+      if (win && !win.isDestroyed()) win.webContents.reload();
+    }, 500);
+  });
+  win.webContents.on('did-start-navigation', (details, _url, _inPlace, mainFrame) => {
+    const isMain = details?.isMainFrame ?? mainFrame;
+    const sameDocument = details?.isSameDocument ?? _inPlace;
+    if (isMain && !sameDocument) stopTerminal();
+  });
   win.webContents.on('did-attach-webview', (_event, guest) => {
     guest.setUserAgent(userAgent());
     // Chromium writes cookies to disk in batches; a sign-in must survive the app being ended

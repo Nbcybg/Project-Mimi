@@ -22,6 +22,8 @@
 
   let root = '';
   let currentFile = '';
+  /** The open file has edits that are not saved yet. */
+  let dirty = false;
   let savedTimer = 0;
   const history = [];
   let historyAt = -1;
@@ -45,22 +47,22 @@
 
   function applyFilter() {
     filterText = filter.value.trim().toLowerCase();
+    // A folder stays visible while something inside it (already loaded) matches, or the
+    // matching rows would float without their folder.
     const walk = (container) => {
       let visible = false;
       for (const child of container.children) {
-        if (child.classList.contains('node')) {
-          const name = (child.dataset.name || '').toLowerCase();
-          const match = !filterText || name.includes(filterText);
-          child.classList.toggle('hidden', !match);
-          if (match) visible = true;
-        } else if (child.classList.contains('children')) {
-          // Filtered on the next pass, when its rows are in place.
-        }
+        if (!child.classList.contains('node')) continue;
+        const name = (child.dataset.name || '').toLowerCase();
+        let match = !filterText || name.includes(filterText);
+        const group = child.nextElementSibling;
+        if (group && group.classList.contains('children') && walk(group)) match = true;
+        child.classList.toggle('hidden', !match);
+        if (match) visible = true;
       }
       return visible;
     };
     walk(tree);
-    for (const group of tree.querySelectorAll('.children')) walk(group);
   }
 
   async function loadDir(rel, container) {
@@ -133,7 +135,19 @@
     }
   }
 
+  /** True when there is nothing unsaved, or the user agreed to drop it. */
+  function canLeaveFile() {
+    if (!dirty) return true;
+    return window.confirm(`"${fileName.dataset.name || currentFile}" ยังไม่ได้บันทึก — ทิ้งการแก้ไขนี้?`);
+  }
+
+  function setDirty(value) {
+    dirty = value;
+    fileName.textContent = `${value ? '● ' : ''}${fileName.dataset.name || ''}`;
+  }
+
   async function chooseRoot() {
+    if (!canLeaveFile()) return;
     const picked = await api.chooseRoot();
     if (!picked) return;
     closeFile();
@@ -142,10 +156,12 @@
   }
 
   async function openFile(rel, name) {
+    if (!canLeaveFile()) return;
     try {
       const file = await api.read(rel);
       currentFile = rel;
-      fileName.textContent = name;
+      fileName.dataset.name = name;
+      setDirty(false);
       fileText.value = file.text;
       fileText.hidden = false;
       previewEmpty.hidden = true;
@@ -153,7 +169,8 @@
       closeButton.hidden = false;
       note('');
     } catch (error) {
-      fileName.textContent = name;
+      fileName.dataset.name = name;
+      setDirty(false);
       fileText.hidden = true;
       previewEmpty.hidden = false;
       previewEmpty.textContent = error.message;
@@ -164,6 +181,8 @@
   }
 
   function closeFile() {
+    dirty = false;
+    fileName.dataset.name = '';
     currentFile = '';
     fileText.value = '';
     fileText.hidden = true;
@@ -179,6 +198,7 @@
     if (!currentFile) return;
     try {
       await api.write(currentFile, fileText.value);
+      setDirty(false);
       note('บันทึกแล้ว');
     } catch (error) {
       note(error.message, true);
@@ -263,6 +283,7 @@
   /** { term, fit } once xterm.js is loaded and the shell is a pty. */
   let xterm = null;
   let xtermLoading = null;
+  let shellExited = false;
 
   function loadAsset(tag, url) {
     return new Promise((resolve, reject) => {
@@ -305,7 +326,14 @@
     const fit = new window.FitAddon.FitAddon();
     term.loadAddon(fit);
     term.open(termView);
-    term.onData((data) => api.terminalInput(data));
+    term.onData((data) => {
+      // After the shell has exited, keys go nowhere; Enter starts a new one.
+      if (shellExited) {
+        if (data === '\r') void restartTerminal();
+        return;
+      }
+      api.terminalInput(data);
+    });
     // Ctrl+C copies when text is selected, otherwise it interrupts; Ctrl+V pastes through the browser.
     term.attachCustomKeyEventHandler((event) => {
       if (event.type !== 'keydown' || !event.ctrlKey || event.altKey) return true;
@@ -349,6 +377,7 @@
   }
 
   async function startTerminal() {
+    shellExited = false;
     termStatus.textContent = 'starting…';
     const canDraw = await loadXterm();
     if (canDraw && !xterm) {
@@ -386,11 +415,16 @@
   function terminalEvents() {
     api.onTerminalData((text) => appendTerminal(text));
     api.onTerminalExit((code) => {
+      shellExited = true;
       termStatus.textContent = `exited ${code}`;
-      appendTerminal(`\r\n[process exited ${code}]\r\n`);
+      appendTerminal(xterm && !termView.hidden ? `\r\n[process exited ${code}] กด Enter เพื่อเริ่มใหม่\r\n` : `\r\n[process exited ${code}]\r\n`);
     });
     termIn.addEventListener('keydown', (event) => {
       if (event.key === 'Enter') {
+        if (shellExited) {
+          void startTerminal();
+          return;
+        }
         const command = termIn.value;
         termIn.value = '';
         if (!command.trim()) return;
@@ -431,7 +465,10 @@
   $('refresh-files').addEventListener('click', () => void refreshTree());
   filter.addEventListener('input', () => applyFilter());
   saveButton.addEventListener('click', () => void saveFile());
-  closeButton.addEventListener('click', closeFile);
+  closeButton.addEventListener('click', () => canLeaveFile() && closeFile());
+  fileText.addEventListener('input', () => {
+    if (currentFile && !dirty) setDirty(true);
+  });
   fileText.addEventListener('keydown', (event) => {
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
       event.preventDefault();

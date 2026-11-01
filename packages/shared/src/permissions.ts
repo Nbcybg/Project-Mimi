@@ -12,6 +12,8 @@ export interface PermissionRequest {
   /** One-line human readable description of what the tool call will do. */
   summary: string;
   timeoutMs: number;
+  /** When true the client offers only "this once" or deny; a grant would not be honoured. */
+  noGrant?: boolean;
   /** When the tool asked (UTC ISO-8601), so the client can show the session it belongs to. */
   createdAt: string;
 }
@@ -51,6 +53,7 @@ const TOOL_FAMILIES: Record<string, string> = {
   image_rotate: 'media.photos',
   media_trim: 'media.video',
   media_subtitle: 'media.video',
+  media_extract_audio: 'media.video',
   video_merge: 'media.video',
   pdf_merge: 'files.pdf',
   pdf_split: 'files.pdf',
@@ -64,6 +67,9 @@ const TOOL_FAMILIES: Record<string, string> = {
   browser_press: 'browser.task',
   browser_focus: 'browser.task',
   browser_wait: 'browser.task',
+  browser_fill_secret: 'browser.secret',
+  install_app: 'apps.install',
+  statement_read: 'finance.statements',
   computer_observe: 'computer.desktop',
   computer_click: 'computer.desktop',
   computer_type: 'computer.desktop',
@@ -78,4 +84,16 @@ const TOOL_FAMILIES: Record<string, string> = {
 
 export function toolFamily(tool: string): string {
   return TOOL_FAMILIES[tool] ?? tool;
+}
+
+/**
+ * Tools whose calls are never covered by a task, session or forever grant: the user
+ * must approve each one. Kept here so the permission gate sees it even when it only
+ * knows the tool name.
+ */
+const ALWAYS_ASK_TOOLS = new Set(['browser_fill_secret']);
+const MONEY_TOOLS = /_(refund_payment|create_payment_link|create_payout|transfer|send_payment)$/;
+
+export function isAlwaysAskTool(tool: string): boolean {
+  return ALWAYS_ASK_TOOLS.has(tool) || MONEY_TOOLS.test(tool);
 }

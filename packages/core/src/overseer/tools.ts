@@ -1121,6 +1121,9 @@ export function createOverseerTools(deps: OverseerToolDeps): ToolDefinition<any>
       if (tool.risk === 'shell' || tool.risk === 'delete') {
         throw new Error(`"${name}" is ${tool.risk}-risk and cannot be run from tool_test. Ask the user to run it.`);
       }
+      if (tool.alwaysAsk) {
+        throw new Error(`"${name}" needs the user's approval for every call and cannot be run from tool_test. Ask the user to run it.`);
+      }
       if (tool.risk === 'write' && !input.confirmWrite) {
         throw new Error(`"${name}" can change data. Pass confirmWrite: true only when the sample values are safe to run for real.`);
       }

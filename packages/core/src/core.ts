@@ -76,6 +76,7 @@ import {
 import { makePcRunner, type PcLink, RoutingExecutor } from './tools/executor.ts';
 import { createToolRegistry } from './tools/index.ts';
 import { createExportTools } from './tools/export-tools.ts';
+import { createBrowserSecretTools } from './tools/browser-secret-tools.ts';
 import { MailWatch } from './notify/mail-watch.ts';
 import { ToolPool } from './tools/pool.ts';
 import { McpHub } from './mcp/hub.ts';
@@ -596,6 +597,12 @@ export async function createCore(
     ...connectorTools(connectorRegistry, connectors),
     // Word / PDF export of the agent's answers, into the working folder.
     ...createExportTools({ workDir: config.allowedDirs[0] ?? path.join(config.rootDir, 'workspace') }),
+    // Passwords and card data come from the vault and need the user's approval every time.
+    ...createBrowserSecretTools({
+      secret: (name) => secrets.get(name),
+      ...(options.pc ? { pc: options.pc } : {}),
+      localPcTools: config.localPcTools,
+    }),
   );
   const toolStore = new ToolStore(config.toolsDir);
   const pcRunner = makePcRunner(options.pc, config.localPcTools);
@@ -939,11 +946,14 @@ export async function createCore(
               'browser_screenshot',
               'browser_wait',
               'browser_close',
+              'browser_fill_secret',
               'computer_screenshot',
               'notify_user',
               'gmail_send',
               'outlook_send',
               'smtp_send',
+              'install_app',
+              'statement_read',
               'create_trigger',
               'list_triggers',
               'cancel_trigger',

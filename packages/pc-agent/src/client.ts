@@ -45,9 +45,9 @@ export class PcAgent {
 
   constructor(options: PcAgentOptions) {
     this.options = options;
-    // Plus the tools only the core's own services use (MCP servers on this machine).
+    // Plus the tools only the core's own services use (MCP servers on this machine, vault fills).
     const shell = options.shell !== false;
-    const offered = [...(options.tools ?? pcTools), ...(shell ? pcInternalTools : [])].filter((tool) => shell || tool.risk !== 'shell');
+    const offered = [...(options.tools ?? pcTools), ...pcInternalTools].filter((tool) => shell || tool.risk !== 'shell');
     this.tools = new Map(offered.map((tool) => [tool.name, tool]));
     this.consent =
       options.consent === false ? null : options.consent instanceof LocalConsent ? options.consent : new LocalConsent();

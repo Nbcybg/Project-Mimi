@@ -128,4 +128,6 @@ test('PC agent without shell: only file and browser tools inside the allowed fol
   }
   assert.ok(full.some((name) => !limited.includes(name) && name.includes('mcp')), 'MCP servers on the PC go too');
   for (const name of ['read_file', 'write_file', 'list_dir', 'browser_open']) assert.ok(limited.includes(name), name);
+  assert.ok(limited.includes('browser_fill_secret'), 'vault fills do not need shell rights');
+  assert.ok(!limited.includes('install_app'), 'installing apps still needs shell rights');
 });

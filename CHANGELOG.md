@@ -45,6 +45,23 @@
 - Media editing: `pdf_merge`, `pdf_split`, `pdf_delete_pages` and `pdf_rotate` (pdf-lib), `image_crop` /
   `image_rotate`, `video_merge` and `media_subtitle` (soft SRT track) all write new files and never change the
   originals. MCP servers get a quiet 15-minute health check over the existing connection.
+- Layer 2 editing: `pdf_delete_pages` / `pdf_rotate`, `image_crop` / `image_rotate`, `media_trim` and
+  `media_subtitle` accept `in_place: true` and replace the source only after the write succeeded; the previous
+  version is kept as `<name>.mimi-backup<ext>` unless `backup: false`. `media_subtitle` can burn the subtitles into
+  the picture (`mode: "burn"`, MP4/MKV/MOV), and `media_extract_audio` writes MP3/M4A/WAV/OGG audio from any media.
+  Without `in_place` the tools still write a new file and leave the source alone.
+- Apps: `install_app` installs or updates a package through winget, Homebrew, Chocolatey, Scoop or apt. It accepts
+  only a package id (no flags or command text) and runs the manager with fixed arguments and no shell; the PC's
+  local consent and the agent permission gate both apply, and the Overseer can use it.
+- Statements and payments: `statement_read` parses CSV/TSV, OFX/QFX and QIF bank or card statements (Thai and
+  English headers) into normalized transactions with money-in, money-out and net totals; it is read-only, never
+  contacts a bank and never changes the file. Stripe's `create_payment_link` and `refund_payment` now require the
+  exact `confirm` phrase and always ask the user, even if a grant exists; every call is recorded in `tool_calls`
+  for `run_log`. Direct bank transfers are not implemented.
+- Browser secrets: `browser_fill_secret` fills a password or card field on the current page from a named vault
+  secret. The model passes only the secret name and never sees the value; the PC-side tool only accepts password /
+  payment fields, snapshots hide their contents, and every call needs a fresh "this once" approval (task, session and
+  forever grants do not cover it). Unattended workflows and `tool_test` refuse it.
 - Chat: room settings sync across devices, a go-to-bottom button, and permission notifications.
 - Triggers: schedule times are shown in the local time zone, not UTC.
 - Chat: the message action bar (love, react, reply, forward, copy, pin) sits under the bubble and is no longer

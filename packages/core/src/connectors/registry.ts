@@ -277,6 +277,7 @@ export class ConnectorRegistry {
           risk: operation.risk,
           ...(operation.untrustedInput === undefined ? {} : { untrustedInput: operation.untrustedInput }),
           ...(operation.response === undefined ? {} : { response: operation.response }),
+          ...(operation.confirmPhrase === undefined ? {} : { confirmPhrase: operation.confirmPhrase }),
         })),
         ...(spec.triggers === undefined ? {} : { triggers: spec.triggers }),
         ...(spec.pagination === undefined ? {} : { pagination: spec.pagination }),

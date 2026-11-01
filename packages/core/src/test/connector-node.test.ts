@@ -7,6 +7,7 @@ import type { WorkflowView } from '@mimi/shared';
 import { ConnectorRegistry } from '../connectors/registry.ts';
 import { ConnectorRuntimeImpl } from '../connectors/runtime.ts';
 import { slackConnector } from '../connectors/services/slack.ts';
+import { stripeConnector } from '../connectors/services/stripe.ts';
 import type { ConnectorAuthResolver } from '../connectors/types.ts';
 import { type WorkflowRunnerDeps, runWorkflow, WorkflowState } from '../workflows/runner.ts';
 import { WorkflowStore } from '../workflows/workflow-store.ts';
@@ -146,6 +147,38 @@ test('connector node: write operations need consent, reads do not', async () => 
   );
   assert.equal(denied.ok, false);
   assert.match(denied.nodes[0]!.error!, /denied/);
+});
+
+test('connector node: money-moving operations never run unattended', async () => {
+  let requests = 0;
+  const fetchFn = (async () => {
+    requests++;
+    return Response.json({ ok: true });
+  }) as typeof fetch;
+  const registry = new ConnectorRegistry([stripeConnector]);
+  const auth: ConnectorAuthResolver = { resolve: () => ({ secretKey: 'sk_test_node' }) };
+  const runtime = new ConnectorRuntimeImpl({ registry, auth, fetchFn });
+
+  const refund = await runWorkflow(
+    flow([
+      {
+        id: 'n1',
+        type: 'connector',
+        config: {
+          connector: 'stripe',
+          operation: 'refund_payment',
+          allow: true,
+          input: { paymentIntent: 'pi_1', amount: 100, confirm: 'CONFIRM REFUND' },
+        },
+        links: { main: [] },
+      },
+    ]),
+    [{ json: {} }],
+    deps(runtime, []),
+  );
+  assert.equal(refund.ok, false);
+  assert.match(refund.nodes[0]!.error!, /moves money/);
+  assert.equal(requests, 0, 'nothing reached Stripe');
 });
 
 test('connector node: API errors follow onError and retries', async () => {

@@ -86,6 +86,29 @@ test('pdf_delete_pages removes the selection and pdf_rotate turns pages', async 
   assert.deepEqual(all.getPages().map((page) => page.getRotation().angle), [180, 180, 180]);
 });
 
+test('pdf in-place edits replace the source and keep a backup', async () => {
+  const source = await makePdf('in-place.pdf', 3);
+  const original = fs.readFileSync(source);
+  const deleted = JSON.parse(
+    await pdfDeletePagesTool.execute({ path: source, pages: '2', in_place: true }, context),
+  ) as { output: string; backup?: string; in_place: boolean };
+  assert.equal(deleted.in_place, true);
+  assert.equal(deleted.output, source);
+  assert.equal(await countPages(source), 2);
+  assert.ok(deleted.backup && fs.existsSync(deleted.backup), 'the previous version is kept');
+  assert.deepEqual(fs.readFileSync(deleted.backup!), original);
+
+  const rotated = JSON.parse(
+    await pdfRotateTool.execute({ path: source, degrees: 90, in_place: true, backup: false }, context),
+  ) as { backup?: string; in_place: boolean };
+  assert.equal(rotated.in_place, true);
+  assert.equal(rotated.backup, undefined, 'backup can be turned off');
+  const after = await PDFDocument.load(fs.readFileSync(source));
+  assert.deepEqual(after.getPages().map((page) => page.getRotation().angle), [90, 90]);
+
+  await assert.rejects(pdfRotateTool.execute({ path: source, output: source, degrees: 90 }, context), /in_place/);
+});
+
 test('pdf tools stay inside the allowed folders', async () => {
   const source = await makePdf('guard.pdf', 1);
   const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'mimi-pdf-outside-'));

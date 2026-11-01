@@ -142,6 +142,21 @@ test('old global forever grants still cover every agent', () => {
   assert.deepEqual(gate.alwaysAllowed(), ['run_shell']);
 });
 
+test('browser_fill_secret asks every time: grants and allow overrides do not cover it', () => {
+  const gate = new PermissionGate(new FakeBroker(true));
+  assert.equal(gate.grant('trace', 'browser_fill_secret', { scope: 'always', agent: 'mimi' }), false);
+  assert.equal(gate.grant('trace', 'browser_fill_secret', { scope: 'session', thread: 'thread-1' }), false);
+  assert.equal(gate.grant('trace', 'browser_fill_secret', { scope: 'task' }), false);
+  assert.equal(gate.modeFor('browser_fill_secret', 'write', 'trace', { agent: 'mimi' }), 'ask');
+  assert.equal(gate.modeFor('browser_fill_secret', 'write', 'trace', { thread: 'thread-1', agent: 'mimi' }), 'ask');
+  assert.equal(gate.modeFor('browser_fill_secret', 'write', 'trace', { overrides: { browser_fill_secret: 'allow' } }), 'ask');
+  assert.equal(gate.modeFor('browser_fill_secret', 'write', 'trace', { overrides: { browser_fill_secret: 'deny' } }), 'deny');
+  assert.equal(gate.alwaysGrantsByAgent().mimi, undefined);
+
+  assert.equal(gate.grant('trace', 'stripe_refund_payment', { scope: 'always', agent: 'mimi' }), false);
+  assert.equal(gate.modeFor('stripe_refund_payment', 'write', 'trace', { overrides: { stripe_refund_payment: 'allow' } }), 'ask');
+});
+
 test('stopping the caller withdraws the permission prompt', async () => {
   let aborted = false;
   const broker: PermissionBroker = {

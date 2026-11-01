@@ -92,6 +92,11 @@ export interface ToolSpec {
   untrustedInput?: boolean;
   /** The built-in browser may share an agent with a shell: the user watches that window. */
   allowWithShell?: boolean;
+  /**
+   * Every call needs a fresh "allow once" from the user. Session, task and forever
+   * grants do not cover it, and unattended workflows refuse to run it.
+   */
+  alwaysAsk?: boolean;
   /** Settings this tool accepts; a tool without settings cannot be made into a preset. */
   settings?: ToolSettingField[];
 }

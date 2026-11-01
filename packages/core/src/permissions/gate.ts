@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { type PermissionDecision, type PermissionRequest, type PermissionScope, type RiskLevel, toolFamily } from '@mimi/shared';
+import { type PermissionDecision, type PermissionRequest, type PermissionScope, type RiskLevel, isAlwaysAskTool, toolFamily } from '@mimi/shared';
 
 export type RiskPolicy = Record<RiskLevel, 'auto' | 'ask'>;
 
@@ -126,6 +126,7 @@ export class PermissionGate {
     const options: GrantOptions = typeof ttlOrOptions === 'number' ? { scope: 'task', ttlMs: ttlOrOptions } : ttlOrOptions;
     const scope = options.scope ?? 'task';
     if (this.overrides[tool] === 'deny') return false;
+    if (isAlwaysAskTool(tool) && scope !== 'once') return false;
     if (scope === 'always') {
       const agent = options.agent || '*';
       const families = this.alwaysGrants.get(agent) ?? new Set<string>();
@@ -213,13 +214,15 @@ export class PermissionGate {
   modeFor(tool: string, risk: RiskLevel, traceId?: string, options: ModeOptions = {}): 'auto' | 'ask' | 'deny' {
     const override = options.overrides?.[tool];
     if (override === 'deny') return 'deny';
+    const global = this.overrides[tool];
+    if (global === 'deny') return 'deny';
+    // Some calls (filling a vault secret into a page) need the user every single time.
+    if (isAlwaysAskTool(tool)) return 'ask';
     // A grant covers a policy "ask"; it never turns a deny into an allow.
     if (this.grantedFor(tool, options.thread, options.agent)) return 'auto';
     if (traceId && this.granted(traceId, tool)) return 'auto';
     if (override === 'allow') return 'auto';
     if (override === 'ask') return 'ask';
-    const global = this.overrides[tool];
-    if (global === 'deny') return 'deny';
     if (global === 'allow') return 'auto';
     if (global === 'ask') return 'ask';
     return this.policy[risk];

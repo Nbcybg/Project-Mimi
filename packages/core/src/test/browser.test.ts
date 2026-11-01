@@ -223,6 +223,29 @@ test('session: typing replaces text, presses Enter on request, and never fills a
   await assert.rejects(session.press('Hyper'), /Unknown key/);
 });
 
+test('session: a vault fill types into secret fields only, and snapshots never show their value', async () => {
+  const page = fakeWorld();
+  page.world.elements.e2 = { x: 30, y: 40, tag: 'input', type: 'text', name: 'Search', sensitive: false };
+  page.world.elements.e3 = { x: 50, y: 60, tag: 'input', type: 'password', name: 'PIN', sensitive: true };
+  const fake = fakeCdp(page.handlers);
+  const session = new BrowserSession({ connect: async () => fake.cdp, start: async () => 'x', existing: () => 'x', sleep: noSleep });
+  await session.open('http://example.com/');
+  await session.typeSecret('e3', 'hunter2');
+  assert.deepEqual(fake.calls.find((call) => call.method === 'Input.insertText')!.params, { text: 'hunter2' });
+  await assert.rejects(session.typeSecret('e2', 'x'), /not a password or payment field/);
+
+  const text = formatSnapshot({
+    url: 'http://example.com/',
+    title: 'Example',
+    text: '',
+    truncated: false,
+    items: [{ ref: 'e3', tag: 'input', type: 'password', name: 'PIN', sensitive: true }],
+    scroll: { y: 0, height: 100, view: 100 },
+  });
+  assert.match(text, /secret field/);
+  assert.doesNotMatch(text, /value=/);
+});
+
 test('session: a tab closed under it is replaced by another, and calls run one at a time', async () => {
   const world = fakeWorld();
   let failOnce = true;

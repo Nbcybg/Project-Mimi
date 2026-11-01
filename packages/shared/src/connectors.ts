@@ -76,6 +76,11 @@ export interface ConnectorOperation {
   paginated?: boolean;
   /** Safe to repeat after a network error or 5xx, even for a write. */
   idempotent?: boolean;
+  /**
+   * A money-moving call: the caller must also pass this exact phrase as `confirm`.
+   * The phrase never reaches the provider.
+   */
+  confirmPhrase?: string;
 }
 
 export interface ConnectorAuth {
@@ -195,6 +200,7 @@ export interface ConnectorOperationView {
   risk: RiskLevel;
   untrustedInput?: boolean;
   response?: ConnectorResponse;
+  confirmPhrase?: string;
 }
 
 /** What the settings and Quick Work screens receive for one service. */

@@ -790,6 +790,7 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
         const toolName = asText(config.tool);
         const tool = deps.tool(toolName);
         if (!tool) throw new Error(`tool node: unknown tool "${toolName}"`);
+        if (tool.alwaysAsk) throw new Error(`tool node: "${toolName}" needs the user's approval on every call, so it cannot run unattended in a workflow`);
         // Unattended runs cannot ask: anything beyond reading needs the node's own consent
         // (or an "allow" for the tool, global or this agent's). A "deny" always wins.
         const agentName = asText(config.agent) || workflow.agent;
@@ -821,6 +822,7 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
         if (!toolName.startsWith('mcp_')) throw new Error('mcp node: choose an MCP tool (mcp_<server>_<tool>)');
         const tool = deps.tool(toolName);
         if (!tool) throw new Error(`mcp node: unknown tool "${toolName}" (refresh that MCP server on the Tools screen)`);
+        if (tool.alwaysAsk) throw new Error(`mcp node: "${toolName}" needs the user's approval on every call, so it cannot run unattended in a workflow`);
         const policy = policyFor(deps, workflow.agent, toolName);
         if (policy === 'deny') throw new Error(`mcp node: "${toolName}" is denied by the permission settings`);
         if (tool.risk !== 'read' && policy !== 'allow' && node.config.allow !== true) {
@@ -914,6 +916,9 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
         const operation = connector.operations.find((entry) => entry.key === operationKey);
         if (!operation) {
           throw new Error(`connector node: connector "${connectorKey}" v${connector.version ?? '?'} has no operation "${operationKey}"`);
+        }
+        if (operation.confirmPhrase) {
+          throw new Error(`connector node: "${connectorKey}_${operationKey}" moves money and needs the user's approval every time; it cannot run unattended in a workflow`);
         }
         // A workflow runs unattended: anything beyond reading needs the node's own
         // consent (or an "allow" for the tool in the settings file). A "deny" always wins.
@@ -1439,6 +1444,7 @@ async function executeNode(node: WorkflowNode, items: FlowItem[], ctx: NodeConte
         const toolName = operation === 'info' ? 'sheets_info' : operation === 'read' ? 'sheets_read' : operation === 'append' ? 'sheets_append' : 'sheets_write';
         const tool = deps.tool(toolName);
         if (!tool) throw new Error(`sheets node: tool "${toolName}" is not available`);
+        if (tool.alwaysAsk) throw new Error(`sheets node: "${toolName}" needs the user's approval on every call, so it cannot run unattended`);
         // Same rule as the tool node: reading is free, writing needs the node's own consent
         // (or an "allow" in the settings file). A "deny" there always wins.
         const policy = policyFor(deps, workflow.agent, toolName);

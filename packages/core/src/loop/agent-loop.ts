@@ -242,6 +242,7 @@ async function* runToolCall(
         risk: definition.risk,
         input: definition.redactInput ? definition.redactInput(parsed.data) : parsed.data,
         summary: definition.summarize(parsed.data),
+        ...(definition.alwaysAsk ? { noGrant: true } : {}),
       });
       yield { type: 'permission-request', request };
       const decision = await deps.gate.decide(request, context.signal, modeOptions);

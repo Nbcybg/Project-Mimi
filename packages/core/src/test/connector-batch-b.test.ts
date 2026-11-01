@@ -47,8 +47,8 @@ const samples: Record<string, Record<string, Input>> = {
     list_customers: {},
     create_customer: { email: 'ada@example.com' },
     list_payments: {},
-    create_payment_link: { priceId: 'price_1' },
-    refund_payment: { paymentIntent: 'pi_1', amount: 100, reason: 'requested_by_customer' },
+    create_payment_link: { priceId: 'price_1', confirm: 'CONFIRM PAYMENT' },
+    refund_payment: { paymentIntent: 'pi_1', amount: 100, reason: 'requested_by_customer', confirm: 'CONFIRM REFUND' },
   },
   github: {
     list_repos: {},
@@ -96,16 +96,45 @@ test('batch B: Google OAuth, Stripe form encoding and GitHub headers', async () 
   await runtime.execute({
     connector: 'stripe',
     operation: 'create_payment_link',
-    input: { priceId: 'price_1', quantity: '2', metadata: { tier: 'pro' } },
+    input: { priceId: 'price_1', quantity: '2', metadata: { tier: 'pro' }, confirm: 'CONFIRM PAYMENT' },
   });
   assert.equal(api.calls[1]!.headers.get('content-type'), 'application/x-www-form-urlencoded');
   const form = new URLSearchParams(api.calls[1]!.body!);
   assert.equal(form.get('line_items[0][price]'), 'price_1');
   assert.equal(form.get('line_items[0][quantity]'), '2');
   assert.equal(form.get('metadata[tier]'), 'pro');
+  assert.equal(form.get('confirm'), null, 'the confirmation phrase never reaches Stripe');
 
   await runtime.execute({ connector: 'github', operation: 'list_issues', input: { owner: 'octo', repo: 'hello' } });
   assert.equal(api.calls[2]!.headers.get('accept'), 'application/vnd.github+json');
   assert.equal(api.calls[2]!.headers.get('x-github-api-version'), '2022-11-28');
   assert.equal(new URL(api.calls[2]!.url).searchParams.get('state'), 'open');
+});
+
+test('money-moving connector operations need the exact confirmation phrase', async () => {
+  const api = fakeFetch(() => Response.json(fixtureBody()));
+  const runtime = new ConnectorRuntimeImpl({ registry, auth: tokenAuth, fetchFn: api.fetchFn });
+  await assert.rejects(
+    runtime.execute({ connector: 'stripe', operation: 'refund_payment', input: { paymentIntent: 'pi_1', amount: 100 } }),
+    /moves money/,
+  );
+  await assert.rejects(
+    runtime.execute({
+      connector: 'stripe',
+      operation: 'create_payment_link',
+      input: { priceId: 'price_1', confirm: 'yes please' },
+    }),
+    /moves money/,
+  );
+  assert.equal(api.calls.length, 0);
+
+  await runtime.execute({
+    connector: 'stripe',
+    operation: 'refund_payment',
+    input: { paymentIntent: 'pi_1', amount: 100, confirm: 'CONFIRM REFUND' },
+  });
+  assert.equal(api.calls.length, 1);
+  const form = new URLSearchParams(api.calls[0]!.body!);
+  assert.equal(form.get('payment_intent'), 'pi_1');
+  assert.equal(form.get('confirm'), null);
 });

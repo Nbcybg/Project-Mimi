@@ -71,6 +71,7 @@ export const stripeConnector: ConnectorSpec = {
       method: 'POST',
       path: '/payment_links',
       risk: 'write',
+      confirmPhrase: 'CONFIRM PAYMENT',
       bodyFormat: 'form',
       body: {
         line_items: [{ price: '{{priceId}}', quantity: '{{quantity}}' }],
@@ -91,6 +92,7 @@ export const stripeConnector: ConnectorSpec = {
       method: 'POST',
       path: '/refunds',
       risk: 'write',
+      confirmPhrase: 'CONFIRM REFUND',
       bodyFormat: 'form',
       body: { payment_intent: '{{paymentIntent}}', amount: '{{amount}}', reason: '{{reason}}' },
       fields: [

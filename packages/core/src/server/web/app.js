@@ -1248,7 +1248,12 @@
     const deny = button('btn', 'ปฏิเสธ', () => answer(false));
     const verdict = el('span', 'muted');
     const row = el('div', 'btns');
-    row.append(allowTask, allowOnce, allowSession, allowAlways, deny, verdict);
+    if (request.noGrant) {
+      card.append(el('div', 'faint', 'เครื่องมือนี้ต้องขออนุญาตทุกครั้ง: อนุญาตได้เฉพาะครั้งนี้เท่านั้น'));
+      row.append(allowOnce, deny, verdict);
+    } else {
+      row.append(allowTask, allowOnce, allowSession, allowAlways, deny, verdict);
+    }
     card.append(row);
     cards.set(request.id, { allowTask, allowOnce, allowSession, allowAlways, deny, verdict });
     if (live) {
@@ -1263,7 +1268,9 @@
     state.pendingPerms.delete(requestId);
     const card = cards.get(requestId);
     if (!card) return;
-    card.allowTask.disabled = card.allowOnce.disabled = card.allowSession.disabled = card.allowAlways.disabled = card.deny.disabled = true;
+    for (const control of [card.allowTask, card.allowOnce, card.allowSession, card.allowAlways, card.deny]) {
+      if (control) control.disabled = true;
+    }
     card.verdict.textContent = decision.allow ? 'อนุญาตแล้ว' : `ไม่อนุญาต (${decision.reason})`;
   }
 

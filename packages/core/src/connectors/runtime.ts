@@ -309,6 +309,16 @@ export class ConnectorRuntimeImpl implements ConnectorRuntime {
         request.operation,
       );
     }
+    if (operation.confirmPhrase) {
+      const confirm = isRecord(request.input) ? request.input.confirm : undefined;
+      if (confirm !== operation.confirmPhrase) {
+        throw new ConnectorError(
+          `Connector "${spec.key}" operation "${operation.key}" moves money. Pass confirm: "${operation.confirmPhrase}" only after the user has explicitly approved it.`,
+          spec.key,
+          request.operation,
+        );
+      }
+    }
 
     const prepared = await this.prepare(spec, operation, request);
     if (operation.paginated && spec.pagination) return this.executePages(prepared, request.signal);
@@ -339,7 +349,10 @@ export class ConnectorRuntimeImpl implements ConnectorRuntime {
   }
 
   private async prepare(spec: ConnectorSpec, operation: ConnectorOperation, request: ConnectorRequest): Promise<PreparedRequest> {
-    const input = this.resolveInput(spec, operation, request.input);
+    const raw = { ...request.input };
+    // The confirmation phrase is for Mimi, not for the provider.
+    if (operation.confirmPhrase) delete raw.confirm;
+    const input = this.resolveInput(spec, operation, raw);
     const auth = await this.authFor(spec, operation, request.account);
     const headers = auth.headers;
     const secrets = Object.values(auth.values ?? {}).filter((value) => value.length >= 4);

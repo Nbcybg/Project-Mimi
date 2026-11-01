@@ -4,6 +4,7 @@ import { degrees, PDFDocument } from 'pdf-lib';
 import { z } from 'zod';
 import { defineTool } from '@mimi/shared';
 import { resolveAllowedPath } from './path-guard.ts';
+import { atomicOutput, resolveSingleOutput } from './output-target.ts';
 
 const MAX_PAGES = 5_000;
 
@@ -127,20 +128,21 @@ export const pdfSplitTool = defineTool({
 
 export const pdfDeletePagesTool = defineTool({
   name: 'pdf_delete_pages',
-  description: 'Remove pages from a PDF and write the rest to a new file. The source is never changed.',
+  description:
+    'Remove pages from a PDF and write the rest to a new file. Set in_place to replace the source file; the previous version is then kept as a .mimi-backup copy. Without in_place the source is never changed.',
   risk: 'write',
   target: 'pc',
   inputSchema: z.object({
     path: z.string().min(1).describe('Source PDF inside the allowed folders'),
-    output: z.string().min(1).describe('New .pdf path'),
+    output: z.string().min(1).optional().describe('New .pdf path; omit when in_place is true'),
     pages: z.string().min(1).describe('Pages to remove, e.g. "2,5-7"'),
+    in_place: z.boolean().optional().describe('Replace the source file instead of writing a new one'),
+    backup: z.boolean().optional().describe('Keep <name>.mimi-backup.pdf when editing in place (default true)'),
   }),
-  summarize: (input) => `Delete pages ${input.pages} from ${path.basename(input.path)}`,
+  summarize: (input) => `Delete pages ${input.pages} from ${path.basename(input.path)}${input.in_place ? ' in place' : ''}`,
   async execute(input, context) {
-    const source = resolveAllowedPath(input.path, context.allowedDirs);
-    const output = resolveAllowedPath(input.output, context.allowedDirs);
-    if (output.toLowerCase() === source.toLowerCase()) throw new Error('The output must be a new file, not the source.');
-    const doc = await loadPdf(source);
+    const target = resolveSingleOutput(input, context.allowedDirs);
+    const doc = await loadPdf(target.source);
     guardPages(doc.getPageCount());
     const remove = new Set(pageRange(input.pages, doc.getPageCount()));
     const keep = doc.getPageIndices().filter((index) => !remove.has(index));
@@ -148,28 +150,50 @@ export const pdfDeletePagesTool = defineTool({
     const result = await PDFDocument.create();
     const copied = await result.copyPages(doc, keep);
     for (const page of copied) result.addPage(page);
-    await writePdf(result, output);
-    return JSON.stringify({ ok: true, output, removed: [...remove].map((index) => index + 1), pages: keep.length, summary: `Wrote ${keep.length} page(s) to ${output}.` }, null, 2);
+    const atomic = atomicOutput(target, input.backup !== false);
+    let backup: string | undefined;
+    try {
+      await writePdf(result, atomic.writePath);
+      backup = await atomic.commit();
+    } catch (error) {
+      await atomic.abort();
+      throw error;
+    }
+    return JSON.stringify(
+      {
+        ok: true,
+        output: target.output,
+        in_place: target.inPlace,
+        ...(backup ? { backup } : {}),
+        removed: [...remove].map((index) => index + 1),
+        pages: keep.length,
+        summary: `Wrote ${keep.length} page(s) to ${target.output}.`,
+      },
+      null,
+      2,
+    );
   },
 });
 
 export const pdfRotateTool = defineTool({
   name: 'pdf_rotate',
-  description: 'Rotate pages of a PDF by 90, 180 or 270 degrees and write a new file. The source is never changed.',
+  description:
+    'Rotate pages of a PDF by 90, 180 or 270 degrees and write a new file. Set in_place to replace the source file; the previous version is then kept as a .mimi-backup copy. Without in_place the source is never changed.',
   risk: 'write',
   target: 'pc',
   inputSchema: z.object({
     path: z.string().min(1).describe('Source PDF inside the allowed folders'),
-    output: z.string().min(1).describe('New .pdf path'),
+    output: z.string().min(1).optional().describe('New .pdf path; omit when in_place is true'),
     degrees: z.union([z.literal(90), z.literal(180), z.literal(270)]).describe('Clockwise rotation'),
     pages: z.string().optional().describe('Pages to rotate, e.g. "1-3"; omit for every page'),
+    in_place: z.boolean().optional().describe('Replace the source file instead of writing a new one'),
+    backup: z.boolean().optional().describe('Keep <name>.mimi-backup.pdf when editing in place (default true)'),
   }),
-  summarize: (input) => `Rotate ${input.pages ? `pages ${input.pages}` : 'all pages'} of ${path.basename(input.path)} by ${input.degrees}°`,
+  summarize: (input) =>
+    `Rotate ${input.pages ? `pages ${input.pages}` : 'all pages'} of ${path.basename(input.path)} by ${input.degrees}°${input.in_place ? ' in place' : ''}`,
   async execute(input, context) {
-    const source = resolveAllowedPath(input.path, context.allowedDirs);
-    const output = resolveAllowedPath(input.output, context.allowedDirs);
-    if (output.toLowerCase() === source.toLowerCase()) throw new Error('The output must be a new file, not the source.');
-    const doc = await loadPdf(source);
+    const target = resolveSingleOutput(input, context.allowedDirs);
+    const doc = await loadPdf(target.source);
     guardPages(doc.getPageCount());
     const selected = input.pages?.trim()
       ? new Set(pageRange(input.pages, doc.getPageCount()))
@@ -179,8 +203,28 @@ export const pdfRotateTool = defineTool({
       const current = page.getRotation().angle;
       page.setRotation(degrees((current + input.degrees) % 360));
     }
-    await writePdf(doc, output);
-    return JSON.stringify({ ok: true, output, pages: [...selected].map((index) => index + 1), degrees: input.degrees, summary: `Rotated ${selected.size} page(s) in ${output}.` }, null, 2);
+    const atomic = atomicOutput(target, input.backup !== false);
+    let backup: string | undefined;
+    try {
+      await writePdf(doc, atomic.writePath);
+      backup = await atomic.commit();
+    } catch (error) {
+      await atomic.abort();
+      throw error;
+    }
+    return JSON.stringify(
+      {
+        ok: true,
+        output: target.output,
+        in_place: target.inPlace,
+        ...(backup ? { backup } : {}),
+        pages: [...selected].map((index) => index + 1),
+        degrees: input.degrees,
+        summary: `Rotated ${selected.size} page(s) in ${target.output}.`,
+      },
+      null,
+      2,
+    );
   },
 });
 

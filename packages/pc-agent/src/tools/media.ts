@@ -6,6 +6,7 @@ import { defineTool } from '@mimi/shared';
 import { z } from 'zod';
 import { runProcess, sanitizedEnv } from '../process.ts';
 import { resolveAllowedPath } from './path-guard.ts';
+import { atomicOutput, resolveSingleOutput } from './output-target.ts';
 
 const MEDIA_DIR = '.mimi-media';
 const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif', '.tif', '.tiff', '.bmp', '.gif']);
@@ -790,92 +791,139 @@ export const mediaMuxCoverTool = defineTool({
 export const mediaTrimTool = defineTool({
   name: 'media_trim',
   description:
-    'Trim a video or audio file to a new file with ffmpeg (start + duration, in seconds). Originals are never changed. Video becomes H.264/AAC MP4 when the output ends in .mp4/.mov; audio is copied or re-encoded.',
+    'Trim a video or audio file with ffmpeg (start + duration, in seconds). Set in_place to replace the source; the previous version is then kept as a .mimi-backup copy. Video becomes H.264/AAC MP4 when the output ends in .mp4/.mov; audio is copied or re-encoded.',
   risk: 'write',
   target: 'pc',
   inputSchema: z.object({
     path: z.string().min(1).describe('Source media file inside the allowed folders'),
-    output: z.string().min(1).describe('New file path (e.g. clips/intro.mp4)'),
+    output: z.string().min(1).optional().describe('New file path (e.g. clips/intro.mp4); omit when in_place is true'),
     start_seconds: z.number().min(0).max(86_400).optional().describe('Default 0'),
     duration_seconds: z.number().positive().max(86_400).describe('How many seconds to keep'),
     reencode: z.boolean().optional().describe('Re-encode instead of stream copy (default true)'),
+    in_place: z.boolean().optional().describe('Replace the source file instead of writing a new one'),
+    backup: z.boolean().optional().describe('Keep <name>.mimi-backup<ext> when editing in place (default true)'),
   }),
-  summarize: (input) => `Trim ${input.path} to ${input.duration_seconds}s → ${input.output}`,
+  summarize: (input) => `Trim ${input.path} to ${input.duration_seconds}s → ${input.in_place ? 'in place' : input.output}`,
   async execute(input, context) {
-    const source = resolveAllowedPath(input.path, context.allowedDirs);
-    const output = resolveAllowedPath(input.output, context.allowedDirs);
+    const target = resolveSingleOutput(input, context.allowedDirs);
     const tools = await detectMediaTools();
     requireTool(tools.ffmpeg, 'ffmpeg');
-    await fs.mkdir(path.dirname(output), { recursive: true });
+    await fs.mkdir(path.dirname(target.output), { recursive: true });
     const start = input.start_seconds ?? 0;
-    const video = /\.(mp4|mov|mkv|webm|avi|m4v)$/i.test(output);
-    const args = ['-v', 'error', '-ss', String(start), '-i', source, '-t', String(input.duration_seconds)];
+    const video = /\.(mp4|mov|mkv|webm|avi|m4v)$/i.test(target.output);
+    const atomic = atomicOutput(target, input.backup !== false);
+    const args = ['-v', 'error', '-ss', String(start), '-i', target.source, '-t', String(input.duration_seconds)];
     if (input.reencode === false) args.push('-c', 'copy');
     else if (video) args.push('-c:v', 'libx264', '-c:a', 'aac', '-pix_fmt', 'yuv420p', '-movflags', '+faststart');
     else args.push('-vn', '-c:a', 'aac');
-    args.push('-y', output);
-    const result = await runMedia('ffmpeg', args, {
-      cwd: path.dirname(source),
-      timeoutMs: 300_000,
-      maxOutput: 1024 * 1024,
-      ...(context.signal ? { signal: context.signal } : {}),
-    });
-    if (result.exitCode !== 0) throw new Error(`ffmpeg failed: ${result.output.trim() || `exit ${result.exitCode}`}`);
-    return JSON.stringify({ ok: true, source, output, start, duration: input.duration_seconds, summary: `Wrote ${output}` }, null, 2);
+    args.push('-y', atomic.writePath);
+    let backup: string | undefined;
+    try {
+      const result = await runMedia('ffmpeg', args, {
+        cwd: path.dirname(target.source),
+        timeoutMs: 300_000,
+        maxOutput: 1024 * 1024,
+        ...(context.signal ? { signal: context.signal } : {}),
+      });
+      if (result.exitCode !== 0) throw new Error(`ffmpeg failed: ${result.output.trim() || `exit ${result.exitCode}`}`);
+      backup = await atomic.commit();
+    } catch (error) {
+      await atomic.abort();
+      throw error;
+    }
+    return JSON.stringify(
+      {
+        ok: true,
+        source: target.source,
+        output: target.output,
+        in_place: target.inPlace,
+        ...(backup ? { backup } : {}),
+        start,
+        duration: input.duration_seconds,
+        summary: `Wrote ${target.output}`,
+      },
+      null,
+      2,
+    );
   },
 });
 
 export const imageCropTool = defineTool({
   name: 'image_crop',
-  description: 'Crop an image to a rectangle and write a new file with ffmpeg. The source is never changed.',
+  description:
+    'Crop an image to a rectangle with ffmpeg. Set in_place to replace the source; the previous version is then kept as a .mimi-backup copy. Without in_place the source is never changed.',
   risk: 'write',
   target: 'pc',
   inputSchema: z.object({
     path: z.string().min(1).describe('Source image inside the allowed folders'),
-    output: z.string().min(1).describe('New file path, e.g. cropped/photo.jpg'),
+    output: z.string().min(1).optional().describe('New file path, e.g. cropped/photo.jpg; omit when in_place is true'),
     x: z.number().int().min(0).describe('Left edge in pixels'),
     y: z.number().int().min(0).describe('Top edge in pixels'),
     width: z.number().int().min(1).max(20_000),
     height: z.number().int().min(1).max(20_000),
+    in_place: z.boolean().optional().describe('Replace the source file instead of writing a new one'),
+    backup: z.boolean().optional().describe('Keep <name>.mimi-backup<ext> when editing in place (default true)'),
   }),
-  summarize: (input) => `Crop ${path.basename(input.path)} to ${input.width}x${input.height}`,
+  summarize: (input) => `Crop ${path.basename(input.path)} to ${input.width}x${input.height}${input.in_place ? ' in place' : ''}`,
   async execute(input, context) {
-    const source = resolveAllowedPath(input.path, context.allowedDirs);
-    const output = resolveAllowedPath(input.output, context.allowedDirs);
-    if (output.toLowerCase() === source.toLowerCase()) throw new Error('The output must be a new file, not the source.');
+    const target = resolveSingleOutput(input, context.allowedDirs);
     const tools = await detectMediaTools();
     requireTool(tools.ffmpeg, 'ffmpeg');
-    await fs.mkdir(path.dirname(output), { recursive: true });
-    const result = await runMedia(
-      'ffmpeg',
-      ['-v', 'error', '-i', source, '-vf', `crop=${input.width}:${input.height}:${input.x}:${input.y}`, '-frames:v', '1', '-y', output],
-      { cwd: path.dirname(source), timeoutMs: 120_000, maxOutput: 1024 * 1024, ...(context.signal ? { signal: context.signal } : {}) },
+    await fs.mkdir(path.dirname(target.output), { recursive: true });
+    const atomic = atomicOutput(target, input.backup !== false);
+    let backup: string | undefined;
+    try {
+      const result = await runMedia(
+        'ffmpeg',
+        ['-v', 'error', '-i', target.source, '-vf', `crop=${input.width}:${input.height}:${input.x}:${input.y}`, '-frames:v', '1', '-y', atomic.writePath],
+        { cwd: path.dirname(target.source), timeoutMs: 120_000, maxOutput: 1024 * 1024, ...(context.signal ? { signal: context.signal } : {}) },
+      );
+      if (result.exitCode !== 0) throw new Error(`ffmpeg could not crop the image: ${result.output.trim() || `exit ${result.exitCode}`}`);
+      backup = await atomic.commit();
+    } catch (error) {
+      await atomic.abort();
+      throw error;
+    }
+    return JSON.stringify(
+      {
+        ok: true,
+        source: target.source,
+        output: target.output,
+        in_place: target.inPlace,
+        ...(backup ? { backup } : {}),
+        x: input.x,
+        y: input.y,
+        width: input.width,
+        height: input.height,
+        summary: `Wrote ${target.output}`,
+      },
+      null,
+      2,
     );
-    if (result.exitCode !== 0) throw new Error(`ffmpeg could not crop the image: ${result.output.trim() || `exit ${result.exitCode}`}`);
-    return JSON.stringify({ ok: true, source, output, x: input.x, y: input.y, width: input.width, height: input.height, summary: `Wrote ${output}` }, null, 2);
   },
 });
 
 export const imageRotateTool = defineTool({
   name: 'image_rotate',
-  description: 'Rotate an image clockwise by any angle and write a new file with ffmpeg. The source is never changed.',
+  description:
+    'Rotate an image clockwise by any angle with ffmpeg. Set in_place to replace the source; the previous version is then kept as a .mimi-backup copy. Without in_place the source is never changed.',
   risk: 'write',
   target: 'pc',
   inputSchema: z.object({
     path: z.string().min(1).describe('Source image inside the allowed folders'),
-    output: z.string().min(1).describe('New file path'),
+    output: z.string().min(1).optional().describe('New file path; omit when in_place is true'),
     degrees: z.number().min(-360).max(360).describe('Clockwise degrees; 90 / 180 / 270 keep the best quality'),
     background: z.string().optional().describe('Colour behind an arbitrary rotation (default black)'),
+    in_place: z.boolean().optional().describe('Replace the source file instead of writing a new one'),
+    backup: z.boolean().optional().describe('Keep <name>.mimi-backup<ext> when editing in place (default true)'),
   }),
-  summarize: (input) => `Rotate ${path.basename(input.path)} by ${input.degrees}°`,
+  summarize: (input) => `Rotate ${path.basename(input.path)} by ${input.degrees}°${input.in_place ? ' in place' : ''}`,
   async execute(input, context) {
-    const source = resolveAllowedPath(input.path, context.allowedDirs);
-    const output = resolveAllowedPath(input.output, context.allowedDirs);
-    if (output.toLowerCase() === source.toLowerCase()) throw new Error('The output must be a new file, not the source.');
+    const target = resolveSingleOutput(input, context.allowedDirs);
     if (input.degrees === 0) throw new Error('Nothing to rotate: give a non-zero angle.');
     const tools = await detectMediaTools();
     requireTool(tools.ffmpeg, 'ffmpeg');
-    await fs.mkdir(path.dirname(output), { recursive: true });
+    await fs.mkdir(path.dirname(target.output), { recursive: true });
     const normalized = ((input.degrees % 360) + 360) % 360;
     const filter =
       normalized === 90
@@ -885,14 +933,34 @@ export const imageRotateTool = defineTool({
           : normalized === 270
             ? 'transpose=2'
             : `rotate=${normalized}*PI/180:ow=rotw(${normalized}*PI/180):oh=roth(${normalized}*PI/180):c=${input.background?.trim() || 'black'}`;
-    const result = await runMedia('ffmpeg', ['-v', 'error', '-i', source, '-vf', filter, '-frames:v', '1', '-y', output], {
-      cwd: path.dirname(source),
-      timeoutMs: 120_000,
-      maxOutput: 1024 * 1024,
-      ...(context.signal ? { signal: context.signal } : {}),
-    });
-    if (result.exitCode !== 0) throw new Error(`ffmpeg could not rotate the image: ${result.output.trim() || `exit ${result.exitCode}`}`);
-    return JSON.stringify({ ok: true, source, output, degrees: input.degrees, summary: `Wrote ${output}` }, null, 2);
+    const atomic = atomicOutput(target, input.backup !== false);
+    let backup: string | undefined;
+    try {
+      const result = await runMedia('ffmpeg', ['-v', 'error', '-i', target.source, '-vf', filter, '-frames:v', '1', '-y', atomic.writePath], {
+        cwd: path.dirname(target.source),
+        timeoutMs: 120_000,
+        maxOutput: 1024 * 1024,
+        ...(context.signal ? { signal: context.signal } : {}),
+      });
+      if (result.exitCode !== 0) throw new Error(`ffmpeg could not rotate the image: ${result.output.trim() || `exit ${result.exitCode}`}`);
+      backup = await atomic.commit();
+    } catch (error) {
+      await atomic.abort();
+      throw error;
+    }
+    return JSON.stringify(
+      {
+        ok: true,
+        source: target.source,
+        output: target.output,
+        in_place: target.inPlace,
+        ...(backup ? { backup } : {}),
+        degrees: input.degrees,
+        summary: `Wrote ${target.output}`,
+      },
+      null,
+      2,
+    );
   },
 });
 
@@ -943,43 +1011,132 @@ export const videoMergeTool = defineTool({
 export const mediaSubtitleTool = defineTool({
   name: 'media_subtitle',
   description:
-    'Add an SRT subtitle file to an MP4 as a soft subtitle track (no re-encoding; viewers can turn it on or off). The video and subtitles are never changed.',
+    'Add an SRT subtitle file to a video. mode "soft" (default) adds a track without re-encoding (MP4/mov_text); mode "burn" draws the text into the picture (re-encodes, works for MP4/MKV/MOV). Set in_place to replace the video; the previous version is then kept as a .mimi-backup copy.',
   risk: 'write',
   target: 'pc',
   inputSchema: z.object({
-    video: z.string().min(1).describe('Source .mp4 inside the allowed folders'),
+    video: z.string().min(1).describe('Source video inside the allowed folders'),
     subtitles: z.string().min(1).describe('SRT file inside the allowed folders'),
-    output: z.string().min(1).describe('New .mp4 path'),
-    language: z.string().optional().describe('Track language tag, e.g. tha or eng (default und)'),
+    output: z.string().min(1).optional().describe('New video path; omit when in_place is true'),
+    language: z.string().optional().describe('Soft track language tag, e.g. tha or eng (default und)'),
+    mode: z.enum(['soft', 'burn']).optional().describe('Default soft (a track the viewer can switch off)'),
+    in_place: z.boolean().optional().describe('Replace the source video instead of writing a new one'),
+    backup: z.boolean().optional().describe('Keep <name>.mimi-backup<ext> when editing in place (default true)'),
   }),
-  summarize: (input) => `Add subtitles to ${path.basename(input.video)} -> ${input.output}`,
+  summarize: (input) =>
+    `Add ${input.mode === 'burn' ? 'burned-in ' : ''}subtitles to ${path.basename(input.video)}${input.in_place ? ' in place' : ` -> ${input.output}`}`,
   async execute(input, context) {
-    const video = resolveAllowedPath(input.video, context.allowedDirs);
+    const target = resolveSingleOutput({ path: input.video, ...(input.output ? { output: input.output } : {}), ...(input.in_place ? { in_place: true } : {}) }, context.allowedDirs);
     const subtitles = resolveAllowedPath(input.subtitles, context.allowedDirs);
+    const mode = input.mode ?? 'soft';
+    const tools = await detectMediaTools();
+    requireTool(tools.ffmpeg, 'ffmpeg');
+    await fs.mkdir(path.dirname(target.output), { recursive: true });
+    const atomic = atomicOutput(target, input.backup !== false);
+    const language = (input.language ?? 'und').trim() || 'und';
+    let temporarySubtitle: string | undefined;
+    let backup: string | undefined;
+    try {
+      let args: string[];
+      if (mode === 'burn') {
+        if (!/\.(mp4|mkv|mov)$/i.test(target.output)) throw new Error('Burning subtitles needs an .mp4, .mkv or .mov output.');
+        temporarySubtitle = path.join(path.dirname(target.source), `.mimi-sub-${randomUUID()}.srt`);
+        await fs.copyFile(subtitles, temporarySubtitle);
+        args = [
+          '-v', 'error',
+          '-i', target.source,
+          '-vf', `subtitles=${path.basename(temporarySubtitle)}`,
+          '-c:v', 'libx264',
+          '-c:a', 'aac',
+          '-pix_fmt', 'yuv420p',
+          ...(/\.(mp4|mov)$/i.test(target.output) ? ['-movflags', '+faststart'] : []),
+          '-y', atomic.writePath,
+        ];
+      } else {
+        if (!/\.mp4$/i.test(target.output)) throw new Error('A soft subtitle track needs an .mp4 output (mov_text). Use mode "burn" for other formats.');
+        args = [
+          '-v', 'error',
+          '-i', target.source,
+          '-i', subtitles,
+          '-map', '0',
+          '-map', '1',
+          '-c', 'copy',
+          '-c:s', 'mov_text',
+          '-metadata:s:s:0', `language=${language}`,
+          '-y', atomic.writePath,
+        ];
+      }
+      const result = await runMedia('ffmpeg', args, {
+        cwd: path.dirname(target.source),
+        timeoutMs: 300_000,
+        maxOutput: 2 * 1024 * 1024,
+        ...(context.signal ? { signal: context.signal } : {}),
+      });
+      if (result.exitCode !== 0) throw new Error(`ffmpeg could not add the subtitles: ${result.output.trim() || `exit ${result.exitCode}`}`);
+      backup = await atomic.commit();
+    } catch (error) {
+      await atomic.abort();
+      throw error;
+    } finally {
+      if (temporarySubtitle) await fs.rm(temporarySubtitle, { force: true });
+    }
+    return JSON.stringify(
+      {
+        ok: true,
+        video: target.source,
+        subtitles,
+        output: target.output,
+        in_place: target.inPlace,
+        ...(backup ? { backup } : {}),
+        mode,
+        ...(mode === 'soft' ? { language } : {}),
+        summary: `Wrote ${target.output} with ${mode === 'burn' ? 'burned-in' : `a ${language}`} subtitles.`,
+      },
+      null,
+      2,
+    );
+  },
+});
+
+export const mediaExtractAudioTool = defineTool({
+  name: 'media_extract_audio',
+  description:
+    'Extract the audio track of a video or audio file into a new file with ffmpeg. The codec follows the output extension: .mp3, .m4a, .wav, .ogg or .opus. The source is never changed.',
+  risk: 'write',
+  target: 'pc',
+  inputSchema: z.object({
+    path: z.string().min(1).describe('Source media file inside the allowed folders'),
+    output: z.string().min(1).describe('New audio path, e.g. audio/track.mp3'),
+    bitrate: z.number().int().min(64).max(320).optional().describe('kbps for lossy outputs (default 192)'),
+  }),
+  summarize: (input) => `Extract audio from ${path.basename(input.path)} -> ${input.output}`,
+  async execute(input, context) {
+    const source = resolveAllowedPath(input.path, context.allowedDirs);
     const output = resolveAllowedPath(input.output, context.allowedDirs);
-    if (output.toLowerCase() === video.toLowerCase()) throw new Error('The output must be a new file, not the source video.');
-    if (!/\.mp4$/i.test(output)) throw new Error('A soft subtitle track needs an .mp4 output (mov_text).');
+    if (output.toLowerCase() === source.toLowerCase()) throw new Error('The output must be a new file, not the source.');
+    const extension = path.extname(output).toLowerCase();
+    const codec =
+      extension === '.mp3'
+        ? ['-c:a', 'libmp3lame', '-b:a', `${input.bitrate ?? 192}k`]
+        : extension === '.m4a' || extension === '.aac'
+          ? ['-c:a', 'aac', '-b:a', `${input.bitrate ?? 192}k`]
+          : extension === '.wav'
+            ? ['-c:a', 'pcm_s16le']
+            : extension === '.ogg' || extension === '.opus'
+              ? ['-c:a', 'libopus', '-b:a', `${input.bitrate ?? 192}k`]
+              : undefined;
+    if (!codec) throw new Error('Choose an audio output ending in .mp3, .m4a, .wav, .ogg or .opus.');
     const tools = await detectMediaTools();
     requireTool(tools.ffmpeg, 'ffmpeg');
     await fs.mkdir(path.dirname(output), { recursive: true });
-    const language = (input.language ?? 'und').trim() || 'und';
-    const result = await runMedia(
-      'ffmpeg',
-      [
-        '-v', 'error',
-        '-i', video,
-        '-i', subtitles,
-        '-map', '0',
-        '-map', '1',
-        '-c', 'copy',
-        '-c:s', 'mov_text',
-        '-metadata:s:s:0', `language=${language}`,
-        '-y', output,
-      ],
-      { cwd: path.dirname(video), timeoutMs: 300_000, maxOutput: 2 * 1024 * 1024, ...(context.signal ? { signal: context.signal } : {}) },
-    );
-    if (result.exitCode !== 0) throw new Error(`ffmpeg could not add the subtitles: ${result.output.trim() || `exit ${result.exitCode}`}`);
-    return JSON.stringify({ ok: true, video, subtitles, output, language, summary: `Wrote ${output} with a ${language} subtitle track.` }, null, 2);
+    const result = await runMedia('ffmpeg', ['-v', 'error', '-i', source, '-vn', ...codec, '-y', output], {
+      cwd: path.dirname(source),
+      timeoutMs: 300_000,
+      maxOutput: 1024 * 1024,
+      ...(context.signal ? { signal: context.signal } : {}),
+    });
+    if (result.exitCode !== 0) throw new Error(`ffmpeg could not extract the audio: ${result.output.trim() || `exit ${result.exitCode}`}`);
+    return JSON.stringify({ ok: true, source, output, codec: codec[1], summary: `Wrote ${output}` }, null, 2);
   },
 });
 
@@ -997,4 +1154,5 @@ export const mediaTools = [
   imageRotateTool,
   videoMergeTool,
   mediaSubtitleTool,
+  mediaExtractAudioTool,
 ];

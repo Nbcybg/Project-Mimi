@@ -50,6 +50,8 @@ export interface PageItem {
   href?: string;
   checked?: boolean;
   disabled?: boolean;
+  /** A password or payment field: its value is never shown in a snapshot. */
+  sensitive?: boolean;
 }
 
 export interface PageHandoff {
@@ -86,6 +88,11 @@ const SNAPSHOT_SCRIPT = `(() => {
     return s.visibility !== 'hidden' && s.display !== 'none' && s.opacity !== '0';
   };
   const selector = 'a[href],button,input,textarea,select,summary,[role=button],[role=link],[role=checkbox],[role=tab],[role=menuitem],[role=option],[onclick],[contenteditable=""],[contenteditable=true]';
+  const secretField = (el) => {
+    const auto = String(el.getAttribute('autocomplete') || '').toLowerCase();
+    const hint = [el.name, el.id, auto, el.getAttribute('aria-label'), el.placeholder].join(' ').toLowerCase();
+    return el.type === 'password' || auto.startsWith('cc-') || /card.?number|cvv|cvc|security.?code|\\bpin\\b|\\bpass(word|code)?\\b/.test(hint);
+  };
   const items = [];
   for (const el of document.querySelectorAll(selector)) {
     if (items.length >= MAX_ITEMS) break;
@@ -93,10 +100,12 @@ const SNAPSHOT_SCRIPT = `(() => {
     const ref = 'e' + (items.length + 1);
     el.setAttribute('data-mimi-ref', ref);
     const field = el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT';
+    const sensitive = field && secretField(el);
     const name = (el.getAttribute('aria-label') || el.innerText || el.placeholder || el.title || el.alt || '').replace(/\\s+/g, ' ').trim().slice(0, 80);
     items.push({
       ref, tag: el.tagName.toLowerCase(), type: el.type || undefined, role: el.getAttribute('role') || undefined, name,
-      value: field && el.type !== 'password' && el.type !== 'checkbox' && el.type !== 'radio' ? String(el.value || '').slice(0, 80) : undefined,
+      value: field && !sensitive && el.type !== 'checkbox' && el.type !== 'radio' ? String(el.value || '').slice(0, 80) : undefined,
+      sensitive: sensitive || undefined,
       href: el.href ? String(el.href).slice(0, 140) : undefined,
       checked: el.type === 'checkbox' || el.type === 'radio' ? el.checked : undefined,
       disabled: el.disabled || undefined,
@@ -307,14 +316,18 @@ export class BrowserSession {
     return JSON.parse(await this.evaluate<string>(SNAPSHOT_SCRIPT)) as PageSnapshot;
   }
 
-  private async find(ref: string): Promise<{ x: number; y: number; tag: string; type: string; name: string }> {
+  private async find(ref: string): Promise<{ x: number; y: number; tag: string; type: string; name: string; sensitive: boolean }> {
     if (!REF.test(ref)) throw new Error(`"${ref}" is not an element ref like e12.`);
-    const found = await this.evaluate<{ x: number; y: number; tag: string; type: string; name: string } | null>(`(() => {
+    const found = await this.evaluate<{ x: number; y: number; tag: string; type: string; name: string; sensitive: boolean } | null>(`(() => {
       const el = document.querySelector('[data-mimi-ref="${ref}"]');
       if (!el) return null;
       el.scrollIntoView({ block: 'center', inline: 'center' });
       const r = el.getBoundingClientRect();
-      return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), tag: el.tagName.toLowerCase(), type: el.type || '', name: (el.getAttribute('aria-label') || el.innerText || el.value || '').slice(0, 60) };
+      const auto = String(el.getAttribute('autocomplete') || '').toLowerCase();
+      const hint = [el.name, el.id, auto, el.getAttribute('aria-label'), el.placeholder].join(' ').toLowerCase();
+      const sensitive = el.type === 'password' || auto.startsWith('cc-') || /card.?number|cvv|cvc|security.?code|\\bpin\\b|\\bpass(word|code)?\\b/.test(hint);
+      const label = el.getAttribute('aria-label') || el.innerText || el.placeholder || (sensitive ? '' : el.value) || '';
+      return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), tag: el.tagName.toLowerCase(), type: el.type || '', name: String(label).slice(0, 60), sensitive };
     })()`);
     if (!found) throw new Error(`No element ${ref} on the page now. Take a new snapshot; refs change when the page does.`);
     return found;
@@ -331,6 +344,22 @@ export class BrowserSession {
   async type(ref: string, text: string, options: { clear?: boolean; submit?: boolean } = {}): Promise<{ url: string; title: string; newTab: boolean }> {
     const target = await this.find(ref);
     if (target.type === 'password') throw new Error('That is a password field. The user types passwords themselves in the browser window.');
+    return this.insert(ref, text, options);
+  }
+
+  /**
+   * Fills a password or payment field with a value the core read from the vault. Only
+   * sensitive fields are accepted, and the value is never echoed back in the result.
+   */
+  async typeSecret(ref: string, text: string, options: { clear?: boolean; submit?: boolean } = {}): Promise<{ url: string; title: string; newTab: boolean }> {
+    const target = await this.find(ref);
+    if (!target.sensitive) {
+      throw new Error(`${ref} is not a password or payment field. browser_fill_secret only fills secret fields.`);
+    }
+    return this.insert(ref, text, options);
+  }
+
+  private async insert(ref: string, text: string, options: { clear?: boolean; submit?: boolean }): Promise<{ url: string; title: string; newTab: boolean }> {
     await this.evaluate(`(() => {
       const el = document.querySelector('[data-mimi-ref="${ref}"]');
       el.focus();

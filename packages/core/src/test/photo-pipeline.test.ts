@@ -10,6 +10,7 @@ import {
   imageCropTool,
   imageRotateTool,
   mediaContactSheetTool,
+  mediaExtractAudioTool,
   mediaSubtitleTool,
   mediaTransformTool,
   mediaTrimTool,
@@ -233,8 +234,19 @@ test('image_crop and image_rotate write new files and keep the source', async (t
 
   await assert.rejects(
     imageCropTool.execute(imageCropTool.inputSchema.parse({ path: source, output: source, x: 0, y: 0, width: 10, height: 10 }), context),
-    /new file/,
+    /in_place/,
   );
+
+  const inPlace = path.join(tmp, 'crop-in-place.png');
+  fs.copyFileSync(source, inPlace);
+  const original = hash(inPlace);
+  const replaced = parse(
+    await imageCropTool.execute(imageCropTool.inputSchema.parse({ path: inPlace, x: 5, y: 5, width: 20, height: 20, in_place: true }), context),
+  );
+  assert.equal(replaced.in_place, true);
+  assert.ok(replaced.backup && fs.existsSync(replaced.backup), 'an in-place edit keeps a backup');
+  assert.equal(hash(replaced.backup), original);
+  assert.deepEqual([streamInfo(inPlace).width, streamInfo(inPlace).height], [20, 20]);
 });
 
 test('video_merge and media_subtitle write new files and keep the sources', async (t) => {
@@ -271,6 +283,26 @@ test('video_merge and media_subtitle write new files and keep the sources', asyn
   );
   const streams = execFileSync('ffprobe', ['-v', 'error', '-select_streams', 's', '-show_entries', 'stream=codec_name', '-of', 'csv=p=0', subtitled]).toString().trim();
   assert.match(streams, /mov_text/);
+
+  const burned = path.join(tmp, 'subtitled-burn.mp4');
+  await mediaSubtitleTool.execute(
+    mediaSubtitleTool.inputSchema.parse({ video: one, subtitles, output: burned, mode: 'burn' }),
+    context,
+  );
+  const burnedCodec = execFileSync('ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=codec_name', '-of', 'csv=p=0', burned]).toString().trim();
+  assert.equal(burnedCodec, 'h264');
+
+  const withAudio = path.join(tmp, 'with-audio.mp4');
+  execFileSync(
+    'ffmpeg',
+    ['-v', 'error', '-f', 'lavfi', '-i', 'color=c=black:s=64x48:d=1', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=1', '-shortest', '-pix_fmt', 'yuv420p', '-y', withAudio],
+    { stdio: 'ignore' },
+  );
+  const audio = path.join(tmp, 'extracted.mp3');
+  const audioSourceHash = hash(withAudio);
+  await mediaExtractAudioTool.execute(mediaExtractAudioTool.inputSchema.parse({ path: withAudio, output: audio }), context);
+  assert.ok(fs.statSync(audio).size > 0);
+  assert.equal(hash(withAudio), audioSourceHash, 'the source video is not changed');
   assert.deepEqual([hash(one), hash(two)], before);
 });
 

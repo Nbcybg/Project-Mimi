@@ -2,7 +2,6 @@ import type { ToolDefinition } from '@mimi/shared';
 import { readFileTool } from './tools/read-file.ts';
 import { browserTools } from './tools/browser.ts';
 import { fileTools } from './tools/files.ts';
-import { pcInternalTools } from './tools/mcp-session.ts';
 import { computerTools } from './tools/computer.ts';
 import { mediaTools } from './tools/media.ts';
 import { organizeTools } from './tools/organize.ts';
@@ -16,6 +15,10 @@ import { applyPatchTool } from './tools/patch.ts';
 import { grepTool } from './tools/search.ts';
 import { gitTools } from './tools/git.ts';
 import { pdfTools } from './tools/pdf.ts';
+import { installAppTool } from './tools/apps.ts';
+import { statementReadTool } from './tools/statement.ts';
+import { browserFillSecretTool } from './tools/secret-fill.ts';
+import { pcInternalTools as mcpInternalTools } from './tools/mcp-session.ts';
 
 export { PcAgent, type PcAgentOptions } from './client.ts';
 export {
@@ -48,7 +51,26 @@ export {
   SseLink,
   StdioLink,
 } from './mcp/client.ts';
-export { closeMcpSessions, type McpRunSpec, mcpSessionTool, pcInternalTools } from './tools/mcp-session.ts';
+export { closeMcpSessions, type McpRunSpec, mcpSessionTool } from './tools/mcp-session.ts';
+/** Internal tools the core calls itself; agents never see their schemas. */
+export const pcInternalTools = [...mcpInternalTools, browserFillSecretTool];
+export { browserFillSecretTool } from './tools/secret-fill.ts';
+export { atomicOutput, backupFilePath, resolveSingleOutput, type AtomicOutput, type SingleOutput } from './tools/output-target.ts';
+export { APP_MANAGERS, installAppTool, packageCommand, pickAppManager, setPackageProbe, setPackageRunner, type AppManager, type PackageRunner } from './tools/apps.ts';
+export {
+  csvDelimiter,
+  detectStatementFormat,
+  parseAmount,
+  parseCsvStatement,
+  parseOfxStatement,
+  parseQifStatement,
+  parseStatement,
+  parseStatementDate,
+  statementReadTool,
+  type ParsedStatement,
+  type StatementFormat,
+  type StatementTransaction,
+} from './tools/statement.ts';
 export { BrowserSession, checkUrl, isLocalHost } from './browser/session.ts';
 export { browserArguments, browserProfileDir, findBrowserExecutable, readDevToolsAddress, startBrowser } from './browser/launcher.ts';
 export { browserSession, browserTools, formatSnapshot, setBrowserSession } from './tools/browser.ts';
@@ -75,6 +97,7 @@ export {
   imageCropTool,
   imageRotateTool,
   mediaContactSheetTool,
+  mediaExtractAudioTool,
   mediaMuxCoverTool,
   mediaProbeTool,
   mediaSubtitleTool,
@@ -121,6 +144,8 @@ export const pcTools: ToolDefinition<any>[] = [
   ...workspaceTools,
   ...mediaTools,
   ...pdfTools,
+  installAppTool,
+  statementReadTool,
   ...computerTools,
   ...systemTools,
   ...browserTools,

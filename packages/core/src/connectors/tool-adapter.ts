@@ -41,6 +41,11 @@ function fieldSchema(field: ConnectorField): z.ZodTypeAny {
 function inputSchemaOf(operation: ConnectorOperation): z.ZodType<Record<string, unknown>> {
   const shape: Record<string, z.ZodTypeAny> = {};
   for (const field of operation.fields) shape[field.key] = fieldSchema(field);
+  if (operation.confirmPhrase) {
+    shape.confirm = z
+      .literal(operation.confirmPhrase)
+      .describe(`Type "${operation.confirmPhrase}" to confirm this money-moving action after the user approved it`);
+  }
   return z.object(shape);
 }
 
@@ -109,11 +114,12 @@ function toolFor(spec: ConnectorSpec, operation: ConnectorOperation, runtime: Co
     risk: operation.risk,
     target: 'core',
     ...(operation.untrustedInput === undefined ? {} : { untrustedInput: operation.untrustedInput }),
+    ...(operation.confirmPhrase ? { alwaysAsk: true } : {}),
     settings,
     inputSchema: inputSchemaOf(operation),
     summarize(input) {
       const shown = operation.fields
-        .filter((field) => field.type !== 'secret' && input[field.key] !== undefined && input[field.key] !== '')
+        .filter((field) => field.key !== 'confirm' && field.type !== 'secret' && input[field.key] !== undefined && input[field.key] !== '')
         .slice(0, 3)
         .map((field) => `${field.key}=${preview(input[field.key])}`);
       return `${spec.label} · ${operation.label}${shown.length > 0 ? ` (${shown.join(', ')})` : ''}`;

@@ -133,7 +133,7 @@
 
 - `browser_upload` ใช้ CDP `DOM.setFileInputFiles`; path ต้องอยู่ใน allowed folders และต้องเป็นไฟล์จริง
 - `browser_wait` และ `browser_focus` ทำงานบน session เดียวกับ browser tools เดิม; ทุก call ผ่าน queue เดียว
-- snapshot ตรวจ password field, OTP/2FA text และ CAPTCHA: ถ้าพบจะคืน `handoff` และเครื่องมือ upload จะไม่อัปโหลด; ไม่มีการพิมพ์รหัสผ่าน/OTP หรือแก้ CAPTCHA
+- snapshot ตรวจ password field, OTP/2FA text และ CAPTCHA: ถ้าพบจะคืน `handoff` และเครื่องมือ upload จะไม่อัปโหลด; การพิมพ์รหัสผ่าน/OTP อัตโนมัติยังไม่ทำ ยกเว้น `browser_fill_secret` ที่ผู้ใช้ต้องอนุมัติทุกครั้ง (ค่ามาจาก vault ตามชื่อ, snapshot ซ่อนค่า, รับเฉพาะ password/payment field)
 - YouTube recipe: validate file → confirm → open → handoff check → upload → metadata → public publish gate → verify URL; unlisted/private อนุมัติครั้งเดียว, public ต้องอนุมัติครั้งที่สอง
 - public publish เป็น irreversible action: gate บังคับ; ไม่มี undo สำหรับ upload
 - browser tools ยังเป็น third-party content (`untrustedInput`) และถูกแยกจาก shell ตามกฎเดิม เว้น browser ที่ผู้ใช้ดูหน้าต่าง
@@ -158,6 +158,15 @@
 - notifications: งาน background ที่ `notify`/`background` จะส่ง `task-result` เข้า inbox ตาม preference/mute เดิม
 - audit: `task_audit` export JSONL จากตาราง tasks; `task_list` แสดงสถานะ/receipt; ไม่มี telemetry
 - ยังเปิด: admin policy รายองค์กร, audit retention อัตโนมัติ, UI สำหรับ task list/kill switch, และการทดสอบ background ข้าม restart จริง
+
+## 13. Layer 2: in-place, apps, statements and vault fills
+
+- in-place editing เขียนไฟล์ชั่วคราวในโฟลเดอร์เดียวกันก่อน แล้ว rename ทับต้นฉบับเมื่อสำเร็จเท่านั้น; ค่าเริ่มต้นเก็บ `<name>.mimi-backup<ext>`; ยังผ่าน path guard และยังไม่มี shell
+- `install_app`: รับเฉพาะ package id ที่ผ่าน regex, ใช้ execFile แบบไม่มี shell และเลือกได้เฉพาะ winget/brew/choco/scoop/apt; เป็น `shell` risk จึงต้องผ่าน local consent และ permission gate; ความเสี่ยงที่เหลือคือพฤติกรรมของผู้จัดการแพ็กเกจเอง (UAC, script ของแพ็กเกจ)
+- `statement_read`: อ่านไฟล์ใน allowed folders, จำกัด 20 MB, ไม่ต่อเครือข่ายและไม่แก้ไฟล์; ข้อความใน statement เป็นเนื้อหาจากบุคคลที่สาม จึงไม่ควรถือเป็นคำสั่ง; ไม่มี bank API หรือการโอนเงินตรง
+- payments: operation ที่มี `confirmPhrase` ต้องส่งวลีตรงและถูกบังคับให้ถามทุกครั้ง (`alwaysAsk`); ไม่บันทึกวลีลง request ที่ส่งผู้ให้บริการ; audit อยู่ใน `tool_calls`/`run_log`
+- `browser_fill_secret`: core อ่าน vault ตามชื่อที่ agent ส่ง, ส่งค่าลง PC ผ่าน internal tool ที่ agent ไม่เห็น schema, และไม่คืนค่าในผลลัพธ์; รับเฉพาะ password/payment field; snapshot ซ่อนค่า; task/session/always grant ใช้ไม่ได้; workflow และ `tool_test` ปฏิเสธ; local consent ของ PC ยังถามอีกชั้น
+- ยังเปิด: การทดสอบกับหน้า checkout จริงที่ใช้ iframe/shadow DOM, การยืนยันตัวตนของผู้ใช้ก่อนอนุมัติ (ผู้ใช้ต้องตรวจ URL เอง), และ native secure fields ซึ่งยังบล็อกตามเดิม
 
 ## สิ่งที่ยังไม่ได้ตรวจ
 

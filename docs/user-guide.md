@@ -77,6 +77,35 @@ Mimi คือผู้ช่วย AI ส่วนตัว: คุยกับ
 - Mimi จะทำ contact sheet ไว้ที่ `culled/preview/contact-sheet.jpg` (ถ้า ffmpeg ทำได้)
 - ปุ่ม **คืนไฟล์ทั้งหมด** ในใบเสร็จจะย้ายไฟล์ผลลัพธ์ไป `.mimi-media/trash/` ไม่ลบทิ้ง; ต้นฉบับยังอยู่ครบ
 
+## แก้ไฟล์ PDF / รูป / วิดีโอในที่
+
+- `pdf_delete_pages`, `pdf_rotate`, `image_crop`, `image_rotate`, `media_trim` และ `media_subtitle` รับ `in_place: true` เพื่อแทนที่ไฟล์เดิม
+- ค่าเริ่มต้นจะเก็บไฟล์เดิมไว้เป็น `<ชื่อ>.mimi-backup<นามสกุล>`; ปิดได้ด้วย `backup: false`
+- `media_subtitle` ใช้ `mode: "burn"` เพื่อเผาซับลงในภาพ (MP4/MKV/MOV) หรือไม่ใส่เพื่อเพิ่มซับแบบ soft track
+- `media_extract_audio` แยกเสียงออกเป็น `.mp3`, `.m4a`, `.wav`, `.ogg` หรือ `.opus`
+- ถ้าไม่ใช้ `in_place` เครื่องมือจะเขียนไฟล์ใหม่และไม่แตะต้นฉบับ
+
+## Statement และการจ่ายเงิน
+
+- `statement_read` อ่านไฟล์ statement ของธนาคาร/บัตร (CSV/TSV, OFX/QFX, QIF) รองรับหัวตารางไทยและอังกฤษ แล้วสรุปรายรับ รายจ่าย และยอดสุทธิ
+- เครื่องมือนี้เป็น read-only: ไม่ต่อธนาคาร ไม่ส่งข้อมูลออก และไม่แก้ไฟล์
+- การจ่ายเงินผ่าน Stripe (`create_payment_link`, `refund_payment`) ต้องใส่วลียืนยันให้ตรง และจะขออนุมัติทุกครั้งแม้เคยอนุญาตมาก่อน
+- Mimi ยังไม่รองรับการโอนเงินผ่าน API ของธนาคารโดยตรง
+
+## ติดตั้ง / อัปเดตแอป
+
+- `install_app` ใช้ winget (Windows), Homebrew (macOS), Chocolatey/Scoop (Windows) หรือ apt (Linux)
+- รับเฉพาะ package id เช่น `Google.Chrome` หรือ `firefox`; ใส่คำสั่งหรือ flag เองไม่ได้
+- ต้องอนุมัติทั้งจาก permission ของ agent และ local consent ของเครื่อง
+
+## เติมรหัสผ่าน / ข้อมูลบัตรจาก vault
+
+- เก็บค่าใน **Settings → Secrets** ด้วยชื่อ เช่น `CARD_NUMBER`, `CARD_CVC`, `BANK_PASSWORD`
+- ใช้ `browser_fill_secret` กับช่องที่ snapshot แสดงว่า secret field (ช่องรหัสผ่านหรือช่องบัตร)
+- agent ส่งได้แคชื่อ secret; ค่าจริงไม่เข้าโมเดล ไม่แสดงในแชต และ snapshot จะซ่อนช่องนั้น
+- ทุกครั้งต้องกดอนุมัติ **ครั้งนี้** เท่านั้น (ไม่มี "ทั้ง session" หรือ "ตลอดไป" สำหรับเครื่องมือนี้)
+- ตรวจ URL/หน้าเว็บก่อนอนุมัติทุกครั้ง เพราะหน้าเว็บปลอมสามารถขอให้กรอกข้อมูลได้
+
 ## อัปโหลด YouTube
 
 - บอก Mimi ว่าอยากอัปโหลดไฟล์ไหน พร้อมชื่อเรื่อง คำอธิบาย และการมองเห็น (private / unlisted / public)

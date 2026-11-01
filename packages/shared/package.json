@@ -1,6 +1,6 @@
 {
   "name": "@mimi/shared",
-  "version": "0.7.8-prototype",
+  "version": "0.7.9-prototype",
   "private": true,
   "type": "module",
   "exports": {

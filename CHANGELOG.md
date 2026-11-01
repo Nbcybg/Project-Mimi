@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### 0.7.9-prototype
+
+- Providers: `claude-subscription` lets a Claude Pro/Max user chat through their own plan by driving the installed
+  Claude Code CLI (or `CLAUDE_CODE_OAUTH_TOKEN` on a server). Its built-in tools, claude.ai connectors and settings
+  files are off, so the prompt is Mimi's alone; Mimi's tools reach the CLI over an in-process MCP bridge and still go
+  through the permission gate.
+- Providers: `chatgpt-plan` lets a ChatGPT Plus/Pro user sign in with ChatGPT (OAuth with PKCE on a loopback port)
+  instead of pasting an API key; requests go to the Responses API with the access token. Tokens are kept in
+  `chatgpt-plan.json` beside `auth.json` and revoked when the provider is removed. A core served from a public
+  address refuses to connect, since the sign-in program covers local apps only. Settings show a connect box that
+  updates itself when sign-in completes.
+- Notifications: opening a chat marks its notifications read, and a notification for the chat on screen is not
+  counted as new, so the bell no longer counts replies already seen.
+- Desktop: the Workspace browser keeps its sign-ins across restarts (until sign-out) and flushes cookies after each
+  page load. The Workspace terminal shows UTF-8 output (Thai file names), sends Thai commands intact, Ctrl+C stops
+  only the running command, and Restart kills the whole process tree.
+- Web UI: the empty chat view explains what to do, Mimiamp has a back button on narrow screens, the floating chat
+  settings panel has a close button, and the Settings header counts its real tabs.
+- Dependencies: `undici` updated to 7.30.1 (`npm audit` clean).
+
 ### 0.7.8-prototype
 
 - MCP: the legacy HTTP+SSE transport is supported next to stdio and Streamable HTTP; a refresh also records the

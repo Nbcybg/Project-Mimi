@@ -85,7 +85,26 @@ railway volume files download /backups/<ไฟล์ล่าสุด>-auto.tar
 1. `npm run typecheck && npm test` บนเครื่อง
 2. push → Railway build อิมเมจเดียวกันให้ทุก service (gateway และ core ใช้ Dockerfile เดียวกัน)
 3. service ที่มี volume จะดับสั้น ๆ ตอน redeploy — อัปเดตนอกเวลาที่มีคนใช้, gateway เป็นตัวสุดท้าย
-4. แอป Mac: `npm run build:mac` แล้วแจก zip ใหม่ (ยังไม่มีอัปเดตอัตโนมัติ)
+4. แอปเดสก์ท็อป (Windows/Mac) และ Android: push tag `v<เวอร์ชัน>` → `.github/workflows/release.yml` build แล้วออก GitHub release
+   พร้อม `SHA256SUMS.txt` · แอปเดสก์ท็อปที่ติดตั้งอยู่เช็กทุก 6 ชั่วโมงและถามก่อนอัปเดต (tag ที่มี `-rc` / `-beta` เป็น pre-release ที่แอปข้าม)
+
+### การลงนามแอปเดสก์ท็อป (ไม่บังคับ แต่ควรมี)
+
+ไม่ตั้งอะไร = Windows ไม่ได้ลงนาม (SmartScreen เตือน) และ Mac ลงนามแบบ ad hoc (ต้องคลิกขวา → Open ครั้งแรก)
+ตั้ง secret ใน GitHub repo แล้วการ build ใน release.yml จะลงนามให้เอง (โค้ดอยู่ที่ `scripts/signing.mjs`):
+
+| Secret | ใช้ทำอะไร |
+|---|---|
+| `WIN_CSC_BASE64`, `WIN_CSC_PASSWORD` | ใบรับรอง Authenticode (.pfx เป็น base64) ลงนาม `Mimi.exe` และตัวติดตั้ง |
+| `APPLE_CERT_BASE64`, `APPLE_CERT_PASSWORD`, `APPLE_SIGN_IDENTITY` | ใบรับรอง "Developer ID Application" (.p12 เป็น base64) และชื่อ identity เช่น `Developer ID Application: ชื่อ (TEAMID)` ลงนามแบบ hardened runtime ด้วย `scripts/mac-entitlements.plist` |
+| `APPLE_ID`, `APPLE_APP_PASSWORD`, `APPLE_TEAM_ID` | notarize กับ Apple (app-specific password) แล้ว staple ticket ลง Mimi.app |
+
+การตรวจตอนอัปเดต (`packages/desktop/updater.cjs`):
+- zip ต้องตรงกับขนาดและ SHA-256 ใน `SHA256SUMS.txt` ของ release นั้น ไม่ตรง = ไม่ติดตั้ง (release ที่ไม่มีไฟล์นี้อัปเดตอัตโนมัติไม่ได้)
+- ถ้าแอปที่ติดตั้งอยู่ลงนามโดยผู้เผยแพร่แล้ว (Windows: subject ของ Authenticode, Mac: Team ID) ตัวใหม่ต้องลงนามถูกต้องโดยผู้เผยแพร่เดียวกัน
+  แอปที่ยังไม่ได้ลงนามมีแค่ checksum เป็นตัวตรวจ (กันไฟล์เสีย/ถูกเปลี่ยนระหว่างทาง แต่ไม่กันคนที่เข้าถึง GitHub release ได้)
+- Mac ที่ลงนามด้วย Developer ID จะไม่ลบ quarantine flag ตอนอัปเดต (Gatekeeper ตรวจ notarization เอง)
+- เปลี่ยนใบรับรองจนชื่อผู้เผยแพร่ (subject / Team ID) เปลี่ยน แอปเดิมจะไม่ยอมอัปเดตอัตโนมัติ ต้องให้ผู้ใช้ติดตั้งเวอร์ชันใหม่เอง
 
 ## ค่าใช้จ่าย
 

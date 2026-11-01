@@ -4,6 +4,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { electronDist } from './electron-dist.mjs';
 import { copyPcAgentPackages, packPcAgent } from './pack-pc-agent.mjs';
+import { signWindows } from './signing.mjs';
 
 // Builds the Windows app people install: dist/win/Mimi/Mimi.exe, a window onto a Mimi server
 // elsewhere (the accounts gateway, or one core), the same app as build-mac.mjs. It holds no
@@ -75,6 +76,10 @@ icoHeader.writeUInt32LE(22, 18);
 fs.writeFileSync(path.join(STAGE, 'Mimi.ico'), Buffer.concat([icoHeader, icoPng]));
 log('icon written');
 
+// 3b. Authenticode signature of Mimi.exe when a certificate is configured (scripts/signing.mjs).
+// It goes on before packing, so the zip the app updates itself from carries it too.
+const signed = signWindows([path.join(STAGE, 'Mimi.exe')]);
+
 // 4. A Start menu and Desktop shortcut for this Windows account, made from where the folder ends up.
 fs.writeFileSync(
   path.join(STAGE, 'install.cmd'),
@@ -97,7 +102,9 @@ fs.writeFileSync(
     `วิธีติดตั้ง\r\n` +
     `1. แตกไฟล์ zip ไปไว้ในที่ที่จะเก็บถาวร เช่น %LOCALAPPDATA%\\Programs\\Mimi\r\n` +
     `2. ดับเบิลคลิก install.cmd เพื่อสร้างทางลัดบน Desktop และ Start menu (หรือเปิด Mimi.exe ตรง ๆ)\r\n` +
-    `   ครั้งแรก Windows SmartScreen อาจเตือน (แอปยังไม่ได้ลงนาม) ให้กด "More info" แล้ว "Run anyway"\r\n` +
+    (signed
+      ? `   ครั้งแรก Windows SmartScreen อาจถามยืนยัน ให้ดูว่าผู้เผยแพร่ถูกต้องแล้วกด Run\r\n`
+      : `   ครั้งแรก Windows SmartScreen อาจเตือน (แอปยังไม่ได้ลงนาม) ให้กด "More info" แล้ว "Run anyway"\r\n`) +
     `3. ใส่ที่อยู่เซิร์ฟเวอร์ที่ผู้ดูแลให้มา (https://...) แล้วเข้าสู่ระบบ\r\n` +
     `4. ไอคอน Mimi อยู่ที่ถาดระบบมุมขวาล่าง: เปิดแชต, ให้ Mimi ใช้เครื่องนี้ (PC agent), ออกจากระบบอัตโนมัติ, ออกจากระบบ\r\n\r\n` +
     `ข้อมูล\r\n` +
@@ -192,6 +199,7 @@ SectionEnd
   fs.writeFileSync(nsiPath, `﻿${nsi}`, 'utf8');
   log(`making ${SETUP_NAME}...`);
   execFileSync(makensis, ['/V2', nsiPath], { stdio: 'inherit' });
+  signWindows([path.join(DIST, SETUP_NAME)]);
   const setupMb = (fs.statSync(path.join(DIST, SETUP_NAME)).size / 1024 / 1024).toFixed(1);
   log(`done: dist/${SETUP_NAME} (${setupMb} MB)`);
 }

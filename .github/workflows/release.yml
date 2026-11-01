@@ -8,6 +8,13 @@
 #   ANDROID_KEYSTORE_BASE64    PKCS#12 keystore, base64, key alias "mimi"
 #   ANDROID_KEYSTORE_PASSWORD  its password (store and key)
 # Repository variable MIMI_ANDROID_HOST: the server the Android app opens (https host only).
+#
+# Optional desktop signing (scripts/signing.mjs); without them the builds stay unsigned / ad hoc:
+#   WIN_CSC_BASE64, WIN_CSC_PASSWORD     Authenticode .pfx (base64) and its password
+#   APPLE_CERT_BASE64, APPLE_CERT_PASSWORD  "Developer ID Application" .p12 (base64) and its password
+#   APPLE_SIGN_IDENTITY                  e.g. "Developer ID Application: Example Co (ABCDE12345)"
+#   APPLE_ID, APPLE_APP_PASSWORD, APPLE_TEAM_ID  notarization (app-specific password)
+# Every release also carries SHA256SUMS.txt; the desktop updater refuses a zip that does not match it.
 name: Release
 
 on:
@@ -31,6 +38,9 @@ jobs:
       # NSIS (makensis) makes the installer that goes out beside the zip.
       - run: choco install nsis -y --no-progress
       - run: npm run build:win
+        env:
+          WIN_CSC_BASE64: ${{ secrets.WIN_CSC_BASE64 }}
+          WIN_CSC_PASSWORD: ${{ secrets.WIN_CSC_PASSWORD }}
       - uses: actions/upload-artifact@v4
         with:
           name: windows
@@ -46,7 +56,32 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci --no-audit --no-fund
+      # The Developer ID certificate goes into a throwaway keychain for this run only.
+      - name: Signing certificate
+        env:
+          APPLE_CERT_BASE64: ${{ secrets.APPLE_CERT_BASE64 }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+        run: |
+          if [ -z "$APPLE_CERT_BASE64" ]; then
+            echo "::warning::No APPLE_CERT_BASE64 secret: the Mac app is signed ad hoc and not notarized."
+            exit 0
+          fi
+          keychain="$RUNNER_TEMP/mimi.keychain-db"
+          password="$(openssl rand -hex 16)"
+          echo "$APPLE_CERT_BASE64" | base64 -d > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/cert.p12" -P "$APPLE_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
+          security set-key-partition-list -S apple-tool:,apple: -k "$password" "$keychain"
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          rm -f "$RUNNER_TEMP/cert.p12"
       - run: npm run build:mac
+        env:
+          APPLE_SIGN_IDENTITY: ${{ secrets.APPLE_CERT_BASE64 && secrets.APPLE_SIGN_IDENTITY || '' }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
       - uses: actions/upload-artifact@v4
         with:
           name: mac
@@ -104,6 +139,8 @@ jobs:
         with:
           path: assets
           merge-multiple: true
+      # The desktop updater checks the zip it downloads against this file.
+      - run: cd assets && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
       - uses: softprops/action-gh-release@v2
         with:
           files: assets/*

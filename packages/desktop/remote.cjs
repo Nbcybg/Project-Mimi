@@ -558,7 +558,13 @@ async function installUpdate() {
   try {
     const stageDir = path.join(cacheDir, 'Mimi-update');
     const source = await updater.download(update, stageDir);
-    updater.startSwap({ source, target: updater.installTarget(), stageDir });
+    const target = updater.installTarget();
+    // A signed app only accepts an update signed by the same publisher.
+    const signed = updater.checkSignature({
+      current: process.platform === 'darwin' ? target : process.execPath,
+      next: process.platform === 'darwin' ? source : path.join(source, 'Mimi.exe'),
+    });
+    updater.startSwap({ source, target, stageDir, keepQuarantine: signed.required });
     app.quit();
   } catch (error) {
     updating = false;

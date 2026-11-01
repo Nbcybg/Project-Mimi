@@ -4,6 +4,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { electronDist } from './electron-dist.mjs';
 import { copyPcAgentPackages, packPcAgent } from './pack-pc-agent.mjs';
+import { notarizeMac, signMac } from './signing.mjs';
 
 // Builds the macOS app people install: dist/mac/Mimi.app, a window onto a Mimi server
 // elsewhere (the accounts gateway, or one core). It holds no core and no database; see
@@ -111,11 +112,10 @@ set('NSCameraUsageDescription', 'string', 'Mimi ใช้กล้องเม�
 set('NSAppleEventsUsageDescription', 'string', 'Mimi ใช้เปิดลิงก์และไฟล์ให้คุณ');
 run('plutil', ['-lint', plist]);
 
-// 5. Changed files break Electron's signature; sign again (ad hoc, so it runs on this and other Macs
-// after "Open" once; a Developer ID signature is needed to pass Gatekeeper without that).
-run('codesign', ['--force', '--deep', '--sign', '-', BUNDLE]);
-run('codesign', ['--verify', '--deep', '--strict', BUNDLE]);
-log('signed (ad hoc)');
+// 5. Changed files break Electron's signature; sign again: with a Developer ID and the hardened
+// runtime when APPLE_SIGN_IDENTITY is set (scripts/signing.mjs), else ad hoc, which runs on
+// this and other Macs after "Open" once.
+const developerId = signMac(BUNDLE, path.join(ROOT, 'scripts', 'mac-entitlements.plist'));
 
 fs.writeFileSync(
   path.join(DIST, 'mac', 'README.txt'),
@@ -130,7 +130,7 @@ fs.writeFileSync(
     `- ออกจากระบบแล้ว token และไฟล์ชั่วคราวถูกลบ เหลือแค่การตั้งค่า (ที่อยู่เซิร์ฟเวอร์ ขนาดหน้าต่าง)\n` +
     `- เครื่องที่ใช้ร่วมกับคนอื่น: ติ๊ก "เครื่องนี้ไม่ใช่ของฉัน" ตอนเข้าสู่ระบบ แล้ว Mimi จะไม่จำการเข้าสู่ระบบหลังปิดแอป\n` +
     `- ปิดหน้าต่าง = ซ่อนไว้ที่แถบเมนู ออกจากแอปจริง ๆ ที่เมนูของไอคอน Mimi\n` +
-    `- ถ้าดาวน์โหลด zip มาจากเครื่องอื่นแล้วเปิดไม่ได้: xattr -dr com.apple.quarantine /Applications/Mimi.app\n`,
+    (developerId ? '' : `- ถ้าดาวน์โหลด zip มาจากเครื่องอื่นแล้วเปิดไม่ได้: xattr -dr com.apple.quarantine /Applications/Mimi.app\n`),
   'utf8',
 );
 
@@ -139,5 +139,10 @@ const zipPath = path.join(DIST, ZIP_NAME);
 fs.rmSync(zipPath, { force: true });
 log(`packing ${ZIP_NAME}...`);
 run('ditto', ['-c', '-k', '--sequesterRsrc', '--keepParent', BUNDLE, zipPath]);
+// Notarization takes the zip; the ticket is stapled to the bundle, which is then zipped again.
+if (developerId && notarizeMac(BUNDLE, zipPath)) {
+  fs.rmSync(zipPath, { force: true });
+  run('ditto', ['-c', '-k', '--sequesterRsrc', '--keepParent', BUNDLE, zipPath]);
+}
 const sizeMb = (fs.statSync(zipPath).size / 1024 / 1024).toFixed(1);
 log(`done: ${path.relative(ROOT, zipPath)} (${sizeMb} MB)`);

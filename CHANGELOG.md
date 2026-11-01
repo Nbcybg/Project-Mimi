@@ -8,6 +8,13 @@
   API key, plus the default chat model), a starter agent (secretary, researcher, PC helper or coder, from the new
   `agent-presets` message), allowed folders, the PC agent and a test chat. Finishing or skipping is remembered across
   devices; Settings has "ตัวช่วยตั้งค่า" to open it again. Presets that read the web or mail have no shell tool.
+- Desktop releases: every release carries `SHA256SUMS.txt`, and the desktop updater refuses a zip whose size or
+  SHA-256 differs (or a release without the file). When the installed app is publisher-signed, the update must carry
+  a valid signature from the same publisher (Authenticode subject on Windows, Team ID on macOS), and a notarized Mac
+  app keeps its quarantine flag. The builds sign when certificates are configured (`scripts/signing.mjs`:
+  `WIN_CSC_*` for Authenticode with signtool, `APPLE_SIGN_IDENTITY` for Developer ID with the hardened runtime,
+  `APPLE_ID` / `APPLE_APP_PASSWORD` / `APPLE_TEAM_ID` for notarization), and release.yml passes them from secrets;
+  without them the builds stay unsigned / ad hoc as before.
 - Tunnel: Settings > แอปและระบบ can open a Cloudflare quick tunnel (`cloudflared tunnel --url`, found on PATH, the
   usual install folders or `MIMI_CLOUDFLARED`) and shows its https://….trycloudflare.com address. Webhook URLs in the
   app switch to it and calendar push subscribes to it when no calendar address is configured. It is refused on a

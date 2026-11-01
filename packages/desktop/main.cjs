@@ -12,9 +12,14 @@
 // Closing the window hides it (the chat, scroll position and recording state stay as they are);
 // only "Quit" in the tray menu ends the app.
 
-const { app, BrowserWindow, Menu, Notification, Tray, nativeImage, nativeTheme, screen, session, shell } = require('electron');
+const { app, BrowserWindow, Menu, Notification, Tray, ipcMain, nativeImage, nativeTheme, screen, session, shell } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
+
+// Windows and macOS show the app by this name (the executable may still be Electron's in a
+// development run); set it before anything reads app.getName() or a path from it.
+app.setName('Mimi');
+process.title = 'Mimi';
 
 // Started by the PC agent as the agents' built-in browser: one Chromium window of its own
 // with a persistent profile, controlled over the DevTools protocol (browser-shell.cjs).
@@ -41,6 +46,34 @@ if (!app.requestSingleInstanceLock()) app.quit();
 app.setAppUserModelId('app.mimi');
 nativeTheme.themeSource = 'dark';
 Menu.setApplicationMenu(null);
+
+// ---------- start with the computer ----------
+// The launcher passes what should be started at login: its own .exe in a packaged build, or
+// the Node command that runs the launcher from the sources. Without it Electron itself would
+// be registered, and a login start would open the window with no core behind it.
+const LOGIN_PATH = process.env.MIMI_LOGIN_PATH || process.execPath;
+const LOGIN_ARGS = (() => {
+  try {
+    const parsed = JSON.parse(process.env.MIMI_LOGIN_ARGS || '[]');
+    return Array.isArray(parsed) ? parsed.map(String) : [];
+  } catch {
+    return [];
+  }
+})();
+const LOGIN_SUPPORTED = process.platform === 'win32' || (process.platform === 'darwin' && app.isPackaged);
+const loginOptions = () => (process.platform === 'win32' ? { path: LOGIN_PATH, args: LOGIN_ARGS } : {});
+const loginItemState = () => {
+  if (!LOGIN_SUPPORTED) return { supported: false, openAtLogin: false };
+  return { supported: true, openAtLogin: Boolean(app.getLoginItemSettings(loginOptions()).openAtLogin) };
+};
+const setLoginItem = (open) => {
+  if (!LOGIN_SUPPORTED) return loginItemState();
+  app.setLoginItemSettings({ openAtLogin: Boolean(open), ...loginOptions() });
+  return loginItemState();
+};
+const trustedSender = (event) => Boolean(CORE) && String(event.senderFrame?.url || '').startsWith(CORE);
+ipcMain.handle('mimi:open-at-login', (event) => (trustedSender(event) ? loginItemState() : { supported: false, openAtLogin: false }));
+ipcMain.handle('mimi:set-open-at-login', (event, open) => (trustedSender(event) ? setLoginItem(open === true) : { supported: false, openAtLogin: false }));
 
 // ---------- what is remembered ----------
 const readState = () => {
@@ -89,7 +122,14 @@ function createWindow() {
     autoHideMenuBar: true,
     alwaysOnTop: state.onTop,
     show: false,
-    webPreferences: { spellcheck: false, devTools: process.env.MIMI_DEVTOOLS === '1', backgroundThrottling: false },
+    webPreferences: {
+      preload: path.join(__dirname, 'shell-preload.cjs'),
+      contextIsolation: true,
+      sandbox: true,
+      spellcheck: false,
+      devTools: process.env.MIMI_DEVTOOLS === '1',
+      backgroundThrottling: false,
+    },
   });
   win.removeMenu();
   if (state.maximized) win.maximize();

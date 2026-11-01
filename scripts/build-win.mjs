@@ -6,6 +6,7 @@ import { electronDist } from './electron-dist.mjs';
 import { applyFuses } from './fuses.mjs';
 import { copyPcAgentPackages, packPcAgent } from './pack-pc-agent.mjs';
 import { copyTerminalPackages } from './pack-terminal.mjs';
+import { patchWindowsApp } from './patch-exe.mjs';
 import { signWindows } from './signing.mjs';
 
 // Builds the Windows app people install: dist/win/Mimi/Mimi.exe, a window onto a Mimi server
@@ -65,8 +66,9 @@ copyPcAgentPackages(ROOT, APP);
 copyTerminalPackages(ROOT, APP);
 log('app and PC agent copied');
 
-// 3. The window and tray picture, drawn in code (the same picture as the Mac build). The .exe
-// keeps Electron's own icon: changing it needs a resource editor this build does not carry.
+// 3. The window and tray picture, drawn in code (the same picture as the Mac build), then
+// written into the .exe together with Mimi's name and version: Windows otherwise shows
+// "Electron" in Task Manager, Alt-Tab and the startup-app list even though the file is Mimi.exe.
 const { renderIconPng } = await import(pathToFileURL(path.join(ROOT, 'packages/core/src/app/icon.ts')).href);
 fs.writeFileSync(path.join(APP, 'icon.png'), renderIconPng());
 const icoPng = renderIconPng(256);
@@ -78,7 +80,8 @@ icoHeader.writeUInt16LE(32, 12); // bits per pixel
 icoHeader.writeUInt32LE(icoPng.length, 14);
 icoHeader.writeUInt32LE(22, 18);
 fs.writeFileSync(path.join(STAGE, 'Mimi.ico'), Buffer.concat([icoHeader, icoPng]));
-log('icon written');
+patchWindowsApp({ exe: path.join(STAGE, 'Mimi.exe'), icon: path.join(STAGE, 'Mimi.ico'), version: VERSION, description: 'Mimi' });
+log('icon and app identity written');
 
 // 3a. Electron fuses: keep RunAsNode for the PC agent, turn off NODE_OPTIONS and inspect flags.
 await applyFuses(path.join(STAGE, 'Mimi.exe'));

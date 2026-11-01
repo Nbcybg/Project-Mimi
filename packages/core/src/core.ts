@@ -1035,6 +1035,7 @@ export async function createCore(
               'list_triggers',
               'cancel_trigger',
               'update_trigger',
+              'mimiamp',
             ]
               .map((name) => toolPool.get(name))
               .filter((tool): tool is NonNullable<typeof tool> => tool !== undefined)

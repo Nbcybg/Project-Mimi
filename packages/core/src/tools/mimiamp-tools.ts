@@ -52,7 +52,7 @@ export function createMimiampTools(control: MimiampControl, library: MimiampLibr
       if (input.action === 'list') {
         const tracks = library();
         return tracks.length === 0
-          ? 'Mimiamp has no songs yet. A developer has to put audio files in server/web/mimiamp/ (or point MIMI_MUSIC_DIR at a folder).'
+          ? 'Mimiamp has no songs yet. Put audio files in <user>/mimiamp (or <app>/mimiamp), or point MIMI_MUSIC_DIR at a folder.'
           : `Mimiamp has ${tracks.length} track${tracks.length === 1 ? '' : 's'}:\n${tracks.map(describeTrack).join('\n')}`;
       }
       if (input.action === 'volume' && input.level === undefined) throw new Error('Give `level` (0–100) for volume.');

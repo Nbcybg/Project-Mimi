@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Chat: an agent's own emoji sprite now wins over an outfit's static picture, so uploaded sprites show while
+  an outfit is worn; when nothing else is set, the small avatar is used instead of leaving the stage blank.
+  An agent without an avatar also uses its first emoji sprite (else its portrait) as the chat-list picture.
+- Permissions: task and session approvals belong to the agent that asked. In a group chat or a handoff, another
+  agent in the same turn/session asks on its own and no longer inherits the approval. Renaming an agent moves
+  its forever approvals, and deleting one drops them so a later agent with the same name cannot inherit them.
+  Removing an old "every agent" approval in Settings now clears only that list, not the same tool family from
+  the individual agents.
+- AI Overseer: the prompt now includes a workspace manual (Files, Browser and Terminal panes, the built-in
+  Chromium browser, Mimiamp and the screens of the web client), and the mimiamp tool is available to it.
+- Settings: a "start Mimi when the computer starts" switch in the desktop app (Windows/macOS), and the Windows
+  build now writes Mimi's name, version and icon into the .exe instead of leaving Electron's identity, so Task
+  Manager, Alt-Tab and the startup-app list say Mimi.
+- Mimiamp: songs are read from `MIMI_MUSIC_DIR`, then `<user>/mimiamp`, then `<app>/mimiamp`, then the built-in
+  demo folder (the first one with audio files); a folder at the project root is copied by the Docker build too.
 - Workspace: a page that crashes or reloads no longer floods the log with "Render frame was disposed" while
   its shell keeps printing; the shell (and anything it runs) stops with the page, and a crashed page reloads
   itself once. Unsaved edits in the file preview are marked with ● and need a confirmation before another

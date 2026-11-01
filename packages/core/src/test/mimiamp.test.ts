@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import type { MimiampCommand } from '@mimi/shared';
-import { isAudioFile, listMimiampTracks, titleFromFile, trackPath } from '../mimiamp/library.ts';
+import { isAudioFile, listMimiampTracks, mimiampDir, titleFromFile, trackPath } from '../mimiamp/library.ts';
 import { createMimiampTools } from '../tools/mimiamp-tools.ts';
 
 const context = { traceId: 't', thread: 'th', agent: 'mimi', allowedDirs: [] };
@@ -45,6 +45,22 @@ test('library lists manifest tracks first, then audio files nobody listed', (t) 
   assert.equal(tracks[0]!.duration, 12);
   assert.equal(tracks[0]!.url, '/mimiamp/b.mp3');
   assert.equal(tracks[1]!.url, '/mimiamp/01%20-%20Long_Name.ogg');
+});
+
+test('the music folder comes from MIMI_MUSIC_DIR, the user folder, or the app root', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mimiamp-root-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, 'user', 'mimiamp'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'user', 'mimiamp', 'a.mp3'), '');
+  fs.mkdirSync(path.join(root, 'mimiamp'));
+  fs.writeFileSync(path.join(root, 'mimiamp', 'b.mp3'), '');
+  const env = { MIMI_ROOT: root, MIMI_USER: 'user' };
+  assert.equal(mimiampDir(env), path.join(root, 'user', 'mimiamp'), 'the user folder wins over the app root');
+  fs.rmSync(path.join(root, 'user', 'mimiamp'), { recursive: true });
+  assert.equal(mimiampDir(env), path.join(root, 'mimiamp'), 'an empty user folder falls back to the app root');
+  fs.rmSync(path.join(root, 'mimiamp', 'b.mp3'));
+  assert.match(mimiampDir(env), /server[\\/]web[\\/]mimiamp$/, 'no music at all falls back to the built-in folder');
+  assert.equal(mimiampDir({ ...env, MIMI_MUSIC_DIR: path.join(root, 'custom') }), path.join(root, 'custom'));
 });
 
 test('a missing folder is an empty library, not an error', () => {

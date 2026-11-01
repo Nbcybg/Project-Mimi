@@ -135,6 +135,48 @@ test('a forever grant only covers the agent it was approved for', () => {
   assert.deepEqual(gate.alwaysGrantsByAgent(), {});
 });
 
+test('task and session grants stay with the agent that asked, even in a group chat', () => {
+  const gate = new PermissionGate(new FakeBroker(true));
+
+  assert.equal(gate.grant('shared-trace', 'run_shell', { scope: 'task', agent: 'mimi' }), true);
+  assert.equal(gate.modeFor('run_shell', 'shell', 'shared-trace', { agent: 'mimi' }), 'auto');
+  assert.equal(gate.modeFor('run_shell', 'shell', 'shared-trace', { agent: 'tim' }), 'ask', 'another agent in the same turn still asks');
+
+  assert.equal(gate.grant('other-trace', 'delete_path', { scope: 'session', thread: 'group-thread', agent: 'mimi' }), true);
+  assert.equal(gate.modeFor('delete_path', 'delete', 'other-trace', { thread: 'group-thread', agent: 'mimi' }), 'auto');
+  assert.equal(gate.modeFor('delete_path', 'delete', 'other-trace', { thread: 'group-thread', agent: 'tim' }), 'ask', 'another agent in the same session still asks');
+});
+
+test('renameAgent moves an agent\'s approvals; forgetAgent drops them', () => {
+  let saved: Record<string, string[]> = {};
+  const gate = new PermissionGate(new FakeBroker(true), {
+    alwaysLoad: () => saved,
+    alwaysSave: (grants) => {
+      saved = grants;
+    },
+  });
+
+  assert.equal(gate.grant('trace', 'delete_path', { scope: 'always', agent: 'mimi' }), true);
+  assert.equal(gate.grant('trace', 'run_shell', { scope: 'session', thread: 'thread-1', agent: 'mimi' }), true);
+  gate.renameAgent('mimi', 'mimi2');
+  assert.deepEqual(gate.alwaysGrantsByAgent(), { mimi2: ['delete_path'] });
+  assert.deepEqual(saved, { mimi2: ['delete_path'] });
+  assert.equal(gate.modeFor('run_shell', 'shell', 'trace', { thread: 'thread-1', agent: 'mimi2' }), 'auto');
+  assert.equal(gate.modeFor('run_shell', 'shell', 'trace', { thread: 'thread-1', agent: 'mimi' }), 'ask');
+
+  gate.forgetAgent('mimi2');
+  assert.deepEqual(gate.alwaysGrantsByAgent(), {});
+  assert.deepEqual(saved, {});
+  assert.equal(gate.modeFor('run_shell', 'shell', 'trace', { thread: 'thread-1', agent: 'mimi2' }), 'ask');
+
+  // Removing an old global ("*") grant must not wipe the same family from other agents.
+  const mixed = new PermissionGate(new FakeBroker(true), { alwaysLoad: () => ({ '*': ['delete_path'], mimi: ['delete_path'] }) });
+  assert.equal(mixed.revokeAlways('delete_path', '*'), true);
+  assert.deepEqual(mixed.alwaysGrantsByAgent(), { mimi: ['delete_path'] });
+  assert.equal(mixed.modeFor('delete_path', 'delete', 'trace', { agent: 'mimi' }), 'auto');
+  assert.equal(mixed.modeFor('delete_path', 'delete', 'trace', { agent: 'tim' }), 'ask');
+});
+
 test('old global forever grants still cover every agent', () => {
   const gate = new PermissionGate(new FakeBroker(true), { alwaysLoad: () => ({ '*': ['run_shell'] }) });
   assert.equal(gate.modeFor('run_shell', 'shell', 'other', { agent: 'mimi' }), 'auto');

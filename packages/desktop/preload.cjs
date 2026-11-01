@@ -24,3 +24,12 @@ contextBridge.exposeInMainWorld('MimiDesktop', {
   /** Opens the separate Workspace window with browser, files and terminal. */
   openWorkspace: () => ipcRenderer.invoke('mimi:open-workspace'),
 });
+
+// The local window (main.cjs) exposes the same object, so the web client has one API for
+// the desktop shell on both installs.
+contextBridge.exposeInMainWorld('MimiShell', {
+  /** Whether Mimi starts with the computer, and whether this platform/build supports it. */
+  openAtLogin: () => ipcRenderer.invoke('mimi:open-at-login'),
+  /** Turns "start with the computer" on or off; returns the new state. */
+  setOpenAtLogin: (open) => ipcRenderer.invoke('mimi:set-open-at-login', open === true),
+});

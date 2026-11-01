@@ -41,10 +41,32 @@ interface ManifestEntry {
   duration?: unknown;
 }
 
-/** The built-in folder, or `MIMI_MUSIC_DIR` when the developer keeps music elsewhere. */
+/** True when a folder has at least one file the player can serve. */
+function hasAudio(dir: string): boolean {
+  try {
+    return fs.readdirSync(dir, { withFileTypes: true }).some((entry) => entry.isFile() && isAudioFile(entry.name));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Where the songs live, in order: `MIMI_MUSIC_DIR`, `<user>/mimiamp` (the user's own music,
+ * on the synchronized folder or the server volume), `<app>/mimiamp` (a folder at the project
+ * root), then the built-in demo folder. A folder only wins when it actually has an audio
+ * file, so an empty folder never hides the next one.
+ */
 export function mimiampDir(env: NodeJS.ProcessEnv = process.env): string {
   const custom = env.MIMI_MUSIC_DIR?.trim();
   if (custom) return path.resolve(custom);
+  const repoRoot = path.resolve(import.meta.dirname, '../../../..');
+  const root = env.MIMI_ROOT ? path.resolve(env.MIMI_ROOT) : repoRoot;
+  const user = env.MIMI_USER?.trim();
+  const candidates = [
+    ...(user ? [path.resolve(root, user, 'mimiamp')] : []),
+    path.join(root, 'mimiamp'),
+  ];
+  for (const dir of candidates) if (hasAudio(dir)) return dir;
   return path.join(import.meta.dirname, '..', 'server', 'web', 'mimiamp');
 }
 

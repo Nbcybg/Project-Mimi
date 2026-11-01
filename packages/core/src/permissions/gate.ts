@@ -72,9 +72,9 @@ export class PermissionGate {
   private readonly grantTtlMs: number;
   private readonly now: () => number;
   private readonly alwaysSave?: (grants: Record<string, string[]>) => void;
-  /** `${traceId}\0${toolFamily}` -> epoch milliseconds when the grant ends. */
+  /** `${traceId}\0${agent}\0${toolFamily}` -> epoch milliseconds when the grant ends. */
   private readonly grants = new Map<string, number>();
-  /** `${thread}\0${toolFamily}` for the rest of a chat session. */
+  /** `${thread}\0${agent}\0${toolFamily}` for the rest of a chat session. */
   private readonly sessionGrants = new Map<string, number>();
   /** Agent -> tool families allowed forever. `*` is the old, global list. */
   private readonly alwaysGrants = new Map<string, Set<string>>();
@@ -113,8 +113,17 @@ export class PermissionGate {
     return this.policy[risk] !== 'auto';
   }
 
-  private key(traceId: string, tool: string): string {
-    return `${traceId}\u0000${toolFamily(tool)}`;
+  /**
+   * A grant belongs to one agent: group chats and handoffs share a trace and a thread,
+   * so a key without the agent would let one agent's approval cover another.
+   * `*` keeps the old behaviour for callers that do not name an agent.
+   */
+  private key(traceId: string, tool: string, agent?: string): string {
+    return `${traceId}\u0000${agent || '*'}\u0000${toolFamily(tool)}`;
+  }
+
+  private sessionKey(thread: string, tool: string, agent?: string): string {
+    return `${thread}\u0000${agent || '*'}\u0000${toolFamily(tool)}`;
   }
 
   /**
@@ -137,26 +146,29 @@ export class PermissionGate {
     }
     if (scope === 'session') {
       if (!options.thread) return false;
-      this.sessionGrants.set(`${options.thread}\u0000${toolFamily(tool)}`, Number.POSITIVE_INFINITY);
+      this.sessionGrants.set(this.sessionKey(options.thread, tool, options.agent), Number.POSITIVE_INFINITY);
       return true;
     }
     if (scope === 'once') return true;
     this.prune();
-    this.grants.set(this.key(traceId, tool), this.now() + Math.max(1, options.ttlMs ?? this.grantTtlMs));
+    this.grants.set(this.key(traceId, tool, options.agent), this.now() + Math.max(1, options.ttlMs ?? this.grantTtlMs));
     return true;
   }
 
   /** True while a task-scoped grant for this tool is still valid. */
-  granted(traceId: string, tool: string): boolean {
+  granted(traceId: string, tool: string, agent?: string): boolean {
     this.prune();
-    return this.grants.has(this.key(traceId, tool));
+    if (this.grants.has(this.key(traceId, tool, agent))) return true;
+    return agent !== undefined && this.grants.has(this.key(traceId, tool));
   }
 
   /** True while a session or forever grant covers this tool (optionally in `thread`). */
   grantedFor(tool: string, thread?: string, agent?: string): boolean {
     const family = toolFamily(tool);
     if (this.alwaysFor(agent).has(family)) return true;
-    return thread !== undefined && this.sessionGrants.has(`${thread}\u0000${family}`);
+    if (thread === undefined) return false;
+    if (this.sessionGrants.has(this.sessionKey(thread, tool, agent))) return true;
+    return agent !== undefined && this.sessionGrants.has(this.sessionKey(thread, tool));
   }
 
   /** Tool families the user allowed forever for one agent (and the old global list). */
@@ -192,15 +204,56 @@ export class PermissionGate {
   }
 
   /** Drops a task grant (all of them for a trace when no tool is given). */
-  revoke(traceId: string, tool?: string): void {
+  revoke(traceId: string, tool?: string, agent?: string): void {
+    const prefix = `${traceId}\u0000`;
     if (tool) {
-      this.grants.delete(this.key(traceId, tool));
+      if (agent !== undefined) this.grants.delete(this.key(traceId, tool, agent));
+      else {
+        const suffix = `\u0000${toolFamily(tool)}`;
+        for (const key of this.grants.keys()) {
+          if (key.startsWith(prefix) && key.endsWith(suffix)) this.grants.delete(key);
+        }
+      }
       return;
     }
-    const prefix = `${traceId}\u0000`;
     for (const key of this.grants.keys()) {
       if (key.startsWith(prefix)) this.grants.delete(key);
     }
+  }
+
+  /** Moves an agent's forever, session and task grants when the agent is renamed. */
+  renameAgent(from: string, to: string): void {
+    if (!from || !to || from === to) return;
+    let changed = false;
+    const families = this.alwaysGrants.get(from);
+    if (families) {
+      const target = this.alwaysGrants.get(to) ?? new Set<string>();
+      for (const family of families) target.add(family);
+      this.alwaysGrants.set(to, target);
+      this.alwaysGrants.delete(from);
+      changed = true;
+    }
+    const marker = `\u0000${from}\u0000`;
+    for (const map of [this.grants, this.sessionGrants]) {
+      for (const key of [...map.keys()]) {
+        if (!key.includes(marker)) continue;
+        const value = map.get(key)!;
+        map.delete(key);
+        map.set(key.replace(marker, `\u0000${to}\u0000`), value);
+      }
+    }
+    if (changed) this.saveAlways();
+  }
+
+  /** Forgets every grant that belongs to an agent (used when the agent is deleted). */
+  forgetAgent(agent: string): void {
+    if (!agent || agent === '*') return;
+    const changed = this.alwaysGrants.delete(agent);
+    const marker = `\u0000${agent}\u0000`;
+    for (const map of [this.grants, this.sessionGrants]) {
+      for (const key of [...map.keys()]) if (key.includes(marker)) map.delete(key);
+    }
+    if (changed) this.saveAlways();
   }
 
   private prune(): void {
@@ -220,7 +273,7 @@ export class PermissionGate {
     if (isAlwaysAskTool(tool)) return 'ask';
     // A grant covers a policy "ask"; it never turns a deny into an allow.
     if (this.grantedFor(tool, options.thread, options.agent)) return 'auto';
-    if (traceId && this.granted(traceId, tool)) return 'auto';
+    if (traceId && this.granted(traceId, tool, options.agent)) return 'auto';
     if (override === 'allow') return 'auto';
     if (override === 'ask') return 'ask';
     if (global === 'allow') return 'auto';

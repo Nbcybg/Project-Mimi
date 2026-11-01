@@ -1,9 +1,11 @@
 // The character card behind a direct chat, visual-novel style. The picture is picked from
 // the last emoji the agent wrote:
 //   1. the emoji picture of the outfit it wears (status "outfit" = a wardrobe id)
-//   2. that outfit's own picture
-//   3. the agent's own picture for the emoji
+//   2. the agent's own picture for the emoji
+//   3. that outfit's own (static) picture
 //   4. the agent's full-body portrait
+//   5. any outfit or agent emoji picture, so a set of sprites alone still shows
+//   6. the small avatar, so even a profile picture alone is not a blank stage
 // When the picture changes it fades in with a small hop (a new outfit slides in); the figure
 // breathes slowly while idle. Also exports the editor used for the emoji pictures of an
 // outfit or an agent.
@@ -74,14 +76,17 @@
     if (outfit && moodKey && outfit.sprites && outfit.sprites[moodKey]) {
       return { path: `/api/sprite/outfit/${enc(outfit.id)}/${moodKey}?v=${outfit.sprites[moodKey]}`, outfit: outfit.id };
     }
-    if (outfit && outfit.image) return { path: `/api/wardrobe-image/${enc(outfit.id)}?v=${outfit.image}`, outfit: outfit.id };
+    // The agent's own emoji picture wins over the outfit's static picture: a sprite the user
+    // uploaded for this emoji should show even while an outfit with a picture is worn.
     if (moodKey && own[moodKey]) return { path: `/api/sprite/agent/${enc(agent.name)}/${moodKey}?v=${own[moodKey]}`, outfit: outfit ? outfit.id : '' };
+    if (outfit && outfit.image) return { path: `/api/wardrobe-image/${enc(outfit.id)}?v=${outfit.image}`, outfit: outfit.id };
     if (agent.portrait) return { path: `/api/agent-image/${enc(agent.name)}/portrait?v=${agent.portrait}`, outfit: outfit ? outfit.id : '' };
     // An agent with only expression pictures keeps a face even when the newest emoji has none.
     const anyOutfit = outfit && outfit.sprites ? Object.keys(outfit.sprites)[0] : null;
     if (anyOutfit) return { path: `/api/sprite/outfit/${enc(outfit.id)}/${anyOutfit}?v=${outfit.sprites[anyOutfit]}`, outfit: outfit.id };
     const anyOwn = Object.keys(own)[0];
     if (anyOwn) return { path: `/api/sprite/agent/${enc(agent.name)}/${anyOwn}?v=${own[anyOwn]}`, outfit: outfit ? outfit.id : '' };
+    if (agent.avatar) return { path: `/api/agent-image/${enc(agent.name)}/avatar?v=${agent.avatar}`, outfit: outfit ? outfit.id : '' };
     return null;
   }
 
@@ -318,6 +323,7 @@
             await M().api(url(key), { method: 'DELETE' });
             delete known[key];
             drawGrid();
+            window.MimiHooks.stage?.refresh();
           }, 'ลบรูปนี้'),
         );
         grid.append(tile);
@@ -342,6 +348,8 @@
       if (!response.ok) return M().toast('อัปโหลดรูปไม่สำเร็จ', (await response.json()).error, true);
       known[key] = String(Date.now());
       drawGrid();
+      // The server also broadcasts the new agent list; refresh now so the stage updates at once.
+      window.MimiHooks.stage?.refresh();
       M().toast('เพิ่มรูปแล้ว ✓', keyToEmoji(key));
     };
 

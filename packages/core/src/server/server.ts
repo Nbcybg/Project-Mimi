@@ -410,6 +410,8 @@ export async function startServer(
       core.backgrounds.renameAgent(renameFrom, name);
       core.status.rename(renameFrom, name);
       core.memos.rename(renameFrom, name);
+      // Forever and session approvals follow the agent, so a rename never loses them.
+      core.deps.gate.renameAgent(renameFrom, name);
     }
     return name;
   };
@@ -444,6 +446,7 @@ export async function startServer(
         core.memos.forget(name);
         core.profile.forgetAgent(name);
         core.backgrounds.forgetAgent(name);
+        core.deps.gate.forgetAgent(name);
         images.forget(name);
         assets.forget(name);
         for (const workflow of core.workflows.forgetAgent(name)) {
@@ -1191,10 +1194,14 @@ export async function startServer(
         broker.respond(message.requestId, allow);
         break;
       }
-      case 'permission-revoke':
-        core.deps.gate.revokeAlways(String(message.tool), typeof message.agent === 'string' ? message.agent : undefined);
+      case 'permission-revoke': {
+        // No agent (an older screen) means the old global list, never every agent: one × must
+        // not wipe the same tool family from agents the user did not touch.
+        const agent = typeof message.agent === 'string' && message.agent ? message.agent : '*';
+        core.deps.gate.revokeAlways(String(message.tool), agent);
         broadcast({ type: 'settings', settings: settingsView(), saved: true });
         break;
+      }
       case 'task-control':
         if (message.action === 'pause' || message.action === 'resume' || message.action === 'cancel') {
           core.taskRunner.control(message.taskId, message.action);
@@ -2007,6 +2014,8 @@ export async function startServer(
           core.memos.forget(gone);
           core.profile.forgetAgent(gone);
           core.backgrounds.forgetAgent(gone);
+          // Approvals belong to the agent; they must not pass to a future agent with the same name.
+          core.deps.gate.forgetAgent(gone);
           images.forget(gone);
           assets.forget(gone);
           // An agent's workflows go with it, and so do their schedules.

@@ -75,6 +75,18 @@ const DEFAULT_SIZE = { width: 410, height: 820 };
 const MIN_SIZE = { width: 340, height: 560 };
 const MARGIN = 12;
 const VIEWS = ['chat', 'agents', 'hub', 'settings'];
+const LOGIN_ARGS = app.isPackaged ? [] : [path.join(__dirname, 'remote.cjs')];
+const LOGIN_SUPPORTED = process.platform === 'win32' || (process.platform === 'darwin' && app.isPackaged);
+const loginOptions = () => (process.platform === 'win32' ? { path: process.execPath, args: LOGIN_ARGS } : {});
+const loginItemState = () => {
+  if (!LOGIN_SUPPORTED) return { supported: false, openAtLogin: false };
+  return { supported: true, openAtLogin: Boolean(app.getLoginItemSettings(loginOptions()).openAtLogin) };
+};
+const setLoginItem = (open) => {
+  if (!LOGIN_SUPPORTED) return loginItemState();
+  app.setLoginItemSettings({ openAtLogin: Boolean(open), ...loginOptions() });
+  return loginItemState();
+};
 
 let config = lib.readConfig(where.config, home);
 let saveTimer = null;
@@ -675,6 +687,11 @@ ipcMain.handle('mimi:open-workspace', (event) => {
   openWorkspace();
   return true;
 });
+
+ipcMain.handle('mimi:open-at-login', (event) => (isServerUrl(event.senderFrame?.url) ? loginItemState() : { supported: false, openAtLogin: false }));
+ipcMain.handle('mimi:set-open-at-login', (event, open) =>
+  isServerUrl(event.senderFrame?.url) ? setLoginItem(open === true) : { supported: false, openAtLogin: false },
+);
 
 ipcMain.handle('mimi:set-server', async (event, raw) => {
   if (!isConnectPage(event.senderFrame?.url)) return { ok: false, error: 'ไม่อนุญาต' };

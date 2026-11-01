@@ -6,7 +6,8 @@ anything it can play; an optional `tracks.json` supplies titles, artists and dur
 - Supported: `.mp3`, `.m4a`, `.aac`, `.ogg`, `.oga`, `.opus`, `.wav`, `.flac`, `.webm`
 - Files not listed in `tracks.json` still appear, titled from their file name.
 - Replace this README or add as many files as you like; no code change is needed.
-- Set `MIMI_MUSIC_DIR=/some/folder` to keep the library outside the app instead.
+- The app also reads `<user>/mimiamp` and `<app>/mimiamp` before this folder; set
+  `MIMI_MUSIC_DIR=/some/folder` to keep the library somewhere else entirely.
 
 `tracks.json` is either an array or `{ "tracks": [...] }`:
 

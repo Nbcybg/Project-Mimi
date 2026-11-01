@@ -184,7 +184,7 @@ node --test --test-timeout=60000 packages/core/src/test/<file>.test.ts
 | `MIMI_CONFIG` | `mimi.json` | ไฟล์ตั้งค่าโมเดล/compaction/memory |
 | `MIMI_TIMEZONE` | `Asia/Bangkok` | timezone ของ scheduler และ trigger |
 | `ALLOWED_DIRS` | `<user>/workspace` | โฟลเดอร์ที่ file/shell tools เข้าถึงได้ คั่นด้วย `;` |
-| `MIMI_MUSIC_DIR` | `<app>/packages/core/src/server/web/mimiamp` | โฟลเดอร์เพลงของ Mimiamp |
+| `MIMI_MUSIC_DIR` | `<user>/mimiamp` → `<app>/mimiamp` → โฟลเดอร์ตัวอย่างในแพ็กเกจ | โฟลเดอร์เพลงของ Mimiamp (ใช้โฟลเดอร์แรกที่มีไฟล์เสียง) |
 | `MIMI_LOCAL_PC_TOOLS` | `1` | `0` = ให้ file/shell tools ทำงานผ่าน PC agent เท่านั้น (เหมาะกับ cloud) |
 | `MIMI_CORE_URL` | `ws://127.0.0.1:8787/ws` | ที่อยู่ core สำหรับ PC agent |
 | `MIMI_PUBLIC_URL` | — | URL สาธารณะของ core ใช้สร้าง OAuth redirect (`/oauth/callback`) |

@@ -400,8 +400,18 @@
     const node = el('span', `av${size ? ` ${size}` : ''}`, (nameOf(name)[0] || '?').toUpperCase());
     node.style.setProperty('--c', colorOf(name));
     const agent = agentOf(name);
-    if (agent && agent.avatar) {
-      blobUrl(`/api/agent-image/${encodeURIComponent(name)}/avatar?v=${agent.avatar}`)
+    // An agent without an avatar still shows a face: its first emoji sprite, else its portrait.
+    // Uploaded sprites then appear at once in the chat list and headers, not only on the stage.
+    const sprite = agent && Object.entries(agent.sprites || {})[0];
+    const picture = agent && agent.avatar
+      ? `/api/agent-image/${encodeURIComponent(name)}/avatar?v=${agent.avatar}`
+      : sprite
+        ? `/api/sprite/agent/${encodeURIComponent(name)}/${sprite[0]}?v=${sprite[1]}`
+        : agent && agent.portrait
+          ? `/api/agent-image/${encodeURIComponent(name)}/portrait?v=${agent.portrait}`
+          : null;
+    if (picture) {
+      blobUrl(picture)
         .then((url) => {
           const image = el('img');
           image.alt = '';
@@ -3862,6 +3872,57 @@
     overlay(dialog);
   }
 
+  /** Desktop only: start Mimi with the computer (Electron registers it with the OS). */
+  function startupPanel() {
+    const shell = window.MimiShell;
+    if (!shell || typeof shell.openAtLogin !== 'function') return null;
+    const panel = el('div', 'panel form');
+    panel.hidden = true;
+    panel.append(
+      el('h3', '', 'เปิด Mimi ตอนเปิดเครื่อง'),
+      el('p', 'hint', 'ให้ Mimi เริ่มเองเมื่อเข้าสู่ระบบ Windows/macOS · ยังอยู่ในถาดระบบเหมือนเดิม ปิดได้จากสวิตช์นี้'),
+    );
+    const label = el('label', 'check');
+    const input = el('input');
+    input.type = 'checkbox';
+    input.disabled = true;
+    const status = el('span', 'faint', '');
+    label.append(input, el('span', '', 'เริ่ม Mimi อัตโนมัติเมื่อเปิดเครื่อง'));
+    panel.append(label, status);
+    const showState = (state) => {
+      input.checked = Boolean(state && state.openAtLogin);
+      status.textContent = input.checked ? 'เปิดอยู่' : 'ปิดอยู่';
+      input.disabled = false;
+    };
+    shell
+      .openAtLogin()
+      .then((state) => {
+        if (!state || state.supported === false) return;
+        panel.hidden = false;
+        showState(state);
+      })
+      .catch(() => {});
+    input.onchange = async () => {
+      input.disabled = true;
+      status.textContent = 'กำลังบันทึก…';
+      try {
+        const state = await shell.setOpenAtLogin(input.checked);
+        if (!state || state.supported === false) {
+          panel.hidden = true;
+          return;
+        }
+        showState(state);
+        flash(input.checked ? 'จะเปิด Mimi เมื่อเปิดเครื่อง' : 'จะไม่เปิด Mimi เมื่อเปิดเครื่อง');
+      } catch (error) {
+        input.checked = !input.checked;
+        status.textContent = 'บันทึกไม่ได้';
+        toast('ตั้งค่าเปิดตอนเปิดเครื่องไม่ได้', (error && error.message) || String(error), true);
+        input.disabled = false;
+      }
+    };
+    return panel;
+  }
+
   /** Desktop only: the browser window that comes with the app, its profile kept between launches. */
   function browserPanel() {
     const panel = el('div', 'panel form');
@@ -4001,6 +4062,8 @@
     } else if (ui.settingsTab === 'memory') {
       stack.append(memoryPanel());
     } else {
+      const startup = startupPanel();
+      if (startup) stack.append(startup);
       // Providers: add, edit, remove and manage the model list (feature-providers.js).
       const providers = el('div', 'panel form');
       providers.append(el('h3', '', 'ผู้ให้บริการโมเดล'));
@@ -4087,7 +4150,9 @@
           general.append(el('p', 'hint', agent === '*' ? 'Every agent (older grants)' : `Agent: ${agent}`));
           const rows = el('div', 'btns');
           for (const tool of families) {
-            rows.append(button('btn ghost', `${tool} ×`, () => send({ type: 'permission-revoke', tool, ...(agent === '*' ? {} : { agent }) })));
+            // Send the agent even for "*": an old global grant is removed only from that list,
+            // not from every agent that has the same tool family.
+            rows.append(button('btn ghost', `${tool} ×`, () => send({ type: 'permission-revoke', tool, agent })));
           }
           general.append(rows);
         }

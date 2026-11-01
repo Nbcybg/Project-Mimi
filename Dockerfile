@@ -21,6 +21,7 @@ ENV NODE_ENV=production \
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json mimi.json ./
+COPY mimiamp ./mimiamp
 COPY packages ./packages
 COPY scripts/docker-entrypoint.sh /usr/local/bin/mimi-entrypoint
 RUN chmod 755 /usr/local/bin/mimi-entrypoint && mkdir -p /app/user /app/backups && chown -R node:node /app/user /app/backups

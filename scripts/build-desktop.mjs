@@ -118,6 +118,9 @@ internal static class MimiLauncher
                 RedirectStandardOutput = true,
                 RedirectStandardError = true
             };
+            // The Node launcher passes this to the app so "start with Windows" points at
+            // this launcher, not at Electron's own executable.
+            info.EnvironmentVariables["MIMI_APP_EXE"] = Path.Combine(root, "Mimi.exe");
             var process = new Process { StartInfo = info };
             process.OutputDataReceived += (sender, line) => { };
             process.ErrorDataReceived += (sender, line) => { };

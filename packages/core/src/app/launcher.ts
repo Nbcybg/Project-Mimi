@@ -105,6 +105,18 @@ interface NativeShell {
   stop(): void;
 }
 
+/**
+ * What Windows/macOS should start at login: the installed Mimi.exe when the build tells us
+ * (`MIMI_APP_EXE`), else the Node command that runs this launcher from the sources.
+ */
+function loginItemCommand(): { path: string; args: string[] } {
+  const installed = process.env.MIMI_APP_EXE?.trim();
+  if (installed) return { path: path.resolve(installed), args: [] };
+  const launcher = path.join(config.rootDir, 'packages/core/src/app/launcher.ts');
+  const envFile = path.join(config.rootDir, '.env');
+  return { path: process.execPath, args: [...(fs.existsSync(envFile) ? [`--env-file=${envFile}`] : []), launcher] };
+}
+
 /** Starts the Electron shell; null when Electron is not installed or did not come up. */
 function startShell(port: number, onQuit: () => void): Promise<NativeShell | null> {
   let electron: string;
@@ -118,7 +130,16 @@ function startShell(port: number, onQuit: () => void): Promise<NativeShell | nul
   // The icon is the app's, not the user's: it stays out of the user folder.
   const icon = path.join(stateDir, 'mimi-icon.png');
   fs.writeFileSync(icon, renderIconPng());
-  const env: NodeJS.ProcessEnv = { ...process.env, MIMI_CORE_URL: `http://127.0.0.1:${port}`, MIMI_TOKEN: settings.token, MIMI_STATE_DIR: stateDir, MIMI_ICON: icon };
+  const login = loginItemCommand();
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    MIMI_CORE_URL: `http://127.0.0.1:${port}`,
+    MIMI_TOKEN: settings.token,
+    MIMI_STATE_DIR: stateDir,
+    MIMI_ICON: icon,
+    MIMI_LOGIN_PATH: login.path,
+    MIMI_LOGIN_ARGS: JSON.stringify(login.args),
+  };
   delete env.ELECTRON_RUN_AS_NODE; // set by tools that are themselves Electron apps; it would make the shell a plain Node
   // Commands travel over node's IPC channel: a GUI program has no usable stdin on Windows.
   const child = spawn(electron, [path.join(config.rootDir, 'packages/desktop/main.cjs')], { env, stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });

@@ -239,7 +239,7 @@
     if (!tracks.length) {
       await loadLibrary();
       if (!tracks.length) {
-        M().toast('Mimiamp', 'ยังไม่มีเพลง — ให้นักพัฒนาวางไฟล์เสียงใน server/web/mimiamp/', true);
+        M().toast('Mimiamp', 'ยังไม่มีเพลง — วางไฟล์เสียงในโฟลเดอร์ mimiamp ของ Mimi หรือตั้ง MIMI_MUSIC_DIR', true);
         return;
       }
     }
@@ -505,7 +505,7 @@
     refresh.onclick = () => {
       loadLibrary(true).then(() => M().toast('Mimiamp', 'รีเฟรชรายการเพลงแล้ว'));
     };
-    foot.append(refresh, el('span', '', 'SERVER/WEB/MIMIAMP'));
+    foot.append(refresh, el('span', '', 'MIMIAMP'));
 
     body.append(lcd, seekRow, controls, playlist, foot);
     win.append(titlebar, body);
@@ -585,9 +585,9 @@
       const empty = el('div', 'amp-empty');
       empty.append(
         el('div', '', 'ยังไม่มีเพลงใน Mimiamp'),
-        el('div', '', 'นักพัฒนาวางไฟล์เสียง (mp3, ogg, wav, m4a, flac) ไว้ที่'),
-        el('code', '', 'packages/core/src/server/web/mimiamp/'),
-        el('div', '', 'แล้วกด “รีเฟรชเพลง” หรือวาง URL ไปยังโฟลเดอร์ผ่าน MIMI_MUSIC_DIR'),
+        el('div', '', 'วางไฟล์เสียง (mp3, ogg, wav, m4a, flac) ไว้ที่'),
+        el('code', '', 'mimiamp/'),
+        el('div', '', 'ในโฟลเดอร์ข้อมูล Mimi หรือโฟลเดอร์โปรเจกต์ แล้วกด “รีเฟรชเพลง” · หรือตั้ง MIMI_MUSIC_DIR ไปยังโฟลเดอร์เพลง'),
       );
       ui.list.append(empty);
       return;

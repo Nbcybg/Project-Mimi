@@ -4,7 +4,8 @@
 // Mimi live on this computer. What it keeps (remote-lib.cjs, locations()):
 //   config.json  server address, window place, auto-lock and PC agent choices (no personal data)
 //   session.bin  the session token, encrypted by the OS keychain (safeStorage), while signed in
-//   chromium/    Chromium's own folder: the window's web data is kept in memory, the rest is wiped
+//   chromium/    Chromium's own folder: the window's web data is kept in memory, the rest is wiped,
+//                except the Workspace browser's sign-ins (Partitions/) while signed in
 //   <cache>/Mimi the agent's browser profile while signed in, when the PC agent is on
 // Signing out (in the app, from the tray, by auto-lock, or an expired session) ends the
 // session on the server, stops the PC agent, wipes all of that except config.json, and
@@ -724,7 +725,11 @@ app.whenReady().then(() => {
     if (current && config.autoLockMinutes > 0) void signOut('locked');
   });
   current = loadSession();
-  if (!current) fs.rmSync(where.cache, { recursive: true, force: true }); // signed out: no temporary files either
+  if (!current) {
+    // Signed out: no temporary files either, and no site still signed in in the Workspace.
+    fs.rmSync(where.cache, { recursive: true, force: true });
+    lib.wipeWorkspaceBrowser(where);
+  }
   createTray();
   createWindow();
   startPcAgent();

@@ -418,6 +418,12 @@
         break;
       case 'notification':
         if (message.notification.id) {
+          // About the chat on screen right now (a permission card, say): seen already, not a new count.
+          const state = M().state;
+          if (message.notification.chatId && state.view === 'chat' && state.chat?.id === message.notification.chatId && document.visibilityState === 'visible') {
+            M().send({ type: 'notifications-read', ids: [message.notification.id] });
+            break;
+          }
           items = [{ ...message.notification, createdAt: new Date().toISOString(), read: false }, ...items].slice(0, 50);
           unread++;
           bell();

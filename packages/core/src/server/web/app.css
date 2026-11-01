@@ -461,6 +461,7 @@ html[data-mode="mobile"] #input { font-size: max(16px, var(--chat-fs)); }
 .knob input[type="range"] { accent-color: var(--accent); width: 100%; }
 .prov { display: flex; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line-soft); flex-wrap: wrap; }
 .prov > div { flex: 1; min-width: 180px; }
+.prov > .hstack { flex: 0 1 auto; min-width: 0; }
 .prov b { display: block; font-size: 13.5px; } .prov small { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .panel a { color: var(--info); }
 .pill { font-size: 11px; padding: 2px 9px; border-radius: 999px; white-space: nowrap; }
@@ -975,6 +976,7 @@ html[data-mode="mobile"] .top .btn.icon { display: inline-block; }
   .rail-top { position: sticky; top: 0; z-index: 2; margin: -14px -16px 4px; padding: 12px 16px 8px; background: var(--panel); border-bottom: 1px solid var(--line-soft); }
   .rail-head { display: flex; align-items: center; justify-content: space-between; }
 }
+html[data-mode="mobile"] .rail-close { display: none; }
 .rail-top .tabs { margin-bottom: 0; }
 .unread { color: var(--accent-text); font-weight: 600; font-size: 10.5px; padding: 1px 7px; border-radius: 999px; background: var(--accent-soft); border: 1px solid rgba(var(--accent-rgb),.45); }
 html[data-mode="mobile"] .rail-quick { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }

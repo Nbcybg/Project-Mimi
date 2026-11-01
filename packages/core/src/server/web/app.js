@@ -627,7 +627,7 @@
 
   function emptyState() {
     const empty = el('div', 'welcome');
-    empty.append(el('b', '', 'Mimi'), state.agents.length ? 'เลือกแชตทางซ้าย หรือกด "+ ใหม่" เพื่อเริ่มคุย' : 'เริ่มจากเชื่อมต่อผู้ให้บริการโมเดลที่ "ตั้งค่า" แล้วสร้าง agent ตัวแรกที่แท็บ "Agent"');
+    empty.append(el('b', '', 'Mimi'), state.agents.some((agent) => agent.name !== 'overseer') ? 'เลือกแชตทางซ้าย หรือกด "+ ใหม่" เพื่อเริ่มคุย' : 'เริ่มจากเชื่อมต่อผู้ให้บริการโมเดลที่ "ตั้งค่า" แล้วสร้าง agent ตัวแรกที่แท็บ "Agent"');
     logInner.replaceChildren(empty);
     updateJump();
   }
@@ -1751,6 +1751,7 @@
     $('box').hidden = !chat || !state.latest;
     $('old-session').hidden = !chat || state.latest;
     $('new-session').hidden = !chat;
+    $('toggle-rail').hidden = !chat;
     const busyHere = Boolean(chat && state.busyChats.has(chat.id));
     $('stop').hidden = !busyHere;
     $('box').classList.toggle('busy', busyHere);
@@ -1769,9 +1770,11 @@
       $('toggle-rail').setAttribute('aria-label', t(open ? 'top.settingClose' : 'setting.title'));
       $('toggle-rail').title = t(open ? 'top.settingClose' : 'setting.title');
     } else {
-      $('toggle-rail').textContent = modeNow() === 'mobile' ? '⋯' : t('top.info');
-      $('toggle-rail').removeAttribute('aria-label');
-      $('toggle-rail').title = '';
+      const mobile = modeNow() === 'mobile';
+      $('toggle-rail').textContent = mobile ? '⋯' : t('top.info');
+      if (mobile) $('toggle-rail').setAttribute('aria-label', t('top.info'));
+      else $('toggle-rail').removeAttribute('aria-label');
+      $('toggle-rail').title = mobile ? t('top.info') : '';
     }
     $('toggle-char').textContent = modeNow() === 'mobile' ? '🧍' : t('top.character');
   }
@@ -1816,10 +1819,12 @@
     const chat = state.chat;
     const nodes = [];
 
-    // The panel's way back is the top bar (the settings button turns into a back arrow); no
-    // second fold button here.
+    // In mobile mode the way back is the top bar (the settings button turns into a back arrow).
+    // A desktop window narrow enough to float the panel covers that button, so it gets a ✕ here.
     const railHead = el('div', 'rail-head');
-    railHead.append(el('b', '', 'ตั้งค่าแชต'));
+    const railClose = button('btn ghost icon rail-close', '✕', () => setRail(false), t('top.settingClose'));
+    railClose.setAttribute('aria-label', t('top.settingClose'));
+    railHead.append(el('b', '', 'ตั้งค่าแชต'), railClose);
 
     // The chat settings are split into three pages, so each one stays short on a phone.
     const tabs = el('div', 'tabs');
@@ -2817,6 +2822,7 @@
     if (view === 'hub') renderHub();
     if (view === 'mimiamp') window.MimiHooks?.mimiamp?.render?.();
     if (view === 'settings') renderSettings();
+    if (view === 'chat' && !state.chat && !logInner.firstChild) emptyState();
     window.MimiHooks?.mimiamp?.onView?.(view);
     renderRail();
   }
@@ -2846,7 +2852,9 @@
     const head = el('div');
     const row = el('div');
     row.style.cssText = 'display:flex;gap:8px;align-items:center';
-    row.append(button('back', '‹', () => $('app').classList.add('show-side')), el('h2', '', title));
+    const back = button('back', '‹', () => $('app').classList.add('show-side'), 'กลับ');
+    back.setAttribute('aria-label', 'กลับ');
+    row.append(back, el('h2', '', title));
     head.append(row, el('p', 'lead', lead));
     return head;
   }
@@ -3755,7 +3763,7 @@
     const page = $('view-settings');
     const view = state.settings;
     if (!view) return page.replaceChildren(pageHead('ตั้งค่า', 'กำลังโหลด…'));
-    const head = pageHead('ตั้งค่า', `แบ่งเป็น 3 หน้า ตั้งค่าไว้ครั้งเดียวใช้ได้ทุกที่${state.version ? ` · Mimi v${state.version}` : ''}`);
+    const head = pageHead('ตั้งค่า', `แบ่งเป็น ${SETTINGS_TABS.length} หน้า ตั้งค่าไว้ครั้งเดียวใช้ได้ทุกที่${state.version ? ` · Mimi v${state.version}` : ''}`);
     const creditsButton = button('btn ghost', 'Credits', creditsDialog, 'ดูเครดิตของ Mimi และทีมงาน');
     creditsButton.style.marginLeft = 'auto';
     head.firstElementChild.append(creditsButton);

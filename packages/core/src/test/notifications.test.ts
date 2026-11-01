@@ -45,6 +45,17 @@ test('inbox: every notification is kept, unread counted, read marks stick', () =
   assert.equal(notifications.unread(), 0);
 });
 
+test('inbox: opening a chat reads the notifications of that chat only', () => {
+  const { notifications } = center({});
+  notifications.add({ kind: 'message', title: 'Mimi', body: 'ตอบแล้ว', chatId: 4 });
+  notifications.add({ kind: 'approval', title: 'ขออนุญาต', body: 'รันคำสั่ง', chatId: 4 });
+  notifications.add({ kind: 'message', title: 'Kai', body: 'อีกแชต', chatId: 7 });
+  assert.equal(notifications.markChatRead(4), 2);
+  assert.equal(notifications.markChatRead(4), 0);
+  assert.deepEqual(notifications.list().items.map((item) => [item.chatId, item.read]), [[7, false], [4, true], [4, true]]);
+  assert.equal(notifications.unread(), 1);
+});
+
 test('push: important kinds go to every device, dead ones are dropped, info stays in the inbox', async () => {
   const { notifications, sent } = center({ 'https://push.example.com/gone': 410, 'https://push.example.com/flaky': 0 });
   assert.throws(() => notifications.subscribe({ endpoint: 'http://insecure.example.com/x', p256dh: 'a', auth: 'b' }, 'x'), /https/);

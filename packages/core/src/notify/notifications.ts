@@ -142,6 +142,13 @@ export class NotificationCenter {
     this.db.transaction(() => ids.forEach((id) => update.run(now, id)))();
   }
 
+  /** Marks everything about one chat read (the user is looking at it); returns how many changed. */
+  markChatRead(chatId: number): number {
+    return Number(
+      this.db.prepare('UPDATE notifications SET read_at = ? WHERE chat_id = ? AND read_at IS NULL').run(new Date().toISOString(), chatId).changes,
+    );
+  }
+
   /** The public key a browser subscribes with. */
   publicKey(): string {
     return this.deps.vapid().publicKey;

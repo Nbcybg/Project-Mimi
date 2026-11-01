@@ -1024,12 +1024,18 @@ export async function startServer(
       case 'ping':
         reply({ type: 'pong' });
         break;
-      case 'presence':
-        presence.set(socket, {
+      case 'presence': {
+        const seen = {
           chatId: typeof message.chatId === 'number' && Number.isInteger(message.chatId) ? message.chatId : null,
           visible: message.visible === true,
-        });
+        };
+        presence.set(socket, seen);
+        // Reading a chat reads its notifications too, or the bell keeps counting replies already seen.
+        if (seen.visible && seen.chatId !== null && core.notifications.markChatRead(seen.chatId) > 0) {
+          broadcast({ type: 'notifications', ...core.notifications.list() });
+        }
         break;
+      }
       case 'send': {
         const text = typeof message.text === 'string' ? message.text.trim() : '';
         if (!text) return;

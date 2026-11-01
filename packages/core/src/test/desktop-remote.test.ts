@@ -111,9 +111,16 @@ test('sign-out wipe: the token file and the temporary cache go, the settings sta
   assert.equal(fs.existsSync(where.config), true);
 
   fs.mkdirSync(path.join(where.chromium, 'GPUCache'), { recursive: true });
+  fs.mkdirSync(path.join(where.chromium, 'Partitions', 'mimi-workspace', 'Network'), { recursive: true });
   for (const name of ['SingletonLock', 'lockfile', 'Local State', 'Network Persistent State']) fs.writeFileSync(path.join(where.chromium, name), 'x');
   lib.emptyFolder(where.chromium, lib.chromiumKeeps);
-  assert.deepEqual(fs.readdirSync(where.chromium).sort(), ['Local State', 'SingletonLock', 'lockfile'], 'Chromium keeps its lock (Windows: lockfile) and the key session.bin is sealed with');
+  assert.deepEqual(
+    fs.readdirSync(where.chromium).sort(),
+    ['Local State', 'Partitions', 'SingletonLock', 'lockfile'],
+    'Chromium keeps its lock (Windows: lockfile), the key session.bin is sealed with, and the Workspace browser sign-ins',
+  );
+  lib.wipeSession(where);
+  assert.equal(fs.existsSync(path.join(where.chromium, 'Partitions')), false, 'signing out signs the Workspace browser out too');
   assert.equal(lib.wsUrl('https://mimi.example.com'), 'wss://mimi.example.com/ws');
   assert.equal(lib.wsUrl('http://localhost:8787'), 'ws://localhost:8787/ws');
 });

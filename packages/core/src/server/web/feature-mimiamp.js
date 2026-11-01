@@ -510,7 +510,11 @@
     body.append(lcd, seekRow, controls, playlist, foot);
     win.append(titlebar, body);
     shell.append(win);
-    page.replaceChildren(shell);
+    // Narrow screens hide the side nav: the same "‹" as the other pages leads back to it.
+    const back = M().button('back', '‹', () => document.getElementById('app').classList.add('show-side'), 'กลับ');
+    back.type = 'button';
+    back.setAttribute('aria-label', 'กลับ');
+    page.replaceChildren(back, shell);
 
     ui = {
       mtext,

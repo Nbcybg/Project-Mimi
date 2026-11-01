@@ -125,10 +125,21 @@ function wsUrl(server) {
  * What stays in Chromium's folder when it is emptied: its lock while it runs (Singleton* on
  * macOS and Linux, lockfile on Windows), and "Local State", which on Windows holds the key
  * safeStorage seals session.bin with (itself sealed by DPAPI); without it the saved sign-in
- * could never be read again and every start asked for the password.
+ * could never be read again and every start asked for the password. Also "Partitions": the
+ * Workspace browser (persist:mimi-workspace), so its sites stay signed in between starts; it
+ * belongs to the session and goes with it (wipeSession, or a start with nobody signed in).
  */
 function chromiumKeeps(name) {
-  return name.startsWith('Singleton') || name === 'lockfile' || name === 'Local State';
+  return name.startsWith('Singleton') || name === 'lockfile' || name === 'Local State' || name === 'Partitions';
+}
+
+/** The Workspace browser's cookies and site data. A file still open (Windows) goes on the next start. */
+function wipeWorkspaceBrowser(where) {
+  try {
+    fs.rmSync(path.join(where.chromium, 'Partitions'), { recursive: true, force: true });
+  } catch (error) {
+    if (error.code !== 'EPERM' && error.code !== 'EBUSY') throw error;
+  }
 }
 
 /**
@@ -156,6 +167,7 @@ function emptyFolder(dir, keep = () => false) {
 function wipeSession(where) {
   fs.rmSync(where.session, { force: true });
   fs.rmSync(where.cache, { recursive: true, force: true });
+  wipeWorkspaceBrowser(where);
 }
 
 module.exports = {
@@ -169,6 +181,7 @@ module.exports = {
   normalizeServerUrl,
   readConfig,
   wipeSession,
+  wipeWorkspaceBrowser,
   writeConfig,
   wsUrl,
 };

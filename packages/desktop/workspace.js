@@ -321,10 +321,12 @@
         termIn.value = history[historyAt] || '';
         return;
       }
-      if (event.ctrlKey && event.key.toLowerCase() === 'c') {
+      // A pipe has no Ctrl+C signal: stop the running command by starting a fresh shell.
+      // With text selected in the line, Ctrl+C stays "copy".
+      if (event.ctrlKey && event.key.toLowerCase() === 'c' && termIn.selectionStart === termIn.selectionEnd) {
         event.preventDefault();
-        api.terminalInput('\x03');
         appendTerminal('^C\n');
+        void startTerminal();
       }
     });
   }

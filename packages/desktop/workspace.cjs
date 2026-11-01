@@ -81,10 +81,24 @@ function stopTerminal() {
     // already gone
   }
   try {
-    child.kill('SIGTERM');
+    // No pty: a command the shell started (ping -t, a dev server) is its own process, so the
+    // whole tree goes, or it would keep running after "Restart".
+    if (process.platform === 'win32' && child.pid) spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }).on('error', () => {});
+    else child.kill('SIGTERM');
   } catch {
     // already gone
   }
+}
+
+/**
+ * One typed line for the shell. PowerShell reads its piped stdin in the OEM code page, so a
+ * line with Thai (or any non-ASCII) text goes as UTF-8 base64 and runs in the same scope.
+ */
+function shellLine(text) {
+  const line = String(text ?? '').replace(/\r?\n$/, '');
+  if (process.platform !== 'win32' || !/[^\x00-\x7f]/.test(line)) return `${line}\n`;
+  const encoded = Buffer.from(line, 'utf8').toString('base64');
+  return `Invoke-Expression ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}')))\n`;
 }
 
 function startTerminal(cwd) {
@@ -103,9 +117,14 @@ function startTerminal(cwd) {
   child.stderr.on('data', push);
   child.on('error', (error) => send('workspace:terminal-data', `\r\n${error.message}\r\n`));
   child.on('exit', (code) => {
-    if (terminal === child) terminal = null;
+    // A shell that was stopped or replaced (Restart, Ctrl+C, another folder) is not news:
+    // its late exit would mark the new one as "exited".
+    if (terminal !== child) return;
+    terminal = null;
     send('workspace:terminal-exit', code ?? 0);
   });
+  // Output in UTF-8 too, or Thai file names come out as "???".
+  if (process.platform === 'win32') child.stdin.write('[Console]::OutputEncoding=[Text.Encoding]::UTF8;$OutputEncoding=[Text.Encoding]::UTF8\n');
   return { cwd: workdir };
 }
 
@@ -148,6 +167,9 @@ function createWindow(options = {}) {
   win.once('ready-to-show', () => win.show());
   win.webContents.on('did-attach-webview', (_event, guest) => {
     guest.setUserAgent(userAgent());
+    // Chromium writes cookies to disk in batches; a sign-in must survive the app being ended
+    // abruptly (shutdown, update, crash), so each loaded page writes them out.
+    guest.on('did-finish-load', () => void guest.session.cookies.flushStore().catch(() => {}));
     guest.setWindowOpenHandler(({ url }) => {
       if (/^https?:/i.test(url)) send('workspace:open-url', url);
       return { action: 'deny' };
@@ -194,7 +216,7 @@ function wire() {
   ipcMain.on('workspace:terminal-input', (event, text) => {
     if (!terminal || !win || event.sender !== win.webContents) return;
     try {
-      terminal.stdin.write(String(text ?? ''));
+      terminal.stdin.write(shellLine(text));
     } catch {
       // shell closed
     }

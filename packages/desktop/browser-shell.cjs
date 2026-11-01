@@ -105,6 +105,9 @@ function createBrowserWindow(url = START_URL, options = {}) {
   webContents.on('will-redirect', (event, target) => {
     if (!allowedUrl(target)) event.preventDefault();
   });
+  // Chromium writes cookies to disk in batches; a sign-in must survive the window being ended
+  // abruptly (the PC agent stopped, shutdown, crash), so each loaded page writes them out.
+  webContents.on('did-finish-load', () => void webContents.session.cookies.flushStore().catch(() => {}));
   webContents.on('page-title-updated', () => updateTitle(win));
   webContents.on('did-navigate', () => updateTitle(win));
   webContents.on('did-navigate-in-page', () => updateTitle(win));

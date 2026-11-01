@@ -2,10 +2,11 @@
 
 ## สถานะ
 
-- Commit ล่าสุด: `9b24e39` (docs), `0e7edf2` (Google Drive connector), `991e291` (Overseer ชั้น 1),
-  `a4b20a3` (MCP/workflow/permissions/secret/git)
-- Typecheck ผ่านทั้ง `shared`, `pc-agent`, `core`
-- Full test suite ผ่าน **684 tests**
+- Commit ล่าสุด: `5386801` (docs/HANDOFF), `9b24e39` (docs), `0e7edf2` (Google Drive connector),
+  `991e291` (Overseer ชั้น 1), `a4b20a3` (MCP/workflow/permissions/secret/git)
+- Working tree สะอาด ไม่มี commit ค้าง (branch `main` นำ `origin/main` อยู่ 11 commits ยังไม่ push)
+- ตรวจซ้ำรอบปิดงาน (2026-11-01): typecheck ผ่านทั้ง `shared`, `pc-agent`, `core`
+- Full test suite ผ่าน **684 tests** (fail 0, skipped 0)
 - UI smoke test ผ่าน 7/7 ในรอบก่อน และรอบนี้ผ่านเพิ่ม: agent permission matrix (6 rows, ค่า policy ที่บันทึกไว้แสดงถูก)
   + Settings จัดกลุ่ม always grants ตาม agent (รันผ่าน BrowserSession/Edge headless, ไม่ได้เพิ่มเป็น test ใน repo)
 - DB schema ล่าสุด: **version 23** (`023-tool-calls.sql`)
@@ -132,6 +133,13 @@
 Overseer ชั้น 1, UI smoke, Google Drive connector ทำครบ)
 สิ่งที่เหลือคือขอบเขตที่ตั้งใจบล็อกไว้เพื่อความปลอดภัย
 
+### สิ่งที่ต้องตัดสินใจก่อนเริ่มงานใหม่
+
+- branch `main` นำ `origin/main` อยู่ 11 commits และยังไม่ push — push เมื่อผู้ใช้สั่งเท่านั้น
+- DB schema เป็น 23; เทสต์บางตัวผูก version นี้ ถ้าจะเพิ่ม migration ต้องอัปเดตเทสต์ด้วย
+- UI smoke test (permission matrix / Settings grouped grants) รันมือผ่าน headless browser
+  ไม่ได้อยู่ในชุดเทสต์อัตโนมัติ จึงไม่ถูกรันซ้ำโดย `npm test`
+
 ### ยังไม่แตะ (Layer 2 เดิม)
 
 - ธนาคาร / statement / จ่ายเงิน
@@ -162,7 +170,8 @@ npm test
 
 1. อ่าน `HANDOFF.md` นี้
 2. `git status` และ `git diff --stat`
-3. งานในลิสต์เดิม, Overseer ชั้น 1, UI smoke และ Drive connector ทำครบแล้ว (684 tests);
+3. งานในลิสต์เดิม, Overseer ชั้น 1, UI smoke และ Drive connector ทำครบแล้ว (684 tests, ตรวจซ้ำรอบปิดงานแล้ว);
    ที่เหลือคือ Layer 2 ที่ตั้งใจบล็อก (ธนาคาร/รหัสผ่าน/ติดตั้งแอป/แก้ไฟล์เดิมในที่)
 4. ก่อนแก้ อย่าลืมว่า DB schema เป็น 23 และเทสต์บางตัวผูก version นี้
 5. commit ได้ตามที่ผู้ใช้สั่ง; ตรวจ `git log --oneline` ก่อนเริ่มงานใหม่
+6. 11 commits บน `main` ยังไม่ push — รอคำสั่งผู้ใช้ก่อน

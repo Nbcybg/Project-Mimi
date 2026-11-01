@@ -31,6 +31,7 @@ const WEB_FILES: Record<string, [string, string]> = {
   '/feature-accounts.js': ['feature-accounts.js', 'text/javascript; charset=utf-8'],
   '/feature-providers.js': ['feature-providers.js', 'text/javascript; charset=utf-8'],
   '/feature-overseer.js': ['feature-overseer.js', 'text/javascript; charset=utf-8'],
+  '/feature-setup.js': ['feature-setup.js', 'text/javascript; charset=utf-8'],
   '/feature-triggers.js': ['feature-triggers.js', 'text/javascript; charset=utf-8'],
   '/feature-workflows.js': ['feature-workflows.js', 'text/javascript; charset=utf-8'],
   '/feature-secrets.js': ['feature-secrets.js', 'text/javascript; charset=utf-8'],

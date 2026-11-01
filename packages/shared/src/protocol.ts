@@ -316,6 +316,21 @@ export interface OverseerView {
 }
 
 /** An agent as the agent editor shows and saves it. */
+/** A starter agent the first-run wizard offers; saved as an ordinary agent. */
+export interface AgentPresetView {
+  id: string;
+  /** Suggested agent id (lower case); the wizard may change it. */
+  name: string;
+  displayName: string;
+  /** Short Thai label for the picker. */
+  label: string;
+  description: string;
+  /** What the agent can and cannot do, for the picker. */
+  summary: string;
+  systemPrompt: string;
+  tools: string[];
+}
+
 export interface AgentView {
   name: string;
   /** Name shown in chats; empty means the id is shown. */
@@ -654,6 +669,8 @@ export type ClientMessage =
   /** Removes an imported connector and its tools (native connectors cannot be removed). */
   | { type: 'connector-import-delete'; key: string; reqId?: number }
   | { type: 'agents-list' }
+  /** Starter agents for the first-run wizard; answered with `agent-presets`. */
+  | { type: 'agent-presets' }
   /** The built-in AI Overseer; created on first use. */
   | { type: 'overseer-get' }
   /** Chooses the model the Overseer runs on (its provider must be connected first). */
@@ -856,6 +873,7 @@ export type ServerMessage =
   | { type: 'connector-auth-url'; connectionId: string; url: string }
   /** Result of testing one operation with stored credentials; never includes the credential. */
   | { type: 'connector-test-result'; ok: boolean; message: string }
+  | { type: 'agent-presets'; presets: AgentPresetView[] }
   /** What an OpenAPI import found or stored; `errors` lists why it was refused (then nothing was saved). */
   | {
       type: 'connector-import-report';

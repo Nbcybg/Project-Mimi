@@ -11,6 +11,7 @@
 
   /** The same form is embedded in Settings and in the Overseer setup screen. */
   function rerender() {
+    if (window.MimiHooks?.setup?.isOpen?.()) return window.MimiHooks.setup.render();
     if (M().state.view === 'overseer' && window.MimiHooks?.overseer?.render) window.MimiHooks.overseer.render();
     else M().renderSettings();
   }

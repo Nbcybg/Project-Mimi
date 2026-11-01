@@ -78,6 +78,7 @@ import { createChatApi } from './chat-api.ts';
 import { handleHttpApi, type WebhookReply } from './http-api.ts';
 import { PcHub } from './pc-hub.ts';
 import { WsBroker } from './ws-broker.ts';
+import { agentPresets } from '../agents/presets.ts';
 
 export interface MimiServer {
   core: Core;
@@ -1793,6 +1794,9 @@ export async function startServer(
         broadcast({ type: 'workflows', workflows: core.workflows.list(), pool: core.triggerPool.list(), nodeTypes: nodeTypesView(), customNodes: core.customNodes.names() });
         break;
       }
+      case 'agent-presets':
+        reply({ type: 'agent-presets', presets: agentPresets((name) => Boolean(core.tools.get(name))) });
+        break;
       case 'agent-save': {
         const saved = saveAgentView(message.agent, message.renameFrom);
         broadcast(agentsMessage(saved));

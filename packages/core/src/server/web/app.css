@@ -1477,3 +1477,14 @@ html[data-mode="mobile"] .solo .typing-chip.bottom { margin: 0 auto 6px; }
   .amp-vis { display: none; }
   .amp-pip.playing .amp-pip-eq i { animation: none; }
 }
+
+/* First-run wizard */
+.dialog.setup { width: min(760px, 100%); max-height: 86vh; overflow-y: auto; }
+.setup-steps { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
+.setup-steps .chip { cursor: pointer; }
+.setup-steps .chip.done::after { content: '✓'; }
+.setup-body { display: grid; gap: 10px; min-height: 180px; }
+.setup-presets { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; }
+.setup-preset { display: grid; gap: 4px; text-align: left; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: transparent; color: var(--ink-2); cursor: pointer; }
+.setup-preset.on { border-color: rgba(var(--accent-rgb),.6); background: var(--accent-soft); color: var(--accent-text); }
+.setup-preset small { line-height: 1.4; }

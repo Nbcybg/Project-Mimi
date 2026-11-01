@@ -29,7 +29,7 @@
   document.documentElement.dataset.mode = modeNow();
   // Screen settings the user's devices share through the server (character position, chat
   // over the character, sounds, read-aloud, language); the rest stays on this device.
-  const SYNCED_KEYS = new Set(['mimi.chatSound', 'mimi.notifySound', 'mimi.autoSpeak', 'mimi.lang', 'mimi.theme', 'mimi.textSize']);
+  const SYNCED_KEYS = new Set(['mimi.setupDone', 'mimi.chatSound', 'mimi.notifySound', 'mimi.autoSpeak', 'mimi.lang', 'mimi.theme', 'mimi.textSize']);
   // Per-chat screen settings (chat setting → หน้าตา) travel with the account, so a phone and a
   // PC opening the same chat look the same. The pattern also covers pictures/backgrounds.
   const CHAT_PREF_KEY = /^mimi\.chat\.-?\d+\.(textSize|bubbles|character|theme|background|backgroundRules)$/;
@@ -3766,7 +3766,8 @@
     const head = pageHead('ตั้งค่า', `แบ่งเป็น ${SETTINGS_TABS.length} หน้า ตั้งค่าไว้ครั้งเดียวใช้ได้ทุกที่${state.version ? ` · Mimi v${state.version}` : ''}`);
     const creditsButton = button('btn ghost', 'Credits', creditsDialog, 'ดูเครดิตของ Mimi และทีมงาน');
     creditsButton.style.marginLeft = 'auto';
-    head.firstElementChild.append(creditsButton);
+    const setupButton = button('btn ghost', 'ตัวช่วยตั้งค่า', () => window.MimiHooks?.setup?.open?.(), 'เปิดตัวช่วยตั้งค่าเริ่มต้นอีกครั้ง');
+    head.firstElementChild.append(creditsButton, setupButton);
     const nodes = [head];
     if (!view.ready) {
       nodes.push(
@@ -4197,6 +4198,8 @@
     const firstRun = !onboarded;
     onboarded = true;
     const normalAgents = state.agents.filter((agent) => agent.name !== 'overseer');
+    // A first start that cannot chat yet gets the setup wizard on top of the screen below.
+    if (firstRun) window.MimiHooks?.setup?.maybeOpen?.();
     // Fresh start with nothing to talk to: lead through the setup. With chats and agents on
     // hand, the app opens straight into the last chat instead of nagging about setup.
     if (firstRun && normalAgents.length === 0) {
@@ -4462,6 +4465,10 @@
       }
       case 'pc-status':
         setPc(message.online, message.name);
+        window.MimiHooks?.setup?.refresh?.();
+        break;
+      case 'agent-presets':
+        window.MimiHooks?.setup?.onPresets?.(message);
         break;
       case 'status': {
         const agent = agentOf(message.agent);
@@ -4477,6 +4484,7 @@
         state.settings = message.settings;
         if (window.MimiHooks && window.MimiHooks.providers) window.MimiHooks.providers.onMessage(message);
         if (window.MimiHooks?.overseer) window.MimiHooks.overseer.onMessage?.(message);
+        window.MimiHooks?.setup?.refresh?.();
         if (state.view === 'overseer' && ((!ui.providerDirty && !ui.overseerDirty) || message.saved)) {
           window.MimiHooks?.overseer?.render?.();
           if (message.saved) saved();
@@ -4508,6 +4516,7 @@
         state.tools = message.tools;
         state.defaultAgent = message.defaultAgent;
         state.gotAgents = true;
+        window.MimiHooks?.setup?.refresh?.();
         if (message.saved) {
           ui.agent = message.saved;
           ui.agentDirty = false;

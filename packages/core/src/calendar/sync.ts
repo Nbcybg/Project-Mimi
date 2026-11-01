@@ -134,7 +134,7 @@ const newToken = () => randomBytes(24).toString('base64url');
 export class CalendarSync {
   private readonly deps: CalendarSyncDeps;
   private readonly file: string;
-  private readonly pushBase: string | null;
+  private pushBase: string | null;
   private readonly enabled: boolean;
   private data: CalendarSyncFile;
   private timer: NodeJS.Timeout | null = null;
@@ -201,6 +201,17 @@ export class CalendarSync {
 
   get isEnabled(): boolean {
     return this.enabled;
+  }
+
+  /**
+   * A public address that appeared or went away while running (the quick tunnel).
+   * Subscriptions are made again for the new address on the next pass, which starts now.
+   */
+  setPublicUrl(url: string | null): void {
+    const next = url?.trim().replace(/\/+$/, '') || null;
+    if (next === this.pushBase) return;
+    this.pushBase = next;
+    void this.tick().catch(() => {});
   }
 
   start(intervalMs: number): void {

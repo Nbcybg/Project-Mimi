@@ -228,6 +228,8 @@ export interface Core {
   mailWatch: MailWatch;
   /** Google / Outlook calendar push subscriptions with a 15-minute delta poll. */
   calendarSync: CalendarSync;
+  /** The quick tunnel's address came or went; calendar push follows it unless an address is configured. */
+  setTunnelUrl(url: string | null): void;
   /** The user's profile fields; each agent sees the ones shared with it. */
   profile: UserProfileStore;
   /** Knowledge bases searched by agents (knowledge_search) and workflows. */
@@ -733,6 +735,8 @@ export async function createCore(
       return undefined;
     }
   })();
+  /** The calendar's own public address wins over a quick tunnel. */
+  const calendarFixed = calendarPublic !== undefined;
   const calendarSync = new CalendarSync({
     dir: config.dataDir,
     accounts: oauth,
@@ -1956,6 +1960,9 @@ export async function createCore(
     scheduler,
     mailWatch,
     calendarSync,
+    setTunnelUrl: (url) => {
+      if (!calendarFixed) calendarSync.setPublicUrl(url);
+    },
     deps,
     listeners,
     runTurn,

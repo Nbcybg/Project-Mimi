@@ -465,7 +465,7 @@ html[data-mode="mobile"] #input { font-size: max(16px, var(--chat-fs)); }
 .prov b { display: block; font-size: 13.5px; } .prov small { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .panel a { color: var(--info); }
 .pill { font-size: 11px; padding: 2px 9px; border-radius: 999px; white-space: nowrap; }
-.pill.ok { background: rgba(116,201,145,.14); color: var(--ok); } .pill.todo { background: rgba(223,178,90,.14); color: var(--warn); }
+.pill.ok { background: rgba(116,201,145,.14); color: var(--ok); } .pill.todo { background: rgba(223,178,90,.14); color: var(--warn); } .pill.bad { background: rgba(224,108,117,.14); color: var(--bad); }
 .pill.warn { background: rgba(125,179,232,.14); color: var(--info); }
 .stackv { display: flex; flex-direction: column; gap: 14px; }
 

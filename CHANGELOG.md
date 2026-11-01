@@ -8,6 +8,12 @@
   API key, plus the default chat model), a starter agent (secretary, researcher, PC helper or coder, from the new
   `agent-presets` message), allowed folders, the PC agent and a test chat. Finishing or skipping is remembered across
   devices; Settings has "ตัวช่วยตั้งค่า" to open it again. Presets that read the web or mail have no shell tool.
+- Tunnel: Settings > แอปและระบบ can open a Cloudflare quick tunnel (`cloudflared tunnel --url`, found on PATH, the
+  usual install folders or `MIMI_CLOUDFLARED`) and shows its https://….trycloudflare.com address. Webhook URLs in the
+  app switch to it and calendar push subscribes to it when no calendar address is configured. It is refused on a
+  core that already has a public address or a `MIMI_TOKEN` shorter than 16 characters, ChatGPT plan sign-in is
+  refused while it runs, the sign-in limiter counts tunnel callers by `cf-connecting-ip`, and cloudflared gets no
+  secrets in its environment.
 - Accounts gateway: sessions now also end `MIMI_SESSION_MAX_DAYS` (default 90) after sign-in, however often they are
   used. Each account can turn on two-step sign-in (TOTP, any authenticator app) in Settings with its password and a
   first code; sign-in then asks for a code, each code works once, wrong codes count toward the sign-in limits, and

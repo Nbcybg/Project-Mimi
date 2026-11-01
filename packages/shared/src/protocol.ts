@@ -316,6 +316,19 @@ export interface OverseerView {
 }
 
 /** An agent as the agent editor shows and saves it. */
+/** The one-click Cloudflare quick tunnel of a core on a computer. */
+export interface TunnelView {
+  state: 'off' | 'starting' | 'on' | 'error' | 'missing';
+  /** The public https address while `on`; it changes every start. */
+  url?: string;
+  since?: string;
+  error?: string;
+  /** How to install cloudflared, when it is `missing`. */
+  hint?: string;
+  /** Why a tunnel cannot be used here (a hosted core already has a public address). */
+  unavailable?: string;
+}
+
 /** A starter agent the first-run wizard offers; saved as an ordinary agent. */
 export interface AgentPresetView {
   id: string;
@@ -553,6 +566,8 @@ export interface SettingsView {
   compactAt: number;
   /** False until an agent exists and its chat model's provider is connected. */
   ready: boolean;
+  /** The Cloudflare quick tunnel (computer only). */
+  tunnel?: TunnelView;
 }
 
 /**
@@ -669,6 +684,9 @@ export type ClientMessage =
   /** Removes an imported connector and its tools (native connectors cannot be removed). */
   | { type: 'connector-import-delete'; key: string; reqId?: number }
   | { type: 'agents-list' }
+  /** Starts or stops the Cloudflare quick tunnel; the state comes back in `settings`. */
+  | { type: 'tunnel-start' }
+  | { type: 'tunnel-stop' }
   /** Starter agents for the first-run wizard; answered with `agent-presets`. */
   | { type: 'agent-presets' }
   /** The built-in AI Overseer; created on first use. */

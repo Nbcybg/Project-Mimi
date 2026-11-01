@@ -3651,6 +3651,40 @@
     return panel;
   }
 
+  /** Cloudflare quick tunnel: a public https address for webhooks and calendar push on a computer. */
+  function tunnelPanel() {
+    const view = (state.settings && state.settings.tunnel) || { state: 'off' };
+    const panel = el('div', 'panel form');
+    panel.append(
+      el('h3', '', 'เข้าจากอินเทอร์เน็ต (Cloudflare Tunnel)'),
+      el(
+        'p',
+        'hint',
+        'เปิดที่อยู่ https ชั่วคราวผ่าน Cloudflare ให้ webhook และ Google/Outlook Calendar ส่งเข้ามาที่ Mimi บนเครื่องนี้ได้ โดยไม่ต้องเปิดพอร์ตบนเราเตอร์ · ที่อยู่เปลี่ยนทุกครั้งที่เปิดใหม่ · ใครรู้ที่อยู่จะเห็นหน้าเข้าสู่ระบบ (ยังต้องใช้รหัสผ่าน) · ระหว่างเปิด เชื่อม ChatGPT plan ไม่ได้',
+      ),
+    );
+    if (view.unavailable) {
+      panel.append(el('p', 'hint', view.unavailable));
+      return panel;
+    }
+    const pill = { off: ['todo', 'ปิดอยู่'], starting: ['todo', 'กำลังเปิด…'], on: ['ok', 'เปิดอยู่'], error: ['bad', 'เปิดไม่สำเร็จ'], missing: ['todo', 'ยังไม่ได้ติดตั้ง cloudflared'] }[view.state] || ['todo', view.state];
+    panel.append(el('p', `pill ${pill[0]}`, pill[1]));
+    if (view.state === 'on' && view.url) {
+      const row = el('div', 'hstack');
+      row.append(el('code', 'mono', view.url), button('btn ghost', 'คัดลอก', () => navigator.clipboard?.writeText(view.url).then(() => toast('คัดลอกแล้ว'))));
+      panel.append(row, el('p', 'hint', 'URL ของ webhook ในหน้า Trigger/Workflow ใช้ที่อยู่นี้แล้ว · Calendar จะสมัครรับการแจ้งเตือนใหม่ให้เอง'));
+    }
+    if (view.state === 'error' && view.error) panel.append(el('p', 'hint badtxt', view.error));
+    if (view.state === 'missing') {
+      panel.append(el('p', 'hint', 'ติดตั้ง cloudflared ก่อน แล้วกดเปิดอีกครั้ง (หรือชี้ตำแหน่งด้วย MIMI_CLOUDFLARED):'), el('code', 'mono', view.hint || 'cloudflared'));
+    }
+    const actions = el('div', 'hstack');
+    if (view.state === 'on' || view.state === 'starting') actions.append(button('btn', 'ปิด tunnel', () => send({ type: 'tunnel-stop' })));
+    else actions.append(button('btn pri', 'เปิด tunnel', () => send({ type: 'tunnel-start' })));
+    panel.append(actions);
+    return panel;
+  }
+
   const SETTINGS_TABS = [
     ['profile', 'โปรไฟล์ของฉัน', 'ข้อมูลของคุณ งบประมาณ การแจ้งเตือน และการสำรองข้อมูล'],
     ['appearance', 'หน้าตา', 'ธีมสว่าง/มืดของทั้งแอป'],
@@ -3918,6 +3952,7 @@
       stack.append(providers);
 
       stack.append(storagePanel());
+      stack.append(tunnelPanel());
       stack.append(browserPanel());
       stack.append(workspacePanel());
 
@@ -4731,7 +4766,8 @@
   window.Mimi = {
     state,
     /** Full URL of a core webhook path (`/api/...`); behind the accounts gateway it carries `/h/<id>`. */
-    webhookUrl: (path) => `${location.origin}${accountsMode ? webhookBase() : ''}${path}`,
+    // While the quick tunnel is up, outside services must call its address, not this page's.
+    webhookUrl: (path) => `${accountsMode ? location.origin + webhookBase() : state.settings?.tunnel?.url || location.origin}${path}`,
     ui,
     send,
     api,

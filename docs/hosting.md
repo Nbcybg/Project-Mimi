@@ -47,6 +47,21 @@ webhook จากบริการภายนอกจะเข้าไม่
 เช่นเดียวกับ calendar push ของ Google/Outlook: ถ้าไม่เปิด public HTTPS ให้ตั้ง `MIMI_CALENDAR_PUBLIC_URL=https://<ชื่อเครื่อง>.<tailnet>.ts.net`
 ผ่าน `tailscale funnel` หรือปล่อยว่างเพื่อใช้ delta poll ทุก 15 นาที
 
+## B0. เครื่องที่บ้าน + Quick Tunnel ในแอป (กดปุ่มเดียว)
+
+สำหรับลอง webhook / calendar push โดยไม่ต้องมีโดเมน:
+
+1. ติดตั้ง `cloudflared` (Windows: `winget install --id Cloudflare.cloudflared`, macOS: `brew install cloudflared`)
+   หรือบอกตำแหน่งด้วย `MIMI_CLOUDFLARED=<path>`
+2. ตั้งค่า → แอปและระบบ → "เข้าจากอินเทอร์เน็ต (Cloudflare Tunnel)" → เปิด tunnel
+3. Mimi ได้ที่อยู่ `https://<สุ่ม>.trycloudflare.com` แสดงในหน้านั้น URL ของ webhook ในหน้า Trigger/Workflow
+   เปลี่ยนไปใช้ที่อยู่นี้เอง และ calendar push จะสมัครใหม่ให้ (ถ้าไม่ได้ตั้ง `MIMI_CALENDAR_PUBLIC_URL` ไว้)
+
+ข้อจำกัด: ที่อยู่เปลี่ยนทุกครั้งที่เปิดใหม่ (ต้องแก้ URL ที่ตั้งไว้ในบริการภายนอก), Cloudflare ไม่รับประกันความพร้อมของ
+quick tunnel, ไม่มี Cloudflare Access กั้นหน้า (ยังต้องใช้รหัสผ่านของ Mimi), ใช้ไม่ได้เมื่อ core มี `MIMI_PUBLIC_URL`
+อยู่แล้ว และต้องมี `MIMI_TOKEN` ยาวอย่างน้อย 16 ตัว ระหว่างเปิด tunnel เชื่อม ChatGPT plan ไม่ได้ · limiter ของการใส่รหัสผิด
+นับแยกตามผู้เรียกจริง (`cf-connecting-ip`) · ใช้ถาวรให้ทำแบบ B
+
 ## B. เครื่องที่บ้าน + Cloudflare Tunnel
 
 1. มีโดเมนใน Cloudflare แล้วติดตั้ง `cloudflared`

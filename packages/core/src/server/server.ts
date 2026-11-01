@@ -79,6 +79,7 @@ import { handleHttpApi, type WebhookReply } from './http-api.ts';
 import { PcHub } from './pc-hub.ts';
 import { WsBroker } from './ws-broker.ts';
 import { agentPresets } from '../agents/presets.ts';
+import { QuickTunnel } from '../app/tunnel.ts';
 
 export interface MimiServer {
   core: Core;
@@ -406,6 +407,22 @@ export async function startServer(
   const oauthReceiver = hostedCallbacks?.receiver;
   core.setOAuthReceiver(oauthReceiver);
 
+  // One-click public address for a core on a computer (webhooks, calendar push). A hosted
+  // core already has one; a short password would be the only thing between it and the internet.
+  let listenPort = config.port;
+  const tunnelUnavailable = publicUrl
+    ? 'Mimi นี้มีที่อยู่สาธารณะอยู่แล้ว (MIMI_PUBLIC_URL / โฮสต์) ไม่ต้องใช้ tunnel'
+    : config.token.length < 16
+      ? 'รหัสผ่านของ Mimi (MIMI_TOKEN) สั้นเกินไปสำหรับเปิดให้เข้าจากอินเทอร์เน็ต: ตั้งให้ยาวอย่างน้อย 16 ตัวก่อน'
+      : undefined;
+  const tunnel = new QuickTunnel({
+    port: () => listenPort,
+    onChange: (view) => {
+      core.setTunnelUrl(view.state === 'on' ? (view.url ?? null) : null);
+      broadcast({ type: 'settings', settings: settingsView() });
+    },
+  });
+
   /** What the settings screen shows. Keys themselves are never sent back to a client. */
   const settingsView = (): SettingsView => {    const defaultAgent = core.defaultAgentName();
     const available = core.registry.available();
@@ -491,6 +508,7 @@ export async function startServer(
       sessionIdleMinutes: appSettings.session.idleMinutes ?? core.settings.session.idle_minutes,
       sessionMaxTokens: appSettings.session.maxTokens ?? core.settings.session.max_tokens,
       compactAt: core.settings.compaction.threshold,
+      tunnel: tunnelUnavailable ? { state: 'off', unavailable: tunnelUnavailable } : tunnel.status(),
       ready: (() => {
         try {
           return defaultAgent !== null && usable(core.models.resolve('chat', core.agents.get(defaultAgent).models));
@@ -1159,10 +1177,22 @@ export async function startServer(
         saveSettings(message);
         reply({ type: 'settings', settings: settingsView(), saved: true });
         break;
+      case 'tunnel-start':
+        if (tunnelUnavailable) throw new Error(tunnelUnavailable);
+        tunnel.start();
+        break;
+      case 'tunnel-stop':
+        tunnel.stop();
+        break;
       case 'chatgpt-plan-connect':
         // OpenAI's program covers apps run locally, not a Mimi served from a public address.
-        if (publicUrl) {
-          reply({ type: 'error', message: 'ChatGPT plan sign-in works only when Mimi runs on your own computer, not on a hosted server.' });
+        if (publicUrl || tunnel.url()) {
+          reply({
+            type: 'error',
+            message: publicUrl
+              ? 'ChatGPT plan sign-in works only when Mimi runs on your own computer, not on a hosted server.'
+              : 'ChatGPT plan sign-in works only while Mimi is not open to the internet: stop the tunnel first.',
+          });
           break;
         }
         core.chatgptPlan.start().then(
@@ -1885,7 +1915,17 @@ export async function startServer(
 
   // Wrong tokens from one address are counted; too many and it is refused for a while.
   const limiter = new AuthLimiter();
-  const addressOf = (request: http.IncomingMessage) => clientAddress(request, config.clientIpHeader);
+  // Through the quick tunnel every caller arrives from cloudflared on this machine, so the
+  // limiter would treat the whole internet (and the user here) as one address. Cloudflare's
+  // header names the real caller; it is trusted only on loopback while the tunnel runs.
+  const addressOf = (request: http.IncomingMessage) => {
+    const cloudflare = request.headers['cf-connecting-ip'];
+    const loopback = /^(127\.|::1$|::ffff:127\.)/.test(request.socket.remoteAddress ?? '');
+    if (!config.clientIpHeader && tunnel.url() && loopback && typeof cloudflare === 'string' && cloudflare.trim()) {
+      return `tunnel:${cloudflare.trim().slice(0, 64)}`;
+    }
+    return clientAddress(request, config.clientIpHeader);
+  };
   const httpApi = {
     attachments: core.attachments,
     images,
@@ -2167,6 +2207,7 @@ export async function startServer(
     server.once('error', reject);
     server.listen(config.port, config.host, resolve);
   });
+  listenPort = (server.address() as AddressInfo).port;
   core.scheduler.start();
   // Push mail: Gmail / Outlook / IMAP / POP3 watched for new unread messages.
   core.mailWatch.start(Math.max(5, Number(process.env.MIMI_MAIL_WATCH_MINUTES ?? 10)) * 60_000);
@@ -2179,6 +2220,7 @@ export async function startServer(
     port: (server.address() as AddressInfo).port,
     someoneLooking: () => [...presence.values()].some((seen) => seen.visible),
     async close() {
+      tunnel.stop();
       clearInterval(heartbeat);
       clearInterval(backupTimer);
       clearTimeout(firstBackup);

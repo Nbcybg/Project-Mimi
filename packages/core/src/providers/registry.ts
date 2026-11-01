@@ -6,6 +6,7 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { ReasoningEffort } from '@mimi/shared';
 import type { EmbeddingModel, LanguageModel, SystemModelMessage } from 'ai';
 import type { AuthStore } from './auth-store.ts';
+import { isClaudeSubscription } from './claude-subscription.ts';
 import type { ModelCatalog } from './catalog.ts';
 import type { ModelDef, ProviderDef, Settings } from './settings.ts';
 
@@ -326,6 +327,10 @@ export class ProviderRegistry {
     }
 
     let factory = BUNDLED[npm];
+    if (!factory && isClaudeSubscription(npm)) {
+      // Loaded on demand: the Claude Code SDK is heavy and only this provider needs it.
+      factory = (await import('ai-sdk-provider-claude-code')).createClaudeCode as unknown as ProviderFactory;
+    }
     if (!factory) {
       let module: Record<string, unknown>;
       try {

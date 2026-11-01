@@ -56,6 +56,12 @@ import { startGoogleOAuth } from '../google/oauth-flow.ts';
 import { HostedCallbacks, publicBaseUrl } from '../oauth/callback.ts';
 import { serveCalendarPush } from '../calendar/push.ts';
 import { serveAssetLinks } from './assetlinks.ts';
+import {
+  checkClaudeLogin,
+  CLAUDE_SUBSCRIPTION_ID,
+  CLAUDE_SUBSCRIPTION_MODELS,
+  CLAUDE_SUBSCRIPTION_NPM,
+} from '../providers/claude-subscription.ts';
 import { type DiscoveredModel, discoverModels } from '../providers/discovery.ts';
 import {
   CUSTOM_PROVIDER_NPM,
@@ -518,6 +524,16 @@ export async function startServer(
     const id = String(request.id ?? '').trim().toLowerCase();
     if (!/^[a-z0-9][a-z0-9._-]*$/.test(id)) {
       throw new Error('Provider id: use lowercase letters, digits, "-", "_" or ".", e.g. "opencode" or "my-server".');
+    }
+    if (id === CLAUDE_SUBSCRIPTION_ID) {
+      // Uses the Claude Code login on this machine: no key and no URL to store.
+      await checkClaudeLogin();
+      core.providers.save(id, {
+        def: { name: 'Claude (plan)', npm: CLAUDE_SUBSCRIPTION_NPM, models: CLAUDE_SUBSCRIPTION_MODELS },
+        models: Object.keys(CLAUDE_SUBSCRIPTION_MODELS),
+      });
+      core.registry.reset();
+      return;
     }
     let known: ResolvedProvider | null = null;
     try {

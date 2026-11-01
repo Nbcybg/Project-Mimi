@@ -144,6 +144,29 @@
     return form;
   }
 
+  /** Claude through the user's own Claude Code login (Pro/Max plan): no API key. */
+  function planBox(entries) {
+    if (entries.some((entry) => entry.id === 'claude-subscription')) return null;
+    const box = el('div', 'prov');
+    const info = el('div');
+    info.append(
+      el('b', '', 'ใช้ Claude แบบรายเดือน (Claude Code)'),
+      el(
+        'small',
+        '',
+        'ใช้บัญชี Claude Pro/Max ของคุณแทน API key · ต้องติดตั้ง Claude Code และรัน "claude auth login" ในเครื่องที่รัน Mimi ก่อน (บนเซิร์ฟเวอร์: "claude setup-token" แล้วตั้ง CLAUDE_CODE_OAUTH_TOKEN) · ใช้โควตาของแผนรายเดือนและต้องเป็นไปตามข้อกำหนดของ Anthropic · เหมาะกับบัญชีของคนเดียว ไม่ควรแชร์ให้หลายคน',
+      ),
+    );
+    box.append(
+      info,
+      button('btn pri', 'เชื่อมต่อ', () => {
+        M().toast('กำลังตรวจการล็อกอิน Claude Code…', 'claude-subscription');
+        M().send({ type: 'provider-connect', id: 'claude-subscription' });
+      }),
+    );
+    return box;
+  }
+
   function render(panel) {
     const view = M().state.settings;
     if (!view) {
@@ -153,6 +176,8 @@
     const entries = view.providers || [];
     if (entries.length === 0) panel.append(el('p', 'hint', 'ยังไม่มีผู้ให้บริการ'));
     for (const provider of entries) panel.append(row(provider, panel));
+    const plan = planBox(entries);
+    if (plan) panel.append(plan);
     const editing = editingId ? entries.find((entry) => entry.id === editingId) || null : null;
     panel.append(form(panel, view, editing));
   }

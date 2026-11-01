@@ -25,6 +25,13 @@ import type { ThreadRepo } from '../db/thread-repo.ts';
 import type { MemoryStore } from '../memory/store.ts';
 import type { TraceBudget } from '../mesh/budget.ts';
 import type { PermissionGate } from '../permissions/gate.ts';
+import {
+  type BridgedTool,
+  claudeModelWithTools,
+  EventQueue,
+  isClaudeSubscription,
+  withSideEvents,
+} from '../providers/claude-subscription.ts';
 import { formatModelRef, providerOptionsFor } from '../providers/registry.ts';
 import type { ModelService } from '../providers/routing.ts';
 import { createToolSearchTool, TOOL_ACTIVATE_MARK, type SearchableTool } from '../tools/tool-search.ts';
@@ -156,6 +163,14 @@ function toSdkTools(tools: ToolDefinition[]): ToolSet | undefined {
   );
 }
 
+/** A response message without tool parts; null when nothing is left of it. */
+function textOnly(message: ModelMessage): ModelMessage | null {
+  if (message.role !== 'assistant') return message.role === 'tool' ? null : message;
+  if (!Array.isArray(message.content)) return message;
+  const parts = message.content.filter((part) => part.type === 'text');
+  return parts.length > 0 ? { ...message, content: parts } : null;
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -284,7 +299,10 @@ export async function* runAgent(deps: AgentLoopDeps, input: RunInput): AsyncGene
   const declaredNames = [...new Set(agent.tools.flatMap((name) => deps.tools.expand?.(name) ?? [name]))];
   const declaredTools = (names: string[]): ToolDefinition[] =>
     names.map((name) => deps.tools.get(name)).filter((tool): tool is ToolDefinition => tool !== undefined);
-  const lazy = agent.lazyTools === true;
+  // Claude through the user's plan: the CLI runs the tool loop, calling Mimi's tools over MCP.
+  const bridged = isClaudeSubscription(modelInfo.npm);
+  // The CLI sees a fixed tool list, so tools cannot be loaded on demand there.
+  const lazy = agent.lazyTools === true && !bridged;
   const toolSearch = lazy
     ? createToolSearchTool(
         declaredTools(declaredNames).map(
@@ -319,7 +337,6 @@ export async function* runAgent(deps: AgentLoopDeps, input: RunInput): AsyncGene
       if (tool) tools.push(tool);
     }
   };
-  const model = await deps.models.languageModel(modelRef);
 
   let handoff: { messageId: number; to: string } | undefined;
   const toolContext: ToolContext = {
@@ -334,6 +351,39 @@ export async function* runAgent(deps: AgentLoopDeps, input: RunInput): AsyncGene
       handoff = request;
     },
   };
+
+  /** Events of tools the CLI runs while the model stream is open (permission asks, results). */
+  const sideEvents = new EventQueue();
+  /** A tool as the CLI sees it: it asks, and the call goes through the same gate and executor as any other. */
+  const bridgeTool = (definition: ToolDefinition): BridgedTool => ({
+    name: definition.name,
+    description: definition.description,
+    inputSchema: definition.inputSchema,
+    run: async (rawInput) => {
+      const call: ToolCall = { id: randomUUID(), name: definition.name, input: rawInput };
+      const toolStartedAt = Date.now();
+      const steps = runToolCall(deps, tools, call, toolContext);
+      let step = await steps.next();
+      while (!step.done) {
+        sideEvents.push(step.value);
+        step = await steps.next();
+      }
+      const result = step.value;
+      deps.usage.logToolCall({
+        traceId,
+        agent: agent.name,
+        tool: definition.name,
+        risk: definition.risk ?? 'unknown',
+        ok: result.ok,
+        durationMs: Date.now() - toolStartedAt,
+        ...(result.ok ? {} : { error: result.output }),
+      });
+      return result.output;
+    },
+  });
+  const model = bridged
+    ? await claudeModelWithTools(modelRef.model, tools.map(bridgeTool), agent.budgets.maxRounds)
+    : await deps.models.languageModel(modelRef);
 
   const persist = (role: MessageRole, content: unknown, context?: string, speech?: SpeechStyle) => {
     const clean = role === 'assistant' && speech === undefined ? stripSpeechFromContent(content) : { content };
@@ -423,7 +473,7 @@ export async function* runAgent(deps: AgentLoopDeps, input: RunInput): AsyncGene
         instructions: prompt.system,
         messages: prompt.messages,
         // Rebuilt every round so tools loaded by tool_search are offered at once.
-        tools: toSdkTools(tools),
+        tools: bridged ? undefined : toSdkTools(tools),
         providerOptions,
         ...modelRef.params,
         abortSignal: signal,
@@ -462,12 +512,18 @@ export async function* runAgent(deps: AgentLoopDeps, input: RunInput): AsyncGene
           return this.settled ? '' : this.release();
         },
       };
-      for await (const part of result.stream) {
+      for await (const item of withSideEvents(result.stream, sideEvents)) {
+        if ('event' in item) {
+          yield item.event;
+          continue;
+        }
+        const part = item.part;
         if (part.type === 'text-delta') {
           text += part.text;
           const visible = stream.push(part.text);
           if (visible) yield { type: 'text-delta', text: visible };
         } else if (part.type === 'tool-call') {
+          if (part.providerExecuted) continue; // the CLI already ran it through the bridge
           calls.push({ id: part.toolCallId, name: part.toolName, input: part.input });
         } else if (part.type === 'finish-step') {
           usage = part.usage;
@@ -487,7 +543,12 @@ export async function* runAgent(deps: AgentLoopDeps, input: RunInput): AsyncGene
       // The SDK rejects malformed calls (unknown tool, bad input) itself and puts the
       // error result in the response; only the calls still open are ours to run.
       const rejected = new Map<string, string>();
-      for (const raw of await result.responseMessages) {
+      // The CLI ran several steps inside this one call; its tool traffic was shown as events
+      // already, and only the written answer belongs in the transcript.
+      if (bridged) usage = await result.totalUsage;
+      for (const response of await result.responseMessages) {
+        const raw = bridged ? textOnly(response) : response;
+        if (!raw) continue;
         // Keep the direction line out of the transcript the model sees next round too.
         const clean = raw.role === 'assistant' ? stripSpeechFromContent(raw.content) : { content: raw.content };
         const message: ModelMessage = clean.content === raw.content ? raw : ({ ...raw, content: clean.content } as ModelMessage);
@@ -525,6 +586,10 @@ export async function* runAgent(deps: AgentLoopDeps, input: RunInput): AsyncGene
       budget?.charge(contextTokens);
       yield { type: 'usage', round: rounds, usage: snapshot };
 
+      if (bridged && handoff) {
+        reason = 'handoff';
+        break;
+      }
       if (calls.length === 0) {
         if (parseSpeech(text).text.trim() || nudged || rounds >= agent.budgets.maxRounds) break;
         nudged = true;

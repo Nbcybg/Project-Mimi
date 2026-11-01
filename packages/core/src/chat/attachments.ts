@@ -215,13 +215,16 @@ export class AttachmentStore {
     return copy;
   }
 
-  /** Attachments of the given messages, keyed by message id. */
+  /**
+   * Attachments of the given messages, keyed by message id. Files saved in the same millisecond
+   * keep the order they were added (rowid), not the order of their random ids.
+   */
   forMessages(messageIds: number[]): Map<number, Attachment[]> {
     const byMessage = new Map<number, Attachment[]>();
     if (messageIds.length === 0) return byMessage;
     const rows = this.db
       .prepare(
-        `SELECT * FROM attachments WHERE message_id IN (${messageIds.map(() => '?').join(', ')}) ORDER BY created_at, id`,
+        `SELECT * FROM attachments WHERE message_id IN (${messageIds.map(() => '?').join(', ')}) ORDER BY created_at, rowid`,
       )
       .all(...messageIds) as AttachmentRow[];
     for (const row of rows) {

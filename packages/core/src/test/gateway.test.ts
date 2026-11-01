@@ -295,6 +295,16 @@ test('webhooks: /h/<id> reaches only that account\'s core', async (t) => {
   alice.close();
 });
 
+test('calendar push: /h/<id>/api/calendar/push/<token> is proxied without a session', async (t) => {
+  const booted = await boot(t);
+  const path = `${booted.people.alice.webhookBase}/api/calendar/push/not-a-real-token`;
+  const response = await fetch(`${booted.http}${path}`);
+  assert.equal(response.status, 404, 'the core answered "no such channel"');
+  assert.match(response.headers.get('content-type') ?? '', /text\/plain/);
+  assert.equal((await fetch(`${booted.http}/api/calendar/push/not-a-real-token`)).status, 401, 'no session, no direct core path');
+  assert.equal((await fetch(`${booted.http}/h/unknown-route/api/calendar/push/token`)).status, 404);
+});
+
 test('tools: a tool call, its approval and its result stay with that person', async (t) => {
   const mimi = scriptedModel([toolStep('write_file', { path: 'note.txt', content: 'alice wrote this' }), textStep('saved')]);
   const booted = await boot(t, { alice: { models: { mimi } } });

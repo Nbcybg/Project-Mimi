@@ -38,6 +38,7 @@ import {
 import type { TriggerPool } from './trigger-pool.ts';
 import { parseConnectorTriggerPool, pollConnectorTrigger } from './connector-triggers.ts';
 import { timeZoneName, type TimeZoneSource } from '../timezone.ts';
+import type { CalendarChangeView, CalendarSource } from '@mimi/shared';
 
 export interface WorkflowMailItem {
   id: string;
@@ -77,6 +78,10 @@ export interface WorkflowRunnerDeps {
       options?: { folder?: string; unseenOnly?: boolean; sinceDays?: number },
     ): Promise<WorkflowMailItem[]>;
     markRead(source: 'google' | 'microsoft' | 'imap' | 'pop3', ids: string[], account?: string, folder?: string): Promise<void>;
+  };
+  /** Calendar changes the realtime watcher noticed (google_calendar / microsoft triggers). */
+  calendar?: {
+    pending(source: CalendarSource, account?: string): CalendarChangeView[];
   };
   state: WorkflowState;
   allowedDirs: string[];
@@ -131,7 +136,7 @@ export interface ModelRequest {
   signal?: AbortSignal;
 }
 
-/** Message ids a mail- or poll-triggered workflow has already handled; machine-local. */
+/** Message ids a mail-, calendar- or poll-triggered workflow has already handled; machine-local. */
 export class WorkflowState {
   private readonly file: string;
   private data: Record<string, { seen: string[]; cursor?: string }>;
@@ -1994,6 +1999,39 @@ export async function resumeWorkflow(
           ...(mail.seen !== undefined ? { Seen: mail.seen } : {}),
         },
       }));
+    }
+    case 'calendar': {
+      if (!deps.calendar) throw new Error('calendar sync is not available in this core');
+      const rawSource = asText((await resolveValue(config.source ?? 'google', empty))).trim();
+      const source: CalendarSource = rawSource === 'microsoft' ? 'microsoft' : 'google';
+      const account = asText((await resolveValue(config.account ?? '', empty))).trim() || undefined;
+      const selection = asText((await resolveValue(config.changeTypes ?? 'any', empty))).trim();
+      const allowed = selection && selection !== 'any' ? new Set(selection.split(',').map((value) => value.trim()).filter(Boolean)) : null;
+      const max = Math.max(1, Math.min(100, Number(await resolveValue(config.maxEvents ?? 20, empty)) || 20));
+      return deps.calendar
+        .pending(source, account)
+        .filter((change) => !allowed || allowed.has(change.action))
+        .slice(-max)
+        .map((change) => ({
+          json: {
+            Id: change.id,
+            Source: change.source,
+            Action: change.action,
+            Summary: change.title,
+            Start: change.start,
+            End: change.end,
+            AllDay: change.allDay,
+            Location: change.location,
+            Organizer: change.organizer,
+            Attendees: change.attendees,
+            Link: change.link,
+            Status: change.status,
+            UpdatedAt: change.updatedAt ?? '',
+            ReceivedAt: change.receivedAt,
+            Account: change.account,
+            Key: change.key,
+          },
+        }));
     }
     case 'poll': {
       const resolved = (await resolveValue(config, empty)) as { url?: JsonValue; method?: JsonValue; headers?: JsonValue };

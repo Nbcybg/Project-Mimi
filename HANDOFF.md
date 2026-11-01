@@ -4,17 +4,20 @@
 
 - Commit Layer 2: `8edf589`; ก่อนหน้า: `22eb64e` (docs/HANDOFF), `5386801` (docs), `9b24e39` (docs),
   `0e7edf2` (Google Drive connector), `991e291` (Overseer ชั้น 1), `a4b20a3` (MCP/workflow/permissions/secret/git)
-- Layer 2 ถูก commit แล้วใน `8edf589` (in-place/apps/statements/vault fill); working tree สะอาด
+- Layer 2 ถูก commit แล้วใน `8edf589` (in-place/apps/statements/vault fill); ต่อมาเพิ่ม realtime calendar sync
+  ใน working tree (ยังไม่ commit)
 - branch `main` นำ `origin/main` และยังไม่ push (ดูจำนวนจริงด้วย `git status -sb`)
 - ตรวจซ้ำรอบปิดงาน Layer 2 (2026-11-01): typecheck ผ่านทั้ง `shared`, `pc-agent`, `core`
-- Full test suite ผ่าน **699 tests** (fail 0, skipped 0)
+- Full test suite ผ่าน **707 tests** (fail 0, skipped 0) รวม calendar-sync 7 tests + gateway calendar push 1 test
+  และ typecheck ผ่านทั้ง `shared`, `pc-agent`, `core`
 - UI smoke test ผ่าน 7/7 ในรอบก่อน และรอบนี้ผ่านเพิ่ม: agent permission matrix (6 rows, ค่า policy ที่บันทึกไว้แสดงถูก)
   + Settings จัดกลุ่ม always grants ตาม agent (รันผ่าน BrowserSession/Edge headless, ไม่ได้เพิ่มเป็น test ใน repo)
-- DB schema ล่าสุด: **version 23** (`023-tool-calls.sql`)
+- DB schema ล่าสุด: **version 23** (`023-tool-calls.sql`) — calendar sync ใช้ไฟล์ JSON ไม่เพิ่ม migration
 - รอบล่าสุด: run_log coverage, MCP reconnect/backoff, config rollback (skill/preset/workflow),
   secret redaction, git secret-file guard, permission matrix + per-agent always grants,
   Overseer ชั้น 1 (machine/web tools, mail/notify, cron, vault, OAuth, workflow enable, self-edit, notify node),
-  Google Drive connector upload/rename/share, **Layer 2 (in-place media, install apps, statements/payment guard, vault fills)**
+  Google Drive connector upload/rename/share, **Layer 2 (in-place media, install apps, statements/payment guard, vault fills)**,
+  **realtime calendar sync (Google/Outlook)**
 
 ## ทำเสร็จแล้ว
 
@@ -111,6 +114,31 @@
   - snapshot ซ่อนค่า secret field; `alwaysAsk` ไม่รับ task/session/always grant; workflow และ `tool_test` ปฏิเสธ
   - UI permission card แสดงเฉพาะ "ครั้งนี้" กับ "ปฏิเสธ" เมื่อ `noGrant`
 
+### Realtime calendar sync (รอบนี้)
+
+- `CalendarSync` ต่อบัญชี Google / Microsoft เก็บ state ใน `user/data/calendar-sync.json`
+  (push token, channel/subscription, sync token / delta link, last sync, last error, recent changes, dedupe keys)
+- Google: `events.watch` (primary calendar, 7 วัน) → `GET events?syncToken=` แบบเพิ่มทีละหน้า; 410 = resync baseline
+- Microsoft: `POST /subscriptions` resource `/me/events` (created,updated,deleted, ~3 วัน) → PATCH renew เมื่อเหลือ < 12 ชั่วโมง
+  → `GET /me/events/delta` ตาม `@odata.nextLink` / `@odata.deltaLink`; 410 = resync baseline
+- Endpoint `GET/POST /api/calendar/push/<token>` เปิดให้ provider เรียกโดยไม่มี token ของแอป:
+  - Graph `?validationToken=` → ตอบ text/plain ตามค่าเดิมทันที
+  - Google ตรวจ `x-goog-channel-token` + `x-goog-channel-id` และตัด notification ซ้ำด้วย `x-goog-message-number`
+  - Graph ตรวจ `clientState` ของทุก notification; ผิด = 401
+  - ตอบ provider ก่อน แล้วค่อย sync เบื้องหลัง; dedupe change keys ระหว่าง push กับ poll
+- Public HTTPS: ใช้ `MIMI_CALENDAR_PUBLIC_URL` ก่อน แล้ว fallback `MIMI_PUBLIC_URL` / Railway domain
+  - local-first ต้องมี tunnel (cloudflared/ngrok/tailscale funnel) หรือ gateway `/h/<route-id>`
+  - ถ้าไม่มี public URL: ไม่สร้าง subscription แต่ยัง delta poll ทุก 15 นาที (`MIMI_CALENDAR_SYNC_MINUTES`)
+- Gateway เปิดเส้นทาง `/h/<id>/api/calendar/push/<token>`; ไม่ต้องมี session
+- Workflow: trigger pool ชนิดใหม่ `calendar` + node `trigger_calendar` (source google/microsoft, account,
+  changeTypes, maxEvents) → items `Id, Source, Action, Summary, Start, End, AllDay, Location, Organizer,
+  Attendees, Link, Status, UpdatedAt, ReceivedAt, Account, Key`
+  - push มาถึง = ยิง workflow ที่ตรง source/account ทันที; schedule ทุก 15 นาทีเป็น safety net
+  - `WorkflowState.seen` + lock ต่อ workflow กัน push/poll ซ้ำ
+- UI: Hub → Trigger มี panel "Calendar sync" (push/poll ต่อบัญชี, วันหมดอายุ, last sync, error, ปุ่ม Sync ตอนนี้);
+  Settings ส่ง `calendar` view มาด้วย
+- ปิดได้ด้วย `MIMI_CALENDAR_SYNC=0`
+
 ### Integrations
 
 - Google Calendar: `calendar_update`, `calendar_delete`
@@ -131,6 +159,9 @@
 ## ไฟล์สำคัญ
 
 - MCP: `packages/pc-agent/src/mcp/client.ts`, `packages/core/src/mcp/hub.ts`
+- Calendar sync: `packages/core/src/calendar/{sync,api,push}.ts`,
+  `packages/core/src/server/server.ts` (push route/listeners), `packages/core/src/gateway/gateway.ts` (`/h` route),
+  `packages/core/src/workflows/runner.ts` (calendar trigger items), `packages/shared/src/calendar.ts`
 - Permissions: `packages/core/src/permissions/gate.ts`, `packages/core/src/loop/agent-loop.ts`, `packages/core/src/tasks/runner.ts`, `packages/core/src/workflows/runner.ts`
 - Agent flags: `packages/core/src/agents/loader.ts`
 - Coding tools: `packages/pc-agent/src/tools/{search,patch,git,background,run-shell}.ts`
@@ -161,13 +192,16 @@
 ### ควรเก็บ
 
 ไม่มีงานค้างในลิสต์เดิมแล้ว (config rollback, permission UX, secret redaction, git safety,
-Overseer ชั้น 1, UI smoke, Google Drive connector ทำครบ) และ Layer 2 ทั้ง 4 ข้อทำเสร็จใน working tree:
-in-place media, install/update apps, statements/payment guard, vault-backed browser fills
+Overseer ชั้น 1, UI smoke, Google Drive connector ทำครบ) และ Layer 2 ทั้ง 4 ข้อทำเสร็จ
+realtime calendar sync ทำครบ 5 ข้อของ Overseer (public endpoint, Google watch/delta, Graph subscription/delta,
+trigger + state + renewal + dedupe, 15-minute poll) แต่ยังไม่ได้ commit
 
 ### สิ่งที่ต้องตัดสินใจก่อนเริ่มงานใหม่
 
-- branch `main` มี commits ที่ยังไม่ push — push เมื่อผู้ใช้สั่งเท่านั้น
+- branch `main` มี commits ที่ยังไม่ push + calendar sync ใน working tree — push/commit เมื่อผู้ใช้สั่งเท่านั้น
 - DB schema เป็น 23; เทสต์บางตัวผูก version นี้ ถ้าจะเพิ่ม migration ต้องอัปเดตเทสต์ด้วย
+- calendar sync ใช้ไฟล์ `calendar-sync.json` ไม่มี migration; การแก้ schema ไฟล์ต้องรองรับของเก่า
+- push ต้องมี public HTTPS จริง (tunnel/gateway) ถึงจะทดสอบ end-to-end กับ Graph/Google ได้; เทสต์ใน repo ใช้ fake fetch
 - UI smoke test (permission matrix / Settings grouped grants) รันมือผ่าน headless browser
   ไม่ได้อยู่ในชุดเทสต์อัตโนมัติ จึงไม่ถูกรันซ้ำโดย `npm test`
 
@@ -177,6 +211,9 @@ in-place media, install/update apps, statements/payment guard, vault-backed brow
 - Secure fields ของแอป native: `computer_type` ยังปฏิเสธ password; `browser_fill_secret` ใช้ได้เฉพาะเว็บ
 - ตัดต่อวิดีโอระดับ multi-track/transition/effect และ in-place ของ merge/split ที่มีหลาย input
 - LINE/Telegram ต้องมี token (connector มีอยู่แล้วถ้าเชื่อมบัญชี; ไม่มีอะไรค้าง)
+- Calendar push: Google watch เฉพาะ `primary` calendar; Graph ใช้ `/me/events` (ทุกปฏิทินของบัญชี) — ยังไม่มี UI เลือกปฏิทินทีละใบ
+- Calendar subscription lifecycle notifications ของ Graph (subscription removed) ไม่ได้สมัคร; renewal job สร้างใหม่เมื่อ PATCH คืน 403/404
+- ไม่มี tunnel ในตัวแอป: ผู้ใช้ต้องตั้ง `MIMI_CALENDAR_PUBLIC_URL` เอง (cloudflared/ngrok/funnel/gateway)
 
 ## ตรวจสอบ
 
@@ -200,10 +237,10 @@ npm test
 
 1. อ่าน `HANDOFF.md` นี้
 2. `git status` และ `git diff --stat`
-3. งานในลิสต์เดิม, Overseer ชั้น 1, UI smoke, Drive connector และ Layer 2 ทำครบแล้ว
-   (699 tests, typecheck ผ่าน, ตรวจซ้ำแล้ว); ที่เหลือคือขอบเขตที่ระบุว่า "ยังตั้งใจไม่ทำ"
+3. งานในลิสต์เดิม, Overseer ชั้น 1, UI smoke, Drive connector, Layer 2 และ realtime calendar sync ทำครบแล้ว
+   (707 tests, typecheck ผ่าน); ที่เหลือคือขอบเขตที่ระบุว่า "ยังตั้งใจไม่ทำ"
 4. ก่อนแก้ อย่าลืมว่า DB schema เป็น 23 และเทสต์บางตัวผูก version นี้
-5. Layer 2 commit แล้วใน `8edf589`; ตรวจ `git log --oneline` ก่อนเริ่มงานใหม่
+5. Layer 2 commit แล้วใน `8edf589`; calendar sync ยัง uncommitted — ตรวจ `git log --oneline` ก่อนเริ่มงานใหม่
 6. commits บน `main` ยังไม่ push — รอคำสั่งผู้ใช้ก่อน
 7. ถ้าทดสอบ `browser_fill_secret` ต้องอัปเดต PC agent ฝั่งเครื่องให้มี internal tool นี้ก่อน
    (core เก่า + PC ใหม่ หรือกลับกัน จะได้ error ว่า PC ไม่มี tool)

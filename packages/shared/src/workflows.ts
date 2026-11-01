@@ -51,6 +51,7 @@ export type NodeTypeName =
   | 'trigger_webhook'
   | 'trigger_form'
   | 'trigger_mail'
+  | 'trigger_calendar'
   | 'trigger_poll'
   | 'trigger_chat'
   | 'trigger_telegram'
@@ -781,7 +782,7 @@ export interface TriggerPoolView {
   name: string;
   label: string;
   description: string;
-  kind: 'manual' | 'schedule' | 'webhook' | 'mail' | 'poll' | 'chat' | 'telegram' | 'tool';
+  kind: 'manual' | 'schedule' | 'webhook' | 'mail' | 'calendar' | 'poll' | 'chat' | 'telegram' | 'tool';
   builtin: boolean;
   fields: NodeTypeField[];
   /** Example of the JSON this trigger produces; shown in the editor. */
@@ -795,6 +796,7 @@ export const TRIGGER_NODE_POOLS: Partial<Record<NodeTypeName, string>> = {
   trigger_webhook: 'webhook',
   trigger_form: 'form',
   trigger_mail: 'mail',
+  trigger_calendar: 'calendar',
   trigger_poll: 'poll',
   trigger_chat: 'chat',
   trigger_telegram: 'telegram',
@@ -887,6 +889,39 @@ export const BUILTIN_TRIGGERS: TriggerPoolView[] = [
     sample: { Id: '18c...', From: 'somchai@example.com', To: 'me@example.com', Cc: '', Date: '2026-10-13', Subject: 'ใบแจ้งหนี้', Content: 'กรุณาชำระภายในสิ้นเดือน', Folder: 'INBOX', Seen: false },
   },
   {
+    name: 'calendar',
+    label: 'ปฏิทินเปลี่ยน (Google / Outlook)',
+    description:
+      'รับแจ้งเมื่ออีเวนต์ใน Google Calendar หรือ Outlook calendar ถูกสร้าง/แก้/ลบ · ใช้ push ได้เมื่อมี public HTTPS endpoint (MIMI_CALENDAR_PUBLIC_URL หรือ MIMI_PUBLIC_URL) ไม่งั้นจะเช็คด้วย delta sync ทุก 15 นาทีเป็น safety net',
+    kind: 'calendar',
+    builtin: true,
+    fields: [
+      { key: 'source', label: 'แหล่งปฏิทิน', type: 'string', options: ['google', 'microsoft'], required: true },
+      { key: 'account', label: 'บัญชี (เว้นว่าง = บัญชีเริ่มต้นของแหล่งนั้น)', type: 'account' },
+      { key: 'changeTypes', label: 'ชนิดการเปลี่ยน', type: 'string', options: ['any', 'created', 'updated', 'deleted'] },
+      { key: 'maxEvents', label: 'จำนวนสูงสุดต่อรอบ (1-100)', type: 'number', placeholder: '20' },
+      { key: 'everyMinutes', label: 'เช็คทุก (นาที)', type: 'number', placeholder: '15' },
+    ],
+    sample: {
+      Id: 'AAMkAGI2...',
+      Source: 'google',
+      Action: 'updated',
+      Summary: 'ประชุมทีม',
+      Start: '2026-10-20T10:00:00+07:00',
+      End: '2026-10-20T11:00:00+07:00',
+      AllDay: false,
+      Location: 'ห้อง 3 ชั้น 5',
+      Organizer: 'somchai@example.com',
+      Attendees: 'somchai@example.com, me@example.com',
+      Link: 'https://calendar.google.com/event?eid=...',
+      Status: 'confirmed',
+      UpdatedAt: '2026-10-19T04:00:00.000Z',
+      ReceivedAt: '2026-10-19T04:00:05.000Z',
+      Account: 'google-abc123',
+      Key: 'google:google-abc123:AAMkAGI2...:2026-10-19T04:00:00.000Z',
+    },
+  },
+  {
     name: 'poll',
     label: 'HTTP poll',
     description: 'เรียก URL เป็นรอบ; JSON ที่ได้กลายเป็น items',
@@ -970,6 +1005,7 @@ const TRIGGER_NODE_LABELS: Partial<Record<NodeTypeName, string>> = {
   trigger_webhook: 'ทริกเกอร์: Webhook',
   trigger_form: 'ทริกเกอร์: ฟอร์ม / HTML form',
   trigger_mail: 'ทริกเกอร์: อีเมลใหม่',
+  trigger_calendar: 'ทริกเกอร์: ปฏิทินเปลี่ยน (Google / Outlook)',
   trigger_poll: 'ทริกเกอร์: HTTP poll',
   trigger_chat: 'ทริกเกอร์: ข้อความในแชต',
   trigger_telegram: 'ทริกเกอร์: Telegram',

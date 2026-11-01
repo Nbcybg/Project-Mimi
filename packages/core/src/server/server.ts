@@ -54,6 +54,7 @@ import type { CoreConfig } from '../config.ts';
 import { type Core, type CoreOptions, createCore } from '../core.ts';
 import { startGoogleOAuth } from '../google/oauth-flow.ts';
 import { HostedCallbacks, publicBaseUrl } from '../oauth/callback.ts';
+import { serveCalendarPush } from '../calendar/push.ts';
 import { serveAssetLinks } from './assetlinks.ts';
 import { type DiscoveredModel, discoverModels } from '../providers/discovery.ts';
 import {
@@ -461,6 +462,7 @@ export async function startServer(
       },
       accounts: core.oauth.views(),
       mailAccounts: core.mailWatch.views(),
+      calendar: core.calendarSync.view(),
       ...(hostedCallbacks ? { oauthRedirectUri: hostedCallbacks.redirectUri } : {}),
       preferences: appSettings.preferences,
       spentTodayUsd: core.spentToday(),
@@ -911,6 +913,9 @@ export async function startServer(
   core.listeners.oauthChanged = () => {
     broadcast({ type: 'oauth-accounts', accounts: core.oauth.views() });
     broadcast({ type: 'settings', settings: settingsView() });
+  };
+  core.listeners.calendarChanged = () => {
+    broadcast({ type: 'calendar-sync', calendar: core.calendarSync.view() });
   };
   core.listeners.skillsChanged = () => {
     broadcast({
@@ -1754,6 +1759,15 @@ export async function startServer(
         );
         break;
       }
+      case 'calendar-sync':
+        reply({ type: 'calendar-sync', calendar: core.calendarSync.view() });
+        break;
+      case 'calendar-sync-now':
+        void core.calendarSync.tick().then(
+          (found) => reply({ type: 'calendar-sync', calendar: core.calendarSync.view(), checked: { found, at: new Date().toISOString() } }),
+          (error: Error) => reply({ type: 'error', message: (error as Error).message }),
+        );
+        break;
       default:
         reply({ type: 'error', message: 'Unknown message type' });
     }
@@ -1912,6 +1926,8 @@ export async function startServer(
     const url = new URL(request.url ?? '/', 'http://localhost');
     if (request.method === 'GET' && serveWebFile(url.pathname, response, request.headers.range)) {
       // the web client
+    } else if (await serveCalendarPush(core.calendarSync, request, response)) {
+      // a calendar provider notification or the Graph validation handshake
     } else if (await handleHttpApi(httpApi, request, response)) {
       // answered by the file API
     } else if (request.method === 'POST' && /^\/app\/[a-z-]+$/.test(url.pathname)) {
@@ -2044,6 +2060,8 @@ export async function startServer(
   core.scheduler.start();
   // Push mail: Gmail / Outlook / IMAP / POP3 watched for new unread messages.
   core.mailWatch.start(Math.max(5, Number(process.env.MIMI_MAIL_WATCH_MINUTES ?? 10)) * 60_000);
+  // Calendar push subscriptions plus the 15-minute delta poll that covers dropped pushes.
+  core.calendarSync.start(Math.max(5, config.calendarSyncMinutes) * 60_000);
 
   const mimi: MimiServer = {
     core,

@@ -247,9 +247,10 @@ export async function startGateway(options: GatewayOptions): Promise<Gateway> {
       return;
     }
 
-    // Webhooks, and the OAuth sign-in callback of a core whose MIMI_PUBLIC_URL is <gateway>/h/<id>
-    // (the provider's redirect carries no session; the core acts only on a sign-in it started).
-    const hook = /^\/h\/([\w-]{1,64})(\/api\/(?:workflow|webhook)\/[^/]+|\/oauth\/callback)$/.exec(url.pathname);
+    // Webhooks, calendar push notifications, and the OAuth sign-in callback of a core
+    // whose MIMI_PUBLIC_URL is <gateway>/h/<id> (the provider's redirect carries no
+    // session; the core acts only on a sign-in it started).
+    const hook = /^\/h\/([\w-]{1,64})(\/api\/(?:workflow|webhook)\/[^/]+|\/api\/calendar\/push\/[^/]+|\/oauth\/callback)$/.exec(url.pathname);
     if (hook) {
       const route = accounts.route(hook[1]!);
       if (!route) sendJson(response, 404, { error: 'No such webhook.' });

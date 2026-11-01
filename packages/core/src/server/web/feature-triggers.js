@@ -302,13 +302,59 @@
     return form;
   }
 
+  function calendarPanel() {
+    const panel = el('div', 'panel');
+    const calendar = M().state.calendar || (M().state.settings || {}).calendar;
+    panel.append(el('h3', '', 'Calendar sync (Google / Outlook)'));
+    if (!calendar) {
+      panel.append(el('p', 'hint', 'เชื่อมบัญชี Google หรือ Microsoft ที่ Hub → บัญชี แล้วตัว sync จะทำงานอัตโนมัติ'));
+      return panel;
+    }
+    const publicUrl = calendar.publicUrl;
+    panel.append(
+      el(
+        'p',
+        'hint',
+        publicUrl
+          ? `Push subscription พร้อมใช้ · providers เรียก ${publicUrl}/api/calendar/push/<token> · มี delta poll ทุก 15 นาทีเป็น safety net`
+          : 'ยังไม่มี public HTTPS endpoint — ระบบจะใช้ delta poll ทุก 15 นาทีแทน push · ตั้ง MIMI_CALENDAR_PUBLIC_URL เป็น tunnel/gateway URL (เช่น https://<gateway>/h/<id>) เพื่อรับแบบเรียลไทม์',
+      ),
+    );
+    const rows = el('div', 'tbl trigrows');
+    const head = el('div', 'hd');
+    for (const label of ['บัญชี', 'โหมด', 'หมดอายุ', 'sync ล่าสุด', '']) head.append(el('span', '', label));
+    rows.append(head);
+    for (const account of calendar.accounts || []) {
+      const row = el('div');
+      const name = el('span', 'nm2');
+      name.append(el('b', '', account.name || account.account), el('small', 'muted', ` · ${account.service}${account.connected ? '' : ' (ยังไม่เชื่อมต่อ)'}`));
+      const mode = el('span');
+      mode.append(el('span', `pill ${account.push ? 'ok' : 'todo'}`, account.push ? 'push' : 'poll'));
+      const expires = el('span', 'mono', account.subscriptionExpiresAt ? M().fmtDate(account.subscriptionExpiresAt) : '—');
+      const last = el('span', 'mono', account.lastSyncAt ? M().fmtDate(account.lastSyncAt) : '—');
+      if (account.lastError) last.title = account.lastError;
+      const actions = el('span', 'hstack');
+      actions.append(button('btn ghost', 'Sync ตอนนี้', () => M().send({ type: 'calendar-sync-now' })));
+      row.append(name, mode, expires, last, actions);
+      rows.append(row);
+    }
+    panel.append(rows);
+    if (!(calendar.accounts || []).length) panel.append(el('div', 'empty', 'ยังไม่มีบัญชี Google / Microsoft'));
+    return panel;
+  }
+
   function render() {
     const stack = el('div', 'stackv');
-    stack.append(poolPanel(), listPanel(), editor());
+    stack.append(poolPanel(), calendarPanel(), listPanel(), editor());
     return stack;
   }
 
   function onMessage(message) {
+    if (message.type === 'calendar-sync') {
+      M().state.calendar = message.calendar;
+      if (M().state.view === 'hub' && M().ui.hubTab === 'triggers' && !M().ui.triggerDirty) M().renderHub();
+      return;
+    }
     if (editingId !== null && !(message.triggers || []).some((entry) => entry.id === editingId)) editingId = null;
   }
 

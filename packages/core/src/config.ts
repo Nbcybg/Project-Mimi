@@ -61,6 +61,14 @@ export interface CoreConfig {
   /** Workflows (`workflows/<agent>/<name>.json`) and the state of their mail triggers. */
   workflowsDir: string;
   workflowStatePath: string;
+  /** Google / Outlook push subscriptions, delta tokens and recent calendar changes. */
+  calendarStatePath: string;
+  /** Public HTTPS base for calendar push (`MIMI_CALENDAR_PUBLIC_URL`, else MIMI_PUBLIC_URL). */
+  calendarPublicUrl: string | undefined;
+  /** False turns the calendar watcher off entirely (`MIMI_CALENDAR_SYNC=0`). */
+  calendarSyncEnabled: boolean;
+  /** Safety-net delta poll, in minutes (`MIMI_CALENDAR_SYNC_MINUTES`, default 15). */
+  calendarSyncMinutes: number;
   /** Provider credentials created by connecting a provider, in opencode's auth.json shape. */
   authPath: string;
   /** Files the user sent in chats. */
@@ -177,6 +185,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
     pushContact: env.MIMI_PUSH_CONTACT ?? 'mailto:mimi@localhost',
     workflowsDir: path.join(userDir, 'workflows'),
     workflowStatePath: path.join(dataDir, 'workflow-state.json'),
+    calendarStatePath: path.join(dataDir, 'calendar-sync.json'),
+    calendarPublicUrl: env.MIMI_CALENDAR_PUBLIC_URL?.trim() || undefined,
+    calendarSyncEnabled: env.MIMI_CALENDAR_SYNC !== '0' && env.MIMI_CALENDAR_SYNC !== 'false',
+    calendarSyncMinutes: positiveInt(env.MIMI_CALENDAR_SYNC_MINUTES, 15),
     authPath: path.join(dataDir, 'auth.json'),
     filesDir: path.join(dataDir, 'files'),
     sessionsDir: path.join(userDir, 'sessions'),

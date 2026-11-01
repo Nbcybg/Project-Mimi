@@ -104,6 +104,12 @@
 - Autonomy: background tasks are opt-in (`MIMI_ALLOW_BACKGROUND_TASKS=1`), unfinished tasks pause after a
   restart, `task_resume` restarts resumable recipes, `task_list` / `task_audit` expose JSONL records, task results
   notify the inbox and `task_kill` stops every running task.
+- Realtime calendar sync: Google `events.watch` channels and Microsoft Graph `/me/events` subscriptions push
+  changes to `/api/calendar/push/<token>` (Graph `validationToken` handshake, Google channel token and Graph
+  `clientState` checks, `syncToken` / `/me/events/delta` incremental reads, per-account state, three-day
+  subscription renewal and dedupe). A 15-minute delta poll runs as the safety net, so a local install without a
+  public HTTPS tunnel still works; the new calendar workflow trigger turns created/updated/deleted events into
+  items on Google or Outlook accounts.
 
 ### 0.7.7-prototype
 

@@ -20,6 +20,7 @@
         'trigger_webhook',
         'trigger_form',
         'trigger_mail',
+        'trigger_calendar',
         'trigger_poll',
         'trigger_chat',
         'trigger_telegram',
@@ -181,6 +182,7 @@
     trigger_webhook: 'webhook',
     trigger_form: 'form',
     trigger_mail: 'mail',
+    trigger_calendar: 'calendar',
     trigger_poll: 'poll',
     trigger_chat: 'chat',
     trigger_telegram: 'telegram',
@@ -1854,6 +1856,7 @@
       }
     }
     if (type === 'trigger_mail') Object.assign(config, { source: 'google', maxMessages: 5, markRead: true });
+    if (type === 'trigger_calendar') Object.assign(config, { source: 'google', changeTypes: 'any', maxEvents: 20, everyMinutes: 15 });
     if (type === 'plugin') Object.assign(config, { plugin: (M().state.nodeTypes || []).find((spec) => spec.type === 'plugin')?.fields?.find((field) => field.key === 'plugin')?.options?.[0] || '', config: {} });
     if (type === 'llm') Object.assign(config, { format: 'text', name: 'text', prompt: '{{ $json.text }}' });
     if (type === 'classify') Object.assign(config, { input: '{{ $json.text }}', categories: [] });

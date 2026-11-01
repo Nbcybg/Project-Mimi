@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { embedMany, generateText } from 'ai';
-import type { AgentEvent, ConnectorRuntime, HistoryMessage, MimiampCommand, Notification, WorkflowRunResult } from '@mimi/shared';
+import type { AgentEvent, CalendarChangeView, ConnectorRuntime, HistoryMessage, MimiampCommand, Notification, WorkflowRunResult } from '@mimi/shared';
 import { type AgentDefinition, AgentCatalog } from './agents/loader.ts';
 import type { AppSettings } from './app/app-settings.ts';
 import { SecretStore } from './app/secrets.ts';
@@ -36,6 +36,7 @@ import { GoogleAuth } from './google/auth.ts';
 import { gmailListUnread, gmailMarkRead } from './google/tools.ts';
 import { OAuthAccounts } from './oauth/accounts.ts';
 import type { ReceiverFactory } from './oauth/callback.ts';
+import { publicBaseUrl } from './oauth/callback.ts';
 import { ConnectorConnections } from './oauth/connections.ts';
 import { type AgentLoopDeps, runAgent, type RunInput } from './loop/agent-loop.ts';
 import { buildPromptVars } from './loop/prompt-vars.ts';
@@ -64,6 +65,7 @@ import { loadSettings, type Settings } from './providers/settings.ts';
 import { Scheduler } from './scheduler/scheduler.ts';
 import { TriggerFiles } from './scheduler/trigger-files.ts';
 import { type Trigger, TriggerStore } from './scheduler/triggers.ts';
+import { CalendarSync } from './calendar/sync.ts';
 import {
   createUseSkillTool,
   loadPersona,
@@ -139,6 +141,8 @@ export interface CoreListeners {
   skillsChanged?: () => void;
   /** An OAuth sign-in finished (the account now has a fresh token). */
   oauthChanged?: () => void;
+  /** Calendar subscription or delta state changed (broadcast to open screens). */
+  calendarChanged?: () => void;
   /** An agent asked the Mimiamp player to do something; returns how many apps were told. */
   mimiampCommand?: (command: MimiampCommand) => number;
 }
@@ -216,6 +220,8 @@ export interface Core {
   notify(notification: Notification): void;
   /** Watches Gmail / Outlook / IMAP / POP3 for new mail and raises a notification per message. */
   mailWatch: MailWatch;
+  /** Google / Outlook calendar push subscriptions with a 15-minute delta poll. */
+  calendarSync: CalendarSync;
   /** The user's profile fields; each agent sees the ones shared with it. */
   profile: UserProfileStore;
   /** Knowledge bases searched by agents (knowledge_search) and workflows. */
@@ -453,6 +459,9 @@ export async function createCore(
       () => {
         oauth.reset(accountId);
         listeners.oauthChanged?.();
+        // A newly connected calendar account gets its subscription and baseline now,
+        // not at the next 15-minute tick.
+        void calendarSync.tick().catch((error: Error) => console.error(`calendar sync after connect: ${error.message}`));
       },
       (error: Error) => console.error(`oauth ${accountId} failed: ${error.message}`),
     );
@@ -668,6 +677,40 @@ export async function createCore(
     microsoft: () => oauth.microsoft(),
     notify: (_kind, title, body) => notify({ kind: 'message', title, body }),
     timezone: () => config.timezone,
+  });
+  /**
+   * Realtime calendar sync. A public HTTPS base makes Graph / Google push work;
+   * without one the watcher still runs its 15-minute delta pass (the safety net).
+   */
+  const calendarPublic = (() => {
+    const explicit = config.calendarPublicUrl;
+    if (explicit) {
+      try {
+        const url = new URL(explicit);
+        if (url.protocol !== 'https:' && url.hostname !== 'localhost' && url.hostname !== '127.0.0.1') {
+          console.error('MIMI_CALENDAR_PUBLIC_URL must be https:// (providers do not call plain http on the internet)');
+          return undefined;
+        }
+        return `${url.origin}${url.pathname.replace(/\/+$/, '')}`;
+      } catch {
+        console.error(`MIMI_CALENDAR_PUBLIC_URL "${explicit}" is not a URL`);
+        return undefined;
+      }
+    }
+    try {
+      return publicBaseUrl(process.env);
+    } catch {
+      return undefined;
+    }
+  })();
+  const calendarSync = new CalendarSync({
+    dir: config.dataDir,
+    accounts: oauth,
+    publicUrl: calendarPublic,
+    enabled: config.calendarSyncEnabled,
+    notify: (title, body) => notify({ kind: 'info', title, body }),
+    onChanges: (changes) => fireCalendarWorkflows(changes),
+    onChanged: () => listeners.calendarChanged?.(),
   });
   const parkedRuns = new ParkedRuns(db);
   const approvals = new Approvals(db, {
@@ -1169,6 +1212,7 @@ export async function createCore(
         return mailWatch.markRead(account, ids, source, folder);
       },
     },
+    calendar: { pending: (source, account) => calendarSync.pending(source, account) },
     customNode: (name) => customNodes.get(name),
     state: workflowState,
     allowedDirs: config.allowedDirs,
@@ -1418,7 +1462,7 @@ export async function createCore(
     const existing = triggers.byWorkflow(id);
     const entry = triggerPool.get(workflow.trigger.pool);
     const kind = entry?.kind;
-    const scheduled = workflow.enabled && (kind === 'schedule' || kind === 'mail' || kind === 'poll');
+    const scheduled = workflow.enabled && (kind === 'schedule' || kind === 'mail' || kind === 'calendar' || kind === 'poll');
     if (!scheduled) {
       if (existing) triggers.delete(existing.id);
       return;
@@ -1629,6 +1673,23 @@ export async function createCore(
     return result;
   }
 
+  /** One running calendar-triggered run per workflow (push and the poll can overlap). */
+  const calendarWorkflowLocks = new Set<string>();
+
+  /** Starts every enabled workflow whose calendar trigger matches one of the new changes. */
+  function fireCalendarWorkflows(changes: CalendarChangeView[]): void {
+    for (const workflow of workflows.list()) {
+      if (!workflow.enabled) continue;
+      if (triggerPool.get(workflow.trigger.pool)?.kind !== 'calendar') continue;
+      const source = workflow.trigger.config.source === 'microsoft' ? 'microsoft' : 'google';
+      const account = typeof workflow.trigger.config.account === 'string' ? workflow.trigger.config.account.trim() : '';
+      if (!changes.some((change) => change.source === source && (!account || change.account === account))) continue;
+      void fireWorkflow(workflow).catch((error) =>
+        console.error(`calendar workflow ${workflow.agent}/${workflow.name}: ${(error as Error).message}`),
+      );
+    }
+  }
+
   /** Runs a workflow from its trigger: mail polls run once per new message, others once. */
   async function fireWorkflow(workflow: StoredWorkflow): Promise<string> {
     const entry = triggerPool.get(workflow.trigger.pool);
@@ -1682,6 +1743,30 @@ export async function createCore(
         }
       }
       return `${fresh.length} mail: ${last.slice(0, 200)}`;
+    }
+    if (entry?.kind === 'calendar') {
+      // Push and the safety-net schedule can both see the same new change; only one
+      // run at a time, and the seen keys keep the second from handling it again.
+      if (calendarWorkflowLocks.has(id)) return 'already running';
+      calendarWorkflowLocks.add(id);
+      try {
+        const items = await triggerItems(workflow, triggerPool, workflowRunner);
+        const seen = workflowState.seen(id);
+        const fresh = items.filter((item) => {
+          const key = String(item.json.Key ?? `${item.json.Id ?? ''}:${item.json.UpdatedAt ?? ''}`);
+          return key !== ':' && !seen.has(key);
+        });
+        if (fresh.length === 0) return 'no new calendar changes';
+        let last = '';
+        for (const item of fresh) {
+          const outcome = await runWorkflowWithHandler(workflow, [item], 'calendar');
+          last = outcome.result;
+          workflowState.mark(id, [String(item.json.Key ?? `${item.json.Id ?? ''}:${item.json.UpdatedAt ?? ''}`)]);
+        }
+        return `${fresh.length} calendar changes: ${last.slice(0, 200)}`;
+      } finally {
+        calendarWorkflowLocks.delete(id);
+      }
     }
     const items: FlowItem[] = await triggerItems(workflow, triggerPool, workflowRunner);
     const outcome = await runWorkflowWithHandler(workflow, items, entry?.kind ?? 'manual');
@@ -1838,6 +1923,7 @@ export async function createCore(
     triggers,
     scheduler,
     mailWatch,
+    calendarSync,
     deps,
     listeners,
     runTurn,
@@ -1862,6 +1948,8 @@ export async function createCore(
     async close() {
       scheduler.stop();
       mailWatch.stop();
+      calendarSync.stop();
+      await calendarSync.idle();
       workflowQueue.close();
       clearInterval(mcpHealthTimer);
       await mcp.close();

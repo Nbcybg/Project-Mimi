@@ -44,6 +44,8 @@ PC agent (`npm run pc-agent`) ยังรันบน PC ของเรา แ
    แล้ว "เพิ่มไปยังหน้าจอหลัก" เพื่อใช้เป็นแอป และเปิด Push ได้ (ต้องเป็น HTTPS)
 
 webhook จากบริการภายนอกจะเข้าไม่ได้ (เพราะไม่เปิดสู่อินเทอร์เน็ต) ถ้าต้องการ ใช้ `tailscale funnel` หรือแบบ B
+เช่นเดียวกับ calendar push ของ Google/Outlook: ถ้าไม่เปิด public HTTPS ให้ตั้ง `MIMI_CALENDAR_PUBLIC_URL=https://<ชื่อเครื่อง>.<tailnet>.ts.net`
+ผ่าน `tailscale funnel` หรือปล่อยว่างเพื่อใช้ delta poll ทุก 15 นาที
 
 ## B. เครื่องที่บ้าน + Cloudflare Tunnel
 
@@ -58,6 +60,8 @@ webhook จากบริการภายนอกจะเข้าไม่
 3. เปิด `https://mimi.example.com/#token=<token>` บนมือถือ
 4. แนะนำเพิ่ม Cloudflare Access (Zero Trust → Access → Application) ให้ล็อกอินด้วยอีเมลก่อนเข้าถึงหน้าเว็บ
    และยกเว้น path `/api/workflow/*` ถ้าใช้ webhook (webhook ตั้ง `x-mimi-secret` ได้ในหน้า workflow)
+   รวมถึง `/api/calendar/push/*` ถ้าใช้ calendar แบบ push (Graph/Google ต้องเรียกเข้ามาได้)
+   แล้วตั้ง `MIMI_CALENDAR_PUBLIC_URL=https://mimi.example.com` ใน `.env` เพื่อให้ Mimi สร้าง subscription
 
 proxy ต้องส่ง header `Host` เดิมไปให้ Mimi (ค่าเริ่มต้นของ cloudflared และ tailscale serve ทำอยู่แล้ว)
 ไม่อย่างนั้นหน้าเว็บจะต่อ WebSocket ไม่ได้

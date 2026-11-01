@@ -52,6 +52,7 @@ const NODE_TYPES = [
   'trigger_webhook',
   'trigger_form',
   'trigger_mail',
+  'trigger_calendar',
   'trigger_poll',
   'trigger_chat',
   'trigger_telegram',

@@ -1,3 +1,4 @@
+import type { CalendarSyncView } from './calendar.ts';
 import type { AgentEvent, UsageSnapshot } from './events.ts';
 import type { MessageRole } from './messages.ts';
 import type { ConnectorConnectionInput, ConnectorConnectionView, OAuthAccountInput, OAuthAccountView } from './oauth.ts';
@@ -514,6 +515,8 @@ export interface SettingsView {
   accounts: OAuthAccountView[];
   /** IMAP / POP3 / SMTP accounts, without any password. */
   mailAccounts: MailAccountView[];
+  /** Google / Outlook calendar push subscriptions and the poll fallback. */
+  calendar?: CalendarSyncView;
   /** Spending limit and notification choices, plus what was spent today. */
   preferences: PreferencesView;
   spentTodayUsd: number;
@@ -782,7 +785,10 @@ export type ClientMessage =
   | { type: 'mail-watch-save'; account: MailWatchAccount; password?: string; smtpPassword?: string }
   | { type: 'mail-watch-delete'; id: string }
   | { type: 'mail-watch-check' }
-  | { type: 'mail-account-test'; id: string };
+  | { type: 'mail-account-test'; id: string }
+  /** Calendar push subscriptions and delta state; check now runs one sync pass. */
+  | { type: 'calendar-sync' }
+  | { type: 'calendar-sync-now' };
 
 /** Sent by the PC agent. */
 export type PcMessage =
@@ -942,7 +948,9 @@ export type ServerMessage =
       checked?: { found: number; at: string };
       /** Set when this answers a connection test. */
       test?: { id: string; ok: boolean; error?: string; message?: string };
-    };
+    }
+  /** Calendar push subscriptions, delta state and the poll fallback. */
+  | { type: 'calendar-sync'; calendar: CalendarSyncView; saved?: boolean; checked?: { found: number; at: string } };
 
 /** How a mail client opens its connection: implicit TLS, STARTTLS, or plain (never for passwords). */
 export type MailSecurityMode = 'tls' | 'starttls' | 'none';

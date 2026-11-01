@@ -2831,6 +2831,7 @@
         send({ type: 'workflows-list' });
         send({ type: 'secrets-list' });
         send({ type: 'mail-watch' });
+        send({ type: 'calendar-sync' });
       }
       if (item.dataset.view === 'agents') {
         send({ type: 'tools-list' });
@@ -4226,7 +4227,7 @@
         state.pendingPerms = new Map(message.pendingPermissions.map((request) => [request.id, request]));
         state.booted = false;
         state.gotAgents = state.gotChats = state.gotOverseer = false;
-        for (const type of ['overseer-get', 'agents-list', 'settings-get', 'chats-list', 'skills-list', 'tools-list', 'workflows-list', 'secrets-list', 'mail-watch']) send({ type });
+        for (const type of ['overseer-get', 'agents-list', 'settings-get', 'chats-list', 'skills-list', 'tools-list', 'workflows-list', 'secrets-list', 'mail-watch', 'calendar-sync']) send({ type });
         reportPresence(true);
         if (state.chat) send({ type: 'chat-open', chatId: state.chat.id, sessionId: state.latest ? undefined : state.session && state.session.id });
         break;
@@ -4553,6 +4554,10 @@
         break;
       case 'mail-watch':
         window.MimiHooks?.mail?.onMessage(message);
+        break;
+      case 'calendar-sync':
+        state.calendar = message.calendar;
+        window.MimiHooks?.triggers?.onMessage?.(message);
         break;
       case 'workflows':
         state.workflows = message.workflows || [];

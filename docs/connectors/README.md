@@ -23,7 +23,7 @@ connector. The frozen contract remains the source of truth for field shapes.
 | E2E, performance and known bottlenecks | [`performance.md`](performance.md) |
 | n8n / Make / Zapier migration | [`n8n-mapping.md`](n8n-mapping.md), [`make-import.md`](make-import.md), [`zapier-import.md`](zapier-import.md) |
 | Migration dialog | [`migration-ui.md`](migration-ui.md) |
-| OpenAPI drafts | [`openapi-import.md`](openapi-import.md) |
+| OpenAPI import | [`openapi-import.md`](openapi-import.md) |
 | Release gate | [`release-checklist.md`](release-checklist.md) |
 
 ## Add a connector
@@ -94,9 +94,10 @@ All importers run locally and never call a provider or save during preview:
   **disabled** with `webhook: null`.
 - Credential values are never imported. Attach a connection after import.
 - Imported connector nodes start with `allow: false` for write operations.
-- OpenAPI import produces a `ConnectorSpec` draft and a report only. It does
-  not persist or register the draft until the integration request in
-  [`longtail-ui.md`](longtail-ui.md) is implemented.
+- OpenAPI import (Hub > Node & Tools) previews a JSON document, then stores it
+  in `user/connectors/imported/` and registers its tools. Imported operations
+  are always untrusted and get method-based risk; see
+  [`openapi-import.md`](openapi-import.md#importing-in-the-app).
 
 ## Troubleshooting
 
@@ -110,7 +111,8 @@ All importers run locally and never call a provider or save during preview:
 | Duplicate webhook runs | The provider does not send a known event-id header/body field; add a supported id or dedupe inside the workflow. |
 | Connector version error | A pinned version was removed. Clear the node's version to use latest, or register the pinned version again. |
 | An imported workflow is not firing | Imported workflows are disabled and have no webhook until enabled. |
-| OpenAPI imported draft is not in the catalog | Expected until persistence/runtime registration is implemented; see [`longtail-ui.md`](longtail-ui.md). |
+| OpenAPI import is refused | The report's `errors` says why: YAML (convert to JSON), http or local server, a native key, a tool name already in use, or the 50-connector / 200-operation cap. |
+| Imported connector missing after restart | Look for `imported connector skipped: <file>: <reason>` in the core log; the file is kept so it can be fixed or removed. |
 | A long workflow stops early | The runner caps executions at 1000 nodes and now fails explicitly with `workflow stopped after 1000 node executions (possible loop)`; split the workflow or check for a cycle. |
 | Test failure mentions a real API | Tests must use `fakeFetch` or an injected `fetchFn`; no test may call a provider. |
 

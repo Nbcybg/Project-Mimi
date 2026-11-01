@@ -4,6 +4,15 @@
 
 ### 0.7.9-prototype
 
+- Connectors: OpenAPI import is usable from the app. Hub > Node & Tools > "+ นำเข้า OpenAPI" previews an OpenAPI
+  3.x JSON document (operations with risk, tool names, unsupported parts, warnings) and on confirm stores it in
+  `user/connectors/imported/<key>.json` and adds its tools without a restart; imports load again at start-up and can
+  be replaced or removed. Imports are JSON only (2 MB), https and non-local servers only, may not reuse a native key
+  or an existing tool name, and are capped at 50 connectors / 200 operations. Every imported operation is
+  `untrustedInput` (so it cannot share an agent with the shell), risk follows the method (GET read, DELETE delete,
+  others write), and a hand-edited file cannot relax that, add triggers, use absolute URLs or borrow Google tokens.
+  A broken file is skipped with a log line; the 50 native connectors are unchanged. New messages
+  `connector-import-preview` / `connector-import-save` / `connector-import-delete` → `connector-import-report`.
 - Providers: `claude-subscription` lets a Claude Pro/Max user chat through their own plan by driving the installed
   Claude Code CLI (or `CLAUDE_CODE_OAUTH_TOKEN` on a server). Its built-in tools, claude.ai connectors and settings
   files are off, so the prompt is Mimi's alone; Mimi's tools reach the CLI over an in-process MCP bridge and still go

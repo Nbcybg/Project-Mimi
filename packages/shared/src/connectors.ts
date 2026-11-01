@@ -221,6 +221,23 @@ export interface ConnectorView {
   rateLimit?: ConnectorRateLimit;
 }
 
+/** What an OpenAPI import found (preview) or stored (save); it never contains credentials. */
+export interface ConnectorImportReportView {
+  key: string;
+  label: string;
+  title: string;
+  version: string;
+  server?: string;
+  security: string[];
+  operations: Array<{ key: string; label: string; method: ConnectorHttpMethod; path: string; risk: RiskLevel }>;
+  /** Agent tool names the connector adds (`<key>_<operation>`). */
+  tools: string[];
+  unsupported: Array<{ where: string; reason: string }>;
+  warnings: string[];
+  /** Whether saving replaces a connector imported earlier under the same key. */
+  replaces: boolean;
+}
+
 export interface ConnectorRequest {
   connector: string;
   operation: string;

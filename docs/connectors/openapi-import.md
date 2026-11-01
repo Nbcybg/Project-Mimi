@@ -1,9 +1,10 @@
 # OpenAPI import (MVP)
 
 `packages/core/src/connectors/openapi.ts` turns an OpenAPI 3.x document into a
-`ConnectorSpec` draft plus a human-readable report. Importing is offline: the
+`ConnectorSpec` draft plus a human-readable report. Parsing is offline: the
 parser never calls a server, never writes credentials, and never registers the
-draft in the connector registry.
+draft in the connector registry. The app's import flow (below) stores and
+registers a checked draft.
 
 ```ts
 import { importOpenApi } from './connectors/openapi.ts';
@@ -59,10 +60,12 @@ are declarations only and always resolve from the vault at runtime.
   link-local or metadata IP literals are rejected unless `allowLocal` is true.
 - Server URLs containing username or password are rejected.
 - External `$ref` values are rejected; only local `#/...` references are read.
-- Import returns data only. No network request is made and no spec is persisted.
+- Every operation is marked `untrustedInput: true`.
+- `importOpenApi` returns data only. No network request is made; persisting is
+  the job of the import store (see "Importing in the app").
 
 These options exist for tests and local development. Do not enable them for
-documents from an untrusted source.
+documents from an untrusted source; the app's import never does.
 
 ## Report
 
@@ -95,5 +98,69 @@ one field fails, so users can review the report and add missing pieces by hand.
   access-token field, with a warning.
 - Pagination, rate limits, triggers and response `itemsPath` inference beyond
   `x-mimi-items-path` are not derived from OpenAPI documents.
-- Imported specs are drafts. They are not written into the built-in services or
-  exposed in the app until a persistence/registration flow is added.
+
+## Importing in the app
+
+Hub > Node & Tools > **+ นำเข้า OpenAPI** sends the document to the core, which
+previews it, and on confirm stores and registers it. The parser above is shared;
+`packages/core/src/connectors/imported.ts` adds the store and the checks.
+
+### Messages
+
+| Client | Meaning |
+| --- | --- |
+| `connector-import-preview` `{ source, key?, label?, replace?, reqId? }` | Parse and check; nothing is written. |
+| `connector-import-save` (same fields) | Check again, then store and register. `replace: true` overwrites an earlier import with the same key. |
+| `connector-import-delete` `{ key, reqId? }` | Remove an imported connector, its tools and its file. |
+
+Each answer is `connector-import-report` `{ reqId, action, saved, key?, report?, errors }`.
+`report` (`ConnectorImportReportView`) lists server, auth, operations with
+risk, tool names, unsupported parts, warnings and whether saving replaces an
+earlier import. `errors` says why the document was refused; when it is not
+empty nothing changed. A save broadcasts `tools` and `connector-connections`.
+
+### What the server accepts
+
+- JSON text only (YAML is refused; convert it first), at most 2 MB.
+- `allowHttp` / `allowLocal` are never set: the server must be absolute https
+  and not localhost, a private, link-local or metadata address.
+- The key may not be one of the 50 native connector keys, and the generated
+  tool names (`<key>_<operation>`) may not collide with any existing tool.
+- At most 50 imported connectors and 200 operations per connector.
+
+### Trust settings that are always applied
+
+`hardenImported` runs on every import and again on every file read at start-up,
+so a hand-edited file cannot relax them:
+
+- `category: 'imported'` and the default version (an import never shadows a
+  native connector version).
+- Risk from the method: `GET` = read, `DELETE` = delete, everything else =
+  write. `confirmPhrase` is dropped.
+- `untrustedInput: true` on every operation: an API response is third-party
+  text, so an agent cannot hold an imported tool together with a shell tool.
+- Operation paths must be relative to the connector's server (no absolute
+  URLs), and triggers are dropped.
+- `auth.extra` keeps only `header`, `prefix`, `location` and `queryNames`, so an
+  import can never borrow the Google account tokens (`provider`). Auth field
+  defaults are removed; credentials always come from Hub > Accounts.
+
+The connector runtime's own SSRF guard (DNS check against private addresses on
+every request) still applies.
+
+### Storage
+
+`user/connectors/imported/<key>.json`:
+
+```json
+{ "format": 1, "importedAt": "…", "title": "Pet Store", "apiVersion": "1.0.0", "spec": { … } }
+```
+
+Files are written to a temporary name and renamed. At start-up the core loads
+them after the 50 native specs; a file that is not JSON, is too large, has a
+name that does not match its key, uses a native key, fails the checks or whose
+tools clash is skipped with a log line (`imported connector skipped: …`) and
+the core starts normally. The native catalog stays at 50.
+
+Removing a connector does not remove its connections from Hub > Accounts, and
+agents that list its tools must drop them (an unknown tool is a config error).

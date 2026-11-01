@@ -2,7 +2,7 @@ import type { CalendarSyncView } from './calendar.ts';
 import type { AgentEvent, UsageSnapshot } from './events.ts';
 import type { MessageRole } from './messages.ts';
 import type { ConnectorConnectionInput, ConnectorConnectionView, OAuthAccountInput, OAuthAccountView } from './oauth.ts';
-import type { ConnectorView } from './connectors.ts';
+import type { ConnectorImportReportView, ConnectorView } from './connectors.ts';
 import type { PermissionDecision, PermissionRequest, PermissionScope } from './permissions.ts';
 import type { SpeechStyle } from './speech.ts';
 import type { CustomToolSpec, McpServerSpec, McpServerView, ToolPreset, ToolSettingField } from './tools.ts';
@@ -645,6 +645,14 @@ export type ClientMessage =
   | { type: 'connector-connection-connect'; id: string }
   /** Loads choices for a select field (`optionsFrom`) by running a read operation. */
   | { type: 'connector-operation-options'; reqId: number; connector: string; operation: string; labelField: string; valueField: string; input?: Record<string, unknown>; account?: string }
+  /**
+   * Imports an OpenAPI 3.x document (JSON text) as a connector. Preview only parses and checks it;
+   * save also stores it under `user/connectors/imported` and adds its tools. `replace` overwrites a
+   * connector imported earlier under the same key. The answer is `connector-import-report`.
+   */
+  | { type: 'connector-import-preview' | 'connector-import-save'; reqId?: number; source: string; key?: string; label?: string; replace?: boolean }
+  /** Removes an imported connector and its tools (native connectors cannot be removed). */
+  | { type: 'connector-import-delete'; key: string; reqId?: number }
   | { type: 'agents-list' }
   /** The built-in AI Overseer; created on first use. */
   | { type: 'overseer-get' }
@@ -848,6 +856,16 @@ export type ServerMessage =
   | { type: 'connector-auth-url'; connectionId: string; url: string }
   /** Result of testing one operation with stored credentials; never includes the credential. */
   | { type: 'connector-test-result'; ok: boolean; message: string }
+  /** What an OpenAPI import found or stored; `errors` lists why it was refused (then nothing was saved). */
+  | {
+      type: 'connector-import-report';
+      reqId?: number;
+      action: 'preview' | 'save' | 'delete';
+      saved: boolean;
+      key?: string;
+      report?: ConnectorImportReportView;
+      errors: string[];
+    }
   /** Options for a connector select field; values are opaque ids from the provider. */
   | { type: 'connector-options'; reqId: number; ok: boolean; options: Array<{ value: string; label: string }>; error?: string }
   /** The agents, plus what the editor offers: tools and the effective default models. */

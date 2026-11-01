@@ -22,7 +22,8 @@ import { ChatEngine } from './chat/engine.ts';
 import { ConnectorRegistry } from './connectors/registry.ts';
 import { ConnectorRuntimeImpl } from './connectors/runtime.ts';
 import { connectorSpecs } from './connectors/services/index.ts';
-import { connectorTools } from './connectors/tool-adapter.ts';
+import { ImportedConnectors } from './connectors/imported.ts';
+import { connectorTools, connectorToolsFor } from './connectors/tool-adapter.ts';
 import type { ConnectorAuthResolver } from './connectors/types.ts';
 import { FileSnapshots, SnapshotExecutor } from './chat/file-snapshots.ts';
 import { HistoryFiles } from './chat/history-files.ts';
@@ -191,6 +192,8 @@ export interface Core {
   tools: ToolPool;
   /** Native connector specs and calls (Slack in Phase 0). */
   connectors: ConnectorRuntime;
+  /** Connectors imported from OpenAPI documents (`user/connectors/imported`). */
+  importedConnectors: ImportedConnectors;
   /** API keys entered in the app; machine-local. */
   secrets: SecretStore;
   /** Workflows and their schedules. */
@@ -547,6 +550,13 @@ export async function createCore(
   };
 
   const connectorRegistry = new ConnectorRegistry(connectorSpecs);
+  // OpenAPI imports join the 50 native connectors; a broken file is skipped, never fatal.
+  const importedConnectors = new ImportedConnectors({
+    dir: path.join(config.userDir, 'connectors', 'imported'),
+    registry: connectorRegistry,
+    nativeKeys: connectorSpecs.map((spec) => spec.key),
+  });
+  for (const error of importedConnectors.load()) console.error(`imported connector skipped: ${error}`);
   const connections = new ConnectorConnections({ dir: config.oauthDir, registry: connectorRegistry, secrets });
   // Google connectors reuse the OAuth accounts (and their refresh tokens); every other
   // service reads a connector connection, with the old vault/env names as a fallback.
@@ -608,7 +618,8 @@ export async function createCore(
     memos,
     timezone: () => config.timezone,
   }).register(
-    ...connectorTools(connectorRegistry, connectors),
+    // Imported connectors add their own tools below (`attach`), so one that clashes is dropped alone.
+    ...connectorTools(connectorRegistry, connectors).filter((tool) => !importedConnectors.has(tool.connector)),
     // Word / PDF export of the agent's answers, into the working folder.
     ...createExportTools({ workDir: config.allowedDirs[0] ?? path.join(config.rootDir, 'workspace') }),
     // Passwords and card data come from the vault and need the user's approval every time.
@@ -618,6 +629,20 @@ export async function createCore(
       localPcTools: config.localPcTools,
     }),
   );
+  for (const error of importedConnectors.attach({
+    toolTaken: (name) => tools.get(name) !== undefined,
+    addTools: (spec) => {
+      const added = connectorToolsFor(spec, connectors);
+      const clash = added.find((tool) => tools.get(tool.name));
+      if (clash) throw new Error(`tool "${clash.name}" already exists`);
+      tools.register(...added);
+    },
+    removeTools: (spec) => {
+      tools.unregister(...spec.operations.map((operation) => `${spec.key}_${operation.key}`));
+    },
+  })) {
+    console.error(`imported connector skipped: ${error}`);
+  }
   const toolStore = new ToolStore(config.toolsDir);
   const pcRunner = makePcRunner(options.pc, config.localPcTools);
   const mcp = new McpHub({
@@ -1854,6 +1879,7 @@ export async function createCore(
     skills: currentSkills,
     tools: toolPool,
     connectors,
+    importedConnectors,
     secrets,
     workflows,
     customNodes,

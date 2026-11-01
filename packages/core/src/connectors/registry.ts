@@ -189,6 +189,13 @@ export class ConnectorRegistry {
     return this;
   }
 
+  /** Drops every version of a connector (used for imported connectors); true when it was installed. */
+  unregister(key: string): boolean {
+    if (!this.byKey.delete(key)) return false;
+    this.rebuildRoutes();
+    return true;
+  }
+
   /** Tool names are unique across services; only the latest version of a key exposes tools. */
   private rebuildRoutes(): void {
     const routes = new Map<string, ConnectorRoute>();

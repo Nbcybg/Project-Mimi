@@ -1270,6 +1270,48 @@ export async function startServer(
         core.connections.setDefault(message.id);
         broadcast(connectionsMessage(true));
         break;
+      case 'connector-import-preview':
+      case 'connector-import-save': {
+        // The source is JSON text only; YAML, http and local servers are refused by the store.
+        const save = message.type === 'connector-import-save';
+        const options = {
+          ...(typeof message.key === 'string' ? { key: message.key.slice(0, 64) } : {}),
+          ...(typeof message.label === 'string' ? { label: message.label.slice(0, 80) } : {}),
+          replace: message.replace === true,
+        };
+        const source = typeof message.source === 'string' ? message.source : '';
+        const plan = save ? core.importedConnectors.save(source, options) : core.importedConnectors.plan(source, options);
+        const saved = save && plan.errors.length === 0;
+        reply({
+          type: 'connector-import-report',
+          reqId: Number(message.reqId) || 0,
+          action: save ? 'save' : 'preview',
+          saved,
+          ...(plan.spec ? { key: plan.spec.key } : {}),
+          ...(plan.report ? { report: plan.report } : {}),
+          errors: plan.errors,
+        });
+        if (saved) {
+          broadcast(toolsMessage(`imported ${plan.spec!.key}`));
+          broadcast(connectionsMessage());
+        }
+        break;
+      }
+      case 'connector-import-delete': {
+        const key = String(message.key ?? '');
+        let errors: string[] = [];
+        try {
+          core.importedConnectors.remove(key);
+        } catch (error) {
+          errors = [(error as Error).message];
+        }
+        reply({ type: 'connector-import-report', reqId: Number(message.reqId) || 0, action: 'delete', saved: false, key, errors });
+        if (errors.length === 0) {
+          broadcast(toolsMessage(`removed ${key}`));
+          broadcast(connectionsMessage());
+        }
+        break;
+      }
       case 'connector-connection-connect': {
         const connectionId = message.id;
         void core.connections.startConnect(connectionId, oauthReceiver).then(

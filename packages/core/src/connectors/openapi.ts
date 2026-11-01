@@ -622,6 +622,8 @@ export function importOpenApi(
         ...(query.length === 0 ? {} : { query }),
         fields: [...fields.values()],
         risk: method === 'GET' ? 'read' : method === 'DELETE' ? 'delete' : 'write',
+        // Whatever a third-party API returns is third-party text: it may not share an agent with the shell.
+        untrustedInput: true,
         ...(operationResponse === undefined ? {} : { response: operationResponse }),
       });
       report.operations.push({ key, label: summary ? humanize(summary).slice(0, 80) : humanize(key), method, path });

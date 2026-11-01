@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import { PcAgent } from '@mimi/pc-agent';
 import type { AgentEvent, ClientMessage, ServerMessage, WorkflowView } from '@mimi/shared';
 import { WebSocket as WsClient } from 'ws';
+import { parse as parseYaml } from 'yaml';
 import { APP_VERSION, type MimiServer, startServer } from '../server/server.ts';
 import { hangingModel, type TestCoreOptions, testCoreParts } from './core-helpers.ts';
 import { scriptedModel, textStep, toolStep } from './helpers.ts';
@@ -546,4 +547,60 @@ test('workflows: saved under an agent, fired by their webhook URL without a toke
 
   client.close();
   await booted.stop();
+});
+
+test('connectors: an OpenAPI import is previewed, saved, kept across a restart and removed over the socket', async () => {
+  const petstore = JSON.stringify(parseYaml(fs.readFileSync(path.join(import.meta.dirname, 'fixtures/openapi/petstore.yaml'), 'utf8')));
+  const parts = testCoreParts();
+  const run = () =>
+    startServer({ ...parts.config, token: TOKEN, host: '127.0.0.1', port: 0, localPcTools: false }, parts.coreOptions);
+  const stored = path.join(parts.root, 'user', 'connectors', 'imported', 'pet_store.json');
+  let server = await run();
+  try {
+    let client = await Client.open(`ws://127.0.0.1:${server.port}/ws`);
+    await client.waitFor(isType('welcome'));
+    const report = (reqId: number) => (message: ServerMessage): message is Extract<ServerMessage, { type: 'connector-import-report' }> =>
+      message.type === 'connector-import-report' && message.reqId === reqId;
+
+    client.send({ type: 'connector-import-preview', reqId: 1, source: petstore });
+    const preview = await client.waitFor(report(1));
+    assert.equal(preview.saved, false);
+    assert.deepEqual(preview.errors, []);
+    assert.equal(preview.report?.operations.length, 4);
+    assert.equal(fs.existsSync(stored), false);
+
+    client.send({ type: 'connector-import-save', reqId: 2, source: 'openapi: 3.0.3\ninfo: {}' });
+    const refused = await client.waitFor(report(2));
+    assert.equal(refused.saved, false);
+    assert.match(refused.errors.join('\n'), /only OpenAPI JSON/);
+
+    client.send({ type: 'connector-import-save', reqId: 3, source: petstore });
+    const saved = await client.waitFor(report(3));
+    assert.equal(saved.saved, true);
+    assert.equal(saved.key, 'pet_store');
+    const tools = await client.waitFor((message): message is Extract<ServerMessage, { type: 'tools' }> =>
+      message.type === 'tools' && (message.connectors ?? []).some((spec) => spec.key === 'pet_store'));
+    assert.ok(tools.tools.some((tool) => tool.name === 'pet_store_list_pets'));
+    assert.equal((tools.connectors ?? []).filter((spec) => spec.category !== 'imported').length, 50);
+    assert.ok(fs.existsSync(stored));
+    client.close();
+    await server.close();
+
+    server = await run();
+    client = await Client.open(`ws://127.0.0.1:${server.port}/ws`);
+    await client.waitFor(isType('welcome'));
+    client.send({ type: 'tools-list' });
+    const restarted = await client.waitFor(isType('tools'));
+    assert.ok((restarted.connectors ?? []).some((spec) => spec.key === 'pet_store' && spec.category === 'imported'));
+    assert.ok(restarted.tools.some((tool) => tool.name === 'pet_store_delete_pet'));
+    client.send({ type: 'connector-import-delete', reqId: 4, key: 'slack' });
+    assert.match((await client.waitFor(report(4))).errors.join('\n'), /built-in connector/);
+    client.send({ type: 'connector-import-delete', reqId: 5, key: 'pet_store' });
+    assert.deepEqual((await client.waitFor(report(5))).errors, []);
+    assert.equal(fs.existsSync(stored), false);
+    client.close();
+  } finally {
+    await server.close();
+    fs.rmSync(parts.root, { recursive: true, force: true });
+  }
 });

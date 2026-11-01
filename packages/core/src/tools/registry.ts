@@ -30,6 +30,12 @@ export class ToolRegistry {
     return this;
   }
 
+  /** Removes tools that can come and go at runtime (imported connectors). */
+  unregister(...names: string[]): this {
+    for (const name of names) this.tools.delete(name);
+    return this;
+  }
+
   get(name: string): ToolDefinition | undefined {
     return this.tools.get(name);
   }

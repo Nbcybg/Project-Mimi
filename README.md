@@ -38,8 +38,8 @@ PC agent ───────────────────────�
 - **Mimiamp** — เครื่องเล่นเพลงประกอบสไตล์ Winamp ในหน้าจอใหม่ ผู้ใช้เปิดเองหรือให้ agent เปิดเป็นหน้าต่างลอย (picture-in-picture) ก็ได้ แตะเพื่อขยายเต็มจอ (เพลงอยู่ใน `packages/core/src/server/web/mimiamp/`)
 - **ความจำและ session** — memory หลายชั้น, สรุปบทสนทนาอัตโนมัติ, context meter, งบ token/ค่าใช้จ่าย
 - **Workflow engine** — trigger ตามเวลา/webhook, expression, code node ที่แยก process, run history, approval, retry และ idempotency
-- **Connectors** — 50 บริการ native / 214 operations, Google (Gmail, Calendar, Drive, Sheets, Docs, YouTube), Microsoft (Outlook, Calendar, To Do, OneDrive), MCP, custom HTTP/code/shell tools
-- **นำเข้า workflow** — n8n, Make, Zapier และ OpenAPI (สร้างเป็น draft พร้อม report)
+- **Connectors** — 50 บริการ native / 218 operations + นำเข้า API อื่นจาก OpenAPI 3.x (JSON) เป็น connector ได้เอง, Google (Gmail, Calendar, Drive, Sheets, Docs, YouTube), Microsoft (Outlook, Calendar, To Do, OneDrive), MCP, custom HTTP/code/shell tools
+- **นำเข้า** — workflow จาก n8n, Make, Zapier (เป็น draft พร้อม report) และ connector จาก OpenAPI (Hub → Node & Tools → นำเข้า OpenAPI)
 - **PC agent** — ให้ agent ใช้เครื่องของคุณผ่านโฟลเดอร์ที่อนุญาต, เบราว์เซอร์ของ agent และ shell (ปิดเป็นค่าเริ่มต้น)
 - **Task ที่ตรวจสอบได้** — recipe แบบ deterministic, แผนก่อนลงมือ, อนุมัติครั้งเดียวทั้งงาน, ใบเสร็จ และ undo (เริ่มด้วย `file-organizer` ที่ย้ายไฟล์ตามชนิดโดยไม่ลบไฟล์)
 - **Workspace / Developer task** — ตรวจ repo, รันเทสต์ที่ fail, checkpoint, ให้ agent แก้โค้ด, รันเทสต์ซ้ำ, แสดง diff และ undo โดยไม่ commit/push/merge

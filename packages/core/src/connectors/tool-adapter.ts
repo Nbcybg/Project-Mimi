@@ -148,3 +148,8 @@ function toolFor(spec: ConnectorSpec, operation: ConnectorOperation, runtime: Co
 export function connectorTools(registry: ConnectorRegistry, runtime: ConnectorRuntime): ConnectorToolDefinition[] {
   return registry.operations().map(({ connector, operation }) => toolFor(connector, operation, runtime));
 }
+
+/** The tools of one connector, for a connector registered after start-up (an OpenAPI import). */
+export function connectorToolsFor(spec: ConnectorSpec, runtime: ConnectorRuntime): ConnectorToolDefinition[] {
+  return spec.operations.map((operation) => toolFor(spec, operation, runtime));
+}

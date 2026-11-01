@@ -10,8 +10,8 @@ machine vault and are edited on Hub > Accounts.
 
 - One row per connector from `state.connectors`, split by source:
   - `native` - connectors shipped in `packages/core/src/connectors/services/`.
-  - `OpenAPI import` - specs whose category is `imported` (none exist yet, see
-    the integration request below).
+  - `OpenAPI import` - specs whose category is `imported`, created with the
+    import dialog (see "OpenAPI import" below).
   - MCP is a separate section (below); MCP servers are not connectors.
 - Per row: label, key, source, category, operation count, auth kind, and a
   connection pill:
@@ -51,8 +51,8 @@ native connector family, and this catalog does not change that grouping.
 
 ## Data sources
 
-Everything is read from messages the server already sends (no new message
-types):
+The catalog reads messages the server already sends; only the import dialog
+adds `connector-import-*` messages:
 
 | UI state | Message field |
 | --- | --- |
@@ -64,25 +64,21 @@ types):
 `ConnectorRuntimeImpl.list()` returns `registry.views()` without a `connected`
 flag, so the UI derives connection status from the connections list instead.
 
-## Integration request: OpenAPI import
+## OpenAPI import
 
-The catalog is ready for imported connectors (category `imported` lights up the
-`OpenAPI import` source chip), but nothing can create them yet:
+The catalog header has a **+ นำเข้า OpenAPI** button. The dialog takes an
+OpenAPI 3.x JSON file or pasted JSON, plus an optional key and label, and asks
+the core for a preview (`connector-import-preview`). The preview shows the
+server, auth, every operation with its risk (all marked untrusted), the agent
+tool names, unsupported parts and warnings, or the reasons the document was
+refused. Confirming sends `connector-import-save`; when an earlier import has
+the same key the preview says so and the button reads "แทนที่ด้วย …".
 
-- `packages/core/src/connectors/openapi.ts` is parser-only. It turns a spec
-  into `ConnectorSpec`/`OpenApiImportReport`, but there is no server message,
-  no persistence and no runtime registration.
-- To finish the feature, the core needs (outside this UI's owned files):
-  1. A `connector-import-openapi` message in `server.ts` (JSON body only, size
-     capped) that calls the parser and stores accepted specs under the user
-     data directory (e.g. `connectors/imported/<slug>.json`).
-  2. Loading those files into the registry at startup with
-     `category: 'imported'`; the catalog then shows them with no UI change.
-  3. A `tools` message note (or the existing `mcp` shape) carrying parse
-     warnings so the dialog can show the same report sections as the workflow
-     importers.
-- Until then the catalog shows a hint under the list and no import button, so
-  the UI never pretends an action is available.
+After a save the core broadcasts `tools`, the connector appears under the
+`OpenAPI import` source chip, and the detail panel opens. An imported
+connector's panel has a delete button (`connector-import-delete`); native
+connectors have none. Message shapes, limits and the trust settings the core
+enforces are in [`openapi-import.md`](openapi-import.md#importing-in-the-app).
 
 ## Smoke checklist
 
@@ -98,7 +94,8 @@ The catalog is ready for imported connectors (category `imported` lights up the
 3. Category select lists the categories in the build (ads, ai, analytics, ...,
    media, ...) and filters the list.
 4. Source chips: `native` keeps every row; `OpenAPI import` shows the empty
-   state; `ต้องตั้ง credential` hides connectors with a working connection.
+   state until something is imported; `ต้องตั้ง credential` hides connectors
+   with a working connection.
 5. Connection pills:
    - A non-connected OAuth2 connector shows `ต้องสร้าง connection` and a
      `ตั้งค่า credential` button that opens Hub > Accounts.
@@ -113,3 +110,14 @@ The catalog is ready for imported connectors (category `imported` lights up the
    risk chips and `untrusted` chip. A disabled server shows `ปิดอยู่`.
 8. Quick Work picker (agent > tools): connector families stay under
    `connector:<key>`; custom and MCP tools stay under their own families.
+9. OpenAPI import: save the Pet Store fixture
+   (`packages/core/src/test/fixtures/openapi/petstore.yaml`) as JSON and upload it.
+   - The preview lists 4 operations (อ่าน 2, เขียน 1, ลบ 1) and 4 tool names;
+     nothing is stored yet.
+   - Confirm: `Pet Store` appears under `OpenAPI import`, the header shows
+     `native 50 · OpenAPI import 1`, and `pet_store_*` tools are in the tool
+     table.
+   - Restart the core: the connector is still there.
+   - Upload the YAML file itself, or a copy with an `http://` server: the
+     dialog shows why it was refused and nothing is saved.
+   - Delete it from its panel: the row and its tools go away.

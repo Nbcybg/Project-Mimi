@@ -4593,6 +4593,9 @@
       case 'workflow-node-result':
         if (window.MimiHooks && window.MimiHooks.workflows) window.MimiHooks.workflows.onNodeResult?.(message.result);
         break;
+      case 'connector-import-report':
+        if (window.MimiHooks && window.MimiHooks.tools) window.MimiHooks.tools.onImport?.(message);
+        break;
       case 'workflow-import':
         if (window.MimiHooks && window.MimiHooks.workflows) window.MimiHooks.workflows.onImport?.(message);
         break;

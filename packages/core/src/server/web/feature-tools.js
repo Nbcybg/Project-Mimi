@@ -190,7 +190,179 @@
       panel.append(chips);
     }
     panel.append(el('p', 'hint', 'Quick Work แยก node ตาม service — long-tail (custom / MCP / OpenAPI) อยู่ในกองของตัวเอง ไม่ปนกับ family native'));
+    if (sourceOf(spec) === 'openapi') {
+      panel.append(
+        button('btn ghost', 'ลบ connector ที่นำเข้านี้', () => {
+          if (confirm(`ลบ connector "${spec.label}" และเครื่องมือ ${spec.operations.length} ตัวของมัน?\nagent ที่ใช้เครื่องมือเหล่านี้อยู่ต้องเอาออกจากรายการเครื่องมือเอง · connection ที่สร้างไว้ยังอยู่ใน Hub → บัญชี`)) {
+            M().send({ type: 'connector-import-delete', key: spec.key });
+          }
+        }),
+      );
+    }
     return panel;
+  }
+
+  // ---------- OpenAPI import ----------
+  /** { source, key, label, preview, busy, reqId } while the import dialog is open. */
+  let importing = null;
+  let importSeq = 0;
+
+  function openImport() {
+    importing = { source: '', key: '', label: '', preview: null, busy: false, reqId: 0 };
+    showImport();
+  }
+
+  /** Preview asks with `replace` so it only reports real problems; save replaces only what the preview said it would. */
+  function sendImport(save) {
+    if (!importing || importing.busy || !importing.source.trim()) return;
+    importing.busy = true;
+    importing.reqId = ++importSeq;
+    const replaces = Boolean(importing.preview && importing.preview.report && importing.preview.report.replaces);
+    M().send({
+      type: save ? 'connector-import-save' : 'connector-import-preview',
+      reqId: importing.reqId,
+      source: importing.source,
+      ...(importing.key.trim() ? { key: importing.key.trim() } : {}),
+      ...(importing.label.trim() ? { label: importing.label.trim() } : {}),
+      replace: save ? replaces : true,
+    });
+    showImport();
+  }
+
+  function importReport(preview) {
+    const box = el('div', 'wresult');
+    const report = preview.report;
+    if (report) {
+      box.append(el('h4', '', preview.saved ? `นำเข้าแล้ว: ${report.label}` : `ตัวอย่าง: ${report.label} (${report.operations.length} operations)`));
+      const meta = el('div', 'grid2');
+      meta.append(
+        M().labelled('Key', el('code', 'mono', report.key)),
+        M().labelled('Server', el('code', 'mono', report.server || '—')),
+        M().labelled('API', el('span', '', `${report.title} ${report.version}`)),
+        M().labelled('Auth', el('span', '', report.security.join(', ') || 'none')),
+      );
+      box.append(meta);
+      if (report.replaces) box.append(el('p', 'hint badtxt', `มี connector "${report.key}" ที่นำเข้าไว้แล้ว — ยืนยันแล้วจะแทนที่ของเดิม`));
+      const counts = {};
+      for (const operation of report.operations) counts[operation.risk] = (counts[operation.risk] || 0) + 1;
+      const chips = el('div', 'hstack');
+      for (const [risk, count] of Object.entries(counts)) chips.append(el('span', `risk${risk === 'read' ? '' : ' w'}`, `${RISK_LABEL[risk] || risk} ${count}`));
+      chips.append(el('span', 'chip', 'untrusted ทุกตัว'));
+      box.append(chips);
+      const ops = el('div', 'tbl');
+      for (const operation of report.operations) {
+        const row = el('div');
+        row.style.gridTemplateColumns = 'minmax(0, 1.2fr) 56px minmax(0, 1.4fr) 56px';
+        const risk = el('span');
+        risk.append(el('span', `risk${operation.risk === 'read' ? '' : ' w'}`, RISK_LABEL[operation.risk] || operation.risk));
+        row.append(el('span', '', `${operation.label} (${operation.key})`), el('span', 'mono muted', operation.method), el('span', 'mono faint', operation.path), risk);
+        ops.append(row);
+      }
+      box.append(ops);
+      const section = (title, items, render, open) => {
+        if (!items || items.length === 0) return;
+        const details = el('details');
+        if (open) details.open = true;
+        details.append(el('summary', '', `${title} (${items.length})`));
+        for (const item of items) details.append(render(item));
+        box.append(details);
+      };
+      section('ส่วนที่นำเข้าไม่ได้ (ข้ามไป)', report.unsupported, (item) => el('p', 'hint badtxt', `${item.where}: ${item.reason}`), true);
+      section('คำเตือน', report.warnings, (item) => el('p', 'hint', item), true);
+      section('ชื่อเครื่องมือที่ agent จะเห็น', report.tools, (item) => el('p', 'hint mono', item), false);
+    }
+    if ((preview.errors || []).length > 0) {
+      box.append(el('h4', 'badtxt', preview.action === 'save' ? 'นำเข้าไม่สำเร็จ — ไม่มีอะไรถูกบันทึก' : 'นำเข้าไม่ได้'));
+      for (const error of preview.errors) box.append(el('p', 'hint badtxt', error));
+    }
+    return box;
+  }
+
+  function showImport() {
+    if (!importing) return;
+    const dialog = el('div', 'dialog wfedit form');
+    dialog.append(
+      el('h3', '', 'นำเข้า connector จาก OpenAPI'),
+      el(
+        'p',
+        'hint',
+        'รับ OpenAPI 3.x แบบ JSON (YAML ให้แปลงเป็น JSON ก่อน) · server ต้องเป็น https และไม่ใช่เครื่องในวง LAN · ไม่มีการเรียก API ตอนนำเข้า และไม่นำเข้า credential — ตั้งค่าใน Hub → บัญชี หลังนำเข้า · ผลลัพธ์จาก API ถือเป็นข้อความภายนอก (untrusted) จึงใช้ร่วมกับ shell ใน agent เดียวกันไม่ได้',
+      ),
+    );
+    const file = el('input');
+    file.type = 'file';
+    file.accept = '.json,application/json';
+    file.onchange = async () => {
+      const picked = file.files && file.files[0];
+      if (!picked) return;
+      importing.source = await picked.text();
+      importing.preview = null;
+      sendImport(false);
+    };
+    dialog.append(M().labelled('ไฟล์ OpenAPI (.json)', file));
+    const paste = el('textarea');
+    paste.placeholder = 'หรือวาง OpenAPI JSON ที่นี่';
+    paste.value = importing.source && importing.source.length < 20000 ? importing.source : '';
+    const names = el('div', 'grid2');
+    const key = el('input');
+    key.placeholder = 'ได้จาก info.title';
+    key.value = importing.key;
+    key.oninput = () => {
+      importing.key = key.value;
+    };
+    const label = el('input');
+    label.placeholder = 'ได้จาก info.title';
+    label.value = importing.label;
+    label.oninput = () => {
+      importing.label = label.value;
+    };
+    names.append(M().labelled('Key (ไม่บังคับ, snake_case)', key), M().labelled('ชื่อที่แสดง (ไม่บังคับ)', label));
+    dialog.append(
+      paste,
+      names,
+      button('btn ghost', 'ดูตัวอย่าง', () => {
+        if (paste.value.trim()) importing.source = paste.value;
+        importing.preview = null;
+        sendImport(false);
+      }),
+    );
+    if (importing.busy) dialog.append(el('p', 'hint', 'กำลังตรวจ…'));
+    const preview = importing.preview;
+    if (preview) dialog.append(importReport(preview));
+    const foot = el('div', 'foot');
+    foot.append(
+      el('span', 'msg'),
+      button('btn ghost', preview && preview.saved ? 'เสร็จ' : 'ปิด', () => {
+        importing = null;
+        M().closeOverlay();
+      }),
+    );
+    if (preview && !preview.saved && preview.report && (preview.errors || []).length === 0 && !importing.busy) {
+      const count = preview.report.operations.length;
+      foot.append(button('btn pri', preview.report.replaces ? `แทนที่ด้วย ${count} operations` : `ยืนยันนำเข้า ${count} operations`, () => sendImport(true)));
+    }
+    dialog.append(foot);
+    M().overlay(dialog);
+  }
+
+  function onImport(message) {
+    if (message.action === 'delete') {
+      if ((message.errors || []).length > 0) {
+        M().toast('ลบ connector ไม่ได้', message.errors.join('\n'), true);
+      } else {
+        M().toast(`ลบ connector ${message.key} แล้ว`);
+        if (sel && sel.mode === 'connector' && sel.name === message.key) go(null);
+      }
+      return;
+    }
+    if (!importing || message.reqId !== importing.reqId) return;
+    importing.busy = false;
+    importing.preview = message;
+    if (message.saved) {
+      M().toast(`นำเข้า ${message.report ? message.report.label : message.key} แล้ว`, 'ตั้ง credential ใน Hub → บัญชี แล้วเพิ่มเครื่องมือให้ agent');
+      sel = { mode: 'connector', name: message.key };
+    }
+    showImport();
   }
 
   function catalogPanel() {
@@ -208,6 +380,10 @@
       ),
     );
     if (!M().state.connections) M().send({ type: 'connector-connections' });
+    const actions = el('div', 'hstack');
+    actions.style.margin = '0 0 8px';
+    actions.append(button('btn', '+ นำเข้า OpenAPI', openImport, 'สร้าง connector จากเอกสาร OpenAPI 3.x (JSON)'));
+    box.append(actions);
 
     const bar = el('div', 'toolgrid-bar');
     const search = el('input', 'toolgrid-search');
@@ -275,13 +451,7 @@
     };
     paint();
     if (imported === 0) {
-      box.append(
-        el(
-          'p',
-          'hint',
-          'OpenAPI import: ตัวแปลง spec พร้อมที่ packages/core/src/connectors/openapi.ts แต่ยังไม่มีทางนำเข้าจากเว็บ (ต้องมี server message + ที่เก็บ connector ที่นำเข้า) — ดู docs/connectors/longtail-ui.md',
-        ),
-      );
+      box.append(el('p', 'hint', 'ยังไม่มี connector ที่นำเข้า — กด "+ นำเข้า OpenAPI" เพื่อเพิ่ม service ที่ไม่อยู่ใน 50 ตัว native'));
     }
     return box;
   }
@@ -846,5 +1016,5 @@
   }
 
   window.MimiHooks = window.MimiHooks || {};
-  window.MimiHooks.tools = { render, onMessage };
+  window.MimiHooks.tools = { render, onMessage, onImport };
 })();

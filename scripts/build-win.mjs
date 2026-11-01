@@ -3,7 +3,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { electronDist } from './electron-dist.mjs';
+import { applyFuses } from './fuses.mjs';
 import { copyPcAgentPackages, packPcAgent } from './pack-pc-agent.mjs';
+import { copyTerminalPackages } from './pack-terminal.mjs';
 import { signWindows } from './signing.mjs';
 
 // Builds the Windows app people install: dist/win/Mimi/Mimi.exe, a window onto a Mimi server
@@ -59,6 +61,8 @@ fs.writeFileSync(
 packPcAgent(ROOT, APP);
 // The outside packages the copied PC agent imports (zod, pdf-lib).
 copyPcAgentPackages(ROOT, APP);
+// The Workspace terminal: node-pty (prebuilt for this system) and xterm.js.
+copyTerminalPackages(ROOT, APP);
 log('app and PC agent copied');
 
 // 3. The window and tray picture, drawn in code (the same picture as the Mac build). The .exe
@@ -75,6 +79,9 @@ icoHeader.writeUInt32LE(icoPng.length, 14);
 icoHeader.writeUInt32LE(22, 18);
 fs.writeFileSync(path.join(STAGE, 'Mimi.ico'), Buffer.concat([icoHeader, icoPng]));
 log('icon written');
+
+// 3a. Electron fuses: keep RunAsNode for the PC agent, turn off NODE_OPTIONS and inspect flags.
+await applyFuses(path.join(STAGE, 'Mimi.exe'));
 
 // 3b. Authenticode signature of Mimi.exe when a certificate is configured (scripts/signing.mjs).
 // It goes on before packing, so the zip the app updates itself from carries it too.

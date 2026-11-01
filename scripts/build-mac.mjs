@@ -3,7 +3,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { electronDist } from './electron-dist.mjs';
+import { applyFuses } from './fuses.mjs';
 import { copyPcAgentPackages, packPcAgent } from './pack-pc-agent.mjs';
+import { copyTerminalPackages } from './pack-terminal.mjs';
 import { notarizeMac, signMac } from './signing.mjs';
 
 // Builds the macOS app people install: dist/mac/Mimi.app, a window onto a Mimi server
@@ -59,6 +61,8 @@ fs.writeFileSync(
 packPcAgent(ROOT, APP);
 // The outside packages the copied PC agent imports (zod, pdf-lib).
 copyPcAgentPackages(ROOT, APP);
+// The Workspace terminal: node-pty (prebuilt for this system) and xterm.js.
+copyTerminalPackages(ROOT, APP);
 log('app and PC agent copied');
 
 // 3. Icons: the tray picture and the app icon, drawn in code (the same picture as the Windows build).
@@ -112,9 +116,10 @@ set('NSCameraUsageDescription', 'string', 'Mimi ใช้กล้องเม�
 set('NSAppleEventsUsageDescription', 'string', 'Mimi ใช้เปิดลิงก์และไฟล์ให้คุณ');
 run('plutil', ['-lint', plist]);
 
-// 5. Changed files break Electron's signature; sign again: with a Developer ID and the hardened
-// runtime when APPLE_SIGN_IDENTITY is set (scripts/signing.mjs), else ad hoc, which runs on
-// this and other Macs after "Open" once.
+// 5. Electron fuses, then sign: changed files break Electron's signature; sign again with a
+// Developer ID and the hardened runtime when APPLE_SIGN_IDENTITY is set (scripts/signing.mjs),
+// else ad hoc, which runs on this and other Macs after "Open" once.
+await applyFuses(path.join(CONTENTS, 'MacOS', 'Mimi'), true);
 const developerId = signMac(BUNDLE, path.join(ROOT, 'scripts', 'mac-entitlements.plist'));
 
 fs.writeFileSync(

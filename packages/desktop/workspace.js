@@ -255,8 +255,94 @@
     });
   }
 
+  // ---------- terminal ----------
+  // With a pseudo-terminal (node-pty in the main process) the pane is xterm.js: every key goes
+  // to the shell as typed and its output is drawn as a real terminal. Without one (or without
+  // xterm.js) the older pipe view stays: an output box and a line-by-line input.
+  const termView = $('term-xterm');
+  /** { term, fit } once xterm.js is loaded and the shell is a pty. */
+  let xterm = null;
+  let xtermLoading = null;
+
+  function loadAsset(tag, url) {
+    return new Promise((resolve, reject) => {
+      const node = document.createElement(tag);
+      if (tag === 'link') {
+        node.rel = 'stylesheet';
+        node.href = url;
+      } else {
+        node.src = url;
+      }
+      node.onload = () => resolve();
+      node.onerror = () => reject(new Error(`could not load ${url}`));
+      document.head.append(node);
+    });
+  }
+
+  /** Loads xterm.js from the URLs the main process put in the page address; false when absent. */
+  function loadXterm() {
+    if (xtermLoading) return xtermLoading;
+    const query = new URLSearchParams(location.search);
+    const urls = [query.get('xterm'), query.get('xtermCss'), query.get('xtermFit')];
+    if (urls.some((url) => !url || !url.startsWith('file:'))) return (xtermLoading = Promise.resolve(false));
+    xtermLoading = Promise.all([loadAsset('link', urls[1]), loadAsset('script', urls[0])])
+      .then(() => loadAsset('script', urls[2]))
+      .then(() => Boolean(window.Terminal && window.FitAddon))
+      .catch(() => false);
+    return xtermLoading;
+  }
+
+  function createXterm() {
+    const term = new window.Terminal({
+      fontFamily: getComputedStyle(document.documentElement).getPropertyValue('--mono').trim() || 'Consolas, monospace',
+      fontSize: 12.5,
+      lineHeight: 1.2,
+      cursorBlink: true,
+      scrollback: 5000,
+      allowProposedApi: false,
+      theme: { background: '#120e11', foreground: '#e9dfe4', cursor: '#f39bc0', selectionBackground: '#5a3a4a' },
+    });
+    const fit = new window.FitAddon.FitAddon();
+    term.loadAddon(fit);
+    term.open(termView);
+    term.onData((data) => api.terminalInput(data));
+    // Ctrl+C copies when text is selected, otherwise it interrupts; Ctrl+V pastes through the browser.
+    term.attachCustomKeyEventHandler((event) => {
+      if (event.type !== 'keydown' || !event.ctrlKey || event.altKey) return true;
+      const key = event.key.toLowerCase();
+      if (key === 'c' && term.hasSelection()) {
+        void navigator.clipboard?.writeText(term.getSelection());
+        term.clearSelection();
+        return false;
+      }
+      if (key === 'v') return false;
+      return true;
+    });
+    const resize = () => {
+      if (termView.hidden || !termView.clientWidth) return;
+      try {
+        fit.fit();
+        api.terminalResize(term.cols, term.rows);
+      } catch {
+        // not laid out yet
+      }
+    };
+    new ResizeObserver(resize).observe(termView);
+    return { term, fit, resize };
+  }
+
+  function usePipeView(pipe) {
+    termView.hidden = pipe;
+    termOut.hidden = !pipe;
+    document.querySelector('.term-line').hidden = !pipe;
+  }
+
   function appendTerminal(text) {
     if (!text) return;
+    if (xterm && !termView.hidden) {
+      xterm.term.write(text);
+      return;
+    }
     termOut.textContent = (termOut.textContent + String(text)).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
     if (termOut.textContent.length > 400_000) termOut.textContent = termOut.textContent.slice(-400_000);
     termOut.scrollTop = termOut.scrollHeight;
@@ -264,15 +350,24 @@
 
   async function startTerminal() {
     termStatus.textContent = 'starting…';
+    const canDraw = await loadXterm();
+    if (canDraw && !xterm) {
+      usePipeView(false);
+      xterm = createXterm();
+    }
+    if (xterm) xterm.resize();
     try {
-      const result = await api.terminalStart('');
+      const result = await api.terminalStart('', xterm ? xterm.term.cols : undefined, xterm ? xterm.term.rows : undefined);
+      // The main process decides: no pseudo-terminal there means the pipe view here.
+      usePipeView(!(result.pty && xterm));
       termPrompt.textContent = processLabel(result.cwd);
-      termStatus.textContent = 'running';
+      termStatus.textContent = result.pty && xterm ? 'running' : 'running (pipe)';
     } catch (error) {
       termStatus.textContent = 'stopped';
       appendTerminal(`\n${error.message}\n`);
     }
-    termIn.focus();
+    if (xterm && !termView.hidden) xterm.term.focus();
+    else termIn.focus();
   }
 
   const processLabel = (cwd) => {
@@ -284,6 +379,7 @@
     termStatus.textContent = 'restarting…';
     await api.terminalStop();
     termOut.textContent = '';
+    if (xterm) xterm.term.reset();
     await startTerminal();
   }
 
@@ -291,7 +387,7 @@
     api.onTerminalData((text) => appendTerminal(text));
     api.onTerminalExit((code) => {
       termStatus.textContent = `exited ${code}`;
-      appendTerminal(`\n[process exited ${code}]\n`);
+      appendTerminal(`\r\n[process exited ${code}]\r\n`);
     });
     termIn.addEventListener('keydown', (event) => {
       if (event.key === 'Enter') {
@@ -354,12 +450,17 @@
   });
   $('term-clear').addEventListener('click', () => {
     termOut.textContent = '';
+    if (xterm) xterm.term.clear();
   });
   $('term-restart').addEventListener('click', () => void restartTerminal());
   document.addEventListener('click', (event) => {
-    if (event.target.closest('.terminal')) termIn.focus();
+    if (!event.target.closest('.terminal')) return;
+    if (xterm && !termView.hidden) xterm.term.focus();
+    else termIn.focus();
   });
   document.addEventListener('keydown', (event) => {
+    // Inside the terminal every key belongs to the shell (Ctrl+L clears the screen there).
+    if (event.target instanceof Element && event.target.closest('#term-xterm')) return;
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'l') {
       event.preventDefault();
       url.focus();

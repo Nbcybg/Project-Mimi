@@ -32,6 +32,7 @@
     "google-auth": "node --env-file-if-exists=.env packages/core/src/cli/google-auth.ts"
   },
   "devDependencies": {
+    "@electron/fuses": "^2.1.3",
     "@types/node": "^24.19.2",
     "typescript": "^5.9.3"
   }

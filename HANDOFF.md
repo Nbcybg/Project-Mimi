@@ -2,18 +2,19 @@
 
 ## สถานะ
 
-- Commit ล่าสุด: `5386801` (docs/HANDOFF), `9b24e39` (docs), `0e7edf2` (Google Drive connector),
-  `991e291` (Overseer ชั้น 1), `a4b20a3` (MCP/workflow/permissions/secret/git)
-- Working tree สะอาด ไม่มี commit ค้าง (branch `main` นำ `origin/main` อยู่ 11 commits ยังไม่ push)
-- ตรวจซ้ำรอบปิดงาน (2026-11-01): typecheck ผ่านทั้ง `shared`, `pc-agent`, `core`
-- Full test suite ผ่าน **684 tests** (fail 0, skipped 0)
+- Commit ล่าสุด: `8edf589` (Layer 2), `22eb64e` (docs/HANDOFF), `5386801` (docs), `9b24e39` (docs),
+  `0e7edf2` (Google Drive connector), `991e291` (Overseer ชั้น 1), `a4b20a3` (MCP/workflow/permissions/secret/git)
+- Layer 2 ถูก commit แล้วใน `8edf589` (in-place/apps/statements/vault fill); working tree สะอาด
+- branch `main` นำ `origin/main` อยู่ 13 commits (รวม commit handoff นี้) และยังไม่ push
+- ตรวจซ้ำรอบปิดงาน Layer 2 (2026-11-01): typecheck ผ่านทั้ง `shared`, `pc-agent`, `core`
+- Full test suite ผ่าน **699 tests** (fail 0, skipped 0)
 - UI smoke test ผ่าน 7/7 ในรอบก่อน และรอบนี้ผ่านเพิ่ม: agent permission matrix (6 rows, ค่า policy ที่บันทึกไว้แสดงถูก)
   + Settings จัดกลุ่ม always grants ตาม agent (รันผ่าน BrowserSession/Edge headless, ไม่ได้เพิ่มเป็น test ใน repo)
 - DB schema ล่าสุด: **version 23** (`023-tool-calls.sql`)
 - รอบล่าสุด: run_log coverage, MCP reconnect/backoff, config rollback (skill/preset/workflow),
   secret redaction, git secret-file guard, permission matrix + per-agent always grants,
   Overseer ชั้น 1 (machine/web tools, mail/notify, cron, vault, OAuth, workflow enable, self-edit, notify node),
-  Google Drive connector upload/rename/share
+  Google Drive connector upload/rename/share, **Layer 2 (in-place media, install apps, statements/payment guard, vault fills)**
 
 ## ทำเสร็จแล้ว
 
@@ -29,7 +30,7 @@
 - Per-agent permission:
   - `agent.md` มี `permissions: { tool: allow|ask|deny }`
   - ใช้ใน chat agent loop, task gates และ workflow tool/mcp/connector/sheets node
-  - approval card มี once / task / session / always
+  - approval card มี once / task / session / always (เครื่องมือ `alwaysAsk` เช่น `browser_fill_secret` และ payment ops แสดงแค่ครั้งนี้/ปฏิเสธ)
   - always grants เก็บใน app settings **แยกตาม agent** และลบได้จาก Settings
   - grant เก่าแบบ flat list ยังใช้ได้ และถูกอ่านเป็น `*` (ทุก agent)
 - UI agent editor: permission matrix (มี filter) แทน textarea, checkbox `Lazy tools`
@@ -89,6 +90,27 @@
   เพราะมี `run_shell` อยู่แล้ว
 - Workflow node ใหม่: `notify` (notification + โพสต์ในแชต, redact secret)
 
+### Layer 2 (รอบนี้)
+
+- In-place editing:
+  - `pdf_delete_pages`, `pdf_rotate`, `image_crop`, `image_rotate`, `media_trim`, `media_subtitle` รับ `in_place: true`
+  - เขียน temp ในโฟลเดอร์เดียวกันก่อน แล้ว rename ทับเมื่อสำเร็จ; ค่าเริ่มต้นเก็บ `<name>.mimi-backup<ext>`
+  - `media_subtitle` เพิ่ม `mode: "burn"` (MP4/MKV/MOV) และ `media_extract_audio` (mp3/m4a/wav/ogg/opus)
+  - merge/split/transform ที่มีหลาย input/output ยังเขียนไฟล์ใหม่เท่านั้น
+- Apps:
+  - `install_app` (install/update) ผ่าน winget/brew/choco/scoop/apt
+  - รับเฉพาะ package id; ใช้ `execFile` ไม่มี shell; เป็น `shell` risk + local consent
+  - Overseer ใช้ได้; `tool_test` ยังปฏิเสธ shell-risk ตามเดิม
+- Statements / payments:
+  - `statement_read` อ่าน CSV/TSV, OFX/QFX, QIF (หัวตารางไทย/อังกฤษ), normalize transactions + totals, read-only, cap 20 MB
+  - Stripe `create_payment_link` / `refund_payment` มี `confirmPhrase` และ `alwaysAsk`; ต้องพิมพ์วลีตรงและอนุมัติทุกครั้ง
+  - audit ผ่าน `tool_calls`/`run_log`; ไม่มี direct bank transfer/API
+- Vault fills:
+  - core tool `browser_fill_secret` รับชื่อ secret จาก vault, agent ไม่เห็นค่า
+  - PC internal `browser_fill_secret` (ไม่อยู่ใน `pcTools`) เติมเฉพาะ password/payment field
+  - snapshot ซ่อนค่า secret field; `alwaysAsk` ไม่รับ task/session/always grant; workflow และ `tool_test` ปฏิเสธ
+  - UI permission card แสดงเฉพาะ "ครั้งนี้" กับ "ปฏิเสธ" เมื่อ `noGrant`
+
 ### Integrations
 
 - Google Calendar: `calendar_update`, `calendar_delete`
@@ -112,6 +134,15 @@
 - Permissions: `packages/core/src/permissions/gate.ts`, `packages/core/src/loop/agent-loop.ts`, `packages/core/src/tasks/runner.ts`, `packages/core/src/workflows/runner.ts`
 - Agent flags: `packages/core/src/agents/loader.ts`
 - Coding tools: `packages/pc-agent/src/tools/{search,patch,git,background,run-shell}.ts`
+- In-place output: `packages/pc-agent/src/tools/output-target.ts`
+- Apps: `packages/pc-agent/src/tools/apps.ts`
+- Statements: `packages/pc-agent/src/tools/statement.ts`
+- Vault fills: `packages/pc-agent/src/tools/secret-fill.ts`, `packages/core/src/tools/browser-secret-tools.ts`,
+  `packages/pc-agent/src/tools/browser/session.ts` (`typeSecret`, secret fields)
+- Payment guard: `packages/core/src/connectors/{runtime,tool-adapter,registry}.ts`,
+  `packages/core/src/connectors/services/stripe.ts`
+- Permissions: `packages/shared/src/permissions.ts` (`alwaysAsk`, `noGrant`), `packages/core/src/permissions/gate.ts`,
+  `packages/core/src/server/web/app.js` (approval card), `packages/core/src/workflows/runner.ts` (unattended guard)
 - PDF/media editing: `packages/pc-agent/src/tools/pdf.ts`, `packages/pc-agent/src/tools/media.ts`
 - Drive/contacts: `packages/core/src/google/{tools,sheets}.ts`, `packages/core/src/microsoft/tools.ts`
 - Lazy tools: `packages/core/src/tools/tool-search.ts`
@@ -130,22 +161,21 @@
 ### ควรเก็บ
 
 ไม่มีงานค้างในลิสต์เดิมแล้ว (config rollback, permission UX, secret redaction, git safety,
-Overseer ชั้น 1, UI smoke, Google Drive connector ทำครบ)
-สิ่งที่เหลือคือขอบเขตที่ตั้งใจบล็อกไว้เพื่อความปลอดภัย
+Overseer ชั้น 1, UI smoke, Google Drive connector ทำครบ) และ Layer 2 ทั้ง 4 ข้อทำเสร็จใน working tree:
+in-place media, install/update apps, statements/payment guard, vault-backed browser fills
 
 ### สิ่งที่ต้องตัดสินใจก่อนเริ่มงานใหม่
 
-- branch `main` นำ `origin/main` อยู่ 11 commits และยังไม่ push — push เมื่อผู้ใช้สั่งเท่านั้น
+- branch `main` นำ `origin/main` อยู่ 13 commits และยังไม่ push — push เมื่อผู้ใช้สั่งเท่านั้น
 - DB schema เป็น 23; เทสต์บางตัวผูก version นี้ ถ้าจะเพิ่ม migration ต้องอัปเดตเทสต์ด้วย
 - UI smoke test (permission matrix / Settings grouped grants) รันมือผ่าน headless browser
   ไม่ได้อยู่ในชุดเทสต์อัตโนมัติ จึงไม่ถูกรันซ้ำโดย `npm test`
 
-### ยังไม่แตะ (Layer 2 เดิม)
+### ขอบเขตที่ยังตั้งใจไม่ทำ
 
-- ธนาคาร / statement / จ่ายเงิน
-- พิมพ์รหัสผ่านหรือข้อมูลบัตรในเว็บ (ตั้งใจบล็อก)
-- ติดตั้ง/อัปเดตแอปแทนผู้ใช้
-- PDF แก้ไฟล์เดิมในที่, ตัดต่อรูป/วิดีโอขั้นสูง (native PDF/รูป/วิดีโอเขียนไฟล์ใหม่เท่านั้น)
+- โอนเงินผ่าน API ธนาคารโดยตรง / bank feed: `statement_read` อ่านไฟล์เท่านั้น; จ่ายเงินได้ผ่าน connector ที่มีอยู่ (Stripe) และต้องยืนยันวลี
+- Secure fields ของแอป native: `computer_type` ยังปฏิเสธ password; `browser_fill_secret` ใช้ได้เฉพาะเว็บ
+- ตัดต่อวิดีโอระดับ multi-track/transition/effect และ in-place ของ merge/split ที่มีหลาย input
 - LINE/Telegram ต้องมี token (connector มีอยู่แล้วถ้าเชื่อมบัญชี; ไม่มีอะไรค้าง)
 
 ## ตรวจสอบ
@@ -170,8 +200,12 @@ npm test
 
 1. อ่าน `HANDOFF.md` นี้
 2. `git status` และ `git diff --stat`
-3. งานในลิสต์เดิม, Overseer ชั้น 1, UI smoke และ Drive connector ทำครบแล้ว (684 tests, ตรวจซ้ำรอบปิดงานแล้ว);
-   ที่เหลือคือ Layer 2 ที่ตั้งใจบล็อก (ธนาคาร/รหัสผ่าน/ติดตั้งแอป/แก้ไฟล์เดิมในที่)
+3. งานในลิสต์เดิม, Overseer ชั้น 1, UI smoke, Drive connector และ Layer 2 ทำครบแล้ว
+   (699 tests, typecheck ผ่าน, ตรวจซ้ำแล้ว); ที่เหลือคือขอบเขตที่ระบุว่า "ยังตั้งใจไม่ทำ"
 4. ก่อนแก้ อย่าลืมว่า DB schema เป็น 23 และเทสต์บางตัวผูก version นี้
-5. commit ได้ตามที่ผู้ใช้สั่ง; ตรวจ `git log --oneline` ก่อนเริ่มงานใหม่
-6. 11 commits บน `main` ยังไม่ push — รอคำสั่งผู้ใช้ก่อน
+5. Layer 2 commit แล้วใน `8edf589`; ตรวจ `git log --oneline` ก่อนเริ่มงานใหม่
+6. 13 commits บน `main` ยังไม่ push — รอคำสั่งผู้ใช้ก่อน
+7. ถ้าทดสอบ `browser_fill_secret` ต้องอัปเดต PC agent ฝั่งเครื่องให้มี internal tool นี้ก่อน
+   (core เก่า + PC ใหม่ หรือกลับกัน จะได้ error ว่า PC ไม่มี tool)
+8. Payment ops ของ Stripe ต้องส่ง `confirm: "CONFIRM PAYMENT"` หรือ `"CONFIRM REFUND"` ให้ตรง
+   และจะถูกบังคับให้ถามทุกครั้ง; ถ้าเพิ่ม connector ที่เคลื่อนเงิน ให้ใส่ `confirmPhrase` ใน spec

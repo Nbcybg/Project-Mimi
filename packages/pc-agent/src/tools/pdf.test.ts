@@ -93,7 +93,9 @@ test('pdf in-place edits replace the source and keep a backup', async () => {
     await pdfDeletePagesTool.execute({ path: source, pages: '2', in_place: true }, context),
   ) as { output: string; backup?: string; in_place: boolean };
   assert.equal(deleted.in_place, true);
-  assert.equal(deleted.output, source);
+  // The tool answers with the resolved path: /var is /private/var on macOS, and the temp folder
+  // can be a short 8.3 name on Windows.
+  assert.equal(deleted.output, fs.realpathSync.native(source));
   assert.equal(await countPages(source), 2);
   assert.ok(deleted.backup && fs.existsSync(deleted.backup), 'the previous version is kept');
   assert.deepEqual(fs.readFileSync(deleted.backup!), original);

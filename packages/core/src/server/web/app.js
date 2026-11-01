@@ -3584,6 +3584,73 @@
   }
 
   // ---------- settings page ----------
+  /** Two-step sign-in of a gateway account: on with the password plus a first code, off with both. */
+  function twoFactorPanel() {
+    const panel = el('div', 'panel form');
+    panel.append(el('h3', '', 'ยืนยันตัวตนสองขั้น (2FA)'));
+    const body = el('div', 'stackv');
+    panel.append(body);
+    const paint = (status, pending) => {
+      body.replaceChildren();
+      if (status === null) {
+        body.append(el('p', 'hint', 'กำลังตรวจสถานะ…'));
+        return;
+      }
+      if (status) {
+        body.append(el('p', 'pill ok', 'เปิดอยู่: เข้าสู่ระบบต้องใช้รหัสจากแอปยืนยันตัวตนทุกครั้ง'));
+        const password = textInput('', 'รหัสผ่าน', 'password');
+        const code = textInput('', 'รหัส 6 หลักตอนนี้');
+        body.append(
+          labelled('รหัสผ่าน', password),
+          labelled('รหัสจากแอป', code),
+          button('btn danger', 'ปิด 2FA', async () => {
+            const answer = await api('/auth/2fa/disable', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: password.value, code: code.value }) });
+            if (!answer.ok) return toast('ปิด 2FA ไม่ได้', answer.status === 429 ? 'ลองผิดหลายครั้งเกินไป รอสักครู่' : 'รหัสผ่านหรือรหัสจากแอปไม่ถูกต้อง', true);
+            toast('ปิด 2FA แล้ว');
+            paint(false, null);
+          }),
+        );
+        return;
+      }
+      if (pending) {
+        body.append(
+          el('p', 'hint', 'เพิ่มบัญชีในแอปยืนยันตัวตน (Google Authenticator, 1Password, Authy …) ด้วยคีย์นี้ แล้วใส่รหัส 6 หลักที่แอปแสดงเพื่อยืนยัน · คีย์นี้แสดงครั้งเดียว อย่าส่งให้ใคร'),
+          labelled('คีย์ (ใส่ในแอปแบบ "ใส่คีย์เอง")', el('code', 'mono', pending.secret.replace(/(.{4})/g, '$1 ').trim())),
+        );
+        const link = el('a', 'btn ghost', 'เปิดในแอปยืนยันตัวตน (บนมือถือ)');
+        link.href = pending.uri;
+        const code = textInput('', 'รหัส 6 หลัก');
+        body.append(
+          link,
+          labelled('รหัสจากแอป', code),
+          button('btn pri', 'ยืนยันและเปิด 2FA', async () => {
+            const answer = await api('/auth/2fa/enable', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: code.value }) });
+            if (!answer.ok) return toast('รหัสไม่ถูกต้อง', 'ดูว่าเวลาในมือถือตรง แล้วใส่รหัสล่าสุดอีกครั้ง', true);
+            toast('เปิด 2FA แล้ว', 'ครั้งหน้าที่เข้าสู่ระบบจะถามรหัสจากแอป');
+            paint(true, null);
+          }),
+        );
+        return;
+      }
+      body.append(el('p', 'hint', 'ปิดอยู่ · เปิดแล้วการเข้าสู่ระบบบนเครื่องใหม่ต้องใช้รหัสจากแอปยืนยันตัวตนบนมือถือด้วย ถ้ามือถือหาย ให้ผู้ดูแลรัน "accounts 2fa-reset <ชื่อผู้ใช้>"'));
+      const password = textInput('', 'รหัสผ่าน', 'password');
+      body.append(
+        labelled('รหัสผ่าน (เพื่อยืนยันว่าเป็นคุณ)', password),
+        button('btn', 'เริ่มตั้งค่า 2FA', async () => {
+          const answer = await api('/auth/2fa/setup', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: password.value }) });
+          if (!answer.ok) return toast('เริ่มไม่ได้', answer.status === 429 ? 'ลองผิดหลายครั้งเกินไป รอสักครู่' : 'รหัสผ่านไม่ถูกต้อง', true);
+          paint(false, await answer.json());
+        }),
+      );
+    };
+    paint(null, null);
+    api('/auth/session')
+      .then((answer) => (answer.ok ? answer.json() : null))
+      .then((session) => paint(Boolean(session && session.twoFactor), null))
+      .catch(() => body.replaceChildren(el('p', 'hint', 'ตรวจสถานะไม่ได้ ลองใหม่ภายหลัง')));
+    return panel;
+  }
+
   const SETTINGS_TABS = [
     ['profile', 'โปรไฟล์ของฉัน', 'ข้อมูลของคุณ งบประมาณ การแจ้งเตือน และการสำรองข้อมูล'],
     ['appearance', 'หน้าตา', 'ธีมสว่าง/มืดของทั้งแอป'],
@@ -3805,6 +3872,7 @@
         button('btn', 'ออกจากระบบ', () => void signOut()),
       );
       stack.append(account);
+      if (accountsMode) stack.append(twoFactorPanel());
 
       // This changes the app's own text, not the language the agents answer in: they read
       // the conversation and their system prompt for that.
@@ -4867,6 +4935,7 @@
     $('gate-hint').textContent = accounts ? 'ใช้ชื่อผู้ใช้และรหัสผ่านที่ผู้ดูแลสร้างให้' : 'ใส่รหัสผ่านของ Mimi (ใส่ครั้งเดียว จำไว้จนกว่าจะออกจากระบบ)';
     $('gate-user').hidden = !accounts;
     $('gate-pass').hidden = !accounts;
+    $('gate-code').hidden = true;
     $('token').hidden = accounts;
     $('gate-form').querySelector('button[type="submit"]').textContent = 'เข้าสู่ระบบ';
   }
@@ -4874,6 +4943,7 @@
   async function signIn() {
     const username = $('gate-user').value.trim();
     const password = $('gate-pass').value;
+    const code = $('gate-code').hidden ? '' : $('gate-code').value.trim();
     if (!username || !password) return;
     $('gate-error').textContent = '';
     let response;
@@ -4881,17 +4951,31 @@
       response = await fetch('/auth/login', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify({ username, password, ...(code ? { code } : {}) }),
       });
     } catch {
       $('gate-error').textContent = 'ติดต่อเซิร์ฟเวอร์ไม่ได้';
       return;
     }
-    $('gate-pass').value = '';
     if (!response.ok) {
-      $('gate-error').textContent = response.status === 429 ? 'ลองผิดหลายครั้งเกินไป รอสักครู่แล้วลองใหม่' : 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง';
+      const answer = await response.json().catch(() => ({}));
+      if (response.status === 401 && answer.twoFactor) {
+        // The password was right: keep it for the second try and ask for the code.
+        $('gate-code').hidden = false;
+        $('gate-code').value = '';
+        $('gate-code').focus();
+        $('gate-error').textContent = 'ใส่รหัส 6 หลักจากแอปยืนยันตัวตน';
+        return;
+      }
+      $('gate-pass').value = '';
+      $('gate-code').value = '';
+      $('gate-error').textContent =
+        response.status === 429 ? 'ลองผิดหลายครั้งเกินไป รอสักครู่แล้วลองใหม่' : code ? 'ชื่อผู้ใช้ รหัสผ่าน หรือรหัสจากแอปไม่ถูกต้อง' : 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง';
       return;
     }
+    $('gate-pass').value = '';
+    $('gate-code').value = '';
+    $('gate-code').hidden = true;
     const session = await response.json();
     keepSignIn(session.token, session.webhookBase || '', session.username || username);
     connect();

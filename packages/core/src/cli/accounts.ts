@@ -17,6 +17,7 @@ const USAGE = `Usage: node packages/core/src/cli/accounts.ts <command>
   logout <username>              sign out every device
   set-core <username> <url>      the account's core moved
   rotate-core-token <username>   new core token (restart that core with it)
+  2fa-reset <username>           remove two-step sign-in (lost phone) and sign out every device
   backup <file>                  consistent copy of the accounts database (keep it with, not next to, the secret)`;
 
 const lines: string[] = [];
@@ -82,7 +83,7 @@ try {
       const all = accounts.list();
       if (all.length === 0) console.log('No accounts.');
       for (const account of all) {
-        const state = account.disabled ? 'disabled' : `${account.sessions} session(s)`;
+        const state = `${account.disabled ? 'disabled' : `${account.sessions} session(s)`}${account.twoFactor ? ', 2FA' : ''}`;
         console.log(`${account.username}\t${account.coreUrl}\t${state}\twebhooks: ${account.webhookBase}`);
       }
     } else if (!name) {
@@ -107,6 +108,9 @@ try {
       if (!rest[0]) throw new AccountError('set-core needs the new URL.');
       accounts.setCoreUrl(name, rest[0]);
       console.log('Core URL changed.');
+    } else if (command === '2fa-reset') {
+      accounts.resetTwoFactor(name);
+      console.log('Two-step sign-in removed; every device was signed out. The person can turn it on again in Settings.');
     } else if (command === 'rotate-core-token') {
       console.log(coreVariables(accounts.rotateCoreToken(name)));
     } else {

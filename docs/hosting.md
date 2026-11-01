@@ -214,6 +214,7 @@ core จึงรับรหัสล็อกอินที่ `https://<โ�
    | `MIMI_GATEWAY_SECRET` | สุ่มยาว ≥ 32 ตัวอักษร (ใช้เข้ารหัส token ของ core ในฐานข้อมูลบัญชี) **ห้ามเปลี่ยน/ทำหาย** ไม่อย่างนั้น gateway จะอ่าน token ของ core ไม่ได้ ต้อง `rotate-core-token` ทุกบัญชี |
    | `MIMI_CLIENT_IP_HEADER` | `x-real-ip` |
    | `MIMI_SESSION_IDLE_DAYS` | ไม่ต้องตั้ง (ค่าเริ่มต้น 30: ไม่ได้ใช้ 30 วันต้องล็อกอินใหม่ ใช้อยู่เรื่อย ๆ ต่ออายุเอง) |
+   | `MIMI_SESSION_MAX_DAYS` | ไม่ต้องตั้ง (ค่าเริ่มต้น 90: ต่อให้ใช้ทุกวัน ครบ 90 วันนับจากล็อกอินก็ต้องล็อกอินใหม่ ไม่น้อยกว่า `MIMI_SESSION_IDLE_DAYS`) |
 3. Volume ที่ `/app/user` (ฐานข้อมูลบัญชีอยู่ที่ `/app/user/data/accounts.db`)
 4. Healthcheck `/health` · Replicas 1 · Generate Domain (gateway เป็น service เดียวที่มี public domain)
 
@@ -241,6 +242,7 @@ node packages/core/src/cli/accounts.ts enable alice
 node packages/core/src/cli/accounts.ts logout alice            # ออกจากระบบทุกเครื่อง
 node packages/core/src/cli/accounts.ts set-core alice <url>    # ย้าย core
 node packages/core/src/cli/accounts.ts rotate-core-token alice # token ใหม่ของ core แล้วใส่ใน service นั้นแล้ว redeploy
+node packages/core/src/cli/accounts.ts 2fa-reset alice         # ปิด 2FA ให้คนที่มือถือหาย (ออกจากระบบทุกเครื่อง)
 node packages/core/src/cli/accounts.ts backup /app/user/backups/accounts-<วันที่>.db  # สำเนาฐานข้อมูลบัญชี
 ```
 

@@ -16,8 +16,12 @@ import type { AccountStore, SessionTarget } from './accounts.ts';
  * Routes:
  *   GET  /, scripts, /vendor/*, /icon.png   the web client (no sign-in)
  *   GET  /health                            { ok, version, accounts: true }
- *   POST /auth/login                        { username, password } -> { token, expiresAt, username, webhookBase }
- *   GET  /auth/session                      Bearer token -> { username, expiresAt, webhookBase }
+ *   POST /auth/login                        { username, password, code? } -> { token, expiresAt, username, webhookBase }
+ *                                           (401 { twoFactor: true } when the account needs an authenticator code)
+ *   GET  /auth/session                      Bearer token -> { username, expiresAt, webhookBase, twoFactor }
+ *   POST /auth/2fa/setup                    Bearer + { password } -> { secret, uri } (pending until enabled)
+ *   POST /auth/2fa/enable                   Bearer + { code } -> { twoFactor: true }
+ *   POST /auth/2fa/disable                  Bearer + { password, code } -> { twoFactor: false }
  *   POST /auth/logout                       Bearer token -> 204; open sockets of it are closed
  *   *    /api/*                             Bearer token -> the person's core
  *   *    /h/<id>/api/(workflow|webhook)/<k> webhooks of one person's core (no sign-in, like a core)
@@ -210,7 +214,7 @@ export async function startGateway(options: GatewayOptions): Promise<Gateway> {
         sendJson(response, 429, { error: 'Too many wrong attempts. Try again later.' });
         return;
       }
-      const opened = body && username ? await checkSlot(() => accounts.login(username, String(body.password ?? ''))) : null;
+      const opened = body && username ? await checkSlot(() => accounts.login(username, String(body.password ?? ''), body.code)) : null;
       if (opened === BUSY) {
         response.writeHead(503, { 'content-type': 'application/json; charset=utf-8', 'retry-after': '5', 'cache-control': 'no-store' });
         response.end(JSON.stringify({ error: 'Busy. Try again in a moment.' }));
@@ -220,7 +224,12 @@ export async function startGateway(options: GatewayOptions): Promise<Gateway> {
         limiter.fail(address);
         if (username) perAccount.fail(username);
         log(`gateway: sign-in failed from ${address}`);
-        sendJson(response, 401, { error: 'Wrong username or password.' });
+        sendJson(response, 401, { error: body?.code ? 'Wrong username, password or code.' : 'Wrong username or password.' });
+        return;
+      }
+      if ('needsCode' in opened) {
+        // The password was right; only now is it said that a code is needed.
+        sendJson(response, 401, { error: 'Enter the code from your authenticator app.', twoFactor: true });
         return;
       }
       limiter.succeed(address);
@@ -233,7 +242,55 @@ export async function startGateway(options: GatewayOptions): Promise<Gateway> {
     if (url.pathname === '/auth/session' && method === 'GET') {
       const target = authorize(request);
       if (!target) sendJson(response, 401, { error: 'Signed out.' });
-      else sendJson(response, 200, { username: target.username, expiresAt: target.expiresAt, webhookBase: target.webhookBase });
+      else {
+        sendJson(response, 200, {
+          username: target.username,
+          expiresAt: target.expiresAt,
+          webhookBase: target.webhookBase,
+          twoFactor: accounts.twoFactorEnabled(target.username),
+        });
+      }
+      return;
+    }
+    if (url.pathname.startsWith('/auth/2fa/') && method === 'POST') {
+      const action = url.pathname.slice('/auth/2fa/'.length);
+      if (!['setup', 'enable', 'disable'].includes(action)) {
+        sendJson(response, 404, { error: 'Not found.' });
+        return;
+      }
+      if (!/^application\/json\b/i.test(request.headers['content-type'] ?? '')) {
+        sendJson(response, 415, { error: 'Send JSON.' });
+        return;
+      }
+      const target = authorize(request);
+      if (!target) {
+        sendJson(response, 401, { error: 'Signed out.' });
+        return;
+      }
+      const body = (await readJson(request)) ?? {};
+      const address = addressOf(request);
+      if (perAccount.blocked(target.username)) {
+        sendJson(response, 429, { error: 'Too many wrong attempts. Try again later.' });
+        return;
+      }
+      const result = await checkSlot(async () => {
+        if (action === 'setup') return accounts.startTwoFactor(target.username, String(body.password ?? ''));
+        if (action === 'enable') return accounts.enableTwoFactor(target.username, body.code) ? { twoFactor: true } : null;
+        return (await accounts.disableTwoFactor(target.username, String(body.password ?? ''), body.code)) ? { twoFactor: false } : null;
+      });
+      if (result === BUSY) {
+        sendJson(response, 503, { error: 'Busy. Try again in a moment.' });
+        return;
+      }
+      if (!result) {
+        // A wrong password or code here counts like a wrong sign-in.
+        limiter.fail(address);
+        perAccount.fail(target.username);
+        sendJson(response, 400, { error: action === 'setup' ? 'Wrong password.' : 'Wrong password or code.' });
+        return;
+      }
+      log(`gateway: ${target.username} two-step sign-in ${action}`);
+      sendJson(response, 200, result);
       return;
     }
     if (url.pathname === '/auth/logout' && method === 'POST') {

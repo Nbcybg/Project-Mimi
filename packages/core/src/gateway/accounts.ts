@@ -2,6 +2,7 @@ import { createCipheriv, createDecipheriv, createHash, hkdfSync, randomBytes, sc
 import fs from 'node:fs';
 import path from 'node:path';
 import Database from 'better-sqlite3';
+import { newTotpSecret, totpUri, verifyTotp } from './totp.ts';
 
 /**
  * Accounts of the gateway: who may sign in, and where each person's own core runs.
@@ -10,7 +11,10 @@ import Database from 'better-sqlite3';
  *
  * - Passwords: scrypt with a random salt per account; never stored or logged in clear.
  * - Sessions: random tokens handed to the device; only their SHA-256 is stored, so a copy
- *   of the database cannot be used to sign in. They lapse after `idleDays` without use.
+ *   of the database cannot be used to sign in. They lapse after `idleDays` without use,
+ *   and in any case `maxDays` after sign-in.
+ * - Two-step sign-in (optional, per account): a TOTP secret, encrypted like the core token.
+ *   Each code works once.
  * - Core tokens: needed in clear to reach the core, so they are encrypted with a key
  *   derived from the gateway secret (MIMI_GATEWAY_SECRET), which is not in the database.
  */
@@ -30,7 +34,11 @@ export interface AccountView {
   createdAt: string;
   disabled: boolean;
   sessions: number;
+  twoFactor: boolean;
 }
+
+/** What a sign-in attempt gives: a session, a request for the authenticator code, or nothing. */
+export type LoginResult = { token: string; target: SessionTarget } | { needsCode: true } | null;
 
 /** What a valid session opens: the person's core and how to talk to it. */
 export interface SessionTarget {
@@ -111,19 +119,23 @@ interface UserRow {
   route_id: string;
   created_at: string;
   disabled_at: string | null;
+  totp_secret: string | null;
+  totp_pending: string | null;
+  totp_last_step: number | null;
 }
 
 export class AccountStore {
   private readonly db: Database.Database;
   private readonly key: Buffer;
   private readonly idleMs: number;
+  private readonly maxMs: number;
   private readonly now: () => number;
   private readonly passwordCost: number;
   /** Compared against when a username is unknown, so both cases take as long. */
   private dummyHash: Promise<string> | undefined;
 
   /** `passwordCost`: scrypt N for new hashes; leave it alone outside tests. */
-  constructor(file: string, secret: string, options: { idleDays?: number; now?: () => number; passwordCost?: number } = {}) {
+  constructor(file: string, secret: string, options: { idleDays?: number; maxDays?: number; now?: () => number; passwordCost?: number } = {}) {
     if (secret.length < 32) throw new AccountError('MIMI_GATEWAY_SECRET must be at least 32 characters.');
     if (file !== ':memory:') {
       fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -156,8 +168,14 @@ export class AccountStore {
       );
       CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id);
     `);
+    // Two-step sign-in came later; older databases get the columns on first open.
+    const columns = new Set((this.db.prepare('PRAGMA table_info(users)').all() as Array<{ name: string }>).map((column) => column.name));
+    for (const [name, type] of [['totp_secret', 'TEXT'], ['totp_pending', 'TEXT'], ['totp_last_step', 'INTEGER']]) {
+      if (!columns.has(name!)) this.db.exec(`ALTER TABLE users ADD COLUMN ${name} ${type}`);
+    }
     this.key = Buffer.from(hkdfSync('sha256', secret, 'mimi-gateway', 'core-token', 32));
     this.idleMs = (options.idleDays ?? 30) * 86_400_000;
+    this.maxMs = Math.max(this.idleMs, (options.maxDays ?? 90) * 86_400_000);
     this.now = options.now ?? Date.now;
     this.passwordCost = options.passwordCost ?? SCRYPT.N;
   }
@@ -224,6 +242,7 @@ export class AccountStore {
       createdAt: row.created_at,
       disabled: row.disabled_at !== null,
       sessions: (live.get(row.id, this.iso()) as { n: number }).n,
+      twoFactor: row.totp_secret !== null,
     }));
   }
 
@@ -260,8 +279,12 @@ export class AccountStore {
     return this.db.prepare('UPDATE sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL').run(this.iso(), row.id).changes;
   }
 
-  /** Checks a password; on success opens a session. Unknown, disabled and wrong all look the same. */
-  async login(rawUsername: string, password: string): Promise<{ token: string; target: SessionTarget } | null> {
+  /**
+   * Checks a password (and, when the account has two-step sign-in, the authenticator code);
+   * on success opens a session. Unknown, disabled and wrong all look the same. A right
+   * password without a code asks for the code; a wrong code is a failed sign-in.
+   */
+  async login(rawUsername: string, password: string, code?: unknown): Promise<LoginResult> {
     let username: string;
     try {
       username = normalizeUsername(rawUsername);
@@ -275,12 +298,67 @@ export class AccountStore {
       return null;
     }
     if (!(await verifyPassword(password, row.password_hash))) return null;
+    if (row.totp_secret !== null) {
+      if (code === undefined || code === null || code === '') return { needsCode: true };
+      if (!this.useCode(row, row.totp_secret, code)) return null;
+    }
     const token = newToken();
     const id = randomBytes(12).toString('hex');
+    const expiresAt = this.iso(Math.min(this.idleMs, this.maxMs));
     this.db
       .prepare('INSERT INTO sessions (id, user_id, token_hash, created_at, last_used_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(id, row.id, sha256(token), this.iso(), this.iso(), this.iso(this.idleMs));
-    return { token, target: this.target(row, id, this.iso(this.idleMs)) };
+      .run(id, row.id, sha256(token), this.iso(), this.iso(), expiresAt);
+    return { token, target: this.target(row, id, expiresAt) };
+  }
+
+  /** Checks a code against a sealed secret and remembers its step, so it cannot be used again. */
+  private useCode(row: UserRow, sealed: string, code: unknown): boolean {
+    const step = verifyTotp(this.open(sealed), code, this.now(), row.totp_last_step ?? -1);
+    if (step === null) return false;
+    this.db.prepare('UPDATE users SET totp_last_step = ? WHERE id = ?').run(step, row.id);
+    row.totp_last_step = step;
+    return true;
+  }
+
+  twoFactorEnabled(rawUsername: string): boolean {
+    return this.mustRow(rawUsername).totp_secret !== null;
+  }
+
+  /**
+   * Starts turning on two-step sign-in: needs the password, returns a new secret and the
+   * otpauth link for the authenticator app. Nothing changes until `enableTwoFactor`.
+   */
+  async startTwoFactor(rawUsername: string, password: string): Promise<{ secret: string; uri: string } | null> {
+    const row = this.mustRow(rawUsername);
+    if (typeof password !== 'string' || !(await verifyPassword(password.slice(0, MAX_PASSWORD), row.password_hash))) return null;
+    const secret = newTotpSecret();
+    this.db.prepare('UPDATE users SET totp_pending = ? WHERE id = ?').run(this.seal(secret), row.id);
+    return { secret, uri: totpUri(secret, row.username) };
+  }
+
+  /** Turns two-step sign-in on once the app shows a right code for the pending secret. */
+  enableTwoFactor(rawUsername: string, code: unknown): boolean {
+    const row = this.mustRow(rawUsername);
+    if (row.totp_pending === null || !this.useCode(row, row.totp_pending, code)) return false;
+    this.db.prepare('UPDATE users SET totp_secret = totp_pending, totp_pending = NULL WHERE id = ?').run(row.id);
+    return true;
+  }
+
+  /** Turns it off from the app: the password and a current code are both needed. */
+  async disableTwoFactor(rawUsername: string, password: string, code: unknown): Promise<boolean> {
+    const row = this.mustRow(rawUsername);
+    if (row.totp_secret === null) return true;
+    if (typeof password !== 'string' || !(await verifyPassword(password.slice(0, MAX_PASSWORD), row.password_hash))) return false;
+    if (!this.useCode(row, row.totp_secret, code)) return false;
+    this.resetTwoFactor(row.username);
+    return true;
+  }
+
+  /** For the administrator (CLI) when a phone is lost: removes it and signs out every device. */
+  resetTwoFactor(rawUsername: string): void {
+    const row = this.mustRow(rawUsername);
+    this.db.prepare('UPDATE users SET totp_secret = NULL, totp_pending = NULL, totp_last_step = NULL WHERE id = ?').run(row.id);
+    this.revokeAll(row.username);
   }
 
   private target(row: UserRow, sessionId: string, expiresAt: string): SessionTarget {
@@ -299,14 +377,16 @@ export class AccountStore {
     if (typeof token !== 'string' || token.length < 20 || token.length > 200) return null;
     const found = this.db
       .prepare(
-        `SELECT s.id AS session_id, s.last_used_at, s.expires_at, u.* FROM sessions s JOIN users u ON u.id = s.user_id
-         WHERE s.token_hash = ? AND s.revoked_at IS NULL`,
+        `SELECT s.id AS session_id, s.created_at AS session_created_at, s.last_used_at, s.expires_at, u.* FROM sessions s
+         JOIN users u ON u.id = s.user_id WHERE s.token_hash = ? AND s.revoked_at IS NULL`,
       )
-      .get(sha256(token)) as (UserRow & { session_id: string; last_used_at: string; expires_at: string }) | undefined;
+      .get(sha256(token)) as (UserRow & { session_id: string; session_created_at: string; last_used_at: string; expires_at: string }) | undefined;
     if (!found || found.disabled_at !== null || Date.parse(found.expires_at) <= this.now()) return null;
     let expiresAt = found.expires_at;
     if (this.now() - Date.parse(found.last_used_at) > TOUCH_EVERY_MS) {
-      expiresAt = this.iso(this.idleMs);
+      // Use keeps a session going, but never past its maximum age.
+      const cap = Date.parse(found.session_created_at) + this.maxMs;
+      expiresAt = new Date(Math.min(this.now() + this.idleMs, cap)).toISOString();
       this.db.prepare('UPDATE sessions SET last_used_at = ?, expires_at = ? WHERE id = ?').run(this.iso(), expiresAt, found.session_id);
     }
     return this.target(found, found.session_id, expiresAt);

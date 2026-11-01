@@ -14,7 +14,9 @@ if (secret.length < 32) {
 }
 const file = process.env.MIMI_ACCOUNTS_DB ? path.resolve(process.env.MIMI_ACCOUNTS_DB) : path.join(config.dataDir, 'accounts.db');
 const idleDays = Number(process.env.MIMI_SESSION_IDLE_DAYS) > 0 ? Number(process.env.MIMI_SESSION_IDLE_DAYS) : 30;
-const accounts = new AccountStore(file, secret, { idleDays });
+// However often it is used, a session ends this long after sign-in (never shorter than idleDays).
+const maxDays = Number(process.env.MIMI_SESSION_MAX_DAYS) > 0 ? Number(process.env.MIMI_SESSION_MAX_DAYS) : 90;
+const accounts = new AccountStore(file, secret, { idleDays, maxDays });
 const gateway = await startGateway({ accounts, host: config.host, port: config.port, clientIpHeader: config.clientIpHeader });
 
 console.log(`Mimi accounts gateway listening on port ${gateway.port}  (accounts: ${file})`);

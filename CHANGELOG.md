@@ -4,6 +4,14 @@
 
 ### 0.7.9-prototype
 
+- First run: a setup wizard opens over the app when nothing can chat yet: provider (Claude plan, ChatGPT plan or an
+  API key, plus the default chat model), a starter agent (secretary, researcher, PC helper or coder, from the new
+  `agent-presets` message), allowed folders, the PC agent and a test chat. Finishing or skipping is remembered across
+  devices; Settings has "ตัวช่วยตั้งค่า" to open it again. Presets that read the web or mail have no shell tool.
+- Accounts gateway: sessions now also end `MIMI_SESSION_MAX_DAYS` (default 90) after sign-in, however often they are
+  used. Each account can turn on two-step sign-in (TOTP, any authenticator app) in Settings with its password and a
+  first code; sign-in then asks for a code, each code works once, wrong codes count toward the sign-in limits, and
+  `accounts 2fa-reset <user>` removes it (and signs out every device) when a phone is lost.
 - Connectors: OpenAPI import is usable from the app. Hub > Node & Tools > "+ นำเข้า OpenAPI" previews an OpenAPI
   3.x JSON document (operations with risk, tool names, unsupported parts, warnings) and on confirm stores it in
   `user/connectors/imported/<key>.json` and adds its tools without a restart; imports load again at start-up and can

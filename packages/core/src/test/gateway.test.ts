@@ -8,6 +8,7 @@ import Database from 'better-sqlite3';
 import type { ServerMessage } from '@mimi/shared';
 import { WebSocket } from 'ws';
 import { AccountStore } from '../gateway/accounts.ts';
+import { base32Decode, base32Encode, newTotpSecret, totpCode, totpStep, verifyTotp } from '../gateway/totp.ts';
 import { type Gateway, startGateway } from '../gateway/gateway.ts';
 import { type MimiServer, startServer } from '../server/server.ts';
 import { type TestCoreOptions, testCoreParts } from './core-helpers.ts';
@@ -233,7 +234,7 @@ test('HTTP: a session reaches only its own core; the core token never leaves the
 
   const me = await fetch(`${booted.http}/auth/session`, authed(alice));
   const body = await me.text();
-  assert.deepEqual(Object.keys(JSON.parse(body) as object).sort(), ['expiresAt', 'username', 'webhookBase']);
+  assert.deepEqual(Object.keys(JSON.parse(body) as object).sort(), ['expiresAt', 'twoFactor', 'username', 'webhookBase']);
   for (const person of Object.values(booted.people)) assert.ok(!body.includes(person.coreToken));
 
   assert.deepEqual(await (await fetch(`${booted.http}/health`)).json(), { ok: true, version: JSON.parse(fs.readFileSync('package.json', 'utf8')).version, accounts: true });
@@ -419,7 +420,8 @@ test('admin CLI: accounts are made with a password from stdin; the core token is
 
   const store = new AccountStore(env.MIMI_ACCOUNTS_DB, SECRET);
   const opened = await store.login('carol', 'carol-password-1');
-  assert.equal(opened?.target.coreToken, coreToken);
+  assert.ok(opened && 'target' in opened);
+  assert.equal(opened.target.coreToken, coreToken);
   store.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -455,4 +457,101 @@ test('the gateway\'s pages may not be framed and run only their own scripts', as
   assert.match(page.headers.get('content-security-policy')!, /frame-ancestors 'none'/);
   assert.match(page.headers.get('content-security-policy')!, /script-src 'self' 'sha256-[\w+/=]+'/);
   assert.equal(page.headers.get('referrer-policy'), 'no-referrer');
+});
+
+test('two-step sign-in: set up with the password and a first code, then every sign-in needs a fresh code', async (t) => {
+  let now = Date.parse('2026-03-01T00:00:00Z');
+  const booted = await boot(t, { now: () => now });
+  const token = await session(booted, 'alice');
+  const post = (path: string, body: unknown, bearer = token) =>
+    fetch(`${booted.http}${path}`, authed(bearer, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }));
+  const signIn = (code?: string) =>
+    fetch(`${booted.http}/auth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-real-ip': freshIp() },
+      body: JSON.stringify({ username: 'alice', password: PASSWORD.alice, ...(code === undefined ? {} : { code }) }),
+    });
+
+  assert.equal((await post('/auth/2fa/setup', { password: 'wrong-password-1' })).status, 400);
+  const setup = await post('/auth/2fa/setup', { password: PASSWORD.alice });
+  assert.equal(setup.status, 200);
+  const { secret, uri } = (await setup.json()) as { secret: string; uri: string };
+  assert.match(uri, /^otpauth:\/\/totp\/Mimi%3Aalice\?secret=[A-Z2-7]+&issuer=Mimi/);
+  assert.equal((await post('/auth/2fa/setup', { password: PASSWORD.alice }, 'not-a-session-token-at-all')).status, 401);
+
+  // Still off until a right code arrives; sign-in works without one.
+  assert.equal((await signIn()).status, 200);
+  assert.equal((await post('/auth/2fa/enable', { code: '000000' })).status, 400);
+  assert.equal((await post('/auth/2fa/enable', { code: totpCode(secret, totpStep(now)) })).status, 200);
+  assert.equal(((await (await fetch(`${booted.http}/auth/session`, authed(token))).json()) as { twoFactor: boolean }).twoFactor, true);
+  assert.match(booted.accounts.list().map((account) => `${account.username}:${account.twoFactor}`).join(','), /alice:true/);
+
+  const asked = await signIn();
+  assert.equal(asked.status, 401);
+  assert.equal(((await asked.json()) as { twoFactor?: boolean }).twoFactor, true);
+  const wrongPassword = await fetch(`${booted.http}/auth/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-real-ip': freshIp() },
+    body: JSON.stringify({ username: 'alice', password: 'wrong-password-1' }),
+  });
+  assert.equal(((await wrongPassword.json()) as { twoFactor?: boolean }).twoFactor, undefined, 'a wrong password does not reveal 2FA');
+  assert.equal((await signIn('123456')).status, 401);
+  now += 60_000;
+  const code = totpCode(secret, totpStep(now));
+  assert.equal((await signIn(code)).status, 200);
+  assert.equal((await signIn(code)).status, 401, 'a code works once');
+  now += 30_000;
+  assert.equal((await signIn(totpCode(secret, totpStep(now)))).status, 200);
+
+  now += 30_000;
+  assert.equal((await post('/auth/2fa/disable', { password: PASSWORD.alice, code: '111111' })).status, 400);
+  assert.equal((await post('/auth/2fa/disable', { password: PASSWORD.alice, code: totpCode(secret, totpStep(now)) })).status, 200);
+  assert.equal((await signIn()).status, 200);
+});
+
+test('sessions end at the maximum age even when used every day; the admin reset removes 2FA and signs out', async () => {
+  let now = Date.parse('2026-05-01T00:00:00Z');
+  const store = new AccountStore(':memory:', SECRET, { idleDays: 5, maxDays: 10, now: () => now, passwordCost: 1024 });
+  await store.create('carol', 'carol-password-1', 'http://127.0.0.1:1');
+  const opened = await store.login('carol', 'carol-password-1');
+  assert.ok(opened && 'token' in opened);
+  for (let day = 2; day < 10; day += 2) {
+    now += 2 * 86_400_000;
+    assert.ok(store.session(opened.token), `day ${day}`);
+  }
+  now += 2 * 86_400_000;
+  assert.equal(store.session(opened.token), null, 'day 10: past the maximum age');
+
+  const pending = await store.startTwoFactor('carol', 'carol-password-1');
+  assert.ok(pending);
+  assert.ok(store.enableTwoFactor('carol', totpCode(pending.secret, totpStep(now))));
+  const second = await store.login('carol', 'carol-password-1', totpCode(pending.secret, totpStep(now) + 1));
+  assert.ok(second && 'token' in second);
+  store.resetTwoFactor('carol');
+  assert.equal(store.session(second.token), null, 'reset signs out every device');
+  assert.equal(store.twoFactorEnabled('carol'), false);
+  const plain = await store.login('carol', 'carol-password-1');
+  assert.ok(plain && 'token' in plain);
+  store.close();
+});
+
+test('totp: RFC 6238 vectors, a one-step window and no reuse', () => {
+  // RFC 6238 appendix B, SHA-1 secret "12345678901234567890" (last 6 of the 8-digit codes).
+  const secret = base32Encode(Buffer.from('12345678901234567890'));
+  assert.equal(secret, 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ');
+  assert.equal(totpCode(secret, totpStep(59_000)), '287082');
+  assert.equal(totpCode(secret, totpStep(1_111_111_109_000)), '081804');
+  assert.equal(totpCode(secret, totpStep(2_000_000_000_000)), '279037');
+  assert.deepEqual(base32Decode(secret), Buffer.from('12345678901234567890'));
+
+  const at = 1_111_111_109_000;
+  const step = totpStep(at);
+  assert.equal(verifyTotp(secret, '081804', at), step);
+  assert.equal(verifyTotp(secret, '081 804', at), step);
+  assert.equal(verifyTotp(secret, totpCode(secret, step - 1), at), step - 1);
+  assert.equal(verifyTotp(secret, totpCode(secret, step + 2), at), null);
+  assert.equal(verifyTotp(secret, '081804', at, step), null, 'used step');
+  assert.equal(verifyTotp(secret, '81804', at), null);
+  assert.equal(verifyTotp(secret, 81804, at), null);
+  assert.equal(newTotpSecret().length, 32);
 });

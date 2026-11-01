@@ -2,10 +2,12 @@ import { randomUUID } from 'node:crypto';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createDeepSeek } from '@ai-sdk/deepseek';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
+import { createOpenAI } from '@ai-sdk/openai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { ReasoningEffort } from '@mimi/shared';
 import type { EmbeddingModel, LanguageModel, SystemModelMessage } from 'ai';
 import type { AuthStore } from './auth-store.ts';
+import { type ChatGptPlan, CHATGPT_PLAN_API, CHATGPT_PLAN_ID } from './chatgpt-plan.ts';
 import { isClaudeSubscription } from './claude-subscription.ts';
 import type { ModelCatalog } from './catalog.ts';
 import type { ModelDef, ProviderDef, Settings } from './settings.ts';
@@ -85,6 +87,8 @@ export interface RegistrySources {
   extra?: () => Record<string, ProviderDef>;
   /** Model ids a provider reported when it was connected; when present, only these are offered. */
   listed?: () => Record<string, string[]>;
+  /** The signed-in ChatGPT plan, for the `chatgpt-plan` provider. */
+  chatgptPlan?: ChatGptPlan;
 }
 
 interface ProviderSdk {
@@ -316,6 +320,15 @@ export class ProviderRegistry {
   }
 
   private async loadSdk(provider: ResolvedProvider, npm: string, baseURL: string | undefined): Promise<ProviderSdk> {
+    if (provider.id === CHATGPT_PLAN_ID && this.sources.chatgptPlan) {
+      // The plan's token is fetched per call (it expires), so the SDK gets a signing fetch, not a key.
+      return createOpenAI({
+        name: provider.id,
+        apiKey: 'chatgpt-plan',
+        baseURL: CHATGPT_PLAN_API,
+        fetch: this.sources.chatgptPlan.authFetch,
+      }) as unknown as ProviderSdk;
+    }
     const apiKey = this.apiKey(provider);
     if (!apiKey && provider.env.length > 0) {
       throw new Error(

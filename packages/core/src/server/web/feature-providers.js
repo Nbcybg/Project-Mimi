@@ -7,6 +7,7 @@
   const button = (cls, text, onClick, title) => M().button(cls, text, onClick, title);
 
   let editingId = null;
+  let authLink = null; // { id, url } from the last provider-auth-url
 
   /** The same form is embedded in Settings and in the Overseer setup screen. */
   function rerender() {
@@ -167,6 +168,38 @@
     return box;
   }
 
+  /** ChatGPT through the user's own plan (Plus/Pro), signed in with OpenAI's official flow. */
+  function chatgptBox(entries) {
+    if (entries.some((entry) => entry.id === 'chatgpt-plan')) return null;
+    const box = el('div', 'prov');
+    const info = el('div');
+    info.append(
+      el('b', '', 'ใช้ ChatGPT แบบรายเดือน (Sign in with ChatGPT)'),
+      el(
+        'small',
+        '',
+        'ล็อกอินด้วยบัญชี ChatGPT Plus/Pro ของคุณผ่านหน้าทางการของ OpenAI แล้ว Mimi จะใช้โควตาของแผน · ใช้ได้เมื่อ Mimi รันบนเครื่องของคุณเอง (ไม่รองรับเซิร์ฟเวอร์ที่เปิดให้เข้าทางอินเทอร์เน็ต) · ใช้โควตาของแผนและต้องเป็นไปตามเงื่อนไขของ OpenAI',
+      ),
+    );
+    const actions = el('div', 'hstack');
+    if (authLink && authLink.id === 'chatgpt-plan') {
+      const link = el('a', 'btn pri', 'เปิดหน้าล็อกอิน ChatGPT');
+      link.href = authLink.url;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      actions.append(link, el('small', 'hint', 'ล็อกอินเสร็จแล้วหน้านี้จะอัปเดตเอง'));
+    } else {
+      actions.append(
+        button('btn pri', 'เชื่อมต่อ', () => {
+          M().toast('กำลังเตรียมหน้าล็อกอิน ChatGPT…', 'chatgpt-plan');
+          M().send({ type: 'chatgpt-plan-connect' });
+        }),
+      );
+    }
+    box.append(info, actions);
+    return box;
+  }
+
   function render(panel) {
     const view = M().state.settings;
     if (!view) {
@@ -178,12 +211,20 @@
     for (const provider of entries) panel.append(row(provider, panel));
     const plan = planBox(entries);
     if (plan) panel.append(plan);
+    const chatgpt = chatgptBox(entries);
+    if (chatgpt) panel.append(chatgpt);
     const editing = editingId ? entries.find((entry) => entry.id === editingId) || null : null;
     panel.append(form(panel, view, editing));
   }
 
   function onMessage(message) {
+    if (message.type === 'provider-auth-url') {
+      authLink = message;
+      rerender();
+      return;
+    }
     if (!message.saved) return;
+    authLink = null;
     M().ui.providerDirty = false;
     if (editingId && !(message.settings.providers || []).some((entry) => entry.id === editingId)) editingId = null;
   }

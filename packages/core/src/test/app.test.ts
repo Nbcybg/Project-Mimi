@@ -216,7 +216,7 @@ test('registry: stored credentials, app-added providers and per-model API dialec
       models: {
         'open-model': { name: 'Open', cost: { input: 1, output: 2 } },
         'claude-like': { name: 'Claude-like', provider: { npm: '@ai-sdk/anthropic' } },
-        'gpt-like': { name: 'GPT-like', provider: { npm: '@ai-sdk/openai' } },
+        'gpt-like': { name: 'GPT-like', provider: { npm: '@ai-sdk/mistral' } },
         'painter': { name: 'Painter', modalities: { input: ['text'], output: ['image'] } },
       },
     },
@@ -240,7 +240,7 @@ test('registry: stored credentials, app-added providers and per-model API dialec
   const viaCompatible = await registry.languageModel(parseModelRef('gateway/open-model'));
   const viaAnthropic = await registry.languageModel(parseModelRef('gateway/claude-like'));
   assert.notEqual((viaCompatible as { provider: string }).provider, (viaAnthropic as { provider: string }).provider);
-  await assert.rejects(registry.languageModel(parseModelRef('gateway/gpt-like')), /"@ai-sdk\/openai" \(for gateway\) is not installed/);
+  await assert.rejects(registry.languageModel(parseModelRef('gateway/gpt-like')), /"@ai-sdk\/mistral" \(for gateway\) is not installed/);
 
   // A provider that exists nowhere but in the app: just a URL and the models it reported.
   await assert.rejects(async () => registry.describe('home-lab'), /Unknown provider "home-lab". Connect it in the app's settings/);

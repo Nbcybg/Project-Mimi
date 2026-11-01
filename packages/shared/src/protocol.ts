@@ -623,6 +623,8 @@ export type ClientMessage =
   | { type: 'provider-update'; id: string; name?: string; baseURL?: string; models?: string[] }
   /** Forgets the credential and, for a provider added in the app, the provider itself. */
   | { type: 'provider-remove'; id: string }
+  /** Starts the ChatGPT plan sign-in; the core answers with `provider-auth-url`. */
+  | { type: 'chatgpt-plan-connect' }
   /** Starts the Google sign-in; the core answers with the link to open. */
   | { type: 'google-connect' }
   /** Starts the Microsoft sign-in; the core answers with the link to open. */
@@ -838,6 +840,8 @@ export type ServerMessage =
   | { type: 'oauth-accounts'; accounts: OAuthAccountView[]; saved?: boolean }
   /** Sign-in link for one account; `accountId` tells the hub where to show it. */
   | { type: 'oauth-auth-url'; accountId: string; service: 'google' | 'microsoft'; url: string }
+  /** Sign-in link for a model provider that signs in with an account (the ChatGPT plan). */
+  | { type: 'provider-auth-url'; id: string; url: string }
   /** Connector connections plus the specs they belong to. */
   | { type: 'connector-connections'; connections: ConnectorConnectionView[]; connectors: ConnectorView[]; saved?: boolean }
   /** The provider page for a generic OAuth2 connection; the callback stores the tokens. */

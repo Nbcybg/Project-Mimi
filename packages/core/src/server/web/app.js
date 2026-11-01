@@ -4462,6 +4462,9 @@
         renderRail();
         break;
       }
+      case 'provider-auth-url':
+        window.MimiHooks?.providers?.onMessage(message);
+        break;
       case 'settings':
         state.settings = message.settings;
         if (window.MimiHooks && window.MimiHooks.providers) window.MimiHooks.providers.onMessage(message);

@@ -57,6 +57,7 @@ import { createDefaultRecipes } from './tasks/recipes.ts';
 import { type TaskAgentStepInput, TaskRunner } from './tasks/runner.ts';
 import { createTaskTools } from './tasks/tools.ts';
 import { AuthStore } from './providers/auth-store.ts';
+import { ChatGptPlan } from './providers/chatgpt-plan.ts';
 import { loadCatalog, type ModelCatalog } from './providers/catalog.ts';
 import { ProviderStore } from './providers/provider-store.ts';
 import { type ModelInfo, parseModelRef, ProviderRegistry, providerOptionsFor } from './providers/registry.ts';
@@ -163,6 +164,8 @@ export interface Core {
   settings: Settings;
   registry: ProviderRegistry;
   auth: AuthStore;
+  /** The user's ChatGPT plan, when signed in (the `chatgpt-plan` provider). */
+  chatgptPlan: ChatGptPlan;
   /** Connected providers as syncable files under `providers/`. */
   providers: ProviderStore;
   agents: AgentCatalog;
@@ -337,8 +340,10 @@ export async function createCore(
     }));
   const auth = new AuthStore(config.authPath);
   const providerStore = new ProviderStore(config.providersDir);
+  const chatgptPlan = new ChatGptPlan(path.join(path.dirname(config.authPath), 'chatgpt-plan.json'));
   const registry = new ProviderRegistry(catalog, settings.provider, process.env, {
     auth,
+    chatgptPlan,
     // Provider files win over the legacy app-settings store.
     extra: () => ({ ...(options.app?.providerDefs() ?? {}), ...providerStore.defs() }),
     listed: () => ({ ...(options.app?.listedModels() ?? {}), ...providerStore.listed() }),
@@ -1832,6 +1837,7 @@ export async function createCore(
     settings,
     registry,
     auth,
+    chatgptPlan,
     providers: providerStore,
     agents,
     defaultAgentName,

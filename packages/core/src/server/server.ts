@@ -56,6 +56,7 @@ import { startGoogleOAuth } from '../google/oauth-flow.ts';
 import { HostedCallbacks, publicBaseUrl } from '../oauth/callback.ts';
 import { serveCalendarPush } from '../calendar/push.ts';
 import { serveAssetLinks } from './assetlinks.ts';
+import { CHATGPT_PLAN_ID, CHATGPT_PLAN_NPM } from '../providers/chatgpt-plan.ts';
 import {
   checkClaudeLogin,
   CLAUDE_SUBSCRIPTION_ID,
@@ -525,6 +526,12 @@ export async function startServer(
     if (!/^[a-z0-9][a-z0-9._-]*$/.test(id)) {
       throw new Error('Provider id: use lowercase letters, digits, "-", "_" or ".", e.g. "opencode" or "my-server".');
     }
+    if (id === CHATGPT_PLAN_ID) {
+      // "Fetch models again" for the signed-in plan; signing in goes through chatgpt-plan-connect.
+      if (!core.chatgptPlan.connected) throw new Error('Sign in with ChatGPT first.');
+      await connectChatGptPlan();
+      return;
+    }
     if (id === CLAUDE_SUBSCRIPTION_ID) {
       // Uses the Claude Code login on this machine: no key and no URL to store.
       await checkClaudeLogin();
@@ -577,6 +584,21 @@ export async function startServer(
     core.registry.reset();
   };
 
+  /** After a ChatGPT sign-in: remember the provider with the models the account may use. */
+  const connectChatGptPlan = async () => {
+    const listed = await core.chatgptPlan.listModels();
+    if (listed.length === 0) throw new Error('This ChatGPT account has no models available for plan usage.');
+    core.providers.save(CHATGPT_PLAN_ID, {
+      def: {
+        name: 'ChatGPT (plan)',
+        npm: CHATGPT_PLAN_NPM,
+        models: Object.fromEntries(listed.map((model) => [model.id, { name: model.name }])),
+      },
+      models: listed.map((model) => model.id),
+    });
+    core.registry.reset();
+  };
+
   /** Edits a provider without touching its credential: display name, base URL, model list. */
   const updateProvider = (request: { id: string; name?: string; baseURL?: string; models?: string[] }) => {
     const id = String(request.id ?? '').trim().toLowerCase();
@@ -605,6 +627,7 @@ export async function startServer(
 
   const removeProvider = (rawId: string) => {
     const id = String(rawId).trim().toLowerCase();
+    if (id === CHATGPT_PLAN_ID) void core.chatgptPlan.disconnect();
     core.auth.remove(id);
     core.providers.remove(id);
     appSettings.removeProvider(id);
@@ -1128,6 +1151,25 @@ export async function startServer(
       case 'settings-save':
         saveSettings(message);
         reply({ type: 'settings', settings: settingsView(), saved: true });
+        break;
+      case 'chatgpt-plan-connect':
+        // OpenAI's program covers apps run locally, not a Mimi served from a public address.
+        if (publicUrl) {
+          reply({ type: 'error', message: 'ChatGPT plan sign-in works only when Mimi runs on your own computer, not on a hosted server.' });
+          break;
+        }
+        core.chatgptPlan.start().then(
+          (flow) => {
+            reply({ type: 'provider-auth-url', id: CHATGPT_PLAN_ID, url: flow.url });
+            flow.done
+              .then(() => connectChatGptPlan())
+              .then(
+                () => broadcast({ type: 'settings', settings: settingsView(), saved: true }),
+                (error: Error) => reply({ type: 'error', message: error.message }),
+              );
+          },
+          (error: Error) => reply({ type: 'error', message: error.message }),
+        );
         break;
       case 'provider-connect':
         connectProvider(message).then(

@@ -21,16 +21,26 @@ export const AUDIO_TYPES: Record<string, string> = {
   '.webm': 'audio/webm',
 };
 
+/** Where a track comes from: a file in the music folder, or YouTube (audio only). */
+export type MimiampTrackSource = 'file' | 'youtube';
+
 export interface MimiampTrack {
+  /** Stable id: `file:<name>` or `youtube:<video id>`. */
+  id: string;
+  source: MimiampTrackSource;
   /** A file name inside the music folder (no folders, no `..`). */
-  file: string;
+  file?: string;
+  /** The YouTube video id, for a YouTube track. */
+  videoId?: string;
   title: string;
   artist?: string;
   album?: string;
-  /** Seconds, when `tracks.json` says it. */
+  /** Seconds, when `tracks.json` or YouTube says it. */
   duration?: number;
-  /** Where the browser fetches it. */
+  /** Where the browser fetches it; a YouTube URL only answers after `prepareYoutube`. */
   url: string;
+  /** Cover art for a YouTube track. */
+  thumbnail?: string;
 }
 
 interface ManifestEntry {
@@ -39,6 +49,16 @@ interface ManifestEntry {
   artist?: unknown;
   album?: unknown;
   duration?: unknown;
+}
+
+/** The id a local file track is known by. */
+export function fileTrackId(file: string): string {
+  return `file:${file}`;
+}
+
+/** The id a YouTube track is known by. */
+export function youtubeTrackId(videoId: string): string {
+  return `youtube:${videoId}`;
 }
 
 /** True when a folder has at least one file the player can serve. */
@@ -111,7 +131,7 @@ function text(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
-/** Every playable track: manifest entries in their order, then files nobody listed. */
+/** Every playable file track: manifest entries in their order, then files nobody listed. */
 export function listMimiampTracks(dir = mimiampDir()): MimiampTrack[] {
   let files: string[] = [];
   try {
@@ -131,6 +151,8 @@ export function listMimiampTracks(dir = mimiampDir()): MimiampTrack[] {
     seen.add(file);
     const duration = Number(entry.duration);
     tracks.push({
+      id: fileTrackId(file),
+      source: 'file',
       file,
       title: text(entry.title) ?? titleFromFile(file),
       ...(text(entry.artist) ? { artist: text(entry.artist) } : {}),
@@ -142,7 +164,13 @@ export function listMimiampTracks(dir = mimiampDir()): MimiampTrack[] {
   for (const file of files.sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }))) {
     if (seen.has(file)) continue;
     seen.add(file);
-    tracks.push({ file, title: titleFromFile(file), url: `/mimiamp/${encodeURIComponent(file)}` });
+    tracks.push({
+      id: fileTrackId(file),
+      source: 'file',
+      file,
+      title: titleFromFile(file),
+      url: `/mimiamp/${encodeURIComponent(file)}`,
+    });
   }
   return tracks;
 }

@@ -682,7 +682,19 @@ export interface MemoryView {
 }
 
 /** What the built-in Mimiamp player can be told to do. */
-export type MimiampAction = 'open' | 'play' | 'pause' | 'stop' | 'next' | 'previous' | 'volume' | 'seek';
+export type MimiampAction =
+  | 'open'
+  | 'play'
+  | 'pause'
+  | 'stop'
+  | 'next'
+  | 'previous'
+  | 'volume'
+  | 'seek'
+  /** Play a playlist by id or name. */
+  | 'playlist-play'
+  /** Playlists changed on the server; open screens load them again. */
+  | 'refresh';
 
 /** A command from an agent (or the app) to the Mimiamp player in the open clients. */
 export interface MimiampCommand {

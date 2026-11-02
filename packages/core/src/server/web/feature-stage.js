@@ -6,6 +6,8 @@
 //   4. the agent's full-body portrait
 //   5. any outfit or agent emoji picture, so a set of sprites alone still shows
 //   6. the small avatar, so even a profile picture alone is not a blank stage
+// A picture that fails to load is skipped for the next one in that order, and an agent shown
+// in 3D keeps its 2D picture while the model loads or when the model cannot be shown.
 // When the picture changes it fades in with a small hop (a new outfit slides in); the figure
 // breathes slowly while idle. Also exports the editor used for the emoji pictures of an
 // outfit or an agent.
@@ -52,6 +54,7 @@
   let shownAgent = ''; // whose picture is on the stage, so a chat switch never keeps the old one
   let pending = '';
   let retries = 0; // failed loads of the current picture
+  const broken = new Set(); // pictures that failed to load: the next one in line is shown instead
 
   const directAgent = () => {
     const chat = M().state.chat;
@@ -67,27 +70,34 @@
     return null;
   }
 
-  /** Which picture to show for this agent, as { path, outfit } or null. */
-  function pick(agent) {
+  /** Every picture this agent could show, best first, as { path, outfit }. */
+  function candidates(agent) {
     const outfitId = (agent.status && agent.status.outfit) || '';
     const outfit = wardrobe().find((item) => item.id === outfitId);
     const own = agent.sprites || {};
     const enc = encodeURIComponent;
+    const worn = outfit ? outfit.id : '';
+    const list = [];
     if (outfit && moodKey && outfit.sprites && outfit.sprites[moodKey]) {
-      return { path: `/api/sprite/outfit/${enc(outfit.id)}/${moodKey}?v=${outfit.sprites[moodKey]}`, outfit: outfit.id };
+      list.push({ path: `/api/sprite/outfit/${enc(outfit.id)}/${moodKey}?v=${outfit.sprites[moodKey]}`, outfit: outfit.id });
     }
     // The agent's own emoji picture wins over the outfit's static picture: a sprite the user
     // uploaded for this emoji should show even while an outfit with a picture is worn.
-    if (moodKey && own[moodKey]) return { path: `/api/sprite/agent/${enc(agent.name)}/${moodKey}?v=${own[moodKey]}`, outfit: outfit ? outfit.id : '' };
-    if (outfit && outfit.image) return { path: `/api/wardrobe-image/${enc(outfit.id)}?v=${outfit.image}`, outfit: outfit.id };
-    if (agent.portrait) return { path: `/api/agent-image/${enc(agent.name)}/portrait?v=${agent.portrait}`, outfit: outfit ? outfit.id : '' };
+    if (moodKey && own[moodKey]) list.push({ path: `/api/sprite/agent/${enc(agent.name)}/${moodKey}?v=${own[moodKey]}`, outfit: worn });
+    if (outfit && outfit.image) list.push({ path: `/api/wardrobe-image/${enc(outfit.id)}?v=${outfit.image}`, outfit: outfit.id });
+    if (agent.portrait) list.push({ path: `/api/agent-image/${enc(agent.name)}/portrait?v=${agent.portrait}`, outfit: worn });
     // An agent with only expression pictures keeps a face even when the newest emoji has none.
-    const anyOutfit = outfit && outfit.sprites ? Object.keys(outfit.sprites)[0] : null;
-    if (anyOutfit) return { path: `/api/sprite/outfit/${enc(outfit.id)}/${anyOutfit}?v=${outfit.sprites[anyOutfit]}`, outfit: outfit.id };
-    const anyOwn = Object.keys(own)[0];
-    if (anyOwn) return { path: `/api/sprite/agent/${enc(agent.name)}/${anyOwn}?v=${own[anyOwn]}`, outfit: outfit ? outfit.id : '' };
-    if (agent.avatar) return { path: `/api/agent-image/${enc(agent.name)}/avatar?v=${agent.avatar}`, outfit: outfit ? outfit.id : '' };
-    return null;
+    for (const key of outfit && outfit.sprites ? Object.keys(outfit.sprites) : []) {
+      list.push({ path: `/api/sprite/outfit/${enc(outfit.id)}/${key}?v=${outfit.sprites[key]}`, outfit: outfit.id });
+    }
+    for (const key of Object.keys(own)) list.push({ path: `/api/sprite/agent/${enc(agent.name)}/${key}?v=${own[key]}`, outfit: worn });
+    if (agent.avatar) list.push({ path: `/api/agent-image/${enc(agent.name)}/avatar?v=${agent.avatar}`, outfit: worn });
+    return list;
+  }
+
+  /** Which picture to show for this agent, as { path, outfit } or null: the best one that loads. */
+  function pick(agent) {
+    return candidates(agent).find((item) => !broken.has(item.path)) || null;
   }
 
   // ---------- where the character stands ----------
@@ -201,7 +211,8 @@
     // An agent shown as a 3D model: the VRM of the outfit it wears, else its own (feature-vrm.js).
     const live = window.MimiHooks.vrmStage;
     const model = agent && agent.character === 'vrm' && live ? modelPath(agent) : null;
-    if (model) {
+    const modelState = model ? live.state(model) : 'none';
+    if (modelState === 'ready') {
       stage.classList.add('has-figure');
       wrap.hidden = false;
       for (const old of wrap.querySelectorAll('img.fig')) old.remove();
@@ -213,7 +224,10 @@
       applyView(agent);
       return;
     }
-    live?.hide();
+    // A model on its way: the 2D picture below stands in until it is on screen
+    // (feature-vrm.js refreshes the stage then). A model that failed to load is left out.
+    if (modelState === 'loading') live.show(wrap, model, moodKey);
+    else live?.hide();
     const target = agent && pick(agent);
     // A missing picture for the newest emoji is not a reason to blank the stage: keep the
     // last picture of this same agent until a real one is available or the chat changes.
@@ -228,7 +242,7 @@
         return;
       }
       kind = null;
-      wrap.replaceChildren();
+      for (const old of wrap.querySelectorAll('img.fig')) old.remove();
       shown = { path: '', outfit: '' };
       shownAgent = '';
       return;
@@ -237,15 +251,20 @@
     applyView(agent);
     if (target.path === shown.path || target.path === pending) return;
     pending = target.path;
+    const image = el('img');
+    image.alt = '';
     M()
       .blobUrl(target.path)
       .then((url) => {
+        image.src = url;
+        // A file the browser cannot draw counts as a failed load, not as an empty stage.
+        return image.decode();
+      })
+      .then(() => {
         if (pending !== target.path) return; // a newer picture was asked for meanwhile
         pending = '';
         const kind = shown.path && shown.outfit !== target.outfit ? 'outfit' : shown.path ? 'face' : 'first';
-        const image = el('img', `fig in-${kind}`);
-        image.alt = '';
-        image.src = url;
+        image.className = `fig in-${kind}`;
         for (const old of wrap.querySelectorAll('img.fig:not(.leaving)')) {
           old.classList.add('leaving');
           setTimeout(() => old.remove(), 460);
@@ -256,9 +275,18 @@
         retries = 0;
       })
       .catch(() => {
-        if (pending === target.path) pending = '';
-        // A picture that failed to load (the app was still starting) is tried again.
-        if (retries++ < 3) setTimeout(refresh, 2000);
+        if (pending !== target.path) return;
+        pending = '';
+        // The next picture in line shows at once. The failed one (the app may still have been
+        // starting) is tried again a few times before it is given up for this chat.
+        broken.add(target.path);
+        if (retries++ < 3) {
+          setTimeout(() => {
+            broken.delete(target.path);
+            refresh();
+          }, 2000);
+        }
+        refresh();
       });
   }
 
@@ -275,8 +303,10 @@
     shown = { path: '', outfit: '' };
     shownAgent = '';
     pending = '';
+    retries = 0;
+    broken.clear();
     const wrap = document.getElementById('figure');
-    if (wrap) wrap.replaceChildren();
+    if (wrap) for (const old of wrap.querySelectorAll('img.fig')) old.remove();
     refresh();
   }
 

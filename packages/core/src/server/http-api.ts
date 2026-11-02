@@ -8,6 +8,7 @@ import { type Attachment, type AttachmentStore, AttachmentQuotaError, MAX_ATTACH
 import type { WardrobeStore } from '../wardrobe/wardrobe-store.ts';
 import type { BackgroundStore } from '../backgrounds/background-store.ts';
 import type { GalleryStore } from '../gallery/gallery-store.ts';
+import type { MimiampService } from '../mimiamp/service.ts';
 
 /** What the webhook endpoint answers: a `respond` node may shape all of it. */
 export interface WebhookReply {
@@ -26,6 +27,10 @@ export interface HttpApiDeps {
   wardrobe: WardrobeStore;
   backgrounds: BackgroundStore;
   gallery: GalleryStore;
+  /** Mimiamp's songs and playlists (absent in installs without the music folder). */
+  mimiamp?: MimiampService;
+  /** Called after a Mimiamp playlist or YouTube song changed. */
+  mimiampChanged?(): void;
   /** Called after a gallery picture was added, changed or removed. */
   galleryChanged(agent: string): void;
   /** Called after a backdrop's picture changed. */
@@ -114,6 +119,160 @@ function sendBytes(response: http.ServerResponse, data: Buffer, mime: string, na
 function sendJson(response: http.ServerResponse, status: number, body: unknown): void {
   response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
   response.end(JSON.stringify(body));
+}
+
+
+async function readJson(request: http.IncomingMessage): Promise<Record<string, unknown>> {
+  const raw = (await readBody(request, 2 * 1024 * 1024)).toString('utf8').trim();
+  if (!raw) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new HttpError(400, 'The request body must be JSON.');
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new HttpError(400, 'The request body must be a JSON object.');
+  return parsed as Record<string, unknown>;
+}
+
+/**
+ * `/api/mimiamp/...`: the player's saved YouTube songs and the user's playlists. Every
+ * mutation tells the open players to reload, so a song an agent added shows up at once.
+ */
+async function handleMimiampApi(
+  service: MimiampService,
+  rest: string[],
+  url: URL,
+  request: http.IncomingMessage,
+  response: http.ServerResponse,
+  changed?: () => void,
+): Promise<void> {
+  const method = request.method ?? 'GET';
+  const [part, id, action] = rest;
+
+  if ((part === undefined || part === 'state') && method === 'GET') {
+    sendJson(response, 200, service.state());
+    return;
+  }
+
+  if (part === 'youtube') {
+    if (id === undefined && method === 'POST') {
+      const body = await readJson(request);
+      const link = String(body.url ?? '').trim();
+      if (!link) throw new HttpError(400, 'Paste a YouTube link.');
+      const track = await service.addYoutube(link);
+      const playlist = typeof body.playlist === 'string' && body.playlist.trim() ? service.playlists.get(body.playlist) : undefined;
+      if (playlist) service.playlists.addTrack(playlist.id, track);
+      changed?.();
+      sendJson(response, 200, { track, ...(playlist ? { playlist: service.playlists.get(playlist.id) } : {}) });
+      return;
+    }
+    if (id === 'search' && method === 'GET') {
+      sendJson(response, 200, await service.searchYoutube(url.searchParams.get('q') ?? ''));
+      return;
+    }
+    if (id === undefined) throw new HttpError(404, 'Not found.');
+    if (action === 'prepare' && method === 'POST') {
+      const audio = await service.prepareYoutube(id);
+      changed?.();
+      sendJson(response, 200, { videoId: audio.videoId, url: `/mimiamp/youtube/${audio.videoId}.audio`, mime: audio.mime });
+      return;
+    }
+    if (action === 'audio' && method === 'GET') {
+      const audio = service.audio(id);
+      if (!audio) throw new HttpError(404, 'This YouTube song is not downloaded yet.');
+      const data = fs.readFileSync(audio.file);
+      sendBytes(response, data, audio.mime, `${audio.videoId}${path.extname(audio.file)}`);
+      return;
+    }
+    if (action === undefined && method === 'DELETE') {
+      if (!service.removeYoutube(id)) throw new HttpError(404, 'No such YouTube song.');
+      changed?.();
+      sendJson(response, 200, { ok: true });
+      return;
+    }
+    throw new HttpError(405, 'Method not allowed.');
+  }
+
+  if (part === 'playlists') {
+    if (id === undefined) {
+      if (method === 'GET') {
+        sendJson(response, 200, { playlists: service.playlists.list() });
+        return;
+      }
+      if (method === 'POST') {
+        const body = await readJson(request);
+        const playlist = service.playlists.create(body.name);
+        changed?.();
+        sendJson(response, 200, { playlist });
+        return;
+      }
+      throw new HttpError(405, 'Method not allowed.');
+    }
+    const playlist = service.playlists.get(id);
+    if (!playlist) throw new HttpError(404, `No playlist "${id}".`);
+
+    if (action === undefined) {
+      if (method === 'GET') {
+        sendJson(response, 200, { playlist });
+        return;
+      }
+      if (method === 'PATCH' || method === 'PUT') {
+        const body = await readJson(request);
+        const updated = service.playlists.rename(playlist.id, body.name);
+        changed?.();
+        sendJson(response, 200, { playlist: updated });
+        return;
+      }
+      if (method === 'DELETE') {
+        service.playlists.remove(playlist.id);
+        changed?.();
+        sendJson(response, 200, { ok: true });
+        return;
+      }
+      throw new HttpError(405, 'Method not allowed.');
+    }
+
+    if (action === 'items' && rest.length === 3 && method === 'POST') {
+      const body = await readJson(request);
+      const updated =
+        typeof body.trackId === 'string' && body.trackId.trim()
+          ? (() => {
+              const track = service.findTrack(body.trackId);
+              if (!track) throw new HttpError(404, `No track "${body.trackId}".`);
+              return service.playlists.addTrack(playlist.id, track);
+            })()
+          : service.playlists.addItem(playlist.id, body);
+      changed?.();
+      sendJson(response, 200, { playlist: updated });
+      return;
+    }
+
+    if (action === 'items' && rest.length === 4 && method === 'DELETE') {
+      const result = service.playlists.removeItem(playlist.id, rest[2]!);
+      if (!result.removed) throw new HttpError(404, 'No such item in the playlist.');
+      changed?.();
+      sendJson(response, 200, { playlist: result.playlist });
+      return;
+    }
+
+    if (action === 'export' && method === 'GET') {
+      sendJson(response, 200, service.exportPlaylist(playlist.id));
+      return;
+    }
+
+    throw new HttpError(404, 'Not found.');
+  }
+
+  if (part === 'import' && method === 'POST') {
+    const body = await readJson(request);
+    const playlist = service.playlists.import(body.playlist ?? body);
+    changed?.();
+    sendJson(response, 200, { playlist });
+    return;
+  }
+
+  throw new HttpError(404, 'Not found.');
 }
 
 /**
@@ -442,6 +601,8 @@ export async function handleHttpApi(
       } else {
         throw new HttpError(405, 'Method not allowed.');
       }
+    } else if (resource === 'mimiamp' && deps.mimiamp) {
+      await handleMimiampApi(deps.mimiamp, rest, url, request, response, deps.mimiampChanged);
     } else {
       throw new HttpError(404, 'Not found.');
     }

@@ -76,7 +76,7 @@
     renderHeader();
     renderRail();
   };
-  /** How much of the chat shows over the character: 0 none, 1 only the newest message, 2 all (the usual). Per mode, with a per-chat override. */
+  /** How much of the chat shows over the character: 0 none, 1 the two newest messages, 2 all (the usual). Per mode, with a per-chat override. */
   const bubbleLevel = () => {
     const saved = chatPref('bubbles', () => store.get(`mimi.bubbles.${modeNow()}`));
     if (saved === null) return 2;
@@ -746,6 +746,8 @@
   }, { passive: true });
   function add(node) {
     const stick = pinned();
+    // Only a message arriving now slides in; a history render or merge never replays it.
+    if (node.matches?.('.gmsg, .row-user, .perm, .approval')) node.classList.add('arrive');
     logInner.append(node);
     if (stick) scrollDown();
     else if (node.matches?.('.gmsg, .row-user, .perm, .approval')) {
@@ -5432,6 +5434,46 @@
   }
   // The Android app calls this when the activity comes back to the front.
   window.__mimiWake = wake;
+
+  /**
+   * The Android back button: closes the topmost thing (picture, popup, menu, side panel) or
+   * goes from a screen back to the list. False when there is nothing left, so the app goes
+   * to the background.
+   */
+  function goBack() {
+    const lightboxNode = document.querySelector('.lightbox');
+    if (lightboxNode) {
+      lightboxNode.remove();
+      return true;
+    }
+    if ($('overlay').firstChild) {
+      // Hub popups listen for Esc themselves and ask before dropping unsaved edits.
+      if ($('overlay').querySelector('.mk-scrim')) document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      else closeOverlay();
+      return true;
+    }
+    const menu = document.querySelector('.ctxmenu');
+    if (menu) {
+      menu.remove();
+      return true;
+    }
+    const popups = [$('attach-menu'), document.querySelector('.emoji-panel'), $('mention')].filter((node) => node && !node.hidden);
+    if (popups.length > 0) {
+      for (const node of popups) node.hidden = true;
+      return true;
+    }
+    if (railFloats() && state.railOpen && !$('rail').hidden) {
+      setRail(false);
+      return true;
+    }
+    // Narrow screens show one pane at a time: a chat or a page goes back to the list.
+    if (getComputedStyle($('back')).display !== 'none' && !$('app').classList.contains('show-side')) {
+      $('app').classList.add('show-side');
+      return true;
+    }
+    return false;
+  }
+  window.__mimiBack = goBack;
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') wake();
   });

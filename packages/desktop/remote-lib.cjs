@@ -67,8 +67,10 @@ function defaultConfig(home) {
   return {
     server: '',
     autoLockMinutes: 0,
-    // shell: tools with the OS account's full rights (commands, power, MCP); off unless chosen.
-    pcAgent: { enabled: false, shell: false, folders: [path.join(home, 'Mimi-Workspace')], apps: [] },
+    // enabled: the PC agent starts with the app (on by default since 0.8.1; autoOn marks that default
+    // as applied, so a later "off" from the user sticks). shell: tools with the OS account's full
+    // rights (commands, power, MCP); off unless chosen.
+    pcAgent: { enabled: true, autoOn: 1, shell: false, folders: [path.join(home, 'Mimi-Workspace')], apps: [] },
     window: { bounds: null, maximized: false, hideOnBlur: false, onTop: false },
   };
 }
@@ -93,7 +95,9 @@ function readConfig(file, home) {
     server,
     autoLockMinutes: LOCK_CHOICES.includes(saved.autoLockMinutes) ? saved.autoLockMinutes : 0,
     pcAgent: {
-      enabled: saved.pcAgent?.enabled === true,
+      // A config from before the default flipped (no autoOn) is switched on once; after that the saved choice rules.
+      enabled: saved.pcAgent?.autoOn === 1 ? saved.pcAgent?.enabled === true : true,
+      autoOn: 1,
       shell: saved.pcAgent?.shell === true,
       folders: folders.length > 0 ? folders : base.pcAgent.folders,
       apps,

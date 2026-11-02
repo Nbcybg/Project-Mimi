@@ -66,30 +66,36 @@ test('PC agent folders: only inside the OS account home, never the home itself o
   }
 });
 
-test('config: defaults are off; bad values from the file are dropped', () => {
+test('config: the PC agent is on by default, the shell is off; bad values from the file are dropped', () => {
   const file = path.join(home, 'config.json');
   const fresh = lib.readConfig(file, home);
-  assert.deepEqual({ server: fresh.server, lock: fresh.autoLockMinutes, pc: fresh.pcAgent.enabled, shell: fresh.pcAgent.shell }, { server: '', lock: 0, pc: false, shell: false });
+  assert.deepEqual({ server: fresh.server, lock: fresh.autoLockMinutes, pc: fresh.pcAgent.enabled, shell: fresh.pcAgent.shell }, { server: '', lock: 0, pc: true, shell: false });
   assert.deepEqual(fresh.pcAgent.folders, [path.join(home, 'Mimi-Workspace')]);
 
   lib.writeConfig(file, {
     ...fresh,
     server: 'https://mimi.example.com',
     autoLockMinutes: 15,
-    pcAgent: { enabled: true, shell: true, folders: [path.join(home, 'work')], apps: ['Mail', 'Thunderbird'] },
+    pcAgent: { enabled: false, autoOn: 1, shell: true, folders: [path.join(home, 'work')], apps: ['Mail', 'Thunderbird'] },
   });
   if (process.platform !== 'win32') assert.equal(fs.statSync(file).mode & 0o077, 0, 'readable by its owner only');
   const saved = lib.readConfig(file, home);
   assert.deepEqual({ server: saved.server, lock: saved.autoLockMinutes, pc: saved.pcAgent }, {
     server: 'https://mimi.example.com',
     lock: 15,
-    pc: { enabled: true, shell: true, folders: [path.join(home, 'work')], apps: ['Mail', 'Thunderbird'] },
+    pc: { enabled: false, autoOn: 1, shell: true, folders: [path.join(home, 'work')], apps: ['Mail', 'Thunderbird'] },
   });
 
-  fs.writeFileSync(file, JSON.stringify({ server: 'http://evil.example', autoLockMinutes: 7, pcAgent: { enabled: 'yes', shell: 'yes', folders: ['/etc', home] } }));
+  fs.writeFileSync(file, JSON.stringify({ server: 'http://evil.example', autoLockMinutes: 7, pcAgent: { enabled: 'yes', autoOn: 1, shell: 'yes', folders: ['/etc', home] } }));
   const cleaned = lib.readConfig(file, home);
   assert.deepEqual({ server: cleaned.server, lock: cleaned.autoLockMinutes, pc: cleaned.pcAgent.enabled, shell: cleaned.pcAgent.shell }, { server: '', lock: 0, pc: false, shell: false });
   assert.deepEqual(cleaned.pcAgent.folders, [path.join(home, 'Mimi-Workspace')], 'folders outside the rules fall back to the default');
+
+  // A config from before the agent was on by default is switched on once; its own "off" after that sticks.
+  fs.writeFileSync(file, JSON.stringify({ pcAgent: { enabled: false, shell: false } }));
+  assert.equal(lib.readConfig(file, home).pcAgent.enabled, true);
+  fs.writeFileSync(file, JSON.stringify({ pcAgent: { enabled: false, autoOn: 1 } }));
+  assert.equal(lib.readConfig(file, home).pcAgent.enabled, false);
 });
 
 test('sign-out wipe: the token file and the temporary cache go, the settings stay', () => {

@@ -5,6 +5,7 @@ export const GOOGLE_SCOPES = [
   'https://www.googleapis.com/auth/gmail.send',
   'https://www.googleapis.com/auth/gmail.modify',
   'https://www.googleapis.com/auth/calendar.events',
+  'https://www.googleapis.com/auth/youtube.readonly',
   'https://www.googleapis.com/auth/contacts.readonly',
   'https://www.googleapis.com/auth/contacts',
   'https://www.googleapis.com/auth/spreadsheets',

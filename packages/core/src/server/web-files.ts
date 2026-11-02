@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { renderIconPng } from '../app/icon.ts';
 import { AUDIO_TYPES, listMimiampTracks, trackPath } from '../mimiamp/library.ts';
+import type { MimiampService } from '../mimiamp/service.ts';
 
 // The built-in web client, served by a core and by the accounts gateway alike.
 
@@ -133,31 +134,14 @@ const icons = new Map<string, Buffer>();
  * the developer's (shipped with the app, or MIMI_MUSIC_DIR); browsers need Range answers to
  * seek in a long song without downloading it all again.
  */
-function serveMimiamp(pathname: string, response: http.ServerResponse, range?: string): boolean {
-  if (pathname === '/mimiamp/tracks.json') {
-    const body = Buffer.from(JSON.stringify({ tracks: listMimiampTracks() }));
-    response.writeHead(200, {
-      'content-type': 'application/json; charset=utf-8',
-      'content-length': body.length,
-      'cache-control': 'no-store',
-      'x-content-type-options': 'nosniff',
-    });
-    response.end(body);
-    return true;
-  }
-  if (!pathname.startsWith('/mimiamp/')) return false;
-  let name: string;
-  try {
-    name = decodeURIComponent(pathname.slice('/mimiamp/'.length));
-  } catch {
-    response.writeHead(400).end();
-    return true;
-  }
-  const file = trackPath(name);
-  if (!file) {
-    response.writeHead(404).end();
-    return true;
-  }
+/** Answers a range request for one audio file; browsers need this to seek without reloading. */
+function serveAudioFile(
+  file: string,
+  name: string,
+  mime: string,
+  response: http.ServerResponse,
+  range?: string,
+): void {
   let size: number;
   try {
     const stat = fs.statSync(file);
@@ -165,10 +149,10 @@ function serveMimiamp(pathname: string, response: http.ServerResponse, range?: s
     size = stat.size;
   } catch {
     response.writeHead(404).end();
-    return true;
+    return;
   }
   const headers: Record<string, string> = {
-    'content-type': AUDIO_TYPES[path.extname(name).toLowerCase()] ?? 'application/octet-stream',
+    'content-type': mime,
     'accept-ranges': 'bytes',
     'cache-control': 'private, max-age=3600',
     'x-content-type-options': 'nosniff',
@@ -188,7 +172,7 @@ function serveMimiamp(pathname: string, response: http.ServerResponse, range?: s
     if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || start > end || start >= size) {
       response.writeHead(416, { ...headers, 'content-range': `bytes */${size}` });
       response.end();
-      return true;
+      return;
     }
     response.writeHead(206, {
       ...headers,
@@ -201,6 +185,50 @@ function serveMimiamp(pathname: string, response: http.ServerResponse, range?: s
   const stream = fs.createReadStream(file, { start, end });
   stream.on('error', () => response.destroy());
   stream.pipe(response);
+}
+
+function serveMimiamp(pathname: string, response: http.ServerResponse, range?: string, service?: MimiampService): boolean {
+  if (pathname === '/mimiamp/tracks.json') {
+    const body = Buffer.from(JSON.stringify({ tracks: service ? service.tracks() : listMimiampTracks() }));
+    response.writeHead(200, {
+      'content-type': 'application/json; charset=utf-8',
+      'content-length': body.length,
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff',
+    });
+    response.end(body);
+    return true;
+  }
+  const youtube = /^\/mimiamp\/youtube\/([A-Za-z0-9_-]{11})\.audio$/.exec(pathname);
+  if (youtube) {
+    const audio = service?.audio(youtube[1]!);
+    if (!audio) {
+      const body = Buffer.from(JSON.stringify({ error: 'This YouTube song is not downloaded yet.' }));
+      response.writeHead(404, {
+        'content-type': 'application/json; charset=utf-8',
+        'content-length': body.length,
+        'cache-control': 'no-store',
+      });
+      response.end(body);
+      return true;
+    }
+    serveAudioFile(audio.file, `${audio.videoId}${path.extname(audio.file)}`, audio.mime, response, range);
+    return true;
+  }
+  if (!pathname.startsWith('/mimiamp/')) return false;
+  let name: string;
+  try {
+    name = decodeURIComponent(pathname.slice('/mimiamp/'.length));
+  } catch {
+    response.writeHead(400).end();
+    return true;
+  }
+  const file = trackPath(name);
+  if (!file) {
+    response.writeHead(404).end();
+    return true;
+  }
+  serveAudioFile(file, name, AUDIO_TYPES[path.extname(name).toLowerCase()] ?? 'application/octet-stream', response, range);
   return true;
 }
 
@@ -208,8 +236,13 @@ function serveMimiamp(pathname: string, response: http.ServerResponse, range?: s
  * Answers a GET for the built-in web client (pages, scripts, 3D libraries, icon), which
  * needs no token. Shared with the accounts gateway. Returns false for any other path.
  */
-export function serveWebFile(pathname: string, response: http.ServerResponse, range?: string): boolean {
-  if (serveMimiamp(pathname, response, range)) return true;
+export function serveWebFile(
+  pathname: string,
+  response: http.ServerResponse,
+  range?: string,
+  service?: MimiampService,
+): boolean {
+  if (serveMimiamp(pathname, response, range, service)) return true;
   if (pathname.startsWith('/backgrounds/')) {
     const name = pathname.slice('/backgrounds/'.length);
     if (!/^[a-z0-9-]+\.webp$/.test(name)) {

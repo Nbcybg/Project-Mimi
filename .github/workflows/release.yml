@@ -47,8 +47,18 @@ jobs:
           path: dist/Mimi-*-win-*.*
           if-no-files-found: error
 
+  # Apple silicon (arm64) and Intel (x64): the zip is named by the runner's own arch, which is what
+  # the desktop updater looks for (Mimi-<version>-mac-<arch>.zip), and node-pty is prebuilt per arch.
   mac:
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-latest
+          - arch: x64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -84,7 +94,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
       - uses: actions/upload-artifact@v4
         with:
-          name: mac
+          name: mac-${{ matrix.arch }}
           path: dist/Mimi-*-mac-*.zip
           if-no-files-found: error
 

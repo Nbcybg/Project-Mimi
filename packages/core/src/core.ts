@@ -78,6 +78,7 @@ import {
   type SkillRunner,
 } from './skills/skills.ts';
 import { makePcRunner, type PcLink, RoutingExecutor } from './tools/executor.ts';
+import { MimiampService } from './mimiamp/service.ts';
 import { createToolRegistry } from './tools/index.ts';
 import { createExportTools } from './tools/export-tools.ts';
 import { createBrowserSecretTools } from './tools/browser-secret-tools.ts';
@@ -185,6 +186,8 @@ export interface Core {
   backgrounds: BackgroundStore;
   /** The situation gallery of each agent. */
   gallery: GalleryStore;
+  /** Mimiamp songs, YouTube links and playlists. */
+  mimiamp: MimiampService;
   attachments: AttachmentStore;
   /** The skill hub as it is on disk right now. */
   skills(): Skill[];
@@ -450,6 +453,7 @@ export async function createCore(
   });
   const googleFor = (account?: string) => oauth.google(account);
   const microsoftFor = (account?: string) => oauth.microsoft(account);
+  const mimiamp = new MimiampService({ dataDir: config.dataDir, google: googleFor() });
   const triggers = new TriggerStore(db, () => config.timezone);
   // The database schedules; the files under `triggers/` mirror it so a synced folder
   // carries reminders and webhooks to another machine.
@@ -594,6 +598,9 @@ export async function createCore(
     profile,
     // Music runs in the open web clients; this core only passes the request on.
     mimiamp: (command) => listeners.mimiampCommand?.(command) ?? 0,
+    mimiampLibrary: () => mimiamp.tracks(),
+    mimiampPlaylists: mimiamp.playlists,
+    mimiampYoutube: { add: (url) => mimiamp.addYoutube(url) },
     media: {
       attachments,
       models,
@@ -1880,6 +1887,7 @@ export async function createCore(
     wardrobe,
     backgrounds,
     gallery,
+    mimiamp,
     attachments,
     skills: currentSkills,
     tools: toolPool,

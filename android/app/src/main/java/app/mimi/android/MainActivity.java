@@ -192,10 +192,18 @@ public class MainActivity extends Activity {
         web.saveState(outState);
     }
 
+    /**
+     * The page is one screen without browser history, so it decides first: it closes a popup,
+     * a menu or the side panel, or goes from a chat back to the list. With nothing left the app
+     * goes to the background (like other chat apps) instead of closing and dropping the chat.
+     */
     @Override
     public void onBackPressed() {
-        if (web.canGoBack()) web.goBack();
-        else super.onBackPressed();
+        web.evaluateJavascript("!!(window.__mimiBack&&window.__mimiBack())", (handled) -> {
+            if ("true".equals(handled)) return;
+            if (web.canGoBack()) web.goBack();
+            else moveTaskToBack(true);
+        });
     }
 
     @Override

@@ -2127,6 +2127,8 @@ export async function startServer(
     wardrobe: core.wardrobe,
     backgrounds: core.backgrounds,
     gallery: core.gallery,
+    mimiamp: core.mimiamp,
+    mimiampChanged: () => broadcast({ type: 'mimiamp', command: { action: 'refresh' } }),
     galleryChanged: (agent: string) => broadcast({ type: 'gallery-changed', agent }),
     backgroundsChanged: () => broadcast(backgroundsMessage()),
     wardrobeChanged: () => broadcast({ type: 'wardrobe', outfits: core.wardrobe.list() }),
@@ -2268,7 +2270,7 @@ export async function startServer(
   firstBackup.unref();
   const server = http.createServer(async (request, response) => {
     const url = new URL(request.url ?? '/', 'http://localhost');
-    if (request.method === 'GET' && serveWebFile(url.pathname, response, request.headers.range)) {
+    if (request.method === 'GET' && serveWebFile(url.pathname, response, request.headers.range, core.mimiamp)) {
       // the web client
     } else if (await serveCalendarPush(core.calendarSync, request, response)) {
       // a calendar provider notification or the Graph validation handshake

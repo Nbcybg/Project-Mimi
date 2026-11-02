@@ -1,6 +1,6 @@
 {
   "name": "@mimi/pc-agent",
-  "version": "0.8.0-prototype",
+  "version": "0.8.1-prototype",
   "private": true,
   "type": "module",
   "exports": {

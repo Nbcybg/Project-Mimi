@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### 0.8.1-prototype
+
+- PC agent: on the desktop app (Windows and macOS) it now starts by itself after sign-in, no longer waiting
+  for the tray switch. Existing installs are switched on once; turning it off in the tray menu stays off.
+  Commands and MCP (the "shell" switch) remain off until chosen.
+- Release: the Mac build now ships for Intel as well (`Mimi-<version>-mac-x64.zip` beside `-mac-arm64.zip`);
+  the updater picks the zip matching the computer.
+
 ### 0.8.0-prototype
 
 - Hub: rebuilt for people who have never seen it. Every tab says in one line what it holds; lists are cards
@@ -33,6 +41,18 @@
 - Chat: an agent's own emoji sprite now wins over an outfit's static picture, so uploaded sprites show while
   an outfit is worn; when nothing else is set, the small avatar is used instead of leaving the stage blank.
   An agent without an avatar also uses its first emoji sprite (else its portrait) as the chat-list picture.
+- Chat: the character no longer vanishes when its picture cannot be shown. An agent set to 3D shows its 2D
+  picture while the VRM loads and keeps it when the model fails to load (or there is no WebGL), instead of an
+  empty canvas; a 2D picture that fails to load or decode is skipped for the next one (portrait → sprites →
+  avatar) instead of leaving the stage blank.
+- Chat (character on): message level 1 shows the two newest messages instead of one. The message box no
+  longer sits on a plain band: the stage and its backdrop run on behind it (glass box on desktop), and only
+  the log is cut above it.
+- Android: the back button closes the topmost picture, popup, menu or side panel, or goes from a chat or
+  page back to the list; with nothing left the app goes to the background instead of closing.
+- Motion: new messages slide in (history renders do not replay it), screens fade in, popups and menus
+  pop, toasts slide in, the mobile chat list slides in, and buttons give a small press. All off with the
+  system's "reduce motion".
 - Permissions: task and session approvals belong to the agent that asked. In a group chat or a handoff, another
   agent in the same turn/session asks on its own and no longer inherits the approval. Renaming an agent moves
   its forever approvals, and deleting one drops them so a later agent with the same name cannot inherit them.

@@ -919,9 +919,33 @@ async function liveLoad(path) {
   canvas.classList.remove('swap');
 }
 
+/** Models that could not be shown on the chat stage; the stage uses the 2D picture for them. */
+const liveFailed = new Set();
+
+/** 'ready' while a model is on screen, 'failed' for a model that could not be shown, else 'loading'. */
+function liveState(path) {
+  if (liveFailed.has(path)) return 'failed';
+  return live.vrm ? 'ready' : 'loading';
+}
+
+function liveFail(path, error) {
+  live.loading = '';
+  liveFailed.add(path);
+  console.error(error);
+  M().toast('โหลดโมเดล VRM บนหน้าแชตไม่สำเร็จ', `${error.message} — ใช้รูป 2D แทน`, true);
+  window.MimiHooks.stage?.refresh();
+}
+
 /** Shows the model at `path` in `wrap` (the stage's figure layer) with the mood of `moodKey`. */
 function liveShow(wrap, path, moodKey) {
-  liveStart();
+  try {
+    liveStart();
+  } catch (error) {
+    // no WebGL here: the stage keeps the 2D picture
+    liveFailed.add(path);
+    console.error(error);
+    return;
+  }
   const canvas = live.renderer.domElement;
   if (canvas.parentElement !== wrap) {
     wrap.append(canvas);
@@ -932,11 +956,9 @@ function liveShow(wrap, path, moodKey) {
   liveResize();
   live.mood = (moodKey && EMOJI_MOOD[moodKey]) || 'neutral';
   if (path === live.path || path === live.loading) return;
-  liveLoad(path).catch((error) => {
-    live.loading = '';
-    console.error(error);
-    M().toast('โหลดโมเดล VRM บนหน้าแชตไม่สำเร็จ', error.message, true);
-  });
+  liveLoad(path)
+    .then(() => window.MimiHooks.stage?.refresh())
+    .catch((error) => liveFail(path, error));
 }
 
 function liveHide() {
@@ -958,4 +980,4 @@ function liveTalk() {
   live.talkUntil = performance.now() + 450;
 }
 
-window.MimiHooks.vrmStage = { show: liveShow, hide: liveHide, talk: liveTalk, setView: liveSetView };
+window.MimiHooks.vrmStage = { show: liveShow, hide: liveHide, state: liveState, talk: liveTalk, setView: liveSetView };

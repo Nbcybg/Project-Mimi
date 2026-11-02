@@ -1385,6 +1385,7 @@
         ? [button('btn ghost', '▶ จากตรงนี้', () => runFrom(node, runId), 'บันทึก แล้วรันใหม่ตั้งแต่ node นี้ ด้วย input เดิมของ run ที่เปิดอยู่ (node ก่อนหน้าไม่รันซ้ำ)')]
         : []),
       ...(mode === 'list' ? [button('btn ghost', '↑', () => move(node.id, -1)), button('btn ghost', '↓', () => move(node.id, 1))] : []),
+      button('btn ghost', '★ preset', () => saveNodePreset(node), 'บันทึก node นี้พร้อมค่าที่ตั้งไว้เป็น preset (Hub → Node) เพื่อวางซ้ำใน workflow อื่น'),
       ...(isTrigger(node.type) ? [] : [button('btn danger', 'ลบ', () => removeNode(node.id))]),
     );
     head.append(actions);
@@ -1937,6 +1938,48 @@
     showEditor();
   }
 
+  /** Saves a configured node as a node preset, after asking for its name. */
+  function saveNodePreset(node) {
+    sync();
+    const Kit = window.MimiKit;
+    const name = M().textInput(node.title || specOf(node.type)?.label || node.type, 'ชื่อ preset');
+    const description = M().textInput('', 'ไว้ทำอะไร (ไม่บังคับ)');
+    const popup = Kit.modal({
+      title: 'บันทึกเป็น node preset',
+      sub: 'ค่าที่ตั้งไว้ใน node นี้จะถูกเก็บไว้ · วางซ้ำได้จากกลุ่ม "Preset ของฉัน" ทางซ้าย · แก้/ลบได้ที่ Hub → Node & เครื่องมือ',
+      body: [Kit.field('ชื่อ preset', name), Kit.field('คำอธิบาย', description)],
+    });
+    popup.setFoot([
+      button('btn ghost', 'ยกเลิก', () => popup.close()),
+      button('btn pri', 'บันทึก', () => {
+        if (!name.value.trim()) return M().toast('ยังไม่ได้ตั้งชื่อ', null, true);
+        try {
+          window.MimiNodePresets.save({ title: name.value.trim(), description: description.value.trim(), type: node.type, config: JSON.parse(JSON.stringify(node.config || {})) });
+        } catch (error) {
+          return M().toast('บันทึกไม่ได้', error.message, true);
+        }
+        popup.done();
+        M().toast(`บันทึก preset "${name.value.trim()}" แล้ว ✓`);
+        if (document.querySelector('.wfc-library')) libraryRedraw?.();
+      }),
+    ]);
+  }
+  let libraryRedraw = null;
+
+  /** A node from a node preset: its type with the saved settings copied in. */
+  function createFromPreset(id, position, from) {
+    const preset = (window.MimiNodePresets?.list() || []).find((entry) => entry.id === id);
+    if (!preset) {
+      M().toast('ไม่พบ preset นี้แล้ว', null, true);
+      return null;
+    }
+    // A trigger preset replaces the workflow's trigger (createNode reuses the one there is).
+    const node = createNode(preset.type, position, from, preset.config?.pool);
+    node.config = { ...node.config, ...JSON.parse(JSON.stringify(preset.config || {})) };
+    node.title = preset.title;
+    return node;
+  }
+
   /** Node types in their groups; `onPick(type)` gets the choice. */
   function paletteGroups(onPick, filter = '') {
     const box = el('div', 'waddgroups');
@@ -1994,7 +2037,10 @@
     if (!draft || !document.querySelector('#wfEditor')) return;
     sync();
     let node;
-    if (entry.startsWith('tool@')) {
+    if (entry.startsWith('preset@')) {
+      node = createFromPreset(entry.slice('preset@'.length), canvasApi?.center() || null, null);
+      if (!node) return;
+    } else if (entry.startsWith('tool@')) {
       node = createNode('tool', canvasApi?.center() || null, null);
       node.config.tool = entry.slice('tool@'.length);
       node.title = entry.slice('tool@'.length);
@@ -2076,6 +2122,14 @@
         .filter((tool) => !tool.preset && match(`${tool.name} ${tool.desc || ''}`))
         .map((tool) => libraryEntry(`tool@${tool.name}`, `tool: ${tool.name}`, M().describeTool?.(tool) || tool.desc || tool.name));
       list.replaceChildren();
+      const presets = (window.MimiNodePresets?.list() || [])
+        .filter((preset) => match(`${preset.title} ${preset.description} ${preset.type}`))
+        .map((preset) => libraryEntry(`preset@${preset.id}`, `★ ${preset.title}`, preset.description || `preset ของ ${specOf(preset.type)?.label || preset.type}`));
+      if (presets.length > 0) {
+        const group = el('div', 'wlib-group');
+        group.append(el('span', 'wlib-label', 'Preset ของฉัน'), ...presets);
+        list.append(group);
+      }
       for (const label of [...NODE_GROUPS.map((group) => group.label), 'อื่น ๆ'].filter((name) => groups.has(name))) {
         const group = el('div', 'wlib-group');
         group.append(el('span', 'wlib-label', label));
@@ -2095,6 +2149,7 @@
       draw();
     };
     draw();
+    libraryRedraw = draw;
     box.append(head, list);
     return box;
   }
@@ -2278,7 +2333,10 @@
       redo,
       addNodeAt: (type, position, from) => {
         let node;
-        if (type.startsWith('tool@')) {
+        if (type.startsWith('preset@')) {
+          node = createFromPreset(type.slice('preset@'.length), position, from);
+          if (!node) return;
+        } else if (type.startsWith('tool@')) {
           node = createNode('tool', position, from);
           node.config.tool = type.slice('tool@'.length);
           node.title = type.slice('tool@'.length);
@@ -2634,6 +2692,6 @@
     if (!draft) return;
     sync();
     showEditor();
-  }, onResult, onNodeResult, onRuns, onRunRecord, onImport, onExprPreview };
+  }, onResult, onNodeResult, onRuns, onRunRecord, onImport, onExprPreview, openEditor };
   window.MimiHooks.workflows = window.MimiHooks.agentWorkflows;
 })();

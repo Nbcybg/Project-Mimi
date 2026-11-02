@@ -372,6 +372,10 @@ export function createChatApi(context: ChatApiContext) {
       topP: number(view.topP, 0, 1, 'Top P'),
       topK: number(view.topK, 1, 1000, 'Top K', true),
       maxOutputTokens: number(view.maxOutputTokens, 1, 1_000_000, 'Max tokens', true),
+      minTokens: number(view.minTokens, 0, 1_000_000, 'Min tokens', true),
+      presencePenalty: number(view.presencePenalty, -2, 2, 'Presence penalty'),
+      frequencyPenalty: number(view.frequencyPenalty, -2, 2, 'Frequency penalty'),
+      repetitionPenalty: number(view.repetitionPenalty, 0, 10, 'Repetition penalty'),
       reasoning: reasoningOf(view.reasoning),
     });
   };

@@ -34,35 +34,35 @@
       M().state.knowledgeLoaded = true;
       M().send({ type: 'knowledge-list' });
     }
-    const wrap = el('div', 'split kbsplit');
-    wrap.append(listPanel(), selected === null ? introPanel() : editorPanel());
+    const Kit = window.MimiKit;
+    const wrap = el('div');
+    wrap.append(Kit.section(`คลังความรู้ (${collections().length})`, 'ใส่เอกสาร โน้ต คู่มือ หรือหน้าเว็บ แล้ว agent ที่มีเครื่องมือ knowledge_search จะค้นเจอเอง · workflow ใช้ node "คลังความรู้" ได้ · ค้นด้วยคำได้เสมอ ตั้ง embedding model เพื่อค้นตามความหมาย', [
+      button('btn pri', '+ สร้างคลังใหม่', () => select('')),
+    ]));
+    wrap.append(Kit.grid(collections().map((entry) => Kit.card({
+      title: entry.title,
+      sub: entry.name,
+      icon: '📚',
+      desc: entry.description,
+      badges: [`${entry.documents} เอกสาร`, entry.embeddingModel ? ['ค้นตามความหมาย + คำ', 'ok'] : 'ค้นด้วยคำ', entry.agents && entry.agents.length ? `เฉพาะ ${entry.agents.map(M().nameOf).join(', ')}` : null],
+      onOpen: () => select(entry.name),
+      actions: [
+        { label: 'เปิด', onClick: () => select(entry.name) },
+        { label: 'ลบ', danger: true, onClick: () => removeCollection(entry) },
+      ],
+    })), 'ยังไม่มีคลัง — กด "+ สร้างคลังใหม่"'));
+    if (selected === null) Kit.closeHost('knowledge');
+    else {
+      const entry = collections().find((item) => item.name === selected);
+      Kit.hostPopup('knowledge', { title: entry ? `คลัง: ${entry.title}` : 'สร้างคลังใหม่', build: () => [editorPanel()], onClose: () => select(null) });
+    }
     return wrap;
   }
 
-  function listPanel() {
-    const panel = el('div', 'panel');
-    panel.append(el('h3', '', 'คลังความรู้'));
-    const list = el('div', 'list');
-    for (const entry of collections()) {
-      const item = button(`item${entry.name === selected ? ' on' : ''}`, '', () => select(entry.name));
-      const text = el('div');
-      text.append(el('b', '', entry.title), el('small', 'muted', ` · ${entry.documents} เอกสาร · ${entry.embeddingModel ? 'ค้นแบบความหมาย + คำ' : 'ค้นด้วยคำ'}${entry.agents && entry.agents.length ? ` · เฉพาะ ${entry.agents.join(', ')}` : ''}`));
-      item.append(text);
-      list.append(item);
-    }
-    if (collections().length === 0) list.append(el('p', 'hint', 'ยังไม่มีคลัง'));
-    panel.append(list, button('btn', '+ สร้างคลังใหม่', () => select('')));
-    return panel;
-  }
-
-  function introPanel() {
-    const panel = el('div', 'panel');
-    panel.append(
-      el('h3', '', 'คลังความรู้ทำอะไร'),
-      el('p', 'hint', 'ใส่เอกสาร โน้ต คู่มือ หรือหน้าเว็บไว้ที่นี่ แล้ว agent จะค้นเจอเองเมื่อมีเครื่องมือ knowledge_search (ติ๊กในหน้า Agent) · workflow ใช้ node "คลังความรู้" ค้นแล้วส่ง context ให้ LLM ได้'),
-      el('p', 'hint', 'ค้นด้วยคำใช้ได้เสมอ (ภาษาไทยไม่ต้องเว้นวรรค) · ถ้าตั้ง embedding model เช่น google/gemini-embedding-001 จะค้นตามความหมายด้วย'),
-    );
-    return panel;
+  async function removeCollection(entry) {
+    if (!(await window.MimiKit.confirmDelete(`คลัง "${entry.title}"`, 'เอกสารทั้งหมดในคลังนี้จะถูกลบด้วย'))) return;
+    M().send({ type: 'knowledge-delete', name: entry.name });
+    if (selected === entry.name) select(null);
   }
 
   function editorPanel() {
@@ -119,8 +119,8 @@
         );
       }
       foot.append(
-        button('btn danger', 'ลบคลัง', () => {
-          if (!confirm(`ลบคลัง "${entry.title}" และเอกสารทั้งหมดในนั้น?`)) return;
+        button('btn danger', 'ลบคลัง', async () => {
+          if (!(await window.MimiKit.confirmDelete(`คลัง "${entry.title}"`, 'เอกสารทั้งหมดในคลังนี้จะถูกลบด้วย'))) return;
           M().send({ type: 'knowledge-delete', name: entry.name });
           select(null);
         }),
@@ -221,8 +221,8 @@
         name,
         el('span', 'faint', `${doc.chunks} ชิ้น · ${doc.chars.toLocaleString()} ตัวอักษร`),
         el('span', 'faint', M().fmtDate(doc.createdAt)),
-        button('btn ghost', 'ลบ', () => {
-          if (confirm(`ลบ "${doc.title}" ออกจากคลัง?`)) M().send({ type: 'knowledge-remove-document', collection: entry.name, id: doc.id });
+        button('btn ghost', 'ลบ', async () => {
+          if (await window.MimiKit.confirmDelete(`"${doc.title}" ออกจากคลัง`)) M().send({ type: 'knowledge-remove-document', collection: entry.name, id: doc.id });
         }),
       );
       rows.append(row);

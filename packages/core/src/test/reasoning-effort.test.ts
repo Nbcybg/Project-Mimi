@@ -25,3 +25,32 @@ test('reasoning effort: a preset carries it, and the AI SDK hands it to the mode
   await generateText({ model, prompt: 'hi', ...ref.params });
   assert.equal(seen, 'high');
 });
+
+test('sampling penalties: SDK settings go to the call, the rest become provider options of the request body', async () => {
+  const ref = resolveModelName('tidy', {
+    tidy: { model: 'local/qwen', presencePenalty: 0.5, frequencyPenalty: -0.2, repetitionPenalty: 1.1, minTokens: 16 },
+  });
+  assert.deepEqual(ref, {
+    provider: 'local',
+    model: 'qwen',
+    params: { presencePenalty: 0.5, frequencyPenalty: -0.2 },
+    extra: { min_tokens: 16, repetition_penalty: 1.1 },
+  });
+  assert.equal(resolveModelName('plain', { plain: { model: 'local/qwen' } }).extra, undefined, 'nothing extra unless set');
+
+  let seen: { presencePenalty?: unknown; frequencyPenalty?: unknown } = {};
+  const model = new MockLanguageModelV4({
+    doGenerate: async (options) => {
+      seen = options as typeof seen;
+      return {
+        content: [{ type: 'text', text: 'ok' }],
+        finishReason: { unified: 'stop', raw: undefined },
+        usage: { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 1, text: 1, reasoning: 0 } },
+        warnings: [],
+      };
+    },
+  });
+  await generateText({ model, prompt: 'hi', ...ref.params });
+  assert.equal(seen.presencePenalty, 0.5);
+  assert.equal(seen.frequencyPenalty, -0.2);
+});

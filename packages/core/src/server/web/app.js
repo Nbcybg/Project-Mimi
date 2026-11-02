@@ -33,7 +33,8 @@
   // Per-chat screen settings (chat setting → หน้าตา) travel with the account, so a phone and a
   // PC opening the same chat look the same. The pattern also covers pictures/backgrounds.
   const CHAT_PREF_KEY = /^mimi\.chat\.-?\d+\.(textSize|bubbles|character|theme|background|backgroundRules)$/;
-  const synced = (key) => SYNCED_KEYS.has(key) || CHAT_PREF_KEY.test(key) || /^mimi\.(view|bubbles|character)\./.test(key);
+  // Node presets (Hub → Node) are shared too, one key each (feature-tools.js).
+  const synced = (key) => SYNCED_KEYS.has(key) || CHAT_PREF_KEY.test(key) || /^mimi\.(view|bubbles|character|nodePreset)\./.test(key);
   const store = {
     get(key) {
       try {
@@ -372,6 +373,7 @@
       if (Object.keys(missing).length > 0) syncUi(missing);
     }
     if (changed.length === 0) return;
+    if (changed.some((key) => key.startsWith('mimi.nodePreset.'))) window.MimiHooks?.tools?.rerender?.();
     renderHeader();
     renderRail();
     window.MimiHooks?.stage?.refresh();
@@ -522,8 +524,26 @@
   }
 
   // ---------- chat list ----------
+  /** The chat list shows one-to-one chats or groups, like the two tabs of a messenger. */
+  let chatListKind = store.get('mimi.chatListKind') === 'group' ? 'group' : 'direct';
   function renderChatList() {
-    const nodes = state.chats.map((chat) => {
+    const groups = state.chats.filter((chat) => chat.kind === 'group');
+    // A group that is open (or has news) brings its tab forward the first time it shows up.
+    if (state.chat && state.chat.kind !== chatListKind && !renderChatList.userPicked) chatListKind = state.chat.kind;
+    const seg = el('div', 'seg chatkind');
+    for (const [kind, label] of [['direct', 'ตัวต่อตัว'], ['group', 'กลุ่ม']]) {
+      const unread = state.chats.filter((chat) => chat.kind === kind && chat.unread && !(state.chat && state.chat.id === chat.id)).length;
+      const tab = button(chatListKind === kind ? 'on' : '', label, () => {
+        chatListKind = kind;
+        renderChatList.userPicked = true;
+        store.set('mimi.chatListKind', kind);
+        renderChatList();
+      });
+      if (kind === 'group' && groups.length > 0) tab.append(el('small', '', ` ${groups.length}`));
+      if (unread > 0) tab.append(el('span', 'unread', String(unread)));
+      seg.append(tab);
+    }
+    const nodes = state.chats.filter((chat) => chat.kind === chatListKind).map((chat) => {
       const busy = state.busyChats.has(chat.id);
       const typing = state.typingByChat.get(chat.id);
       const viewing = state.viewing.has(chat.id);
@@ -544,7 +564,9 @@
           : typing
             ? `${nameOf(typing)} กำลังตอบ…`
             : 'กำลังตอบ…';
-      middle.append(el('div', 't', chatTitle(chat)), el('div', `p${busy ? ' busy' : ''}`, busy ? active : chat.preview.replace(/[*`]/g, '') || fallback));
+      const titleLine = el('div', 't', chatTitle(chat));
+      if (chat.kind === 'group') titleLine.append(el('small', 'count', ` ${chat.agents.length} คน`));
+      middle.append(titleLine, el('div', `p${busy ? ' busy' : ''}`, busy ? active : chat.preview.replace(/[*`]/g, '') || fallback));
       const right = el('div', 'r');
       if (chat.unread && !(state.chat && state.chat.id === chat.id)) right.append(el('span', 'unread', 'ใหม่'));
       if (chat.lastMessageAt) right.append(el('span', '', fmtDay(chat.lastMessageAt)));
@@ -558,7 +580,12 @@
     const fresh = state.agents.filter(
       (agent) => !state.chats.some((chat) => chat.kind === 'direct' && chat.agents[0] === agent.name),
     );
-    if (fresh.length > 0) {
+    if (chatListKind === 'group') {
+      if (groups.length === 0) {
+        nodes.push(el('div', 'empty', 'ยังไม่มีกลุ่ม — รวม agent หลายตัวไว้ในแชตเดียว ให้ถาม-ตอบ-แย้งกันเองได้'));
+      }
+      nodes.push(button('newgroup', '+ สร้างกลุ่มใหม่', () => newChatDialog('group')));
+    } else if (fresh.length > 0) {
       nodes.push(el('div', 'side-head', 'เริ่มคุยกับ'));
       for (const agent of fresh) {
         const row = button('chat', null, () => startChat({ type: 'chat-create', kind: 'direct', agents: [agent.name] }));
@@ -569,8 +596,8 @@
         nodes.push(row);
       }
     }
-    if (nodes.length === 0) nodes.push(el('div', 'empty', 'ยังไม่มี agent — ไปที่แท็บ Agent เพื่อสร้างตัวแรก'));
-    $('chat-list').replaceChildren(...nodes);
+    if (nodes.length === 0) nodes.push(el('div', 'empty', state.agents.length ? 'ยังไม่มีแชตตัวต่อตัว' : 'ยังไม่มี agent — ไปที่แท็บ Agent เพื่อสร้างตัวแรก'));
+    $('chat-list').replaceChildren(seg, ...nodes);
     updateUnreadBadge();
   }
   /** A count on the chat-list buttons, so replies in another chat are visible while this one is open. */
@@ -784,12 +811,34 @@
     return quote;
   }
 
-  function assistantBlock(agent, iso) {
+  /**
+   * In a group, who an agent answers: the agent who spoke just before it in the same turn (the
+   * one who @-called it). After the user's own message there is no label: it answers the user.
+   */
+  function previousSpeaker() {
+    const rows = logInner.children;
+    for (let index = rows.length - 1; index >= 0; index--) {
+      const row = rows[index];
+      if (row.classList.contains('row-user')) return null;
+      if (row.classList.contains('gmsg')) return row.dataset.agent || null;
+    }
+    return null;
+  }
+  function assistantBlock(agent, iso, answers) {
     const node = el('div', 'gmsg');
+    node.dataset.agent = agent;
     node.style.setProperty('--c', colorOf(agent));
     const right = el('div');
     right.style.minWidth = '0';
     const name = el('div', 'nm', nameOf(agent));
+    if (state.chat && state.chat.kind === 'group') {
+      if (iso) name.append(el('small', '', fmtTime(iso)));
+      if (answers && answers !== agent) {
+        const label = el('span', 'answers', `↩ ตอบ ${nameOf(answers)}`);
+        label.style.setProperty('--c2', colorOf(answers));
+        name.append(label);
+      }
+    }
     const body = el('div', 'body');
     right.append(name, body);
     node.append(avatar(agent), right);
@@ -1038,7 +1087,7 @@
     }
     let target = block;
     if (!target || target.agent !== message.agent) {
-      target = assistantBlock(message.agent, message.createdAt);
+      target = assistantBlock(message.agent, message.createdAt, block ? block.agent : null);
       container.append(target.node);
     }
     if (message.text) {
@@ -1204,7 +1253,7 @@
   /** A turn still streaming: rebuilds its bubble, tool rows and permission cards so nothing is lost. */
   function renderLiveSnapshot(liveView, chatId) {
     if (!liveView) return;
-    live = assistantBlock(liveView.agent, new Date().toISOString());
+    live = assistantBlock(liveView.agent, new Date().toISOString(), previousSpeaker());
     liveNode = live.node;
     add(live.node);
     if (liveView.text) {
@@ -1435,7 +1484,7 @@
           subLine(sub, `เริ่มทำงาน (${event.model})`);
           break;
         }
-        live = assistantBlock(event.agent, new Date().toISOString());
+        live = assistantBlock(event.agent, new Date().toISOString(), previousSpeaker());
         liveNode = live.node;
         add(live.node);
         think(true);
@@ -1707,12 +1756,18 @@
     const showCharacter = characterOn();
     $('app').classList.toggle('solo', Boolean(direct && showCharacter));
     $('app').classList.toggle('char-off', Boolean(direct && !showCharacter));
+    // A group shows the time beside each speaker's name, as in a group messenger.
+    $('app').classList.toggle('grouped', Boolean(chat && chat.kind === 'group'));
     $('app').dataset.bubbles = direct && showCharacter ? bubbleLevel() : 2;
     $('toggle-char').hidden = !direct;
     $('toggle-char').classList.toggle('on', showCharacter);
     $('toggle-char').title = t(showCharacter ? 'setting.characterHide' : 'setting.characterShow');
     syncTopButtons();
-    input.placeholder = direct ? t('composer.placeholderTo', { name: nameOf(direct.name) }) : t('composer.placeholder');
+    input.placeholder = direct
+      ? t('composer.placeholderTo', { name: nameOf(direct.name) })
+      : chat && chat.kind === 'group'
+        ? 'พิมพ์ถึงทุกคน หรือ @ชื่อ เพื่อถามคนเดียว…'
+        : t('composer.placeholder');
     const sub = $('chat-sub');
     const typingHere = chat ? state.typingByChat.get(chat.id) : null;
     const handoffHere = chat ? state.handoffByChat.get(chat.id) : null;
@@ -1730,11 +1785,16 @@
             ? `${nameOf(typingHere)} กำลังตอบ…`
             : '';
     sub.className = 'sub';
-    sub.textContent = !chat
-      ? ''
-      : chat.kind === 'group'
-        ? `กลุ่ม · ${chat.agents.map(nameOf).join(', ')}`
-        : (direct && direct.description) || '';
+    if (chat && chat.kind === 'group') {
+      sub.className = 'sub pills';
+      const members = el('span', 'tpill', `กลุ่ม · ${chat.agents.length} agent`);
+      members.title = chat.agents.map(nameOf).join(', ');
+      const shared = el('span', 'tpill soft', 'ทุกคนเห็นข้อความเดียวกัน');
+      shared.title = 'ทุก agent ในกลุ่มอ่านทุกข้อความ · ความจำของแต่ละคนยังแยกกัน';
+      sub.replaceChildren(members, shared);
+    } else {
+      sub.textContent = !chat ? '' : (direct && direct.description) || '';
+    }
     const chip = typingChip();
     chip.hidden = !chat || !active;
     chip.textContent = active;
@@ -1850,6 +1910,7 @@
     railTop.append(railHead, tabs);
     nodes.push(railTop);
 
+    if (ui.railTab === 'status' && chat.kind === 'group') nodes.push(...groupPanels(chat));
     if (ui.railTab === 'status') {
       const quick = el('div', 'rail-quick');
       quick.append(
@@ -1909,8 +1970,6 @@
           cg.append(button('btn ghost', 'เอาภาพออกจากแชต', () => send({ type: 'status-set', agent: chat.agents[0], key: 'situation', value: '' })));
           nodes.push(cg);
         }
-      } else {
-        nodes.push(el('p', 'hint', 'พิมพ์ @ชื่อ เพื่อเรียกคนตอบ ถ้าไม่ระบุ คนแรกในรายชื่อจะตอบ agent เรียกกันเองด้วย @ชื่อ ได้เช่นกัน'));
       }
     }
 
@@ -2009,12 +2068,7 @@
       } else {
         const section = el('div');
         const head = el('h3', '', 'สมาชิก');
-        head.append(
-          button('', 'เปลี่ยนชื่อกลุ่ม', () => {
-            const title = prompt('ชื่อกลุ่ม', chat.title);
-            if (title !== null) send({ type: 'chat-update', chatId: chat.id, title });
-          }),
-        );
+        head.append(button('', 'แก้ไขกลุ่ม', () => groupEditor(chat)));
         section.append(head);
         for (const name of chat.agents) {
           const agent = agentOf(name);
@@ -2035,17 +2089,8 @@
       );
 
       nodes.push(
-        button('btn danger', 'ลบแชตนี้', () => {
-          if (confirm(`ลบแชต "${chatTitle(chat)}" ?\nประวัติจะไม่แสดงอีก (ความจำที่บันทึกไว้แล้วยังอยู่)`)) {
-            send({ type: 'chat-delete', chatId: chat.id });
-            state.chat = null;
-            state.session = null;
-            state.sessions = [];
-            emptyState();
-            renderHeader();
-            renderRail();
-            $('app').classList.add('show-side');
-          }
+        button('btn danger', chat.kind === 'group' ? 'ลบกลุ่มนี้' : 'ลบแชตนี้', async () => {
+          if (await window.MimiKit.confirmDelete(`${chat.kind === 'group' ? 'กลุ่ม' : 'แชต'} "${chatTitle(chat)}"`, 'ประวัติจะไม่แสดงอีก (ความจำที่บันทึกไว้แล้วยังอยู่)')) deleteChat(chat);
         }),
       );
     }
@@ -2053,6 +2098,188 @@
     rail.replaceChildren(...nodes);
     railShownTab = ui.railTab;
     rail.scrollTop = keepRailScroll;
+  }
+
+  // ---------- group chat panels ----------
+  /** Speakers of the latest question, in order: everyone who answered since the user's last message. */
+  function latestSpeakers() {
+    const ids = state.historyIds;
+    let start = ids.length;
+    for (let index = ids.length - 1; index >= 0; index--) {
+      const message = messageStore.get(ids[index]);
+      start = index;
+      if (message && message.role === 'user') break;
+    }
+    const speakers = [];
+    for (const id of ids.slice(start)) {
+      const message = messageStore.get(id);
+      if (message && message.role === 'assistant' && message.agent && message.text && speakers[speakers.length - 1] !== message.agent) speakers.push(message.agent);
+    }
+    const typing = state.chat && state.typingByChat.get(state.chat.id);
+    if (typing && speakers[speakers.length - 1] !== typing) speakers.push(typing);
+    return speakers;
+  }
+
+  function groupPanels(chat) {
+    const nodes = [];
+    const members = el('div', 'grp');
+    members.append(el('h3', '', 'สมาชิกและสถานะ'));
+    const typing = state.typingByChat.get(chat.id);
+    chat.agents.forEach((name, index) => {
+      const agent = agentOf(name);
+      const status = (agent && agent.status) || {};
+      const row = el('div', `member${typing === name ? ' talking' : ''}`);
+      const info = el('div');
+      const title = el('b', '', nameOf(name));
+      title.style.color = colorOf(name);
+      if (index === 0) title.append(el('small', 'lead', ' ตอบเมื่อไม่ได้ @ ใคร'));
+      const line = typing === name ? 'กำลังพิมพ์…' : [status.location, status.mood || status.current_task].filter(Boolean).join(' · ') || (agent ? agent.description : 'agent นี้ถูกลบแล้ว');
+      info.append(title, el('div', 's', line || ''));
+      row.append(avatar(name), info);
+      row.title = 'แตะเพื่อ @ ถามคนนี้';
+      row.onclick = () => {
+        const label = `@${nameOf(name)} `;
+        if (!input.value.includes(label)) input.value = `${label}${input.value}`;
+        input.focus();
+        refreshComposer();
+      };
+      members.append(row);
+    });
+    if (!chat.agents.some((name) => agentOf(name))) members.append(el('p', 'hint badtxt', 'สมาชิกทุกคนถูกลบไปแล้ว — เพิ่มสมาชิกใหม่ที่ "แก้ไขกลุ่ม"'));
+    members.append(button('btn ghost sm', 'แก้ไขกลุ่ม / สมาชิก', () => groupEditor(chat)));
+    nodes.push(members);
+
+    const talk = el('div', 'grp');
+    talk.append(el('h3', '', 'ใครคุยกับใครในคำถามนี้'));
+    const speakers = latestSpeakers();
+    if (speakers.length === 0) {
+      talk.append(el('p', 'hint', 'ยังไม่มีใครตอบ — ส่งข้อความแล้วจะเห็นว่าใครส่งต่อให้ใคร'));
+    } else {
+      const pairs = new Map();
+      const add = (from, to, kind) => {
+        const key = [from, to].sort().join('|');
+        const entry = pairs.get(key) || { from, to, both: false, count: 0, kind };
+        if (entry.from !== from) entry.both = true;
+        entry.count++;
+        pairs.set(key, entry);
+      };
+      add('', speakers[0], 'ถาม');
+      for (let index = 1; index < speakers.length; index++) add(speakers[index - 1], speakers[index], 'ส่งต่อ');
+      const rows = el('div', 'talk');
+      const who = (name) => {
+        const node = el('span', 'who');
+        const dot = el('i');
+        dot.style.background = name ? colorOf(name) : 'var(--faint)';
+        node.append(dot, name ? nameOf(name) : 'คุณ');
+        return node;
+      };
+      for (const pair of pairs.values()) {
+        const row = el('div');
+        const names = el('span', 'pair');
+        names.append(who(pair.from), el('span', 'arrow', pair.both ? ' ⇄ ' : ' → '), who(pair.to));
+        row.append(names, el('span', 'kind', pair.both ? `${pair.count} ข้อความ` : pair.kind));
+        rows.append(row);
+      }
+      if (!state.busyChats.has(chat.id)) {
+        const row = el('div');
+        const names = el('span', 'pair');
+        names.append(who(speakers[speakers.length - 1]), el('span', 'arrow', ' → '), who(''));
+        row.append(names, el('span', 'kind', 'สรุปให้คุณ'));
+        rows.append(row);
+      }
+      talk.append(rows);
+    }
+    const limit = state.settings && state.settings.groupMaxTurns;
+    talk.append(el('p', 'hint', `สองทาง: agent ถามกลับ แย้ง และตอบกันเองได้จนได้ข้อสรุป${limit ? ` (สูงสุด ${limit} ทอด)` : ''} · คุณแทรกได้ทุกเมื่อ`));
+    nodes.push(talk);
+
+    const rules = el('div', 'grp');
+    rules.append(el('h3', '', 'กติกาของกลุ่ม'));
+    const list = el('ul', 'rules');
+    for (const line of [
+      'คนที่ถูก @ ตอบก่อน และถามกลับได้',
+      'ไม่ได้ @ ใคร: คนแรกในรายชื่อเป็นคนตอบ',
+      'agent เรียกกันเองด้วย @ชื่อ เพื่อถามหรือแย้ง',
+      'ทุกคนอ่านข้อความในกลุ่มเห็นเหมือนกัน',
+      'ความจำของแต่ละคนยังแยกกัน',
+    ]) list.append(el('li', '', line));
+    rules.append(list);
+    nodes.push(rules);
+    return nodes;
+  }
+
+  /** Rename a group and choose its members; the first member answers when nobody is @-called. */
+  function groupEditor(chat) {
+    const Kit = window.MimiKit;
+    let order = [...chat.agents];
+    const title = textInput(chat.title || '', 'ชื่อกลุ่ม เช่น บ้าน, งานเอกสาร');
+    const list = el('div', 'grp-members');
+    const candidates = state.agents.filter((agent) => agent.name !== 'overseer');
+    const paint = () => {
+      list.replaceChildren();
+      order.forEach((name, index) => {
+        const row = el('div', 'mk-tag');
+        const text = el('div');
+        text.append(el('b', '', `${index + 1}. ${nameOf(name)}`), el('small', '', index === 0 ? 'ตอบเมื่อไม่ได้ @ ใคร' : (agentOf(name) && agentOf(name).description) || ''));
+        row.append(avatar(name, 'sm'), text);
+        if (index > 0) {
+          row.append(button('mk-tag-x', '↑', () => {
+            order.splice(index - 1, 0, order.splice(index, 1)[0]);
+            popup.dirty = true;
+            paint();
+          }, 'เลื่อนขึ้น'));
+        }
+        row.append(button('mk-tag-x', '✕', () => {
+          order = order.filter((entry) => entry !== name);
+          popup.dirty = true;
+          paint();
+        }, 'เอาออกจากกลุ่ม'));
+        list.append(row);
+      });
+      const rest = candidates.filter((agent) => !order.includes(agent.name));
+      if (rest.length > 0) {
+        list.append(Kit.select([['', '+ เพิ่มสมาชิก…'], ...rest.map((agent) => [agent.name, nameOf(agent.name)])], '', (value) => {
+          if (!value) return;
+          order.push(value);
+          popup.dirty = true;
+          paint();
+        }));
+      }
+    };
+    const popup = Kit.modal({
+      title: `แก้ไขกลุ่ม: ${chatTitle(chat)}`,
+      body: [Kit.field('ชื่อกลุ่ม', title), Kit.section('สมาชิก', 'คนบนสุดตอบเมื่อไม่ได้ @ ใคร · กด ↑ เพื่อเลื่อนลำดับ', []), list],
+    });
+    paint();
+    popup.setFoot(
+      [
+        button('btn ghost', 'ยกเลิก', () => popup.close()),
+        button('btn pri', 'บันทึก', () => {
+          if (order.length < 2) return toast('กลุ่มต้องมีอย่างน้อย 2 คน', null, true);
+          send({ type: 'chat-update', chatId: chat.id, title: title.value.trim(), agents: order });
+          popup.done();
+          toast('บันทึกกลุ่มแล้ว ✓');
+        }),
+      ],
+      [button('btn danger', 'ลบกลุ่ม', async () => {
+        if (!(await Kit.confirmDelete(`กลุ่ม "${chatTitle(chat)}"`, 'ประวัติแชตจะไม่แสดงอีก (ความจำที่บันทึกไว้แล้วของแต่ละคนยังอยู่)'))) return;
+        popup.done();
+        deleteChat(chat);
+      })],
+    );
+  }
+
+  function deleteChat(chat) {
+    send({ type: 'chat-delete', chatId: chat.id });
+    if (state.chat && state.chat.id === chat.id) {
+      state.chat = null;
+      state.session = null;
+      state.sessions = [];
+      emptyState();
+      renderHeader();
+      renderRail();
+      $('app').classList.add('show-side');
+    }
   }
 
   // ---------- composer ----------
@@ -2097,8 +2324,14 @@
       hints.replaceChildren(el('span', 'rec', speaking));
       return;
     }
+    if (state.chat && state.chat.kind === 'group') {
+      const limit = state.settings && state.settings.groupMaxTurns;
+      const left = el('span', '', 'agent ถาม-ตอบ-แย้งกันเองได้สองทาง · ');
+      left.append(el('kbd', '', 'Esc'), ' หยุดทุกคน');
+      hints.replaceChildren(left, el('span', 'right', limit ? `จำกัด ${limit} ทอดต่อหนึ่งคำถาม` : '@ชื่อ เพื่อเรียกคนตอบ'));
+      return;
+    }
     const parts = ['Enter ส่ง · Shift+Enter ขึ้นบรรทัดใหม่'];
-    if (state.chat && state.chat.kind === 'group') parts.push('@ชื่อ เพื่อเรียกคนตอบ');
     hints.replaceChildren(...parts.map((part) => el('span', '', part)));
   }
   function renderStaged() {
@@ -3267,332 +3500,458 @@
   }
 
   // ---------- hub page ----------
+  // Every tab says in one line what it holds; lists are cards or a table, and everything is
+  // added, edited and deleted in popups (feature-hubkit.js), so the list never jumps around.
   const HUB_TABS = [
-    ['models', 'กองโมเดล'],
-    ['skills', 'Skill'],
-    ['nodes', 'Node'],
-    ['accounts', 'บัญชี'],
-    ['secrets', 'คีย์ลับ'],
-    ['mail', 'Mail'],
-    ['triggers', 'Trigger'],
-    ['knowledge', 'คลังความรู้'],
-    ['wardrobe', 'ตู้เสื้อผ้า'],
-    ['backgrounds', 'ฉากหลัง'],
-    ['links', 'MCP / CLI'],
-    ['packs', 'แพ็ก'],
+    ['models', 'กองโมเดล', 'ชุด "โมเดล + ค่าการสุ่ม" ที่ตั้งชื่อไว้ แล้วเลือกใช้ได้ทุกที่ที่เลือกโมเดล (agent, skill, workflow)'],
+    ['skills', 'Skill', 'คู่มือการทำงานเฉพาะเรื่อง (เช่น เขียนเพลง ตรวจสัญญา) ที่ agent หยิบไปใช้เมื่องานตรงเรื่อง · เขียนเองหรือนำเข้าไฟล์ .md'],
+    ['nodes', 'Node & เครื่องมือ', 'ทุกอย่างที่วางใน workflow ได้ และที่ agent เรียกใช้ได้ · บันทึก node ที่ตั้งค่าแล้วเป็น preset เพื่อใช้ซ้ำ'],
+    ['triggers', 'Trigger', 'สิ่งที่ทำให้งานเริ่มเอง: ถึงเวลา, มีคนยิง webhook, มีเมลใหม่, ปฏิทินเปลี่ยน…'],
+    ['accounts', 'บัญชี', 'บัญชีที่ Mimi เข้าใช้แทนคุณ: Google, Microsoft, กล่องเมล IMAP/POP3 และ connection ของบริการอื่น'],
+    ['secrets', 'คีย์ลับ', 'API key / token ที่เครื่องมืออ้างถึงด้วย {{secret.ชื่อ}} · เก็บในเครื่องนี้เท่านั้น'],
+    ['knowledge', 'คลังความรู้', 'เอกสารที่ agent ค้นหาคำตอบได้'],
+    ['wardrobe', 'ตู้เสื้อผ้า', 'ชุดของตัวละครที่ agent เปลี่ยนใส่ได้'],
+    ['backgrounds', 'ฉากหลัง', 'ภาพฉากหลังของแชต'],
+    ['packs', 'แพ็ก', 'ชุดสำเร็จรูป: agent + connector + workflow ติดตั้งทีเดียว'],
   ];
+  /** Old tab keys still used by links elsewhere in the app. */
+  const HUB_ALIAS = { mail: 'accounts', links: 'nodes' };
   function renderHub() {
     const page = $('view-hub');
-    const tabs = el('div', 'tabs');
-    for (const [key, label] of HUB_TABS) {
-      tabs.append(
-        button(key === ui.hubTab ? 'on' : '', label, () => {
-          ui.hubTab = key;
-          renderHub();
-        }),
-      );
+    ui.hubTab = HUB_ALIAS[ui.hubTab] || ui.hubTab;
+    if (!HUB_TABS.some(([key]) => key === ui.hubTab)) ui.hubTab = 'models';
+    const counts = {
+      models: state.settings ? state.settings.presets.length : undefined,
+      skills: state.skills.length,
+      triggers: (state.triggers || []).filter((trigger) => trigger.status === 'active').length,
+    };
+    const tabs = el('div', 'hub-tabs');
+    for (const [key, label, lead] of HUB_TABS) {
+      const tab = button(key === ui.hubTab ? 'on' : '', label, () => {
+        ui.hubTab = key;
+        renderHub();
+        page.scrollTop = 0;
+      }, lead);
+      if (counts[key] !== undefined) tab.append(el('small', '', String(counts[key])));
+      tabs.append(tab);
     }
-    const knowledge = () => (window.MimiHooks && window.MimiHooks.knowledge ? window.MimiHooks.knowledge.render() : el('div'));
-    const accounts = () => (window.MimiHooks && window.MimiHooks.accounts ? window.MimiHooks.accounts.render() : el('div'));
-    const wardrobe = () => (window.MimiHooks && window.MimiHooks.wardrobe ? window.MimiHooks.wardrobe.render() : el('div'));
-    const backgrounds = () => (window.MimiHooks && window.MimiHooks.backgrounds ? window.MimiHooks.backgrounds.render() : el('div'));
+    const hook = (name) => () => (window.MimiHooks && window.MimiHooks[name] ? window.MimiHooks[name].render() : el('div'));
     const secrets = () => {
-      const panel = el('div', 'panel form');
-      panel.append(el('h3', '', 'คีย์ลับ (vault)'));
-      const hook = window.MimiHooks && window.MimiHooks.secrets;
-      if (hook) hook.render(panel);
+      const panel = el('div');
+      const vault = window.MimiHooks && window.MimiHooks.secrets;
+      if (vault) vault.render(panel);
       else panel.append(el('p', 'hint', '—'));
       return panel;
     };
-    const mail = () => (window.MimiHooks && window.MimiHooks.mail ? window.MimiHooks.mail.render() : el('div'));
-    const packs = () => (window.MimiHooks && window.MimiHooks.packs ? window.MimiHooks.packs.render() : el('div'));
-    const body = { models: hubModels, skills: hubSkills, nodes: hubTools, accounts, secrets, mail, triggers: hubTriggers, knowledge, wardrobe, backgrounds, links: hubLinks, packs }[ui.hubTab]();
-    page.replaceChildren(pageHead('Hub', 'ของกลางที่ agent และ skill หยิบไปใช้: ตั้งค่าที่เดียว ใช้ได้ทุกตัว'), tabs, body);
+    const render = {
+      models: hubModels,
+      skills: hubSkills,
+      nodes: hook('tools'),
+      accounts: hook('accounts'),
+      secrets,
+      triggers: hook('triggers'),
+      knowledge: hook('knowledge'),
+      wardrobe: hook('wardrobe'),
+      backgrounds: hook('backgrounds'),
+      packs: hook('packs'),
+    }[ui.hubTab];
+    const lead = HUB_TABS.find(([key]) => key === ui.hubTab)[2];
+    const intro = el('div', 'hub-intro');
+    intro.append(el('b', '', `${HUB_TABS.find(([key]) => key === ui.hubTab)[1]}: `), lead);
+    const keep = page.scrollTop;
+    page.replaceChildren(pageHead('Hub', 'ของกลางที่ agent, skill และ workflow หยิบไปใช้: ตั้งค่าที่เดียว ใช้ได้ทุกตัว'), tabs, intro, render());
+    page.scrollTop = keep;
   }
   const shown = (value) => (value === undefined || value === null ? '—' : String(value));
 
-  function hubModels() {
-    const view = state.settings || { presets: [], models: [] };
-    const preset = view.presets.find((entry) => entry.name === ui.preset) || null;
-    const table = el('div', 'panel');
-    table.append(el('h3', '', 'Preset'), el('p', 'hint', 'preset = โมเดล + ค่าการสุ่ม ตั้งชื่อแล้วเลือกใช้ได้ทุกที่ที่เลือกโมเดล (agent, skill, ค่าเริ่มต้น)'));
-    const rows = el('div', 'tbl presets');
-    const head = el('div', 'hd');
-    for (const label of ['ชื่อ', 'โมเดล', 'temp', 'top_p', 'top_k', 'max', 'effort']) head.append(el('span', '', label));
-    rows.append(head);
-    for (const entry of view.presets) {
-      const row = button(entry.name === ui.preset ? 'sel' : '', null, () => {
-        ui.preset = entry.name;
-        ui.presetDirty = false;
-        renderHub();
-      });
-      row.append(el('span', 'nm2', entry.name), el('span', 'mono', entry.model));
-      for (const value of [entry.temperature, entry.topP, entry.topK, entry.maxOutputTokens, entry.reasoning]) row.append(el('span', 'num', shown(value)));
-      rows.append(row);
-    }
-    table.append(rows);
-    if (view.presets.length === 0) table.append(el('div', 'empty', 'ยังไม่มี preset'));
-    const create = button('btn', '+ preset ใหม่', () => {
-      ui.preset = null;
-      ui.presetDirty = false;
-      renderHub();
-    });
-    create.style.marginTop = '10px';
-    table.append(create);
+  // ----- กองโมเดล -----
+  /** The sampling knobs of a preset: what each means, its range and the value used when left empty. */
+  const PRESET_KNOBS = [
+    { key: 'temperature', label: 'temperature', def: 1, min: 0, max: 2, step: 0.05, hint: 'ต่ำ = ตอบนิ่ง ตรงประเด็น · สูง = หลากหลาย สร้างสรรค์' },
+    { key: 'topP', label: 'top_p', def: 1, min: 0, max: 1, step: 0.01, hint: 'เลือกคำจากกลุ่มที่รวมความน่าจะเป็นได้เท่านี้' },
+    { key: 'topK', label: 'top_k', defText: 'ปิด (ไม่จำกัด)', min: 1, max: 1000, whole: true, hint: 'เลือกจาก K คำที่น่าจะเป็นที่สุด · บางผู้ให้บริการไม่รองรับ' },
+    { key: 'maxOutputTokens', label: 'max tokens (ความยาวคำตอบสูงสุด)', defText: 'สูงสุดของโมเดล', min: 1, max: 1000000, whole: true },
+    { key: 'minTokens', label: 'min tokens (ความยาวคำตอบต่ำสุด)', def: 0, min: 0, max: 1000000, whole: true, hint: 'เฉพาะผู้ให้บริการแบบ OpenAI-compatible (vLLM, OpenRouter …)' },
+    { key: 'presencePenalty', label: 'presence penalty', def: 0, min: -2, max: 2, step: 0.05, hint: 'บวก = ชวนพูดเรื่องใหม่ ไม่วนคำเดิม' },
+    { key: 'frequencyPenalty', label: 'frequency penalty', def: 0, min: -2, max: 2, step: 0.05, hint: 'บวก = ลดคำที่พูดซ้ำบ่อย' },
+    { key: 'repetitionPenalty', label: 'repetition penalty', def: 1, defText: '1 (ไม่ลงโทษ)', min: 0, max: 10, step: 0.01, hint: 'มากกว่า 1 = ลดการพูดซ้ำ · เฉพาะผู้ให้บริการแบบ OpenAI-compatible' },
+  ];
+  const providerOf = (ref) => (String(ref).includes('/') ? String(ref).slice(0, String(ref).indexOf('/')) : '');
+  const providerName = (id) => ((state.settings && state.settings.providers) || []).find((entry) => entry.id === id)?.name || id;
+  /** Waiting for the server to confirm a popup's save; the popup closes when it does. */
+  let hubPending = null;
+  function settleHubPending(kind, ok) {
+    if (!hubPending || hubPending.kind !== kind || !ok(hubPending)) return;
+    hubPending.popup.done();
+    toast(hubPending.done || 'บันทึกแล้ว ✓');
+    hubPending = null;
+  }
 
-    const form = el('div', 'panel form');
-    form.oninput = () => {
-      ui.presetDirty = true;
-    };
-    form.append(el('h3', '', preset ? `แก้ไข ${preset.name}` : 'Preset ใหม่'));
-    const name = textInput(preset ? preset.name : '', 'เช่น creative, precise, pro');
+  function presetEditor(preset, copyOf) {
+    const Kit = window.MimiKit;
+    const view = state.settings || { presets: [], models: [], providers: [] };
+    const source = preset || copyOf || null;
+    const name = textInput(preset ? preset.name : copyOf ? `${copyOf.name}-copy` : '', 'เช่น creative, precise, pro');
     name.readOnly = Boolean(preset);
-    const model = modelSelect(preset ? preset.model : '', 'เลือกโมเดล', null, false);
-    form.append(labelled('ชื่อ (ตัวพิมพ์เล็ก ไม่มีเว้นวรรค)', name));
-    // With several providers the same model can come from more than one of them: pick the
-    // provider first, then only its models are listed.
-    const providerOf = (ref) => (ref.includes('/') ? ref.slice(0, ref.indexOf('/')) : '');
     const providerIds = [...new Set(view.models.map((entry) => providerOf(entry.ref)).filter(Boolean))];
-    if (providerIds.length > 1) {
-      const names = new Map((view.providers || []).map((entry) => [entry.id, entry.name]));
-      const provider = el('select');
-      for (const id of providerIds) {
-        const option = el('option', '', `${names.get(id) || id} (${view.models.filter((entry) => providerOf(entry.ref) === id).length})`);
-        option.value = id;
-        provider.append(option);
+    const provider = el('select');
+    for (const id of providerIds) {
+      const option = el('option', '', `${providerName(id)} (${view.models.filter((entry) => providerOf(entry.ref) === id).length} โมเดล)`);
+      option.value = id;
+      provider.append(option);
+    }
+    const startProvider = (source && providerOf(source.model)) || providerIds[0] || '';
+    if (startProvider && !providerIds.includes(startProvider)) {
+      const option = el('option', '', `${providerName(startProvider)} (ยังไม่ได้เชื่อมต่อ)`);
+      option.value = startProvider;
+      provider.append(option);
+    }
+    provider.value = startProvider;
+    const model = el('select');
+    const fillModels = () => {
+      model.replaceChildren();
+      const choices = view.models.filter((entry) => providerOf(entry.ref) === provider.value);
+      if (source && providerOf(source.model) === provider.value && !choices.some((entry) => entry.ref === source.model)) {
+        const option = el('option', '', `${source.model} (ไม่อยู่ในรายการแล้ว)`);
+        option.value = source.model;
+        model.append(option);
       }
-      provider.value = (preset && providerOf(preset.model)) || providerIds[0];
-      const filter = () => {
-        for (const option of model.options) {
-          if (!option.value) continue;
-          const from = providerOf(option.value);
-          option.hidden = Boolean(from) && from !== provider.value;
-        }
-        if (model.selectedOptions[0]?.hidden) model.value = '';
-      };
-      provider.onchange = () => {
-        filter();
-        ui.presetDirty = true;
-      };
-      filter();
-      form.append(labelled('ผู้ให้บริการ', provider));
-    }
-    form.append(labelled('โมเดล', model));
-    if (view.models.length === 0) form.append(el('p', 'hint', 'ยังไม่มีโมเดลให้เลือก: เชื่อมต่อผู้ให้บริการที่หน้า "ตั้งค่า" ก่อน'));
+      for (const entry of choices) {
+        const option = el('option', '', entry.label.replace(`${providerName(provider.value)} · `, ''));
+        option.value = entry.ref;
+        model.append(option);
+      }
+      if (source && [...model.options].some((option) => option.value === source.model)) model.value = source.model;
+    };
+    fillModels();
     const knobs = {};
-    for (const [key, label, min, max, step] of [
-      ['temperature', 'temperature', 0, 2, 0.05],
-      ['topP', 'top_p', 0, 1, 0.01],
-      ['topK', 'top_k', 1, 200, 1],
-    ]) {
-      const row = el('div', 'knob');
-      const range = el('input');
-      range.type = 'range';
-      range.min = min;
-      range.max = max;
-      range.step = step;
-      const number = textInput(preset && preset[key] !== undefined ? preset[key] : '', 'ค่าเริ่มต้น', 'number');
-      number.min = min;
-      number.max = key === 'topK' ? 1000 : max;
-      number.step = step;
-      range.value = number.value === '' ? (key === 'temperature' ? 1 : key === 'topP' ? 1 : 40) : number.value;
-      range.oninput = () => {
-        number.value = range.value;
-      };
-      number.oninput = () => {
-        if (number.value !== '') range.value = number.value;
-      };
-      row.append(el('span', '', label), range, number);
-      knobs[key] = number;
-      form.append(row);
+    const knobBox = el('div', 'mk-grid2');
+    for (const spec of PRESET_KNOBS) {
+      knobs[spec.key] = Kit.numberField({ ...spec, value: source ? source[spec.key] : undefined });
+      knobBox.append(knobs[spec.key].node);
     }
-    const maxTokens = textInput(preset && preset.maxOutputTokens !== undefined ? preset.maxOutputTokens : '', 'ค่าเริ่มต้น', 'number');
-    form.append(labelled('ความยาวคำตอบสูงสุด (token)', maxTokens));
+    const maxDefault = () => {
+      const limit = view.models.find((entry) => entry.ref === model.value)?.outputLimit;
+      const text = limit ? `${limit.toLocaleString()} (สูงสุดของโมเดล)` : 'สูงสุดของโมเดล';
+      knobs.maxOutputTokens.input.placeholder = `ค่าเริ่มต้น: ${text}`;
+      knobs.maxOutputTokens.node.querySelector('.mk-num-hint').textContent = `ค่าเริ่มต้น ${text} · ช่วง 1 ถึง 1000000 · จำนวนเต็ม`;
+    };
+    maxDefault();
+    provider.onchange = () => {
+      fillModels();
+      maxDefault();
+    };
+    model.onchange = maxDefault;
     const reasoning = el('select');
     for (const [value, text] of REASONING_CHOICES) {
       const option = el('option', '', text);
       option.value = value;
       reasoning.append(option);
     }
-    reasoning.value = (preset && preset.reasoning) || '';
-    form.append(labelled('effort (คิดก่อนตอบมากแค่ไหน)', reasoning));
-    form.append(el('p', 'hint', 'สูง = ตอบฉลาดขึ้นแต่ช้าและเปลือง token มากขึ้น · โมเดลที่ไม่มีโหมดคิดจะไม่สนค่านี้ · บางผู้ให้บริการรองรับแค่บางระดับ จะปัดไประดับที่ใกล้ที่สุด'));
-    form.append(el('p', 'hint', 'ช่องที่เว้นว่างจะใช้ค่าเริ่มต้นของผู้ให้บริการ โมเดลบางตัวไม่รองรับ top_k'));
-    const foot = el('div', 'foot');
-    foot.append(el('span', 'msg'));
-    if (preset) {
-      foot.append(
-        button('btn danger', 'ลบ', () => {
-          if (confirm(`ลบ preset "${preset.name}" ?`)) {
-            send({ type: 'preset-delete', name: preset.name });
-            ui.preset = null;
-            ui.presetDirty = false;
-          }
-        }),
-      );
-    }
-    foot.append(
-      button('btn pri', 'บันทึก', () => {
-        const value = (node) => (node.value === '' ? undefined : Number(node.value));
-        ui.preset = name.value.trim().toLowerCase();
-        ui.presetDirty = false;
-        flash('กำลังบันทึก…');
-        send({
-          type: 'preset-save',
-          preset: {
-            name: name.value.trim(),
-            model: model.value,
-            temperature: value(knobs.temperature),
-            topP: value(knobs.topP),
-            topK: value(knobs.topK),
-            maxOutputTokens: value(maxTokens),
-            reasoning: reasoning.value || undefined,
-          },
-        });
-      }),
+    reasoning.value = (source && source.reasoning) || '';
+    const top = el('div', 'mk-grid2');
+    top.append(Kit.field('ผู้ให้บริการ', provider), Kit.field('โมเดล', model));
+    const body = [
+      Kit.field('ชื่อ preset (ตัวพิมพ์เล็ก a-z 0-9 - _)', name, preset ? 'เปลี่ยนชื่อไม่ได้ — ใช้ "ทำสำเนา" แล้วลบอันเดิมแทน' : 'ชื่อนี้คือสิ่งที่เลือกในช่อง "โมเดล" ของ agent / skill'),
+      top,
+    ];
+    if (providerIds.length === 0) body.push(el('p', 'hint badtxt', 'ยังไม่มีผู้ให้บริการที่เชื่อมต่อ — ไปที่ ตั้งค่า → ผู้ให้บริการ ก่อน'));
+    const resetAll = button('btn ghost sm', '↺ ค่าเริ่มต้นทั้งหมด', () => {
+      for (const knob of Object.values(knobs)) knob.reset();
+      reasoning.value = '';
+      popup.dirty = true;
+    }, 'ล้างทุกช่องกลับไปใช้ค่าเริ่มต้นของผู้ให้บริการ');
+    body.push(Kit.section('ค่าการสุ่ม', 'ช่องว่าง = ใช้ค่าเริ่มต้นที่เขียนไว้ใต้ช่อง · กด ↺ เพื่อกลับไปค่าเริ่มต้น', [resetAll]), knobBox);
+    body.push(Kit.field('effort (คิดก่อนตอบมากแค่ไหน)', reasoning, 'ค่าเริ่มต้น: ตามผู้ให้บริการ · สูง = ฉลาดขึ้นแต่ช้าและเปลือง token · โมเดลที่ไม่มีโหมดคิดจะไม่สนค่านี้'));
+    const popup = Kit.modal({ title: preset ? `แก้ไข preset: ${preset.name}` : copyOf ? `ทำสำเนา ${copyOf.name}` : 'เพิ่ม preset', size: 'wide', body });
+    const save = () => {
+      let values;
+      try {
+        values = Object.fromEntries(Object.entries(knobs).map(([key, knob]) => [key, knob.read()]));
+      } catch (error) {
+        return toast('ค่าไม่ถูกต้อง', error.message, true);
+      }
+      if (!name.value.trim()) return toast('ยังไม่ได้ตั้งชื่อ', 'ใส่ชื่อ preset ก่อน', true);
+      if (!model.value) return toast('ยังไม่ได้เลือกโมเดล', null, true);
+      const saving = name.value.trim().toLowerCase();
+      if (!preset && view.presets.some((entry) => entry.name === saving)) return toast('ชื่อซ้ำ', `มี preset "${saving}" อยู่แล้ว`, true);
+      hubPending = { kind: 'preset', name: saving, model: model.value, popup, done: `บันทึก preset ${saving} แล้ว ✓` };
+      send({ type: 'preset-save', preset: { name: name.value.trim(), model: model.value, ...values, reasoning: reasoning.value || undefined } });
+    };
+    popup.setFoot(
+      [button('btn ghost', 'ยกเลิก', () => popup.close()), button('btn pri', 'บันทึก', save)],
+      preset ? [button('btn danger', 'ลบ', () => deletePreset(preset, popup)), button('btn ghost', 'ทำสำเนา', () => presetEditor(null, preset))] : [],
     );
-    form.append(foot);
-    const split = el('div', 'split');
-    split.style.gridTemplateColumns = 'minmax(0, 1.2fr) minmax(0, 1fr)';
-    split.append(table, form);
-    return split;
+  }
+
+  async function deletePreset(preset, popup) {
+    const users = [
+      ...state.agents.filter((agent) => Object.values(agent.models || {}).includes(preset.name)).map((agent) => `agent ${nameOf(agent.name)}`),
+      ...state.skills.filter((skill) => skill.model === preset.name).map((skill) => `skill ${skill.name}`),
+    ];
+    if (users.length > 0) {
+      return window.MimiKit.ask({ title: `ลบ "${preset.name}" ไม่ได้`, body: [`ยังมีที่ใช้ preset นี้อยู่: ${users.join(', ')}`, 'เปลี่ยนโมเดลของที่ใช้อยู่ก่อน แล้วค่อยลบ'], ok: 'เข้าใจแล้ว' });
+    }
+    if (!(await window.MimiKit.confirmDelete(`preset "${preset.name}"`, `${preset.model}`))) return;
+    send({ type: 'preset-delete', name: preset.name });
+    popup?.done();
+  }
+
+  function hubModels() {
+    const Kit = window.MimiKit;
+    const view = state.settings || { presets: [], models: [], providers: [] };
+    const wrap = el('div');
+    const exportPresets = () => Kit.downloadJson(`mimi-model-presets-${Kit.stamp()}.json`, { kind: 'mimi-model-presets', version: 1, items: view.presets });
+    const importPresets = async (files) => {
+      const items = (await Kit.readJsonItems(files)).filter((item) => item && typeof item.name === 'string' && typeof item.model === 'string');
+      if (items.length === 0) throw new Error('ไม่พบ preset ในไฟล์ (ต้องมี name และ model)');
+      const existing = items.filter((item) => view.presets.some((entry) => entry.name === item.name.toLowerCase()));
+      if (existing.length > 0 && !(await Kit.ask({ title: 'มี preset ชื่อซ้ำ', body: `จะเขียนทับ: ${existing.map((item) => item.name).join(', ')}`, ok: 'เขียนทับ', danger: true }))) return;
+      for (const item of items) send({ type: 'preset-save', preset: item });
+      toast(`นำเข้า ${items.length} preset`, 'preset ที่ใช้โมเดลซึ่งยังไม่ได้เชื่อมต่อจะไม่ถูกบันทึก (ดูข้อความแจ้งเตือน)');
+    };
+    wrap.append(Kit.section(`Preset (${view.presets.length})`, 'คลิกแถวเพื่อแก้ไข · ช่องที่ขึ้นว่า "ค่าเริ่มต้น" = ใช้ค่าของผู้ให้บริการ', [
+      button('btn pri', '+ เพิ่ม preset', () => presetEditor(null)),
+      ...Kit.ioButtons({ onImport: importPresets, onExport: view.presets.length ? exportPresets : null }),
+    ]));
+    const table = el('div', 'mtable');
+    const head = el('div', 'hd');
+    for (const label of ['ชื่อ', 'ผู้ให้บริการ', 'โมเดล', 'temp', 'top_p', 'top_k', 'max', 'effort', '']) head.append(el('span', label === 'ชื่อ' || label === 'ผู้ให้บริการ' || label === 'โมเดล' || !label ? '' : 'num', label));
+    table.append(head);
+    for (const entry of view.presets) {
+      const row = el('div', 'row');
+      row.onclick = (event) => {
+        if (!event.target.closest('button')) presetEditor(entry);
+      };
+      const nameCell = el('span', 'nm', entry.name);
+      const extras = ['minTokens', 'presencePenalty', 'frequencyPenalty', 'repetitionPenalty'].filter((key) => entry[key] !== undefined);
+      if (extras.length > 0) nameCell.title = extras.map((key) => `${key}: ${entry[key]}`).join('\n');
+      row.append(nameCell, el('span', 'prov', providerName(providerOf(entry.model))));
+      const modelCell = el('span', 'mono', entry.model.slice(entry.model.indexOf('/') + 1));
+      modelCell.title = entry.model;
+      row.append(modelCell);
+      for (const key of ['temperature', 'topP', 'topK', 'maxOutputTokens', 'reasoning']) {
+        const value = entry[key];
+        row.append(el('span', `num${value === undefined ? ' def' : ''}`, value === undefined ? 'ค่าเริ่มต้น' : String(value)));
+      }
+      const acts = el('span', 'acts');
+      acts.append(button('btn ghost sm', 'แก้ไข', () => presetEditor(entry)), button('btn danger sm', 'ลบ', () => deletePreset(entry)));
+      row.append(acts);
+      table.append(row);
+    }
+    const panel = el('div', 'panel');
+    panel.append(table);
+    if (view.presets.length === 0) panel.append(el('div', 'empty mk-empty', 'ยังไม่มี preset — กด "+ เพิ่ม preset" เพื่อสร้างชุดแรก (เช่น "creative" = โมเดลเดิมแต่ temperature สูง)'));
+    wrap.append(panel);
+    if (view.models.length === 0) wrap.append(el('p', 'hint', 'ยังไม่มีโมเดลให้เลือก: เชื่อมต่อผู้ให้บริการที่หน้า "ตั้งค่า" ก่อน'));
+    return wrap;
+  }
+
+  // ----- Skill -----
+  let skillQuery = '';
+  let skillFilter = 'all';
+  /** A skill as a SKILL.md file: YAML frontmatter, then the instructions. */
+  function skillMarkdown(skill) {
+    const yaml = [`name: ${skill.name}`, `description: ${JSON.stringify(skill.description || '')}`];
+    if (skill.model) yaml.push(`model: ${skill.model}`);
+    if ((skill.tools || []).length > 0) yaml.push('tools:', ...skill.tools.map((tool) => `  - ${tool}`));
+    return `---\n${yaml.join('\n')}\n---\n${(skill.body || '').trim()}\n`;
+  }
+  /** Reads a SKILL.md (Mimi's or Claude's format: `allowed-tools` is taken as tools). */
+  function parseSkillMarkdown(text, fileName) {
+    const match = /^﻿?---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(text);
+    const meta = {};
+    let body = text;
+    if (match) {
+      body = match[2];
+      let listKey = null;
+      for (const raw of match[1].split(/\r?\n/)) {
+        const item = /^\s+-\s+(.*)$/.exec(raw);
+        if (item && listKey) {
+          meta[listKey].push(unquote(item[1]));
+          continue;
+        }
+        const pair = /^([A-Za-z][\w-]*)\s*:\s*(.*)$/.exec(raw);
+        if (!pair) continue;
+        const key = pair[1].toLowerCase();
+        const value = pair[2].trim();
+        if (value === '') {
+          meta[key] = [];
+          listKey = key;
+        } else {
+          listKey = null;
+          meta[key] = value.startsWith('[') ? value.slice(1, -1).split(',').map((part) => unquote(part.trim())).filter(Boolean) : unquote(value);
+        }
+      }
+    }
+    const fromFile = String(fileName || '').replace(/\.(md|markdown)$/i, '').replace(/^SKILL$/i, '');
+    const name = String(meta.name || fromFile || '').trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
+    const toolsRaw = meta.tools || meta['allowed-tools'] || [];
+    const tools = (Array.isArray(toolsRaw) ? toolsRaw : String(toolsRaw).split(/[,\s]+/)).map(String).filter(Boolean);
+    const firstLine = body.trim().split('\n').find((line) => line.trim() && !line.startsWith('#')) || '';
+    return { name, description: String(meta.description || firstLine).slice(0, 300), model: typeof meta.model === 'string' ? meta.model : '', tools, body: body.trim() };
+  }
+  function unquote(value) {
+    const text = String(value).trim();
+    if (/^".*"$/.test(text)) {
+      try {
+        return JSON.parse(text);
+      } catch {
+        return text.slice(1, -1);
+      }
+    }
+    return /^'.*'$/.test(text) ? text.slice(1, -1).replace(/''/g, "'") : text;
+  }
+  const skillUsers = (name) => state.agents.filter((agent) => (agent.skills || []).includes(name)).map((agent) => nameOf(agent.name));
+
+  function skillEditor(skill, draft) {
+    const Kit = window.MimiKit;
+    const source = skill || draft || null;
+    const name = textInput(source ? source.name : '', 'เช่น song-writer (a-z 0-9 -)');
+    const description = textInput(source ? source.description : '', 'ใช้เมื่อไร: agent อ่านบรรทัดนี้เพื่อตัดสินใจว่าจะเรียก skill');
+    const model = modelSelect(source ? source.model : '', 'ไม่แยกโมเดล: agent อ่านคำสั่งแล้วทำเอง', 'model');
+    const body = el('textarea', 'tall');
+    body.value = source ? source.body : '';
+    body.placeholder = 'คำสั่งของ skill: ขั้นตอน กฎ รูปแบบผลลัพธ์';
+    const allTools = toolItems();
+    const known = new Set(allTools.map((tool) => tool.name));
+    const unknownTools = (source ? source.tools || [] : []).filter((tool) => !known.has(tool));
+    const tools = Kit.pickerField({
+      items: allTools.map((tool) => ({ value: tool.name, label: tool.name, desc: describeTool(tool), group: tool.preset ? 'preset' : tool.mcp ? 'MCP' : tool.builtin === false ? 'custom' : tool.risk || 'อื่น ๆ' })),
+      chosen: (source ? source.tools || [] : []).filter((tool) => known.has(tool)),
+      addLabel: '+ เพิ่มเครื่องมือ',
+      empty: 'ยังไม่ได้เลือกเครื่องมือ — skill ที่รันแยกโมเดลจะไม่มีเครื่องมือใช้',
+      title: 'เลือกเครื่องมือให้ skill',
+      groups: [...new Set(allTools.map((tool) => (tool.preset ? 'preset' : tool.mcp ? 'MCP' : tool.builtin === false ? 'custom' : tool.risk || 'อื่น ๆ')))],
+    });
+    const top = el('div', 'mk-grid2');
+    top.append(Kit.field('ชื่อ', name), Kit.field('โมเดลของ skill นี้', model));
+    const toolsBox = el('div');
+    const paintTools = () => {
+      toolsBox.hidden = !model.value;
+    };
+    model.addEventListener('change', paintTools);
+    toolsBox.append(Kit.section('เครื่องมือที่ skill ใช้ได้', 'ใช้เฉพาะเมื่อ skill รันแยกด้วยโมเดลของตัวเอง', []), tools.node);
+    if (unknownTools.length > 0) toolsBox.append(el('p', 'hint badtxt', `เครื่องมือที่ไม่มีในเครื่องนี้ถูกตัดออก: ${unknownTools.join(', ')}`));
+    paintTools();
+    const popup = Kit.modal({
+      title: skill ? `แก้ไข skill: ${skill.name}` : draft ? `นำเข้า skill: ${draft.name || '(ไม่มีชื่อ)'}` : 'สร้าง skill',
+      sub: skill && skill.builtin ? 'skill ติดตัวแอป — บันทึกแล้วจะเป็นสำเนาของคุณ (ลบสำเนาเพื่อกลับไปใช้ของเดิม)' : undefined,
+      size: 'wide',
+      body: [
+        top,
+        Kit.field('คำอธิบาย (ใช้เมื่อไร)', description),
+        el('p', 'hint', 'เลือกโมเดล (เช่น preset "pro") = skill รันแยกเป็นงานย่อยด้วยโมเดลนั้นแล้วส่งผลกลับให้ agent · ไม่เลือก = agent อ่านคำสั่งแล้วทำเอง'),
+        Kit.field('คำสั่ง', body),
+        toolsBox,
+      ],
+    });
+    if (draft) popup.dirty = true;
+    const save = async () => {
+      if (!name.value.trim() || !body.value.trim()) return toast('กรอกไม่ครบ', 'ต้องมีชื่อและคำสั่ง', true);
+      const saving = name.value.trim();
+      if (!skill && state.skills.some((entry) => entry.name === saving) && !(await window.MimiKit.ask({ title: `มี skill "${saving}" อยู่แล้ว`, body: 'บันทึกแล้วจะเขียนทับของเดิม', ok: 'เขียนทับ', danger: true }))) return;
+      hubPending = { kind: 'skill', name: saving, popup, done: `บันทึก skill ${saving} แล้ว ✓` };
+      send({
+        type: 'skill-save',
+        renameFrom: skill && !skill.builtin ? skill.name : undefined,
+        skill: { name: saving, description: description.value.trim(), model: model.value, tools: model.value ? tools.read() : [], body: body.value },
+      });
+    };
+    const left = [];
+    if (skill && !skill.builtin) left.push(button('btn danger', 'ลบ', () => deleteSkillAsk(skill, popup)));
+    if (skill) left.push(button('btn ghost', 'ส่งออก .md', () => Kit.download(`${skill.name}.md`, skillMarkdown(skill), 'text/markdown')));
+    popup.setFoot([button('btn ghost', 'ยกเลิก', () => popup.close()), button('btn pri', 'บันทึก', save)], left);
+  }
+
+  async function deleteSkillAsk(skill, popup) {
+    const users = skillUsers(skill.name);
+    if (!(await window.MimiKit.confirmDelete(`skill "${skill.name}"`, users.length ? `จะถูกเอาออกจาก agent ที่ใช้อยู่: ${users.join(', ')}` : 'ยังไม่มี agent ใช้ skill นี้'))) return;
+    send({ type: 'skill-delete', name: skill.name });
+    popup?.done();
+    toast(`ลบ skill ${skill.name} แล้ว`);
   }
 
   function hubSkills() {
-    const skill = state.skills.find((entry) => entry.name === ui.skill) || null;
-    const list = el('div', 'panel');
-    list.append(el('h3', '', 'Skill ทั้งหมด'));
-    const items = el('div', 'list');
-    for (const entry of state.skills) {
-      const users = state.agents.filter((agent) => (agent.skills || []).includes(entry.name)).map((agent) => nameOf(agent.name));
-      const row = button(`item${entry.name === ui.skill ? ' on' : ''}`, null, () => {
-        ui.skill = entry.name;
-        ui.skillDirty = false;
-        renderHub();
-      });
-      const info = el('div', 'one');
-      info.append(el('b', 'mono', entry.name), el('small', '', `${entry.builtin ? 'built-in · ' : ''}${entry.model ? `โมเดล ${entry.model}` : 'agent ทำเอง'} · ${users.length ? `ใช้โดย ${users.join(', ')}` : 'ยังไม่มีใครใช้'}`));
-      row.append(info);
-      items.append(row);
-    }
-    if (state.skills.length === 0) items.append(el('div', 'empty', 'ยังไม่มี skill'));
-    list.append(items);
-    const create = button('btn', '+ skill ใหม่', () => {
-      ui.skill = null;
-      ui.skillDirty = false;
-      renderHub();
-    });
-    create.style.marginTop = '10px';
-    list.append(create);
-
-    const form = el('div', 'panel form');
-    form.oninput = () => {
-      ui.skillDirty = true;
+    const Kit = window.MimiKit;
+    const wrap = el('div');
+    const importSkills = async (files) => {
+      const drafts = [];
+      for (const file of files) {
+        if (/\.json$/i.test(file.name)) {
+          for (const item of await Kit.readJsonItems([file])) if (item && item.name && item.body) drafts.push(item);
+        } else {
+          drafts.push(parseSkillMarkdown(await file.text(), file.name));
+        }
+      }
+      if (drafts.length === 0) throw new Error('ไม่พบ skill ในไฟล์');
+      // One file: check it in the editor first. Several: save them all, keeping only known tools.
+      if (drafts.length === 1) return skillEditor(null, drafts[0]);
+      const known = new Set(toolItems().map((tool) => tool.name));
+      const bad = drafts.filter((draft) => !draft.name || !draft.body);
+      const good = drafts.filter((draft) => draft.name && draft.body);
+      const clash = good.filter((draft) => state.skills.some((entry) => entry.name === draft.name));
+      if (clash.length > 0 && !(await Kit.ask({ title: 'มี skill ชื่อซ้ำ', body: `จะเขียนทับ: ${clash.map((draft) => draft.name).join(', ')}`, ok: 'เขียนทับ', danger: true }))) return;
+      for (const draft of good) send({ type: 'skill-save', skill: { ...draft, tools: draft.model ? (draft.tools || []).filter((tool) => known.has(tool)) : [] } });
+      toast(`นำเข้า ${good.length} skill`, bad.length ? `ข้าม ${bad.length} ไฟล์ที่ไม่มีชื่อหรือคำสั่ง` : null, bad.length > 0);
     };
-    form.append(el('h3', '', skill ? `แก้ไข ${skill.name}` : 'Skill ใหม่'));
-    const name = textInput(skill ? skill.name : '', 'เช่น song-writer (a-z 0-9 -)');
-    const description = textInput(skill ? skill.description : '', 'ใช้เมื่อไร: agent อ่านบรรทัดนี้เพื่อตัดสินใจว่าจะเรียก skill');
-    const model = modelSelect(skill ? skill.model : '', 'ไม่แยกโมเดล: agent อ่านคำสั่งแล้วทำเอง', 'model');
-    const top = el('div', 'grid2');
-    top.append(labelled('ชื่อ', name), labelled('โมเดลของ skill นี้', model));
-    form.append(top, labelled('คำอธิบาย', description));
-    form.append(el('p', 'hint', 'ถ้าเลือกโมเดล (เช่น preset "pro") skill จะรันแยกเป็นงานย่อยด้วยโมเดลนั้น แล้วส่งผลลัพธ์กลับมาให้ agent'));
-    const body = el('textarea', 'tall');
-    body.value = skill ? skill.body : '';
-    body.placeholder = 'คำสั่งของ skill: ขั้นตอน กฎ รูปแบบผลลัพธ์';
-    form.append(labelled('คำสั่ง', body));
-    form.append(el('h4', '', 'เครื่องมือที่ skill ใช้ได้ (เฉพาะเมื่อรันแยกโมเดล)'));
-    const tools = checkList(toolItems(), skill ? skill.tools : [], describeTool);
-    form.append(tools);
-    const foot = el('div', 'foot');
-    foot.append(el('span', 'msg'));
-    if (skill && !skill.builtin) {
-      foot.append(
-        button('btn danger', 'ลบ', () => {
-          if (confirm(`ลบ skill "${skill.name}" ? (จะถูกเอาออกจาก agent ทุกตัวที่ใช้อยู่)`)) {
-            send({ type: 'skill-delete', name: skill.name });
-            ui.skill = null;
-            ui.skillDirty = false;
-          }
-        }),
-      );
-    }
-    foot.append(
-      button('btn pri', 'บันทึก', () => {
-        flash('กำลังบันทึก…');
-        send({
-          type: 'skill-save',
-          renameFrom: skill ? skill.name : undefined,
-          skill: { name: name.value.trim(), description: description.value.trim(), model: model.value, tools: picked(tools), body: body.value },
+    const exportAll = () => Kit.downloadJson(`mimi-skills-${Kit.stamp()}.json`, { kind: 'mimi-skills', version: 1, items: state.skills.filter((skill) => !skill.builtin) });
+    wrap.append(Kit.section(`Skill (${state.skills.length})`, 'คลิกการ์ดเพื่อแก้ไข · นำเข้าได้ทั้ง SKILL.md (หลายไฟล์พร้อมกันได้) และไฟล์ .json ที่ส่งออกจากที่นี่', [
+      button('btn pri', '+ สร้าง skill', () => skillEditor(null)),
+      ...Kit.ioButtons({ accept: '.md,.markdown,.json,text/markdown,application/json', onImport: importSkills, onExport: state.skills.some((skill) => !skill.builtin) ? exportAll : null, exportTitle: 'ส่งออก skill ของคุณทั้งหมดเป็น .json' }),
+    ]));
+    const filters = [
+      { key: 'all', label: 'ทั้งหมด', test: () => true },
+      { key: 'mine', label: 'ของฉัน', test: (skill) => !skill.builtin },
+      { key: 'builtin', label: 'ติดตัวแอป', test: (skill) => skill.builtin },
+      { key: 'model', label: 'รันแยกโมเดล', test: (skill) => Boolean(skill.model) },
+      { key: 'unused', label: 'ยังไม่มีใครใช้', test: (skill) => skillUsers(skill.name).length === 0 },
+    ];
+    const listBox = el('div');
+    const draw = () => {
+      const needle = skillQuery.trim().toLowerCase();
+      const test = filters.find((entry) => entry.key === skillFilter).test;
+      const visible = state.skills.filter((skill) => test(skill) && (!needle || `${skill.name} ${skill.description} ${skill.body}`.toLowerCase().includes(needle)));
+      listBox.replaceChildren(Kit.grid(visible.map((skill) => {
+        const users = skillUsers(skill.name);
+        return Kit.card({
+          title: skill.name,
+          mono: true,
+          sub: skill.model ? `โมเดล: ${skill.model}` : 'agent ทำเอง (ไม่แยกโมเดล)',
+          desc: skill.description || '(ไม่มีคำอธิบาย)',
+          badges: [
+            skill.builtin ? ['ติดตัวแอป', 'info'] : null,
+            skill.model ? [`เครื่องมือ ${(skill.tools || []).length}`, ''] : null,
+            users.length ? [`ใช้โดย ${users.join(', ')}`, 'ok'] : ['ยังไม่มีใครใช้', 'warn'],
+          ],
+          onOpen: () => skillEditor(skill),
+          actions: [
+            { label: 'แก้ไข', onClick: () => skillEditor(skill) },
+            { label: 'ส่งออก', onClick: () => Kit.download(`${skill.name}.md`, skillMarkdown(skill), 'text/markdown'), title: 'ดาวน์โหลดเป็น SKILL .md' },
+            skill.builtin
+              ? { label: 'ลบ', disabled: true, onClick: () => {}, title: 'skill ติดตัวแอปลบไม่ได้ — เอาออกจาก agent ได้ที่หน้า Agent' }
+              : { label: 'ลบ', danger: true, onClick: () => deleteSkillAsk(skill) },
+          ],
         });
-      }),
-    );
-    form.append(foot);
-    const split = el('div', 'split');
-    split.append(list, form);
-    return split;
-  }
-
-  function hubTools() {
-    const hook = window.MimiHooks && window.MimiHooks.tools;
-    if (hook) return hook.render();
-    const panel = el('div', 'panel');
-    panel.append(el('h3', '', `เครื่องมือในกอง (${state.tools.length})`), el('p', 'hint', 'agent และ skill เลือกเครื่องมือจากกองนี้ · read ทำได้เลย · write / shell / delete / network ต้องขออนุญาตก่อนทุกครั้ง'));
-    const rows = el('div', 'tbl toolrows');
-    const head = el('div', 'hd');
-    for (const label of ['ชื่อ', 'ระดับ', 'ทำอะไร', 'ใช้โดย']) head.append(el('span', '', label));
-    rows.append(head);
-    for (const tool of state.tools) {
-      const users = state.agents.filter((agent) => agent.tools.includes(tool.name)).map((agent) => nameOf(agent.name));
-      const row = el('div');
-      const risk = el('span');
-      risk.append(el('span', `risk${tool.risk === 'read' ? '' : ' w'}`, tool.risk));
-      const description = el('span', '', tool.description);
-      description.title = tool.description;
-      row.append(el('span', 'nm2', tool.name), risk, description, el('span', 'muted', users.join(', ') || '—'));
-      rows.append(row);
-    }
-    panel.append(rows);
-    return panel;
-  }
-
-  function hubTriggers() {
-    const hook = window.MimiHooks && window.MimiHooks.triggers;
-    if (hook) return hook.render();
-    const panel = el('div', 'panel');
-    panel.append(el('h3', '', 'Trigger'), el('p', 'hint', 'สร้างได้โดยสั่ง agent ในแชต เช่น "เตือนพรุ่งนี้ 9 โมงให้โทรหาแม่" หรือ "ทุกเช้า 8 โมงสรุปเมลให้หน่อย" (agent ต้องมีเครื่องมือ create_trigger)'));
-    const rows = el('div', 'tbl trigrows');
-    const head = el('div', 'hd');
-    for (const label of ['เรื่อง', 'ชนิด', 'เวลา', 'สถานะ', '']) head.append(el('span', '', label));
-    rows.append(head);
-    for (const trigger of state.triggers) {
-      const row = el('div');
-      const when = trigger.cron ? `cron ${trigger.cron}` : trigger.fireAt ? fmtDate(trigger.fireAt) : '—';
-      const status = el('span');
-      status.append(el('span', `pill ${trigger.status === 'active' ? 'ok' : 'todo'}`, { active: 'รออยู่', fired: 'ทำแล้ว', cancelled: 'ยกเลิก' }[trigger.status]));
-      const cancel = trigger.status === 'active'
-        ? button('btn ghost', 'ยกเลิก', () => confirm(`ยกเลิก "${trigger.title}" ?`) && send({ type: 'trigger-cancel', id: trigger.id }))
-        : el('span');
-      row.append(el('span', '', `${trigger.title}${trigger.agent ? ` · ${nameOf(trigger.agent)}` : ''}`), el('span', 'muted', trigger.kind === 'reminder' ? 'เตือน' : 'งานของ agent'), el('span', 'mono', when), status, cancel);
-      rows.append(row);
-    }
-    panel.append(rows);
-    if (state.triggers.length === 0) panel.append(el('div', 'empty', 'ยังไม่มี trigger'));
-    return panel;
-  }
-
-  function hubLinks() {
-    const panel = el('div', 'panel');
-    panel.append(
-      el('h3', '', 'MCP และ CLI'),
-      el('p', '', 'MCP server: เพิ่มที่แท็บ "Node" → "+ MCP server" (คำสั่งในเครื่อง หรือ URL) เครื่องมือของ server จะเข้ากองชื่อ mcp_<server>_<tool> · ใส่ mcp_<server> ใน agent = ได้ทุกตัว · ดูจากเทอร์มินัล: npm run mcp / npm run mcp -- test <ชื่อ>'),
-      el('p', '', 'คำสั่ง CLI: สร้างเครื่องมือใหม่ชนิด "shell" ในแท็บ "Node" เช่น git status หรือ ping -n 1 {{input.host}} — ขออนุญาตก่อนรันทุกครั้ง · หรือให้ agent ใช้ run_shell บนเครื่อง PC'),
-      button('btn', 'ไปที่แท็บ Node', () => {
-        ui.hubTab = 'nodes';
+      }), state.skills.length === 0 ? 'ยังไม่มี skill — กด "+ สร้าง skill" หรือนำเข้าไฟล์ .md' : 'ไม่พบ skill ที่ตรงกับตัวกรอง'));
+    };
+    const bar = Kit.filterBar({
+      query: skillQuery,
+      placeholder: 'ค้นหาชื่อ คำอธิบาย หรือคำสั่ง…',
+      chips: filters.map((entry) => ({ key: entry.key, label: entry.label, count: state.skills.filter(entry.test).length })),
+      active: skillFilter,
+      onQuery: (value) => {
+        skillQuery = value;
+        draw();
+      },
+      onChip: (key) => {
+        skillFilter = key;
         renderHub();
-      }),
-    );
-    return panel;
+      },
+    });
+    wrap.append(bar.node, listBox);
+    draw();
+    return wrap;
   }
 
   // ---------- settings page ----------
@@ -4272,14 +4631,14 @@
   }
   const closeOverlay = () => $('overlay').replaceChildren();
 
-  function newChatDialog() {
+  function newChatDialog(startKind) {
     if (state.agents.length === 0) {
       setView('agents');
       $('app').classList.remove('show-side');
       return toast('ยังไม่มี agent', 'สร้าง agent ตัวแรกก่อน');
     }
     const dialog = el('div', 'dialog form');
-    let kind = 'direct';
+    let kind = startKind === 'group' ? 'group' : 'direct';
     const render = () => {
       const seg = el('div', 'seg');
       seg.append(
@@ -4328,7 +4687,7 @@
     render();
     overlay(dialog);
   }
-  $('new-chat').onclick = newChatDialog;
+  $('new-chat').onclick = () => newChatDialog(chatListKind);
 
   let searchTimer = null;
   let searchQuery = '';
@@ -4728,7 +5087,9 @@
           renderSettings();
           if (message.saved) saved();
         }
-        if (state.view === 'hub' && ((!ui.presetDirty && !ui.skillDirty && !ui.toolDirty && !ui.triggerDirty && !ui.workflowDirty) || message.saved)) {
+        settleHubPending('preset', (pending) => message.settings.presets.some((entry) => entry.name === pending.name && entry.model === pending.model));
+        // Hub editors are popups, so the list behind them can always follow the server.
+        if (state.view === 'hub' && ((!ui.toolDirty && !ui.triggerDirty && !ui.workflowDirty) || message.saved)) {
           renderHub();
           if (message.saved) saved();
         }
@@ -4769,15 +5130,8 @@
         break;
       case 'skills':
         state.skills = message.skills;
-        if (message.saved) {
-          ui.skill = message.saved;
-          ui.skillDirty = false;
-        }
-        if (ui.skill && !state.skills.some((skill) => skill.name === ui.skill)) ui.skill = null;
-        if (state.view === 'hub' && (!ui.skillDirty || message.saved)) {
-          renderHub();
-          if (message.saved) saved();
-        }
+        settleHubPending('skill', (pending) => message.saved === pending.name);
+        if (state.view === 'hub') renderHub();
         if (state.view === 'agents' && !ui.agentDirty) renderAgents();
         break;
       case 'tools':
@@ -4789,10 +5143,7 @@
         if (message.connectors) state.connectors = message.connectors;
         if (message.connections) state.connections = message.connections;
         if (window.MimiHooks && window.MimiHooks.tools) window.MimiHooks.tools.onMessage(message);
-        if (state.view === 'hub' && ui.hubTab === 'nodes' && (!ui.toolDirty || message.saved)) {
-          renderHub();
-          if (message.saved) saved();
-        }
+        if (state.view === 'hub' && ui.hubTab === 'nodes') renderHub();
         if (state.view === 'agents' && !ui.agentDirty) renderAgents();
         break;
       case 'connector-connections':
@@ -4835,8 +5186,8 @@
         state.customNodes = message.customNodes || [];
         if (window.MimiHooks && window.MimiHooks.agentWorkflows) window.MimiHooks.agentWorkflows.onMessage(message);
         if (state.view === 'agents' && !ui.agentDirty) renderAgents();
-        if (state.view === 'hub' && ui.hubTab === 'triggers') renderHub();
-        if (state.view === 'hub' && ui.hubTab === 'nodes' && (!ui.toolDirty || message.saved)) renderHub();
+        window.MimiHooks?.triggers?.onPool?.(message);
+        if (state.view === 'hub' && ui.hubTab === 'nodes') renderHub();
         break;
       case 'workflow-result': {
         const result = message.result;
@@ -4866,7 +5217,7 @@
       case 'triggers':
         state.triggers = message.triggers;
         if (window.MimiHooks && window.MimiHooks.triggers) window.MimiHooks.triggers.onMessage(message);
-        if (state.view === 'hub' && ui.hubTab === 'triggers' && !ui.triggerDirty) renderHub();
+        if (state.view === 'hub' && ui.hubTab === 'triggers') renderHub();
         break;
       case 'memory':
         state.memory = message.entries;
@@ -4911,6 +5262,7 @@
   // this one stays readable; they reach back through this bridge.
   window.Mimi = {
     state,
+    syncUi,
     /** Full URL of a core webhook path (`/api/...`); behind the accounts gateway it carries `/h/<id>`. */
     // While the quick tunnel is up, outside services must call its address, not this page's.
     webhookUrl: (path) => `${accountsMode ? location.origin + webhookBase() : state.settings?.tunnel?.url || location.origin}${path}`,

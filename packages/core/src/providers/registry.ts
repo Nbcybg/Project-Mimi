@@ -20,6 +20,9 @@ export interface SamplingParams {
   topP?: number;
   topK?: number;
   maxOutputTokens?: number;
+  /** -2..2: penalises words already used at all / by how often they were used. */
+  presencePenalty?: number;
+  frequencyPenalty?: number;
   /** Reasoning effort ("none" … "max"); passed to the AI SDK, which maps it per provider. */
   reasoning?: ReasoningEffort;
 }
@@ -29,6 +32,11 @@ export interface ModelRef {
   model: string;
   /** Set when the reference came from a preset of the model pool. */
   params?: SamplingParams;
+  /**
+   * Request-body fields outside the AI SDK's call settings (`repetition_penalty`, `min_tokens`).
+   * They travel as provider options, which OpenAI-compatible servers put into the request body.
+   */
+  extra?: Record<string, unknown>;
 }
 
 /** USD per 1M tokens. */
@@ -305,7 +313,8 @@ export class ProviderRegistry {
           `Refresh the provider's model list in the app's settings, or add the model under provider.${ref.provider}.models in the settings file.`,
       );
     }
-    return this.toInfo(provider, ref.model, def);
+    const info = this.toInfo(provider, ref.model, def);
+    return ref.extra ? { ...info, options: { ...info.options, ...ref.extra } } : info;
   }
 
   /** True when the provider can be called: it has a credential, or needs none. */

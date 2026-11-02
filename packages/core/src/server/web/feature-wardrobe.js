@@ -25,8 +25,29 @@
       M().state.wardrobeLoaded = true;
       M().send({ type: 'wardrobe-list' });
     }
-    const wrap = el('div', 'split kbsplit');
-    wrap.append(listPanel(), selected === null ? introPanel() : editorPanel());
+    const Kit = window.MimiKit;
+    const wrap = el('div');
+    wrap.append(Kit.section(`ตู้เสื้อผ้า (${outfits().length})`, 'รหัสชุด (เช่น wa01) + รูป + คำอธิบาย · เขียน {{wa01}} ใน system prompt แล้วจะถูกแทนด้วยชื่อและคำอธิบายชุด · agent ที่มี status_set เปลี่ยนชุดเองได้', [
+      button('btn pri', '+ เพิ่มชุดใหม่', () => select('')),
+    ]));
+    wrap.append(Kit.grid(outfits().map((outfit) => Kit.card({
+      title: outfit.name,
+      sub: `{{${outfit.id}}}`,
+      icon: thumb(outfit, 's'),
+      desc: outfit.description,
+      badges: [outfit.model ? ['มีโมเดล 3D', 'info'] : null],
+      onOpen: () => select(outfit.id),
+      actions: [
+        { label: 'แก้ไข', onClick: () => select(outfit.id) },
+        { label: 'ลบ', danger: true, onClick: async () => {
+          if (!(await Kit.confirmDelete(`ชุด "${outfit.name}" (${outfit.id})`, 'รูปและโมเดลของชุดนี้จะถูกลบด้วย'))) return;
+          M().send({ type: 'wardrobe-delete', id: outfit.id });
+          if (selected === outfit.id) select(null);
+        } },
+      ],
+    })), 'ยังไม่มีชุด — กด "+ เพิ่มชุดใหม่"'));
+    if (selected === null) Kit.closeHost('wardrobe');
+    else Kit.hostPopup('wardrobe', { title: selected === '' ? 'เพิ่มชุดใหม่' : `ชุด: ${(outfits().find((item) => item.id === selected) || {}).name || selected}`, build: () => [editorPanel()], onClose: () => select(null) });
     return wrap;
   }
 
@@ -43,32 +64,6 @@
         .catch(() => {});
     }
     return frame;
-  }
-
-  function listPanel() {
-    const panel = el('div', 'panel');
-    panel.append(el('h3', '', 'ตู้เสื้อผ้า'));
-    const list = el('div', 'list');
-    for (const outfit of outfits()) {
-      const item = button(`item witem${outfit.id === selected ? ' on' : ''}`, '', () => select(outfit.id));
-      const text = el('div');
-      text.append(el('b', '', outfit.name), el('small', 'muted', ` · {{${outfit.id}}}`));
-      item.append(thumb(outfit, 's'), text);
-      list.append(item);
-    }
-    if (outfits().length === 0) list.append(el('p', 'hint', 'ยังไม่มีชุด'));
-    panel.append(list, button('btn', '+ เพิ่มชุดใหม่', () => select('')));
-    return panel;
-  }
-
-  function introPanel() {
-    const panel = el('div', 'panel');
-    panel.append(
-      el('h3', '', 'ตู้เสื้อผ้าทำอะไร'),
-      el('p', 'hint', 'เก็บชุดทั้งหมดไว้ที่เดียว: รหัส (เช่น wa01) รูป และคำอธิบาย · เขียน {{wa01}} ใน system prompt ของ agent แล้วจะถูกแทนด้วยชื่อ + คำอธิบายชุดนั้น เช่น "ชุดทำงานของ {{char}} คือ {{wa01}}"'),
-      el('p', 'hint', 'agent ที่ติ๊กเครื่องมือ status_set จะเห็นรายการชุดและเปลี่ยนชุดเองได้ (ตั้ง outfit เป็นรหัสชุด) · ชุดที่ใส่อยู่จะแสดงในสถานะของ agent'),
-    );
-    return panel;
   }
 
   function editorPanel() {
@@ -99,8 +94,8 @@
     );
     if (!isNew) {
       actions.append(
-        button('btn ghost', 'ลบชุด', () => {
-          if (confirm(`ลบชุด "${outfit.name}" (${outfit.id})?`)) {
+        button('btn danger', 'ลบชุด', async () => {
+          if (await window.MimiKit.confirmDelete(`ชุด "${outfit.name}" (${outfit.id})`, 'รูปและโมเดลของชุดนี้จะถูกลบด้วย')) {
             M().send({ type: 'wardrobe-delete', id: outfit.id });
             selected = null;
           }
@@ -130,7 +125,7 @@
       const row = el('div', 'row');
       row.append(button('btn', 'เลือกรูป', () => choose.click()));
       if (outfit.image) {
-        row.append(button('btn ghost', 'ลบรูป', () => M().api(`/api/wardrobe-image/${encodeURIComponent(outfit.id)}`, { method: 'DELETE' })));
+        row.append(button('btn ghost', 'ลบรูป', async () => (await window.MimiKit.confirmDelete(`รูปของชุด "${outfit.name}"`)) && M().api(`/api/wardrobe-image/${encodeURIComponent(outfit.id)}`, { method: 'DELETE' })));
       }
       picture.append(frame, row, choose);
       panel.append(picture, el('p', 'hint', `ใช้ใน prompt: {{${outfit.id}}}`));
@@ -154,7 +149,7 @@
         el('span', 'faint', outfit.model ? `model.vrm (${new Date(Number(outfit.model)).toLocaleString('th-TH')})` : 'ยังไม่มีโมเดล'),
         button('btn', outfit.model ? 'เปลี่ยนไฟล์ .vrm' : 'อัปโหลด .vrm', () => chooseModel.click()),
       );
-      if (outfit.model) modelRow.append(button('btn ghost', 'ลบโมเดล', () => M().api(`/api/wardrobe-model/${encodeURIComponent(outfit.id)}`, { method: 'DELETE' })));
+      if (outfit.model) modelRow.append(button('btn ghost', 'ลบโมเดล', async () => (await window.MimiKit.confirmDelete(`โมเดล 3D ของชุด "${outfit.name}"`)) && M().api(`/api/wardrobe-model/${encodeURIComponent(outfit.id)}`, { method: 'DELETE' })));
       panel.append(modelRow, chooseModel, el('p', 'hint', 'ใช้กับ agent ที่ตั้งตัวละครเป็น "โมเดล 3D (VRM)" · เมื่อสถานะ "ชุด" ของ agent เป็นรหัสชุดนี้ บนหน้าแชตจะแสดงโมเดลนี้แทนโมเดลหลักของ agent'));
       panel.append(el('h4', '', 'รูปตามอีโมจิของชุดนี้'));
       panel.append(el('p', 'hint', 'เมื่อ agent ใส่ชุดนี้และส่งอีโมจิ จะใช้รูปที่ตั้งไว้ที่นี่ · อีโมจิที่ไม่มีรูป จะใช้รูปชุดด้านบนแทน'));

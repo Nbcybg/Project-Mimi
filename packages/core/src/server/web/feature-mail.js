@@ -1,7 +1,8 @@
-// Hub → Mail: the accounts the core watches for new mail (Gmail / Outlook of the connected
-// OAuth accounts, plus any IMAP / POP3 mailbox with optional SMTP sending). Every new message
-// raises a notification. Passwords are typed here but stored only in the machine's vault:
-// the account list sent back never contains them.
+// Hub → บัญชี → กล่องเมล: the mailboxes the core reads (Gmail / Outlook of the connected
+// OAuth accounts, plus any IMAP / POP3 mailbox with optional SMTP sending). Mail tools and the
+// mail trigger pick a mailbox from here; every new message also raises a notification.
+// Passwords are typed here but stored only in the machine's vault: the account list sent back
+// never contains them.
 (() => {
   'use strict';
   const M = () => window.Mimi;
@@ -39,45 +40,40 @@
     return node;
   }
 
-  function row(account) {
-    const line = el('div', 'hstack ndevice');
-    const info = el('div', 'one');
-    const where =
-      account.kind === 'imap' || account.kind === 'pop3'
-        ? `${account.email || account.incoming.user} · ${account.incoming.host}:${account.incoming.port || (account.incoming.security === 'tls' ? account.kind === 'pop3' ? 995 : 993 : 143)}`
-        : account.email || account.query || '(ทุกข้อความยังไม่เปิดอ่าน)';
-    const status = `${account.connected === false ? '○ ยังไม่ครบ' : '● พร้อมใช้'}${account.outgoing ? ' · SMTP' : ''}${account.default ? ' ★' : ''}`;
-    info.append(el('b', '', `${account.name || account.id} · ${KIND_LABELS[account.kind] || account.kind}`), el('small', '', `${where} · ${status}`));
-    const actions = el('div', 'hstack');
-    actions.append(button('btn ghost', 'แก้ไข', () => {
-      editing = account.id;
-      addingKind = account.kind;
-      testResult = null;
-      rerender();
-    }));
-    actions.append(button('btn ghost', 'ลบ', () => {
-      if (confirm(`ลบ “${account.name || account.id}”? รหัสผ่านของบัญชีนี้จะถูกลบด้วย`)) M().send({ type: 'mail-watch-delete', id: account.id });
-    }, 'เลิกดู / เลิกใช้กล่องนี้'));
-    line.append(info, actions);
-    return line;
-  }
-
   function field(label, input, hint) {
     const box = M().labelled(label, input);
     if (hint) box.append(el('p', 'hint', hint));
     return box;
   }
 
-  function editor() {
+  /** The mailbox popup; `entry` null adds one. */
+  function openEditor(entry) {
+    editing = entry ? entry.id : null;
+    addingKind = entry ? entry.kind : 'imap';
+    testResult = null;
+    const popup = window.MimiKit.modal({ title: '', size: 'wide', onClose: () => {
+      if (editorPopup === popup) editorPopup = null;
+    } });
+    editorPopup = popup;
+    paintEditor();
+  }
+  let editorPopup = null;
+
+  function paintEditor() {
+    if (!editorPopup) return;
+    const popup = editorPopup;
     const entry = editing ? find(editing) : null;
     const incoming = entry && (entry.kind === 'imap' || entry.kind === 'pop3') ? entry.incoming : {};
     const outgoing = entry && (entry.kind === 'imap' || entry.kind === 'pop3') ? entry.outgoing || {} : {};
-    const panel = el('div', 'panel form');
-    panel.append(el('h3', '', entry ? `แก้ไข ${entry.name || entry.id}` : '+ เพิ่มกล่องเมล / mail provider'));
+    const panel = el('div');
+    popup.setTitle(entry ? `กล่องเมล: ${entry.name || entry.id}` : 'เพิ่มกล่องเมล');
 
     const kind = select([['google', KIND_LABELS.google], ['microsoft', KIND_LABELS.microsoft], ['imap', KIND_LABELS.imap], ['pop3', KIND_LABELS.pop3]], entry ? entry.kind : addingKind);
     kind.disabled = Boolean(entry);
-    panel.append(field('บริการ', kind, 'Gmail / Outlook ใช้บัญชี OAuth ที่ Hub → บัญชี · IMAP / POP3 ใส่ข้อมูลเซิร์ฟเวอร์เอง'));
+    kind.addEventListener('change', () => {
+      addingKind = kind.value;
+    });
+    panel.append(field('บริการ', kind, 'Gmail / Outlook ใช้บัญชี Google / Microsoft ด้านบน · IMAP / POP3 ใส่ข้อมูลเซิร์ฟเวอร์เอง (ใช้ได้กับทุกผู้ให้บริการ)'));
 
     const id = M().textInput(entry ? entry.id : `mail-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`, 'mail-work');
     id.disabled = Boolean(entry);
@@ -111,20 +107,19 @@
     const timeout = M().textInput(incoming.timeoutMs ? String(incoming.timeoutMs) : '30000', '30000', 'number');
 
     const incomingBox = el('div');
-    incomingBox.append(
-      el('h4', '', 'รับเมล (incoming)'),
-      grid,
+    // How the notifier reads the box; a workflow's mail trigger sets its own search per node.
+    const fetching = el('details');
+    const fetchGrid = el('div', 'grid2');
+    fetchGrid.append(
       field('โฟลเดอร์ (IMAP)', folder),
       field('คำค้นในเมล', query2),
       field('ย้อนหลัง (วัน, 0 = ไม่จำกัด)', since),
       field('จำนวนสูงสุดต่อครั้ง', maxMessages),
       field('ตรวจทุก (นาที, 0 = รอบรวม)', poll),
       field('timeout (ms)', timeout),
-      reject.wrap,
-      unseen.wrap,
-      markRead.wrap,
-      deleteAfter.wrap,
     );
+    fetching.append(el('summary', 'hint', 'ตัวเลือกการดึงเมล (ขั้นสูง — ปกติไม่ต้องแก้)'), fetchGrid, reject.wrap, unseen.wrap, markRead.wrap, deleteAfter.wrap);
+    incomingBox.append(el('h4', '', 'รับเมล (incoming)'), grid, fetching);
     grid.append(
       field('โฮสต์', host),
       field('พอร์ต', port),
@@ -159,13 +154,16 @@
       field('Reply-To', replyTo),
       field('timeout (ms)', smtpTimeout),
     );
-    smtp.append(
-      el('h4', '', 'ส่งเมล (SMTP) — เว้น host ว่างถ้าไม่ต้องส่ง'),
-      el('p', 'hint', 'ใช้รหัสผ่านของบัญชีนี้เก็บใน vault แยกจากไฟล์ตั้งค่า · ระบบจะไม่ส่งรหัสกลับมาที่หน้าจอ'),
+    const sending = el('details');
+    if (outgoing.host) sending.open = true;
+    sending.append(
+      el('summary', 'hint', 'ส่งเมล (SMTP) — เปิดเมื่อต้องการให้ Mimi ส่งเมลจากกล่องนี้'),
+      el('p', 'hint', 'เว้น host ว่างถ้าไม่ต้องส่ง · รหัสผ่านเก็บใน vault แยกจากไฟล์ตั้งค่า'),
       smtpGrid,
       smtpReject.wrap,
       samePassword.wrap,
     );
+    smtp.append(sending);
 
     const isDefault = checkbox('ใช้เป็นบัญชีเริ่มต้นของ Mail');
     isDefault.box.checked = entry ? entry.default === true : accounts.filter((a) => a.kind === 'imap' || a.kind === 'pop3').length === 0;
@@ -188,9 +186,7 @@
       smtp.hidden = true;
     }
 
-    const foot = el('div', 'foot');
-    foot.append(
-      button('btn pri', entry ? 'บันทึก' : '+ เพิ่ม', () => {
+    const save = () => {
         if (!name.value.trim()) return M().toast('กรอกไม่ครบ', 'ต้องมีชื่อบัญชี', true);
         const local = kind.value === 'imap' || kind.value === 'pop3';
         if (local && (!host.value.trim() || !user.value.trim())) return M().toast('กรอกไม่ครบ', 'ต้องมีโฮสต์และผู้ใช้', true);
@@ -249,52 +245,60 @@
           ...(local && password.value ? { password: password.value } : {}),
           ...(local && smtpPassword.value ? { smtpPassword: smtpPassword.value } : {}),
         });
-        editing = null;
-      }),
-      button('btn ghost', 'ยกเลิก', () => {
-        editing = null;
-        testResult = null;
-        rerender();
-      }),
-    );
-    panel.append(foot);
+        pendingSave = { id: id.value.trim(), popup };
+      };
+    popup.setBody([panel]);
+    const left = [];
+    if (entry) left.push(button('btn danger', 'ลบ', () => removeAccount(entry, popup)));
     if (entry && isLocal) {
-      panel.append(button('btn', 'ทดสอบการเชื่อมต่อ', () => {
+      left.push(button('btn ghost', testResult && testResult.pending ? 'กำลังทดสอบ…' : 'ทดสอบการเชื่อมต่อ', () => {
         testResult = { id: entry.id, pending: true };
         M().send({ type: 'mail-account-test', id: entry.id });
-        rerender();
+        paintEditor();
       }));
-      if (testResult && testResult.id === entry.id) {
-        panel.append(el('p', `hint${testResult.ok === false ? ' badtxt' : ''}`, testResult.pending ? 'กำลังทดสอบ…' : testResult.ok === false ? `ไม่ผ่าน: ${testResult.error || ''}` : testResult.message || 'เชื่อมต่อได้ ✓'));
+      if (testResult && testResult.id === entry.id && !testResult.pending) {
+        panel.append(el('p', `hint${testResult.ok === false ? ' badtxt' : ''}`, testResult.ok === false ? `ทดสอบไม่ผ่าน: ${testResult.error || ''}` : testResult.message || 'เชื่อมต่อได้ ✓'));
       }
     }
-    return panel;
+    popup.setFoot([button('btn ghost', 'ยกเลิก', () => popup.close()), button('btn pri', entry ? 'บันทึก' : 'เพิ่ม', save)], left);
+    popup.dirty = false;
   }
 
-  function render() {
-    if (!M().state.settings || !M().state.settings.mailAccounts) M().send({ type: 'settings-get' });
+  async function removeAccount(account, popup) {
+    if (!(await window.MimiKit.confirmDelete(`กล่องเมล "${account.name || account.id}"`, 'รหัสผ่านของกล่องนี้จะถูกลบด้วย · workflow ที่อ่านกล่องนี้จะใช้กล่องเริ่มต้นแทน'))) return;
+    M().send({ type: 'mail-watch-delete', id: account.id });
+    popup?.done();
+  }
+
+  /** The mailbox cards of Hub → บัญชี. */
+  function section() {
+    const Kit = window.MimiKit;
     if (!M().state.mailAccountsRequested) {
       M().state.mailAccountsRequested = true;
       M().send({ type: 'mail-watch' });
     }
-    const wrap = el('div', 'stackv');
-    const list = el('div', 'panel form');
-    list.append(
-      el('h3', '', 'กล่องเมล / Mail providers'),
-      el('p', 'hint', 'IMAP / POP3 ใช้ได้กับทุกผู้ให้บริการ และส่งผ่าน SMTP ได้ · บัญชีเหล่านี้ใช้ได้ในเครื่องมือ imap_*, pop3_*, smtp_* และ trigger อีเมล · รหัสผ่านเก็บใน vault ของเครื่องนี้เท่านั้น'),
-    );
-    const rows = el('div');
-    for (const account of accounts) rows.append(row(account));
-    if (accounts.length === 0) rows.append(el('p', 'hint', 'ยังไม่มีกล่อง — เพิ่ม Gmail / Outlook / IMAP / POP3 ด้านล่าง'));
-    list.append(rows);
-    if (lastCheckedAt) list.append(el('p', 'hint', `ตรวจล่าสุด: ${M().fmtDate(lastCheckedAt)}`));
-    list.append(button('btn', 'ตรวจเดี๋ยวนี้', () => M().send({ type: 'mail-watch-check' }), 'ค้นหาเมลใหม่ทันที (ปกติรอรอบอัตโนมัติ)'));
-    wrap.append(list, editor());
-    return wrap;
+    const block = el('div', 'mk-block');
+    block.append(Kit.section('กล่องเมล', `IMAP / POP3 ใช้ได้กับทุกผู้ให้บริการ (ส่งผ่าน SMTP ได้) · Gmail / Outlook ใช้บัญชีด้านบน · ใช้กับเครื่องมือเมลและ trigger "อีเมลใหม่"${lastCheckedAt ? ` · ตรวจล่าสุด ${M().fmtDate(lastCheckedAt)}` : ''}`, [
+      button('btn', '+ เพิ่มกล่องเมล', () => openEditor(null)),
+      accounts.length ? button('btn ghost', 'ตรวจเมลเดี๋ยวนี้', () => M().send({ type: 'mail-watch-check' }), 'ค้นหาเมลใหม่ทันที (ปกติรอรอบอัตโนมัติ)') : null,
+    ]));
+    block.append(Kit.grid(accounts.map((account) => {
+      const local = account.kind === 'imap' || account.kind === 'pop3';
+      return Kit.card({
+        title: `${account.name || account.id}${account.default ? ' ★' : ''}`,
+        sub: `${KIND_LABELS[account.kind] || account.kind}${account.outgoing ? ' · ส่งได้ (SMTP)' : ''}`,
+        icon: '✉',
+        state: account.connected === false ? ['todo', 'ยังไม่ครบ'] : ['ok', 'พร้อมใช้'],
+        desc: local ? `${account.email || account.incoming.user} · ${account.incoming.host}` : account.email || account.query || 'ทุกข้อความที่ยังไม่เปิดอ่าน',
+        onOpen: () => openEditor(account),
+        actions: [{ label: 'แก้ไข', onClick: () => openEditor(account) }, { label: 'ลบ', danger: true, onClick: () => removeAccount(account) }],
+      });
+    }), 'ยังไม่มีกล่องเมล — กด "+ เพิ่มกล่องเมล"'));
+    return block;
   }
 
   function rerender() {
-    if (M().state.view === 'hub' && M().ui.hubTab === 'mail') M().renderHub();
+    if (M().state.view === 'hub' && M().ui.hubTab === 'accounts') M().renderHub();
   }
 
   function onMessage(message) {
@@ -303,10 +307,18 @@
     lastCheckedAt = message.lastCheckedAt;
     if (M().state.settings) M().state.settings.mailAccounts = accounts;
     if (message.checked) M().toast('ตรวจเมลแล้ว ✓', `พบใหม่ ${message.checked.found} ฉบับ`);
-    if (message.test) testResult = message.test;
+    if (message.test) {
+      testResult = message.test;
+      paintEditor();
+    } else if (pendingSave && accounts.some((account) => account.id === pendingSave.id)) {
+      pendingSave.popup.done();
+      M().toast('บันทึกกล่องเมลแล้ว ✓');
+      pendingSave = null;
+    }
     rerender();
   }
+  let pendingSave = null;
 
   window.MimiHooks = window.MimiHooks || {};
-  window.MimiHooks.mail = { render, onMessage };
+  window.MimiHooks.mail = { section, onMessage, openEditor };
 })();

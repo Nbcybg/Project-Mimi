@@ -39,6 +39,9 @@ export type VideoModel = Parameters<typeof import('ai').experimental_generateVid
 /** A named entry of the model pool: a model plus how to sample from it. */
 export interface ModelPreset extends SamplingParams {
   model: string;
+  /** Sent as `min_tokens` / `repetition_penalty`; only OpenAI-compatible servers (vLLM, OpenRouter…) read them. */
+  minTokens?: number;
+  repetitionPenalty?: number;
 }
 
 /** Turns a model string into a reference: a preset name is looked up, anything else is `provider/model`. */
@@ -48,9 +51,16 @@ export function resolveModelName(name: string, presets: Record<string, ModelPres
   if (!preset) {
     throw new Error(`Unknown model preset "${name}". Add it to the model pool, or use "<provider>/<model>".`);
   }
-  const { model, ...params } = preset;
+  const { model, minTokens, repetitionPenalty, ...params } = preset;
   const defined = Object.fromEntries(Object.entries(params).filter(([, value]) => value !== undefined));
-  return { ...parseModelRef(model), ...(Object.keys(defined).length > 0 ? { params: defined } : {}) };
+  const extra = Object.fromEntries(
+    Object.entries({ min_tokens: minTokens, repetition_penalty: repetitionPenalty }).filter(([, value]) => value !== undefined),
+  );
+  return {
+    ...parseModelRef(model),
+    ...(Object.keys(defined).length > 0 ? { params: defined } : {}),
+    ...(Object.keys(extra).length > 0 ? { extra } : {}),
+  };
 }
 
 export class ModelRouter implements ModelService {

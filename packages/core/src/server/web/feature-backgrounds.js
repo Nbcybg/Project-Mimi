@@ -273,8 +273,38 @@
   }
 
   function render() {
-    const wrap = el('div', 'split kbsplit');
-    wrap.append(listPanel(), selected === null ? introPanel() : editorPanel());
+    const Kit = window.MimiKit;
+    const wrap = el('div');
+    wrap.append(Kit.section(`ฉากหลัง (${sceneItems().length})`, 'ภาพฉาก (ห้องทำงาน คาเฟ่ ห้องนอน ฯลฯ) ที่หน้าแชตแสดงเป็นฉากหลัง · ใส่คำสำคัญแล้วโหมด "อัตโนมัติ" จะเปลี่ยนฉากตามสถานที่ของ agent', [
+      button('btn pri', '+ เพิ่มฉากหลัง', () => select('')),
+    ]));
+    wrap.append(Kit.grid(sceneItems().map((item) => Kit.card({
+      title: item.name,
+      sub: item.id,
+      icon: thumb(item, 's'),
+      desc: item.keywords.length ? `คำสำคัญ: ${item.keywords.join(', ')}` : 'ยังไม่มีคำสำคัญ (โหมดอัตโนมัติจะไม่เลือกฉากนี้)',
+      onOpen: () => select(item.id),
+      actions: [
+        { label: 'แก้ไข', onClick: () => select(item.id) },
+        { label: 'ลบ', danger: true, onClick: async () => {
+          if (!(await Kit.confirmDelete(`ฉาก "${item.name}" (${item.id})`, 'แชตที่ใช้ฉากนี้จะกลับไปใช้ฉากเริ่มต้น'))) return;
+          M().send({ type: 'background-delete', id: item.id });
+          if (selected === item.id) select(null);
+        } },
+      ],
+    })), 'ยังไม่มีฉากหลัง — กด "+ เพิ่มฉากหลัง"'));
+    const use = el('div', 'mk-block');
+    use.append(Kit.section('ใช้ฉากไหน', 'เลือกให้ทั้งแอป หรือแยกตาม agent · แต่ละแชตเลือกเองได้อีกที่ ตั้งค่าแชต → หน้าตา', []));
+    const grid = el('div', 'mk-grid2 form');
+    const settings = data().settings;
+    grid.append(M().labelled('ทั้งแอป', choiceSelect(settings.default, false, (choice) => M().send({ type: 'background-select', choice }))));
+    for (const agent of M().state.agents) {
+      grid.append(M().labelled(M().nameOf(agent.name), choiceSelect(settings.agents[agent.name] || '', true, (choice) => M().send({ type: 'background-select', agent: agent.name, choice }))));
+    }
+    use.append(grid);
+    wrap.append(use);
+    if (selected === null) Kit.closeHost('backgrounds');
+    else Kit.hostPopup('backgrounds', { title: selected === '' ? 'เพิ่มฉากหลัง' : `ฉาก: ${(sceneItems().find((entry) => entry.id === selected) || {}).name || selected}`, build: () => [editorPanel()], onClose: () => select(null) });
     return wrap;
   }
 
@@ -310,46 +340,6 @@
     return select;
   }
 
-  function listPanel() {
-    const panel = el('div', 'panel');
-    panel.append(el('h3', '', 'ฉากหลัง'));
-    const list = el('div', 'list');
-    for (const item of sceneItems()) {
-      const row = button(`item witem${item.id === selected ? ' on' : ''}`, '', () => select(item.id));
-      const text = el('div');
-      text.append(el('b', '', item.name), el('small', 'muted', item.keywords.length ? ` · ${item.keywords.join(', ')}` : ''));
-      row.append(thumb(item, 's'), text);
-      list.append(row);
-    }
-    if (sceneItems().length === 0) list.append(el('p', 'hint', 'ยังไม่มีฉากหลัง'));
-    panel.append(list, button('btn', '+ เพิ่มฉากหลัง', () => select('')));
-
-    panel.append(el('h4', '', 'ใช้ฉากไหน'));
-    const grid = el('div', 'grid2');
-    const settings = data().settings;
-    grid.append(M().labelled('ทั้งแอป', choiceSelect(settings.default, false, (choice) => M().send({ type: 'background-select', choice }))));
-    for (const agent of M().state.agents) {
-      grid.append(
-        M().labelled(
-          M().nameOf(agent.name),
-          choiceSelect(settings.agents[agent.name] || '', true, (choice) => M().send({ type: 'background-select', agent: agent.name, choice })),
-        ),
-      );
-    }
-    panel.append(grid);
-    return panel;
-  }
-
-  function introPanel() {
-    const panel = el('div', 'panel');
-    panel.append(
-      el('h3', '', 'ฉากหลังทำอะไร'),
-      el('p', 'hint', 'เพิ่มภาพฉาก (ห้องทำงาน คาเฟ่ ห้องนอน ฯลฯ) แล้วเลือกให้ทั้งแอปหรือแยกตาม agent · หน้าแชตจะแสดงเป็นฉากหลัง และค่อยๆ เปลี่ยนภาพเมื่อสลับฉาก'),
-      el('p', 'hint', 'โหมด "อัตโนมัติ": ใส่คำสำคัญให้แต่ละฉาก (เช่น คาเฟ่, ร้านกาแฟ) เมื่อ agent ตั้งสถานที่ (location) ที่มีคำนั้น ฉากจะเปลี่ยนตามเอง แบบ visual novel'),
-    );
-    return panel;
-  }
-
   function editorPanel() {
     const isNew = selected === '';
     const item = sceneItems().find((entry) => entry.id === selected) || { id: '', name: '', keywords: [], image: null };
@@ -376,8 +366,8 @@
     );
     if (!isNew) {
       actions.append(
-        button('btn ghost', 'ลบฉาก', () => {
-          if (confirm(`ลบฉาก "${item.name}" (${item.id})?`)) {
+        button('btn danger', 'ลบฉาก', async () => {
+          if (await window.MimiKit.confirmDelete(`ฉาก "${item.name}" (${item.id})`, 'แชตที่ใช้ฉากนี้จะกลับไปใช้ฉากเริ่มต้น')) {
             M().send({ type: 'background-delete', id: item.id });
             selected = null;
           }
@@ -565,8 +555,8 @@
           save();
         });
         pick.append(thumb(item, 's'), el('span', '', item.name));
-        const del = button('bgupload-del', '✕', () => {
-          if (!confirm(`ลบรูป "${item.name}"?`)) return;
+        const del = button('bgupload-del', '✕', async () => {
+          if (!(await window.MimiKit.confirmDelete(`รูป "${item.name}"`))) return;
           const rules = readChatRules(chat.id).filter((rule) => rule.upload !== item.id);
           writeChatRules(chat.id, rules);
           if (config.type === 'upload' && config.upload === item.id) {

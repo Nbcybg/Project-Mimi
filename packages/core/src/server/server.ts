@@ -579,6 +579,7 @@ export async function startServer(
             ...(model.type ? { type: model.type } : {}),
             ...(model.inputs ? { input: model.inputs } : {}),
             ...(model.outputs ? { output: model.outputs } : {}),
+            ...(model.outputLimit ? { outputLimit: model.outputLimit } : {}),
           };
         }),
       ),
@@ -615,6 +616,7 @@ export async function startServer(
       timezone: config.timezone,
       sessionIdleMinutes: appSettings.session.idleMinutes ?? core.settings.session.idle_minutes,
       sessionMaxTokens: appSettings.session.maxTokens ?? core.settings.session.max_tokens,
+      groupMaxTurns: core.settings.mesh.max_hops,
       compactAt: core.settings.compaction.threshold,
       tunnel: tunnelUnavailable ? { state: 'off', unavailable: tunnelUnavailable } : tunnel.status(),
       ready: (() => {

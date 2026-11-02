@@ -24,7 +24,7 @@ export function createMailTools(mail: () => MailWatch): ToolDefinition<any>[] {
   const imapSearchTool = defineTool({
     name: 'imap_search',
     description:
-      'Search an IMAP mailbox. Uses the account configured in Hub → Mail; without a query it lists the newest messages. Returns id, sender, subject, date and a preview.',
+      'Search an IMAP mailbox. Uses the account configured in Hub → บัญชี → กล่องเมล; without a query it lists the newest messages. Returns id, sender, subject, date and a preview.',
     risk: 'read',
     target: 'core',
     untrustedInput: true,
@@ -150,14 +150,14 @@ export function createMailTools(mail: () => MailWatch): ToolDefinition<any>[] {
 
   const mailAccountsTool = defineTool({
     name: 'mail_accounts',
-    description: 'List the IMAP / POP3 / SMTP accounts configured in Hub → Mail, with whether each has a password and SMTP. No passwords are returned.',
+    description: 'List the IMAP / POP3 / SMTP accounts configured in Hub → บัญชี → กล่องเมล, with whether each has a password and SMTP. No passwords are returned.',
     risk: 'read',
     target: 'core',
     inputSchema: z.object({}),
     summarize: () => 'List mail accounts',
     async execute() {
       const accounts = mail().localAccounts();
-      if (accounts.length === 0) return 'ยังไม่มีบัญชี IMAP/POP3/SMTP — เพิ่มได้ที่ Hub → Mail';
+      if (accounts.length === 0) return 'ยังไม่มีบัญชี IMAP/POP3/SMTP — เพิ่มได้ที่ Hub → บัญชี → กล่องเมล';
       return accounts
         .map((entry) => {
           const outgoing = entry.outgoing ? ` · SMTP ${entry.outgoing.host}` : ' · ไม่มี SMTP';

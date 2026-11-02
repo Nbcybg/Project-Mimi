@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+- Hub: rebuilt for people who have never seen it. Every tab says in one line what it holds; lists are cards
+  (or a table for the model pool) with search and filters; adding and editing happen in popups that ask before
+  closing with unsaved changes; every delete asks for confirmation in the same popup; tabs that hold movable
+  things have import / export. The Mail tab moved into บัญชี (as "กล่องเมล") and the MCP / CLI pointer tab is
+  gone (MCP servers are a filter of Node & เครื่องมือ). Lists always follow the server, so a saved item shows
+  up at once.
+- Model pool: presets pick a provider first, then its model, and take numbers typed in (no sliders) for
+  temperature, top_p, top_k, max tokens, min tokens, presence / frequency / repetition penalty. Each field says
+  its default value and has a ↺ reset; "ทำสำเนา" copies a preset. Min tokens and repetition penalty go to the
+  request body of OpenAI-compatible providers (`min_tokens`, `repetition_penalty`).
+- Node & เครื่องมือ: one card grid for workflow nodes, tools, custom tools, MCP servers and connector services,
+  with kind and group filters. Node presets are new: a node with its settings filled in, made here or with
+  "★ preset" on a node in the workflow editor, listed under "Preset ของฉัน" in the canvas library and shared
+  across the account's devices. Import / export covers node presets, custom tools and MCP servers (also the
+  `mcpServers` file of Claude Desktop).
+- Skill: cards with filters; SKILL.md files import (one opens in the editor, several save at once; Claude's
+  `allowed-tools` is read as tools) and every skill exports as .md; the tools of a skill are picked as cards
+  from a searchable picker instead of a long checkbox list.
+- Trigger: one list for reminders, agent tasks and the trigger of every workflow (open / switch on-off from
+  the card), with run, edit, copy and delete. Trigger types are cards too; custom ones can be edited. Google /
+  Outlook calendar sync now lives inside the "ปฏิทินเปลี่ยน" type and the mailboxes inside "อีเมลใหม่".
+- Group chat follows the design: ตัวต่อตัว / กลุ่ม tabs in the chat list with "+ สร้างกลุ่มใหม่", header
+  pills, each reply labelled with who it answers, and a rail with members and their status (tap to @ them),
+  who talked to whom in the latest question, and the group's rules. Groups can be renamed, members added,
+  removed and reordered (the first answers when nobody is @-called).
+
 - Chat: an agent's own emoji sprite now wins over an outfit's static picture, so uploaded sprites show while
   an outfit is worn; when nothing else is set, the small avatar is used instead of leaving the stage blank.
   An agent without an avatar also uses its first emoji sprite (else its portrait) as the chat-list picture.

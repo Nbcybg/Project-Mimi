@@ -224,6 +224,10 @@ export interface PresetView {
   topP?: number;
   topK?: number;
   maxOutputTokens?: number;
+  minTokens?: number;
+  presencePenalty?: number;
+  frequencyPenalty?: number;
+  repetitionPenalty?: number;
   /** Reasoning effort; left out = the provider's default. */
   reasoning?: ReasoningEffort;
 }
@@ -584,7 +588,7 @@ export interface SettingsView {
    * `audio`, `video`, `pdf`). `input` / `output` are absent when the catalog does not say:
    * unknown abilities, so a picker still offers the model.
    */
-  models: Array<{ ref: string; label: string; type?: string; input?: string[]; output?: string[] }>;
+  models: Array<{ ref: string; label: string; type?: string; input?: string[]; output?: string[]; outputLimit?: number }>;
   /** Default model per capability, used by agents that leave that capability empty. */
   defaults: ModelChoice;
   /** The model pool. A preset name can be used wherever a model is chosen. */
@@ -625,6 +629,8 @@ export interface SettingsView {
   sessionIdleMinutes: number;
   /** A session this long (tokens of conversation) is followed by a new one; 0 = no limit. */
   sessionMaxTokens: number;
+  /** Most agent turns one message may set off in a group chat. */
+  groupMaxTurns: number;
   /** Share of the context window at which older messages are summarized automatically (0..1). */
   compactAt: number;
   /** False until an agent exists and its chat model's provider is connected. */

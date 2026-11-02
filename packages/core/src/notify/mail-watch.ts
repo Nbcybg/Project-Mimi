@@ -256,11 +256,11 @@ export class MailWatch {
 
   private requireAccount(accountId?: string, kind?: 'imap' | 'pop3'): LocalMailAccount {
     const account = accountId ? this.find(accountId) : kind ? this.defaultAccount(kind) : this.defaultLocal();
-    if (!account) throw new Error(kind ? `ยังไม่มีบัญชี ${kind.toUpperCase()} — เพิ่มที่ Hub → Mail` : 'ยังไม่มีบัญชีเมล — เพิ่มที่ Hub → Mail');
+    if (!account) throw new Error(kind ? `ยังไม่มีบัญชี ${kind.toUpperCase()} — เพิ่มที่ Hub → บัญชี → กล่องเมล` : 'ยังไม่มีบัญชีเมล — เพิ่มที่ Hub → บัญชี → กล่องเมล');
     if (account.kind === 'google' || account.kind === 'microsoft') throw new Error(`บัญชี "${account.name ?? account.id}" เป็น Gmail/Outlook ใช้เครื่องมือ gmail_* หรือ outlook_* แทน`);
     if (kind && account.kind !== kind) throw new Error(`บัญชี "${account.name}" เป็น ${account.kind.toUpperCase()} ไม่ใช่ ${kind.toUpperCase()}`);
     const password = this.accountPassword(account);
-    if (!password) throw new Error(`บัญชี "${account.name}" ยังไม่มีรหัสผ่าน — ตั้งที่ Hub → Mail`);
+    if (!password) throw new Error(`บัญชี "${account.name}" ยังไม่มีรหัสผ่าน — ตั้งที่ Hub → บัญชี → กล่องเมล`);
     return account;
   }
 
@@ -302,9 +302,9 @@ export class MailWatch {
   async send(accountId: string | undefined, input: MailSendInput): Promise<{ account: LocalMailAccount; result: string }> {
     const account = this.requireAccount(accountId);
     const outgoing = account.outgoing;
-    if (!outgoing) throw new Error(`บัญชี "${account.name}" ยังไม่ได้ตั้งค่า SMTP — เพิ่มที่ Hub → Mail`);
+    if (!outgoing) throw new Error(`บัญชี "${account.name}" ยังไม่ได้ตั้งค่า SMTP — เพิ่มที่ Hub → บัญชี → กล่องเมล`);
     const password = this.outgoingPassword(account);
-    if (!password) throw new Error(`บัญชี "${account.name}" ยังไม่มีรหัสผ่าน SMTP — ตั้งที่ Hub → Mail`);
+    if (!password) throw new Error(`บัญชี "${account.name}" ยังไม่มีรหัสผ่าน SMTP — ตั้งที่ Hub → บัญชี → กล่องเมล`);
     const result = await sendSmtpMail(
       {
         ...outgoing,

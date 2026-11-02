@@ -45,7 +45,7 @@ export interface ToolServices {
   /** Picks the auth of an OAuth account by id (`undefined` = the default account); without it the single `google` auth is used. */
   googleFor?: (account?: string) => GoogleAuth;
   microsoftFor?: (account?: string) => MicrosoftAuth;
-  /** IMAP / POP3 / SMTP accounts from Hub → Mail; without it those tools are not offered. */
+  /** IMAP / POP3 / SMTP accounts from Hub → บัญชี → กล่องเมล; without it those tools are not offered. */
   mail?: () => MailWatch;
   /** API keys of the web tools, by environment variable name; read at call time. */
   key?: (name: string) => string | undefined;

@@ -872,7 +872,7 @@ export const BUILTIN_TRIGGERS: TriggerPoolView[] = [
   {
     name: 'mail',
     label: 'อีเมลใหม่ (Gmail / Outlook / IMAP / POP3)',
-    description: 'เช็คอีเมลใหม่เป็นรอบ แล้วรันทีละฉบับ · IMAP/POP3 ใช้บัญชีที่ตั้งไว้ที่ Hub → Mail',
+    description: 'เช็คอีเมลใหม่เป็นรอบ แล้วรันทีละฉบับ · IMAP/POP3 ใช้บัญชีที่ตั้งไว้ที่ Hub → บัญชี → กล่องเมล',
     kind: 'mail',
     builtin: true,
     fields: [

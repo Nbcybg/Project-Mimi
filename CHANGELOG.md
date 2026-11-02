@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+### 0.8.0-prototype
+
 - Hub: rebuilt for people who have never seen it. Every tab says in one line what it holds; lists are cards
   (or a table for the model pool) with search and filters; adding and editing happen in popups that ask before
   closing with unsaved changes; every delete asks for confirmation in the same popup; tabs that hold movable

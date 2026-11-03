@@ -5,21 +5,9 @@ import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import type { GoogleAuth } from '../google/auth.ts';
 import { AUDIO_TYPES, listMimiampTracks, type MimiampTrack, youtubeTrackId } from './library.ts';
-import { MimiampPlaylists, type MimiampPlaylist, type MimiampPlaylistExport } from './playlists.ts';
-
-export interface YoutubeSearchResult {
-  videoId: string;
-  title: string;
-  artist?: string;
-  duration?: number;
-  thumbnail?: string;
-}
-
-export interface YoutubeSearchReply {
-  results: YoutubeSearchResult[];
-  source: 'google' | 'youtube' | 'none';
-  error?: string;
-}
+import { MimiampPlaylists } from './playlists.ts';
+import type { MimiampPlaylist, MimiampPlaylistExport, MimiampStateView, YoutubeSearchReply, YoutubeSearchResult } from '@mimi/shared';
+export type { MimiampStateView, YoutubeSearchReply, YoutubeSearchResult } from '@mimi/shared';
 
 export interface YoutubeAudio {
   videoId: string;
@@ -29,12 +17,6 @@ export interface YoutubeAudio {
 
 interface StoredYoutubeTrack extends YoutubeSearchResult {
   addedAt: string;
-}
-
-export interface MimiampStateView {
-  tracks: MimiampTrack[];
-  playlists: MimiampPlaylist[];
-  youtube: { ready: boolean; google: boolean; error?: string };
 }
 
 export interface MimiampServiceOptions {

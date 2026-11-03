@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { nativePushConfig } from './notify/native-push.ts';
 
 export interface CoreConfig {
   rootDir: string;
@@ -100,6 +101,13 @@ export interface CoreConfig {
    * that overwrites the header, or a caller could pick its own address.
    */
   clientIpHeader?: string;
+  /**
+   * Serve the built-in web client (pages, scripts). Off (MIMI_SERVE_WEB=0) for a core used
+   * only by the native apps; their assets (music, backdrops, icons) are served either way.
+   */
+  serveWeb?: boolean;
+  /** Native push (FCM / APNs) credentials and how much of a message a push may carry. */
+  nativePush?: import('./notify/native-push.ts').NativePushConfig;
   timezone: string;
   permissionTimeoutMs: number;
 }
@@ -201,6 +209,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
     port: positiveInt(env.PORT ?? env.MIMI_PORT, 8787),
     token: env.MIMI_TOKEN || undefined,
     clientIpHeader: env.MIMI_CLIENT_IP_HEADER?.trim().toLowerCase() || undefined,
+    serveWeb: env.MIMI_SERVE_WEB !== '0' && env.MIMI_SERVE_WEB !== 'false',
+    nativePush: nativePushConfig(env),
     timezone: env.MIMI_TIMEZONE ?? 'Asia/Bangkok',
     permissionTimeoutMs: positiveInt(env.PERMISSION_TIMEOUT_MS, 900_000),
   };

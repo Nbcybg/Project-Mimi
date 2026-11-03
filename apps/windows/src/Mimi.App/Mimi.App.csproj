@@ -1,0 +1,60 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The Mimi app for Windows: WinUI 3 (Windows App SDK); WebView2 only where nothing native does the job
+       (the Workspace browser and terminal emulator, the 3D VRM character). Unpackaged (a folder with Mimi.exe,
+       shipped as a zip + per-user installer like the Electron app it replaces), with the Windows App SDK
+       runtime inside the folder (self-contained), so nothing else has to be installed. -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+    <RootNamespace>Mimi.App</RootNamespace>
+    <AssemblyName>Mimi</AssemblyName>
+    <AssemblyTitle>Mimi</AssemblyTitle>
+    <Description>Mimi</Description>
+    <ApplicationIcon>Assets\Mimi.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <UseWinUI>true</UseWinUI>
+    <Platforms>x64;ARM64</Platforms>
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
+    <WindowsPackageType>None</WindowsPackageType>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <!-- Not for an MSIX: this tooling also puts Mimi.pri and the compiled XAML (.xbf) into a publish. -->
+    <EnableMsixTooling>true</EnableMsixTooling>
+    <!-- Program.cs has the Main: one instance per Windows account (a second start shows the first). -->
+    <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
+    <!-- Where the app looks for newer releases (Desktop/Updater.cs); the build script sets it. Empty = no updates. -->
+    <UpdateRepo Condition="'$(UpdateRepo)' == ''"></UpdateRepo>
+  </PropertyGroup>
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>UpdateRepo</_Parameter1>
+      <_Parameter2>$(UpdateRepo)</_Parameter2>
+    </AssemblyAttribute>
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.6.4" />
+    <PackageReference Include="NAudio.Wasapi" Version="2.2.1" />
+    <PackageReference Include="NAudio.WinMM" Version="2.2.1" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Mimi.Core\Mimi.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="Assets\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <!-- From the repository (npm install): the web app's scene presets, three.js + three-vrm for the 3D character,
+       xterm.js for the Workspace terminal. Shown from local files, so the app needs no network for them. -->
+  <PropertyGroup>
+    <RepoRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\..\..\'))</RepoRoot>
+    <Modules>$(RepoRoot)node_modules\</Modules>
+  </PropertyGroup>
+  <ItemGroup>
+    <Content Include="$(RepoRoot)packages\core\src\server\web\backgrounds\*.webp" Link="Assets\backgrounds\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="$(Modules)three\build\three.module.js;$(Modules)three\build\three.core.js" Link="Assets\web\vendor\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" Condition="Exists('$(Modules)three')" />
+    <Content Include="$(Modules)three\examples\jsm\loaders\GLTFLoader.js" Link="Assets\web\vendor\addons\loaders\GLTFLoader.js" CopyToOutputDirectory="PreserveNewest" Condition="Exists('$(Modules)three')" />
+    <Content Include="$(Modules)three\examples\jsm\utils\BufferGeometryUtils.js;$(Modules)three\examples\jsm\utils\SkeletonUtils.js" Link="Assets\web\vendor\addons\utils\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" Condition="Exists('$(Modules)three')" />
+    <Content Include="$(Modules)@pixiv\three-vrm\lib\three-vrm.module.js" Link="Assets\web\vendor\three-vrm.module.js" CopyToOutputDirectory="PreserveNewest" Condition="Exists('$(Modules)@pixiv')" />
+    <Content Include="$(Modules)@xterm\xterm\lib\xterm.js;$(Modules)@xterm\xterm\css\xterm.css;$(Modules)@xterm\addon-fit\lib\addon-fit.js" Link="Assets\web\vendor\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" Condition="Exists('$(Modules)@xterm')" />
+  </ItemGroup>
+</Project>

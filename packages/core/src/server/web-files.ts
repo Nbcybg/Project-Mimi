@@ -134,13 +134,17 @@ const icons = new Map<string, Buffer>();
  * the developer's (shipped with the app, or MIMI_MUSIC_DIR); browsers need Range answers to
  * seek in a long song without downloading it all again.
  */
-/** Answers a range request for one audio file; browsers need this to seek without reloading. */
-function serveAudioFile(
+/**
+ * Answers a range request for one file (songs, chat media); players need this to seek
+ * without reloading, and AVPlayer will not play a video from a server without it.
+ */
+export function serveFileRange(
   file: string,
   name: string,
   mime: string,
   response: http.ServerResponse,
   range?: string,
+  options: { headers?: Record<string, string>; disposition?: 'inline' | 'attachment' } = {},
 ): void {
   let size: number;
   try {
@@ -156,7 +160,8 @@ function serveAudioFile(
     'accept-ranges': 'bytes',
     'cache-control': 'private, max-age=3600',
     'x-content-type-options': 'nosniff',
-    'content-disposition': `inline; filename*=UTF-8''${encodeURIComponent(name)}`,
+    'content-disposition': `${options.disposition ?? 'inline'}; filename*=UTF-8''${encodeURIComponent(name)}`,
+    ...options.headers,
   };
   const match = /^bytes=(\d*)-(\d*)$/.exec((range ?? '').trim());
   let start = 0;
@@ -212,7 +217,7 @@ function serveMimiamp(pathname: string, response: http.ServerResponse, range?: s
       response.end(body);
       return true;
     }
-    serveAudioFile(audio.file, `${audio.videoId}${path.extname(audio.file)}`, audio.mime, response, range);
+    serveFileRange(audio.file, `${audio.videoId}${path.extname(audio.file)}`, audio.mime, response, range);
     return true;
   }
   if (!pathname.startsWith('/mimiamp/')) return false;
@@ -228,21 +233,29 @@ function serveMimiamp(pathname: string, response: http.ServerResponse, range?: s
     response.writeHead(404).end();
     return true;
   }
-  serveAudioFile(file, name, AUDIO_TYPES[path.extname(name).toLowerCase()] ?? 'application/octet-stream', response, range);
+  serveFileRange(file, name, AUDIO_TYPES[path.extname(name).toLowerCase()] ?? 'application/octet-stream', response, range);
   return true;
 }
 
 /**
  * Answers a GET for the built-in web client (pages, scripts, 3D libraries, icon), which
  * needs no token. Shared with the accounts gateway. Returns false for any other path.
+ * With `web: false` (MIMI_SERVE_WEB=0) the pages and scripts are gone; what the native
+ * apps still load from here (music, backdrops, icons) is served either way.
  */
 export function serveWebFile(
   pathname: string,
   response: http.ServerResponse,
   range?: string,
   service?: MimiampService,
+  options: { web?: boolean } = {},
 ): boolean {
   if (serveMimiamp(pathname, response, range, service)) return true;
+  if (options.web === false && (WEB_FILES[pathname] || pathname.startsWith('/vendor/'))) {
+    response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+    response.end('The web client is turned off on this server (MIMI_SERVE_WEB=0). Use a Mimi app.');
+    return true;
+  }
   if (pathname.startsWith('/backgrounds/')) {
     const name = pathname.slice('/backgrounds/'.length);
     if (!/^[a-z0-9-]+\.webp$/.test(name)) {

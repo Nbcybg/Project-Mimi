@@ -9,6 +9,9 @@ import type { WardrobeStore } from '../wardrobe/wardrobe-store.ts';
 import type { BackgroundStore } from '../backgrounds/background-store.ts';
 import type { GalleryStore } from '../gallery/gallery-store.ts';
 import type { MimiampService } from '../mimiamp/service.ts';
+import { isAudioFile } from '../mimiamp/library.ts';
+import type { NativePushRegistration, PermissionScope, PushDeviceView } from '@mimi/shared';
+import { serveFileRange } from './web-files.ts';
 
 /** What the webhook endpoint answers: a `respond` node may shape all of it. */
 export interface WebhookReply {
@@ -60,6 +63,61 @@ export interface HttpApiDeps {
   chatCsv?(chatId?: number): { csv: string; filename: string } | null;
   /** The user's own pictures and models (kept until deleted) and their quota, for upload checks. */
   userMedia?: { usedBytes(): number; quotaBytes(): number };
+  /** Notifications after an id, read or not (`GET /api/notifications?afterId=`). */
+  notificationsAfter?(afterId: number): unknown;
+  /** Native apps' FCM / APNs tokens. */
+  nativePush?: {
+    register(registration: NativePushRegistration): { device: PushDeviceView; delivering: boolean };
+    unregister(token: string): boolean;
+  };
+  /** Answers a tool's permission request; false when it is no longer waiting. */
+  answerPermission?(requestId: string, allow: boolean, scope?: PermissionScope): boolean;
+  /** Answers a workflow's approval request; false when it is no longer waiting. */
+  decideApproval?(id: number, approved: boolean, note?: string): boolean;
+  /** Folder uploaded songs are written to; null when the server has none. */
+  musicUploadDir?(): string | null;
+}
+
+/** A song upload is bigger than a chat file: a long lossless track. */
+const MAX_SONG_BYTES = 200 * 1024 * 1024;
+const SCOPES = new Set<PermissionScope>(['once', 'task', 'session', 'always']);
+
+/** Writes a request body straight to a file (no buffering), refusing more than `limit` bytes. */
+function writeBody(request: http.IncomingMessage, file: string, limit: number): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const temp = `${file}.${process.pid}.${Date.now()}.part`;
+    const out = fs.createWriteStream(temp, { mode: 0o600 });
+    let size = 0;
+    const fail = (error: Error) => {
+      out.destroy();
+      fs.rmSync(temp, { force: true });
+      reject(error);
+    };
+    request.on('data', (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > limit) {
+        request.destroy();
+        fail(new HttpError(413, `The file is larger than ${Math.round(limit / 1024 / 1024)} MB.`));
+        return;
+      }
+      if (!out.write(chunk)) {
+        request.pause();
+        out.once('drain', () => request.resume());
+      }
+    });
+    request.on('end', () =>
+      out.end(() => {
+        try {
+          fs.renameSync(temp, file);
+          resolve(size);
+        } catch (error) {
+          fail(error as Error);
+        }
+      }),
+    );
+    request.on('error', (error) => fail(error));
+    out.on('error', (error) => fail(error));
+  });
 }
 
 export function toAttachmentView(attachment: Attachment): AttachmentView {
@@ -146,9 +204,39 @@ async function handleMimiampApi(
   request: http.IncomingMessage,
   response: http.ServerResponse,
   changed?: () => void,
+  upload?: { dir: string | null; check(bytes: number): void },
 ): Promise<void> {
   const method = request.method ?? 'GET';
   const [part, id, action] = rest;
+
+  // POST /api/mimiamp/files?name=<song.mp3>   body = the audio file   -> { track }
+  // DELETE /api/mimiamp/files/<song.mp3>
+  if (part === 'files' && upload) {
+    if (!upload.dir) throw new HttpError(409, 'This server has no music folder for uploads (set MIMI_USER or MIMI_MUSIC_DIR).');
+    if (method === 'POST' && id === undefined) {
+      const name = String(url.searchParams.get('name') ?? '').trim();
+      if (!isAudioFile(name)) throw new HttpError(400, 'Name the song with an audio extension (.mp3, .m4a, .flac, .wav, .ogg, .opus…), no folders.');
+      const declared = Number(request.headers['content-length'] ?? 0);
+      if (declared > MAX_SONG_BYTES) throw new HttpError(413, `The file is larger than ${MAX_SONG_BYTES / 1024 / 1024} MB.`);
+      upload.check(declared);
+      fs.mkdirSync(upload.dir, { recursive: true });
+      await writeBody(request, path.join(upload.dir, name), MAX_SONG_BYTES);
+      changed?.();
+      const track = service.tracks().find((entry) => entry.source === 'file' && entry.file === name);
+      sendJson(response, 200, { track: track ?? null });
+      return;
+    }
+    if (method === 'DELETE' && id !== undefined && rest.length === 2) {
+      if (!isAudioFile(id)) throw new HttpError(400, 'Not a song file name.');
+      const file = path.join(upload.dir, id);
+      if (!fs.existsSync(file)) throw new HttpError(404, 'No such song in the upload folder.');
+      fs.rmSync(file);
+      changed?.();
+      sendJson(response, 200, { ok: true });
+      return;
+    }
+    throw new HttpError(405, 'Method not allowed.');
+  }
 
   if ((part === undefined || part === 'state') && method === 'GET') {
     sendJson(response, 200, service.state());
@@ -181,8 +269,7 @@ async function handleMimiampApi(
     if (action === 'audio' && method === 'GET') {
       const audio = service.audio(id);
       if (!audio) throw new HttpError(404, 'This YouTube song is not downloaded yet.');
-      const data = fs.readFileSync(audio.file);
-      sendBytes(response, data, audio.mime, `${audio.videoId}${path.extname(audio.file)}`);
+      serveFileRange(audio.file, `${audio.videoId}${path.extname(audio.file)}`, audio.mime, response, request.headers.range);
       return;
     }
     if (action === undefined && method === 'DELETE') {
@@ -400,12 +487,48 @@ export async function handleHttpApi(
       sendJson(response, 200, deps.widgetChats(url.searchParams.get('since')));
     } else if (resource === 'notifications' && request.method === 'GET' && rest.length === 0 && deps.notificationsSync) {
       // The Android app polls this while the page is closed and posts native notifications.
-      sendJson(response, 200, deps.notificationsSync(url.searchParams.get('since')));
+      // `afterId` (native apps): everything newer than that id, read or not, oldest first.
+      const afterId = url.searchParams.get('afterId');
+      if (afterId !== null && deps.notificationsAfter) {
+        const value = Number(afterId);
+        if (!Number.isInteger(value) || value < 0) throw new HttpError(400, 'afterId must be a whole number.');
+        sendJson(response, 200, deps.notificationsAfter(value));
+      } else {
+        sendJson(response, 200, deps.notificationsSync(url.searchParams.get('since')));
+      }
+    } else if (resource === 'push' && request.method === 'POST' && rest.length === 1 && deps.nativePush) {
+      const body = await readJson(request);
+      if (rest[0] === 'register') {
+        sendJson(response, 200, { ok: true, ...deps.nativePush.register(body as unknown as NativePushRegistration) });
+      } else if (rest[0] === 'unregister') {
+        sendJson(response, 200, { ok: true, removed: deps.nativePush.unregister(String(body.token ?? '')) });
+      } else {
+        throw new HttpError(404, 'Not found.');
+      }
+    } else if (resource === 'permissions' && request.method === 'POST' && rest.length === 1 && deps.answerPermission) {
+      // A notification's "allow" button, while the app has no WebSocket open.
+      const body = await readJson(request);
+      const scope = typeof body.scope === 'string' && SCOPES.has(body.scope as PermissionScope) ? (body.scope as PermissionScope) : undefined;
+      if (!deps.answerPermission(rest[0]!, body.allow === true, scope)) throw new HttpError(404, 'This request is no longer waiting.');
+      sendJson(response, 200, { ok: true });
+    } else if (resource === 'approvals' && request.method === 'POST' && rest.length === 1 && deps.decideApproval) {
+      const body = await readJson(request);
+      const id = Number(rest[0]);
+      if (!Number.isInteger(id)) throw new HttpError(400, 'An approval id is a number.');
+      if (!deps.decideApproval(id, body.approved === true, typeof body.note === 'string' ? body.note : undefined)) {
+        throw new HttpError(404, 'This request is no longer waiting (answered, timed out, or the app restarted).');
+      }
+      sendJson(response, 200, { ok: true });
     } else if (resource === 'files' && request.method === 'GET' && rest.length === 1) {
       const attachment = deps.attachments.get(rest[0]!);
-      const data = attachment && !attachment.deletedAt ? deps.attachments.read(attachment.id) : undefined;
-      if (!attachment || !data) throw new HttpError(attachment?.deletedAt ? 410 : 404, attachment?.deletedAt ? 'This media was removed after the retention period.' : 'No such file.');
-      sendBytes(response, data, attachment.mime, attachment.name);
+      const file = attachment && !attachment.deletedAt ? deps.attachments.filePath(attachment.id) : undefined;
+      if (!attachment || !file) throw new HttpError(attachment?.deletedAt ? 410 : 404, attachment?.deletedAt ? 'This media was removed after the retention period.' : 'No such file.');
+      // Streamed with Range answers, so players can seek (AVPlayer needs it to play at all).
+      const inline = INLINE.test(attachment.mime);
+      serveFileRange(file, attachment.name, inline ? attachment.mime : 'application/octet-stream', response, request.headers.range, {
+        disposition: inline ? 'inline' : 'attachment',
+        headers: { 'content-security-policy': "default-src 'none'; sandbox", 'cache-control': 'private, max-age=3600' },
+      });
     } else if (resource === 'agent-image' && rest.length === 2 && isImageSlot(rest[1]!)) {
       const [agent, slot] = rest as [string, 'avatar' | 'portrait'];
       if (request.method === 'GET') {
@@ -602,7 +725,7 @@ export async function handleHttpApi(
         throw new HttpError(405, 'Method not allowed.');
       }
     } else if (resource === 'mimiamp' && deps.mimiamp) {
-      await handleMimiampApi(deps.mimiamp, rest, url, request, response, deps.mimiampChanged);
+      await handleMimiampApi(deps.mimiamp, rest, url, request, response, deps.mimiampChanged, deps.musicUploadDir ? { dir: deps.musicUploadDir(), check: checkMedia } : undefined);
     } else {
       throw new HttpError(404, 'Not found.');
     }

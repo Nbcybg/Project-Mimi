@@ -1,0 +1,11 @@
+<Project>
+  <!-- CommunityToolkit.Mvvm 8.4 ships its source generator for several Roslyn versions; with the .NET 10
+       SDK both the roslyn4.12 and the roslyn5.0 copy get loaded and every property is generated twice.
+       Keep only the copy for the compiler in use (Roslyn 5). -->
+  <Target Name="MimiOneMvvmGenerator" BeforeTargets="CoreCompile;XamlPreCompile">
+    <ItemGroup>
+      <Analyzer Remove="@(Analyzer)" Condition="$([System.String]::Copy('%(Analyzer.Identity)').Contains('communitytoolkit.mvvm')) And !$([System.String]::Copy('%(Analyzer.Identity)').Contains('roslyn5.0'))" />
+    </ItemGroup>
+  </Target>
+</Project>
+

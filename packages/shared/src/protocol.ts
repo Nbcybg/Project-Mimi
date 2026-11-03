@@ -12,6 +12,26 @@ import type { CustomToolSpec, McpServerSpec, McpServerView, ToolPreset, ToolSett
  * frame is one JSON object. A connection must send `hello` first.
  */
 
+/**
+ * Version of the client API (this file, the HTTP routes and their JSON). Raised only when
+ * a change would break a client built for the previous number; additions keep it.
+ * See docs/native/api-versioning.md.
+ */
+export const API_VERSION = 1;
+/** The oldest client API this core still serves; an older client is told to update. */
+export const MIN_CLIENT_API = 1;
+/** Close code for a client whose `hello.client.api` is below MIN_CLIENT_API. */
+export const CLOSE_CLIENT_TOO_OLD = 4426;
+
+/** What a client says about itself in `hello` (native apps; the web client sends none). */
+export interface ClientInfo {
+  platform: 'web' | 'android' | 'ios' | 'macos' | 'windows' | 'desktop' | 'other';
+  /** The app's own release, e.g. "1.2.0". */
+  version?: string;
+  /** The API_VERSION the app was built against. */
+  api?: number;
+}
+
 export interface TriggerInfo {
   id: number;
   kind: 'reminder' | 'agent_task';
@@ -280,14 +300,34 @@ export interface NotificationItem extends Notification {
   read: boolean;
 }
 
-/** A browser that receives push messages. */
+/** A browser (Web Push) or a native app (FCM / APNs) that receives push messages. */
 export interface PushDeviceView {
+  /** Web Push endpoint, or `native:<platform>:<id>` for an app; `push-unsubscribe` takes either. */
   endpoint: string;
+  /** Absent for Web Push. */
+  platform?: NativePushPlatform;
   /** The push service's host (fcm.googleapis.com, web.push.apple.com…). */
   service: string;
   label: string;
   createdAt: string;
   lastOkAt: string | null;
+}
+
+/** Push services of native apps: Firebase Cloud Messaging (Android) and Apple Push (iOS / macOS). */
+export type NativePushPlatform = 'fcm' | 'apns';
+
+/** What a native app registers to get push messages (WS `native-push-register` or `POST /api/push/register`). */
+export interface NativePushRegistration {
+  platform: NativePushPlatform;
+  /** The FCM registration token, or the APNs device token (hex). */
+  token: string;
+  /** Shown in the device list, e.g. "Pixel 8". */
+  label?: string;
+  appVersion?: string;
+  /** APNs only: the app's bundle id (the push topic); defaults to MIMI_APNS_TOPIC. */
+  bundleId?: string;
+  /** APNs only: a development build, pushed through the sandbox service. */
+  sandbox?: boolean;
 }
 
 /**
@@ -709,7 +749,7 @@ export interface MimiampCommand {
 
 /** Sent by UI clients. */
 export type ClientMessage =
-  | { type: 'hello'; role: 'client'; token: string; name?: string }
+  | { type: 'hello'; role: 'client'; token: string; name?: string; client?: ClientInfo }
   | { type: 'send'; text: string; agent?: string }
   /** Stops the turn of this chat; without a chat id, stops every running turn. */
   | { type: 'abort'; chatId?: number }
@@ -790,8 +830,11 @@ export type ClientMessage =
   | { type: 'chat-create'; kind: 'direct' | 'group'; agents: string[]; title?: string }
   | { type: 'chat-update'; chatId: number; title?: string; agents?: string[] }
   | { type: 'chat-delete'; chatId: number }
-  /** Asks for a session of a chat (the latest one by default) and its messages. */
-  | { type: 'chat-open'; chatId: number; sessionId?: number; beforeId?: number }
+  /**
+   * Asks for a session of a chat (the latest one by default) and its messages. `afterId` asks
+   * only for the messages newer than that one (catching up after a reconnect).
+   */
+  | { type: 'chat-open'; chatId: number; sessionId?: number; beforeId?: number; afterId?: number }
   /** Sends a message to a chat. `attachments` are ids returned by `POST /api/upload`. */
   | { type: 'chat-send'; chatId: number; text: string; attachments?: string[]; replyTo?: number; clientId?: string; forward?: { from: string; chat: string } }
   /** Starts a new session by hand; the next message goes there. */
@@ -861,6 +904,9 @@ export type ClientMessage =
   | { type: 'push-unsubscribe'; endpoint: string }
   | { type: 'push-devices' }
   | { type: 'push-test' }
+  /** A native app's FCM / APNs token; answered with `push-devices`. */
+  | ({ type: 'native-push-register' } & NativePushRegistration)
+  | { type: 'native-push-unregister'; token: string }
   | { type: 'preferences-save'; preferences: PreferencesView }
   /** Screen settings shared by all the user's devices (null removes one). */
   | { type: 'ui-set'; values: Record<string, string | null> }
@@ -955,6 +1001,11 @@ export type ServerMessage =
       pendingPermissions: PermissionRequest[];
       /** Screen settings shared by all the user's devices (character position, sounds, …). */
       ui?: Record<string, string>;
+      /** The core's release (same as `/health`). */
+      version?: string;
+      /** API_VERSION of this core, and the oldest client API it serves. */
+      api?: number;
+      minClientApi?: number;
     }
   /** Shared screen settings that changed on another device (null: removed). */
   | { type: 'ui'; values: Record<string, string | null> }
@@ -1016,6 +1067,8 @@ export type ServerMessage =
       hasMore: boolean;
       /** Set when this answers a request for older messages. */
       beforeId?: number;
+      /** Set when this answers `afterId`: only the messages after it (oldest first). */
+      afterId?: number;
       /** Every pinned message of the chat, newest pin first. */
       pins?: PinView[];
       /** A turn still streaming in this chat, to rebuild while it continues. */
@@ -1028,6 +1081,11 @@ export type ServerMessage =
   | { type: 'session-context'; chatId: number; sessionId: number; context: SessionContextView }
   | { type: 'chat-message'; chatId: number; sessionId: number; message: ChatMessageView }
   | { type: 'chat-event'; chatId: number; sessionId: number; agent: string; event: AgentEvent }
+  /**
+   * A turn ended: the messages it stored after the user's message (replies, tool steps), with
+   * their ids, so a client can replace what it streamed without opening the chat again.
+   */
+  | { type: 'chat-turn-messages'; chatId: number; sessionId: number; afterId: number; messages: ChatMessageView[] }
   /** Recordings in this chat are being transcribed (`on`) or that finished. */
   | { type: 'chat-transcribing'; chatId: number; on: boolean }
   /** The agent is looking at pictures in this chat (`on`) or that finished. */
@@ -1091,7 +1149,16 @@ export type ServerMessage =
   | { type: 'knowledge-embedded'; collection: string; count: number }
   | { type: 'workflow-run-record'; run: WorkflowRunRecord }
   | { type: 'status'; agent: string; status: AgentStatusView }
-  | { type: 'error'; message: string; /** Stable code such as E-AUTH-401, shown in the chat. */ code?: string; chatId?: number; clientId?: string }
+  | {
+      type: 'error';
+      message: string;
+      /** Stable code such as E-AUTH-401, shown in the chat. */
+      code?: string;
+      chatId?: number;
+      clientId?: string;
+      /** The `type` of the client message that failed, when the error answers one. */
+      requestType?: string;
+    }
   /** The push-mail watcher: watched accounts and when they were last checked. */
   | {
       type: 'mail-watch';

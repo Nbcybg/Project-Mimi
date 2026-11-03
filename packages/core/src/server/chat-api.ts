@@ -58,6 +58,8 @@ type Reply = (message: ServerMessage) => void;
 /** Opening a chat draws only the newest messages (a phone is slow at drawing a long log); "older" fetches more. */
 const FIRST_PAGE = 40;
 const OLDER_PAGE = 60;
+/** Most messages one `chat-open {afterId}` returns; `hasMore` says to ask again from the last. */
+const NEWER_PAGE = 200;
 const PREVIEW_LENGTH = 90;
 const SNIPPET_RADIUS = 70;
 const PRESET_NAME = /^[a-z0-9][a-z0-9_-]*$/;
@@ -169,15 +171,21 @@ export function createChatApi(context: ChatApiContext) {
     }));
   };
 
-  const historyMessage = (chatId: number, sessionId?: number, beforeId?: number): ServerMessage => {
+  const historyMessage = (chatId: number, sessionId?: number, beforeId?: number, afterId?: number): ServerMessage => {
     const chat = chats.getChat(chatId);
     if (!chat) throw new Error(`Chat #${chatId} does not exist.`);
     const sessions = chats.sessions(chat.id, 200);
     const session = sessionId === undefined ? sessions[0] : sessions.find((entry) => entry.id === sessionId);
     if (sessionId !== undefined && !session) throw new Error(`Session #${sessionId} does not exist.`);
-    const pageSize = beforeId === undefined ? FIRST_PAGE : OLDER_PAGE;
-    const rows = session ? messages.timeline(session.thread, beforeId, pageSize + 1) : [];
+    const pageSize = afterId !== undefined ? NEWER_PAGE : beforeId === undefined ? FIRST_PAGE : OLDER_PAGE;
+    const rows = !session
+      ? []
+      : afterId !== undefined
+        ? messages.timelineAfter(session.thread, afterId, pageSize + 1)
+        : messages.timeline(session.thread, beforeId, pageSize + 1);
+    // Older pages count from the end; a catch-up page counts from its start.
     const hasMore = rows.length > pageSize;
+    const page = !hasMore ? rows : afterId !== undefined ? rows.slice(0, pageSize) : rows.slice(1);
     // Opening (not just fetching older pages) means the user is reading this session now.
     if (beforeId === undefined && session) {
       chats.markRead(session.id);
@@ -192,9 +200,10 @@ export function createChatApi(context: ChatApiContext) {
       chat: chatView(chat),
       session: session ? sessionView(session) : null,
       sessions: sessions.map(sessionView),
-      messages: messageViews(hasMore ? rows.slice(1) : rows),
+      messages: messageViews(page),
       hasMore,
       beforeId,
+      ...(afterId !== undefined ? { afterId } : {}),
       pins: pinsOf(chat),
       live: liveHere,
     };
@@ -215,6 +224,7 @@ export function createChatApi(context: ChatApiContext) {
     afterStored?: () => void,
   ) => {
     let sessionId = 0;
+    let userMessageId = 0;
     let stored = false;
     const markStored = () => {
       if (stored) return;
@@ -247,6 +257,7 @@ export function createChatApi(context: ChatApiContext) {
               ...(item.clientId ? { clientId: item.clientId } : {}),
             },
           });
+          userMessageId = item.id;
           markStored();
         } else if (item.type === 'transcribing') {
           broadcast({ type: 'chat-transcribing', chatId, on: item.on });
@@ -269,6 +280,11 @@ export function createChatApi(context: ChatApiContext) {
     markStored();
     // The session may have been given its title during the turn.
     const session = chats.getSession(sessionId);
+    // What the turn stored, with ids: a client replaces its streamed bubbles without reopening the chat.
+    if (session && userMessageId > 0) {
+      const replies = messages.timelineAfter(session.thread, userMessageId, NEWER_PAGE).filter((row) => row.role === 'assistant');
+      broadcast({ type: 'chat-turn-messages', chatId, sessionId, afterId: userMessageId, messages: messageViews(replies) });
+    }
     if (session) broadcast({ type: 'chat-session', chatId, session: sessionView(session), started: false });
     broadcast(chatsMessage());
   };
@@ -434,9 +450,12 @@ export function createChatApi(context: ChatApiContext) {
         chats.deleteChat(Number(message.chatId));
         broadcast(chatsMessage());
         return true;
-      case 'chat-open':
-        reply(historyMessage(Number(message.chatId), message.sessionId, message.beforeId));
+      case 'chat-open': {
+        const afterId = message.afterId === undefined ? undefined : Number(message.afterId);
+        if (afterId !== undefined && (!Number.isInteger(afterId) || afterId < 0)) throw new Error('afterId must be a message id.');
+        reply(historyMessage(Number(message.chatId), message.sessionId, message.beforeId, afterId));
         return true;
+      }
       case 'chat-send': {
         const chatId = Number(message.chatId);
         const text = typeof message.text === 'string' ? message.text.trim() : '';

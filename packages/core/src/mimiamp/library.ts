@@ -21,27 +21,8 @@ export const AUDIO_TYPES: Record<string, string> = {
   '.webm': 'audio/webm',
 };
 
-/** Where a track comes from: a file in the music folder, or YouTube (audio only). */
-export type MimiampTrackSource = 'file' | 'youtube';
-
-export interface MimiampTrack {
-  /** Stable id: `file:<name>` or `youtube:<video id>`. */
-  id: string;
-  source: MimiampTrackSource;
-  /** A file name inside the music folder (no folders, no `..`). */
-  file?: string;
-  /** The YouTube video id, for a YouTube track. */
-  videoId?: string;
-  title: string;
-  artist?: string;
-  album?: string;
-  /** Seconds, when `tracks.json` or YouTube says it. */
-  duration?: number;
-  /** Where the browser fetches it; a YouTube URL only answers after `prepareYoutube`. */
-  url: string;
-  /** Cover art for a YouTube track. */
-  thumbnail?: string;
-}
+import type { MimiampTrack } from '@mimi/shared';
+export type { MimiampTrack, MimiampTrackSource } from '@mimi/shared';
 
 interface ManifestEntry {
   file?: unknown;
@@ -88,6 +69,20 @@ export function mimiampDir(env: NodeJS.ProcessEnv = process.env): string {
   ];
   for (const dir of candidates) if (hasAudio(dir)) return dir;
   return path.join(import.meta.dirname, '..', 'server', 'web', 'mimiamp');
+}
+
+/**
+ * Where uploaded songs go: `MIMI_MUSIC_DIR`, else `<user>/mimiamp` (on a server, the volume).
+ * Null when neither is set (a local folder layout the player would not read uploads from).
+ * The first upload makes that folder win over the app's demo songs (see mimiampDir).
+ */
+export function musicUploadDir(env: NodeJS.ProcessEnv = process.env): string | null {
+  const custom = env.MIMI_MUSIC_DIR?.trim();
+  if (custom) return path.resolve(custom);
+  const user = env.MIMI_USER?.trim();
+  if (!user) return null;
+  const root = env.MIMI_ROOT ? path.resolve(env.MIMI_ROOT) : path.resolve(import.meta.dirname, '../../../..');
+  return path.resolve(root, user, 'mimiamp');
 }
 
 /** True for a plain audio file name that may be served (never a path). */

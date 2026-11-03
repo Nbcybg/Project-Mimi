@@ -29,6 +29,7 @@ const MIGRATIONS = [
   '021-notification-agent.sql',
   '022-tasks.sql',
   '023-tool-calls.sql',
+  '024-native-push.sql',
 ];
 
 function migrate(db: Db): void {

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { type TestContext, test } from 'node:test';
 import Database from 'better-sqlite3';
-import type { ServerMessage } from '@mimi/shared';
+import { API_VERSION, MIN_CLIENT_API, type ServerMessage } from '@mimi/shared';
 import { WebSocket } from 'ws';
 import { AccountStore } from '../gateway/accounts.ts';
 import { base32Decode, base32Encode, newTotpSecret, totpCode, totpStep, verifyTotp } from '../gateway/totp.ts';
@@ -237,7 +237,7 @@ test('HTTP: a session reaches only its own core; the core token never leaves the
   assert.deepEqual(Object.keys(JSON.parse(body) as object).sort(), ['expiresAt', 'recoveryCodes', 'twoFactor', 'username', 'webhookBase']);
   for (const person of Object.values(booted.people)) assert.ok(!body.includes(person.coreToken));
 
-  assert.deepEqual(await (await fetch(`${booted.http}/health`)).json(), { ok: true, version: JSON.parse(fs.readFileSync('package.json', 'utf8')).version, accounts: true });
+  assert.deepEqual(await (await fetch(`${booted.http}/health`)).json(), { ok: true, version: JSON.parse(fs.readFileSync('package.json', 'utf8')).version, api: API_VERSION, minClientApi: MIN_CLIENT_API, accounts: true });
   assert.equal((await fetch(`${booted.http}/`)).status, 200);
   assert.equal((await fetch(`${booted.http}/app/show`, { method: 'POST' })).status, 404);
 });

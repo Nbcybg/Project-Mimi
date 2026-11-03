@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Mimi.App/Mimi.App.csproj" />
+    <Project Path="src/Mimi.Core/Mimi.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Mimi.App.UiTests/Mimi.App.UiTests.csproj" />
+    <Project Path="tests/Mimi.Core.Tests/Mimi.Core.Tests.csproj" />
+  </Folder>
+</Solution>

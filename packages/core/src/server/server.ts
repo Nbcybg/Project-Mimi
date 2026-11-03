@@ -24,7 +24,8 @@ import type {
   WorkflowNode,
   WorkflowView,
 } from '@mimi/shared';
-import { NODE_TYPES } from '@mimi/shared';
+import { API_VERSION, CLOSE_CLIENT_TOO_OLD, MIN_CLIENT_API, NODE_TYPES, type PermissionScope } from '@mimi/shared';
+import { musicUploadDir } from '../mimiamp/library.ts';
 import { WebSocket, WebSocketServer } from 'ws';
 import { deleteAgent, saveAgent } from '../agents/loader.ts';
 import { classifyError } from '../errors.ts';
@@ -1121,6 +1122,22 @@ export async function startServer(
     reportJobs();
   };
 
+  /** A permission answer from the chat card or a notification button; false once it stopped waiting. */
+  const answerPermission = (requestId: string, allow: boolean, scope?: PermissionScope): boolean => {
+    // once = this call only; task = the trace; session = the chat; always = this machine.
+    if (allow && scope && scope !== 'once') {
+      const request = broker.pending().find((entry) => entry.id === requestId);
+      if (request) {
+        core.deps.gate.grant(request.traceId, request.tool, {
+          scope,
+          agent: request.agent,
+          ...(request.thread ? { thread: request.thread } : {}),
+        });
+      }
+    }
+    return broker.respond(requestId, allow);
+  };
+
   const handleClient = (socket: WebSocket, message: ClientMessage) => {
     const reply = (response: ServerMessage) => {
       let out = response;
@@ -1180,22 +1197,9 @@ export async function startServer(
           for (const controller of activeByChat.values()) controller.abort();
         }
         break;
-      case 'permission-response': {
-        const allow = message.allow === true;
-        // once = this call only; task = the trace; session = the chat; always = this machine.
-        if (allow && message.scope && message.scope !== 'once') {
-          const request = broker.pending().find((entry) => entry.id === message.requestId);
-          if (request) {
-            core.deps.gate.grant(request.traceId, request.tool, {
-              scope: message.scope,
-              agent: request.agent,
-              ...(request.thread ? { thread: request.thread } : {}),
-            });
-          }
-        }
-        broker.respond(message.requestId, allow);
+      case 'permission-response':
+        answerPermission(message.requestId, message.allow === true, message.scope);
         break;
-      }
       case 'permission-revoke': {
         // No agent (an older screen) means the old global list, never every agent: one × must
         // not wipe the same tool family from agents the user did not touch.
@@ -1776,6 +1780,14 @@ export async function startServer(
       case 'push-devices':
         reply({ type: 'push-devices', devices: core.notifications.devices() });
         break;
+      case 'native-push-register':
+        core.notifications.registerNative(message);
+        broadcast({ type: 'push-devices', devices: core.notifications.devices() });
+        break;
+      case 'native-push-unregister':
+        core.notifications.unregisterNative(String(message.token ?? ''));
+        broadcast({ type: 'push-devices', devices: core.notifications.devices() });
+        break;
       case 'push-test':
         void core.notifications
           .push({ id: 0, kind: 'reminder', title: 'ทดสอบแจ้งเตือน', body: 'ถ้าเห็นข้อความนี้ แปลว่าแจ้งเตือนเข้าเครื่องได้แล้ว ✓' })
@@ -2103,7 +2115,8 @@ export async function startServer(
         break;
       }
       default:
-        reply({ type: 'error', message: 'Unknown message type' });
+        // A newer client speaking to an older core: say which message this core does not know.
+        reply({ type: 'error', message: 'Unknown message type', code: 'E-PROTOCOL', requestType: String((message as { type?: unknown }).type ?? '') });
     }
   };
 
@@ -2187,6 +2200,31 @@ export async function startServer(
         });
       return { chats, busyChat: busyChatIds()[0] ?? null };
     },
+    notificationsAfter: (afterId: number) =>
+      core.notifications.after(afterId).map((item) => ({
+        id: item.id,
+        kind: item.kind,
+        title: item.title,
+        body: item.body,
+        chatId: item.chatId ?? null,
+        createdAt: item.createdAt,
+        read: item.read,
+      })),
+    nativePush: {
+      register: (registration: Parameters<typeof core.notifications.registerNative>[0]) => {
+        const result = core.notifications.registerNative(registration);
+        broadcast({ type: 'push-devices', devices: core.notifications.devices() });
+        return result;
+      },
+      unregister: (token: string) => {
+        const removed = core.notifications.unregisterNative(token);
+        if (removed) broadcast({ type: 'push-devices', devices: core.notifications.devices() });
+        return removed;
+      },
+    },
+    answerPermission,
+    decideApproval: (id: number, approved: boolean, note?: string) => core.approvals.decide(id, approved, note),
+    musicUploadDir: () => musicUploadDir(),
     notificationsSync: (since: string | null) => {
       const { items } = core.notifications.list(100);
       const start = since ? Date.parse(since) : 0;
@@ -2270,7 +2308,9 @@ export async function startServer(
   firstBackup.unref();
   const server = http.createServer(async (request, response) => {
     const url = new URL(request.url ?? '/', 'http://localhost');
-    if (request.method === 'GET' && serveWebFile(url.pathname, response, request.headers.range, core.mimiamp)) {
+    // Every answer says which client API this core speaks, so an app can tell before it parses anything.
+    response.setHeader('x-mimi-api', String(API_VERSION));
+    if (request.method === 'GET' && serveWebFile(url.pathname, response, request.headers.range, core.mimiamp, { web: config.serveWeb !== false })) {
       // the web client
     } else if (await serveCalendarPush(core.calendarSync, request, response)) {
       // a calendar provider notification or the Graph validation handshake
@@ -2291,7 +2331,7 @@ export async function startServer(
     } else if (request.method === 'GET' && url.pathname === '/health') {
       // Open to anyone (launcher, Docker/Railway health checks): nothing about use or the PC.
       response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-      response.end(JSON.stringify({ ok: true, version: APP_VERSION }));
+      response.end(JSON.stringify({ ok: true, version: APP_VERSION, api: API_VERSION, minClientApi: MIN_CLIENT_API }));
     } else {
       response.writeHead(404).end();
     }
@@ -2337,6 +2377,12 @@ export async function startServer(
         }
         limiter.succeed(address);
         clearTimeout(helloTimer);
+        // An app built for an API this core no longer serves is told to update, not left to misread frames.
+        const clientApi = (message.client as { api?: unknown } | undefined)?.api;
+        if (message.role !== 'pc' && typeof clientApi === 'number' && clientApi < MIN_CLIENT_API) {
+          socket.close(CLOSE_CLIENT_TOO_OLD, `update the app: this server needs client API ${MIN_CLIENT_API} or newer`);
+          return;
+        }
         if (message.role === 'pc') {
           role = 'pc';
           const hello = message as Extract<PcMessage, { type: 'hello' }>;
@@ -2358,6 +2404,9 @@ export async function startServer(
             busyChats: busyChatIds(),
             pendingPermissions: broker.pending(),
             ui: appSettings.ui,
+            version: APP_VERSION,
+            api: API_VERSION,
+            minClientApi: MIN_CLIENT_API,
           };
           socket.send(JSON.stringify(welcome));
         }
@@ -2374,7 +2423,15 @@ export async function startServer(
         // A rejected setting or memory write is the client's to show, not a reason to drop it.
         const clientId = message.type === 'chat-send' && typeof message.clientId === 'string' ? message.clientId : undefined;
         const classified = classifyError(error);
-        socket.send(JSON.stringify({ type: 'error', message: classified.message, code: classified.code, ...(clientId ? { clientId } : {}) } satisfies ServerMessage));
+        socket.send(
+          JSON.stringify({
+            type: 'error',
+            message: classified.message,
+            code: classified.code,
+            ...(clientId ? { clientId } : {}),
+            ...(typeof message.type === 'string' ? { requestType: message.type } : {}),
+          } satisfies ServerMessage),
+        );
       }
     });
 

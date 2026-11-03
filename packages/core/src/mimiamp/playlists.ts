@@ -1,41 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import type { MimiampTrack, MimiampTrackSource } from './library.ts';
+import type { MimiampPlaylist, MimiampPlaylistExport, MimiampPlaylistItem, MimiampTrack, MimiampTrackSource } from '@mimi/shared';
 
-/** One song in a playlist. The title and artist are kept so an exported list still makes sense elsewhere. */
-export interface MimiampPlaylistItem {
-  id: string;
-  /** The library track it points at, when it came from the library. */
-  trackId?: string;
-  source: MimiampTrackSource | 'local';
-  file?: string;
-  videoId?: string;
-  /** A file on the listener's own device (never uploaded to the server). */
-  localId?: string;
-  title: string;
-  artist?: string;
-  album?: string;
-  /** Seconds. */
-  duration?: number;
-  thumbnail?: string;
-  addedAt: string;
-}
-
-export interface MimiampPlaylist {
-  id: string;
-  name: string;
-  createdAt: string;
-  updatedAt: string;
-  items: MimiampPlaylistItem[];
-}
-
-export interface MimiampPlaylistExport {
-  format: 'mimiamp-playlist';
-  version: 1;
-  exportedAt: string;
-  playlist: Omit<MimiampPlaylist, 'id'>;
-}
+export type { MimiampPlaylist, MimiampPlaylistExport, MimiampPlaylistItem } from '@mimi/shared';
 
 const MAX_NAME = 80;
 const MAX_TITLE = 300;

@@ -30,7 +30,15 @@ backups/
 android/.gradle/
 android/build/
 android/app/build/
+android/**/build/
+android/.kotlin/
 android/local.properties
 *.p12
 *.keystore
 *.jks
+
+# Windows native app (apps/windows) build output
+apps/windows/**/bin/
+apps/windows/**/obj/
+apps/windows/**/TestResults/
+*.user

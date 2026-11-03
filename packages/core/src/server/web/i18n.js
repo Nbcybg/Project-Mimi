@@ -49,7 +49,7 @@
     'pins.viewAll': 'ดูทั้งหมด',
     emoji: 'อิโมจิ',
 
-    'voice.slide': '‹ เลื่อนซ้ายเพื่อยกเลิก',
+    'voice.slide': '‹ เลื่อนออกด้านข้างเพื่อยกเลิก ›',
     'voice.armed': '🗑 ปล่อยเพื่อยกเลิก',
     'voice.tapStop': 'แตะไมค์เพื่อหยุด',
     'voice.cancel': '✕ ยกเลิก',
@@ -140,7 +140,7 @@
     'pins.viewAll': 'View all',
     emoji: 'Emoji',
 
-    'voice.slide': '‹ Slide left to cancel',
+    'voice.slide': '‹ Slide sideways to cancel ›',
     'voice.armed': '🗑 Release to cancel',
     'voice.tapStop': 'Tap the mic to stop',
     'voice.cancel': '✕ Cancel',

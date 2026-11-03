@@ -2,7 +2,7 @@
 // Mimi Workspace: a separate window with a browser, a folder tree and a terminal.
 // It is opened from the tray menu or Settings; the window talks to this process over IPC.
 
-const { BrowserWindow, dialog, ipcMain, shell } = require('electron');
+const { BrowserWindow, clipboard, dialog, ipcMain, nativeImage, shell, webContents } = require('electron');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -286,7 +286,11 @@ function createWindow(options = {}) {
   });
 }
 
+/** The chat window's way in: set by the shell that opened the Workspace (main.cjs or remote.cjs). */
+let sendToChat = null;
+
 function openWorkspace(options = {}) {
+  sendToChat = typeof options.sendToChat === 'function' ? options.sendToChat : null;
   if (win && !win.isDestroyed()) {
     if (win.isMinimized()) win.restore();
     win.show();
@@ -335,6 +339,40 @@ function wire() {
     } catch {
       // shell closed
     }
+  });
+  // Annotating a page: the snapshot is taken here (the guest page's own compositor), and the
+  // finished picture goes to the clipboard, a file, or the chat.
+  const fromBase64 = (value) => (typeof value === 'string' && value.length < 60_000_000 ? Buffer.from(value, 'base64') : null);
+  ipcMain.handle('workspace:capture', async (event, guestId) => {
+    const guest = webContents.fromId(Number(guestId));
+    // Only a page hosted inside this Workspace window.
+    if (!guest || guest.hostWebContents !== event.sender) return null;
+    const image = await guest.capturePage();
+    const size = image.getSize();
+    return { png: image.toPNG().toString('base64'), width: size.width, height: size.height };
+  });
+  ipcMain.handle('workspace:annot-copy', (_event, data) => {
+    const buffer = fromBase64(data);
+    if (!buffer) return false;
+    const image = nativeImage.createFromBuffer(buffer);
+    if (image.isEmpty()) return false;
+    clipboard.writeImage(image);
+    return true;
+  });
+  ipcMain.handle('workspace:annot-save', async (event, data, name) => {
+    const buffer = fromBase64(data);
+    if (!buffer) return '';
+    const owner = BrowserWindow.fromWebContents(event.sender);
+    const safe = String(name || 'page.png').replace(/[^\w.\-\u0E00-\u0E7F]+/g, '_').slice(0, 80) || 'page.png';
+    const result = await dialog.showSaveDialog(owner, { defaultPath: path.join(root || os.homedir(), safe), filters: [{ name: 'PNG', extensions: ['png'] }] });
+    if (result.canceled || !result.filePath) return '';
+    fs.writeFileSync(result.filePath, buffer);
+    return result.filePath;
+  });
+  ipcMain.handle('workspace:annot-send', (_event, data, name) => {
+    const buffer = fromBase64(data);
+    if (!buffer || !sendToChat) return false;
+    return Boolean(sendToChat(String(name || 'page.png'), data));
   });
   ipcMain.handle('workspace:open-external', (_event, raw) => {
     let parsed;

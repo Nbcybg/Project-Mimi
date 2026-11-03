@@ -42,11 +42,17 @@
       <button class="icon" id="back" type="button" title="ย้อนกลับ">←</button>
       <button class="icon" id="forward" type="button" title="ถัดไป">→</button>
       <button class="icon" id="reload" type="button" title="โหลดใหม่">⟳</button>
+      <button class="icon" id="annotate" type="button" title="วาด / ทำเครื่องหมายบนหน้าเว็บ">✎</button>
       <input id="url" placeholder="Type a URL" spellcheck="false" autocomplete="off">
       <button class="mini" id="go" type="button">ไป</button>
     </div>
     <div class="browser-body">
       <webview id="view" partition="persist:mimi-workspace" src="about:blank"></webview>
+      <div class="annot" id="annot" hidden>
+        <img id="annot-shot" alt="" draggable="false">
+        <canvas id="annot-canvas"></canvas>
+        <div class="annot-bar" id="annot-bar" role="toolbar" aria-label="เครื่องมือวาด"></div>
+      </div>
       <div class="browse-empty" id="browse-empty">
         <div class="globe">◍</div>
         <b>Browse the web</b>
@@ -72,5 +78,6 @@
   </aside>
 </div>
 <script src="workspace.js"></script>
+<script src="workspace-annotate.js"></script>
 </body>
 </html>

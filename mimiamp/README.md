@@ -1,7 +1,8 @@
 # Mimiamp music (this project)
 
-Put audio files here to use them as Mimiamp's library from the sources, Docker, or a
-deployment built from this folder. The app reads this folder before the built-in demo in
+Put audio files here to use them as Mimiamp's library when running from the sources. The
+Docker image no longer copies this folder: on a server the songs live on the volume in
+`<user>/mimiamp` (see `docs/hosting.md`, "เพลงของ Mimiamp บนเซิร์ฟเวอร์"). The app reads this folder before the built-in demo in
 `packages/core/src/server/web/mimiamp/`.
 
 - Supported: `.mp3`, `.m4a`, `.aac`, `.ogg`, `.oga`, `.opus`, `.wav`, `.flac`, `.webm`

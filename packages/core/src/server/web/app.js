@@ -2650,6 +2650,7 @@
   function closePhotoReview(revoke = true) {
     if (!photoReview) return;
     if (revoke) for (const entry of photoReview.entries) if (entry.url) URL.revokeObjectURL(entry.url);
+    document.removeEventListener('keydown', photoReview.onKey);
     photoReview.scrim.remove();
     photoReview = null;
   }
@@ -2660,134 +2661,356 @@
         : image,
     );
     if (photoReview) {
-      // More pictures picked while the sheet is open join it; the first caption sheet stays.
+      // More pictures picked while the sheet is open join it, and the grid shows them.
       for (const entry of entries) if (!photoReview.entries.some((known) => known.file === entry.file)) photoReview.entries.push(entry);
-      photoReview.index = Math.max(0, photoReview.entries.length - entries.length);
+      photoReview.view = 'grid';
       renderPhotoReview();
       return;
     }
-    photoReview = { chatId: state.chat && state.chat.id, entries, index: 0, separate: false, sharedCaption: '', scrim: null, refs: {} };
+    // One picture opens straight in the viewer (like a camera shot); several open as a grid to tick.
+    photoReview = { chatId: state.chat && state.chat.id, entries, index: 0, view: entries.length > 1 ? 'grid' : 'viewer', separate: false, sharedCaption: '', scrim: null, refs: {}, focusCaption: Boolean(options.caption) };
     const scrim = el('div', 'photo-scrim');
     const dialog = el('div', 'photo-review');
     scrim.append(dialog);
-    scrim.onclick = (event) => {
-      if (event.target === scrim) closePhotoReview();
-    };
     document.body.append(scrim);
     photoReview.scrim = scrim;
     photoReview.dialog = dialog;
+    photoReview.onKey = (event) => {
+      if (event.key !== 'Escape' || !photoReview) return;
+      if (photoReview.view === 'viewer' && photoReview.entries.length > 1) {
+        photoReview.view = 'grid';
+        renderPhotoReview();
+      } else closePhotoReview();
+    };
+    document.addEventListener('keydown', photoReview.onKey);
     renderPhotoReview();
-    requestAnimationFrame(() => photoReview && photoReview.refs.caption && photoReview.refs.caption.focus());
+  }
+  /** Sends the ticked pictures: one message with a shared caption, or one each with their own. */
+  function sendPhotoReview() {
+    const review = photoReview;
+    if (!review) return;
+    const chosen = review.entries.filter((entry) => entry.selected);
+    if (chosen.length === 0) return toast('ยังไม่ได้เลือกรูป', 'แตะวงกลมมุมขวาบนของรูปก่อน', true);
+    if (!review.separate) {
+      const text = review.sharedCaption.trim();
+      for (const entry of chosen) entry.caption = text;
+      const pending = createPending(review.chatId, '', chosen, null);
+      pending.message.pendingStatus = 'กำลังอัปโหลด…';
+      closePhotoReview(false);
+      void sendPhotoPending([pending]);
+    } else {
+      const pendings = chosen.map((entry) => createPending(review.chatId, '', [entry], null));
+      closePhotoReview(false);
+      void sendPhotoPending(pendings);
+    }
+  }
+  /** The caption line and the send button, pinned at the bottom of both views. */
+  function photoReviewBar(review) {
+    const bar = el('div', 'pr-bar');
+    const caption = el('textarea', 'pr-caption');
+    caption.rows = 1;
+    caption.maxLength = 500;
+    const sync = () => {
+      const current = review.entries[review.index];
+      caption.value = review.separate ? (current && current.caption) || '' : review.sharedCaption || '';
+      caption.placeholder = review.separate ? 'คำบรรยายของรูปนี้…' : review.entries.length > 1 ? 'เพิ่มคำบรรยายให้ทุกรูป…' : 'เพิ่มคำบรรยาย…';
+    };
+    sync();
+    const fit = () => {
+      caption.style.height = 'auto';
+      caption.style.height = `${Math.min(110, caption.scrollHeight)}px`;
+    };
+    caption.oninput = () => {
+      const current = review.entries[review.index];
+      if (review.separate && current) current.caption = caption.value;
+      else review.sharedCaption = caption.value;
+      fit();
+    };
+    review.refs.caption = caption;
+    review.refs.syncCaption = sync;
+    const count = el('span', 'pr-count');
+    const send = el('button', 'pr-send');
+    send.setAttribute('aria-label', 'ส่ง');
+    send.innerHTML = ICONS.send || svg('<path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4z"/>');
+    send.append(count);
+    send.onclick = sendPhotoReview;
+    review.refs.count = count;
+    review.refs.send = send;
+    const left = el('div', 'pr-barleft');
+    left.append(caption);
+    if (review.entries.length > 1) {
+      const mode = button(`pr-mode${review.separate ? ' on' : ''}`, review.separate ? 'แยกทีละรูป' : 'รวมเป็นข้อความเดียว', () => {
+        review.separate = !review.separate;
+        mode.textContent = review.separate ? 'แยกทีละรูป' : 'รวมเป็นข้อความเดียว';
+        mode.classList.toggle('on', review.separate);
+        sync();
+      }, 'สลับระหว่างคำบรรยายเดียวกับทุกรูป และคำบรรยายแยกทีละรูป');
+      left.append(mode);
+    }
+    bar.append(left, send);
+    refreshPhotoCount(review);
+    return bar;
+  }
+  function refreshPhotoCount(review) {
+    const chosen = review.entries.filter((entry) => entry.selected).length;
+    if (review.refs.count) {
+      review.refs.count.textContent = chosen > 1 || review.entries.length > 1 ? String(chosen) : '';
+      review.refs.count.hidden = review.entries.length < 2;
+    }
+    if (review.refs.send) review.refs.send.disabled = chosen === 0;
+    if (review.refs.title) review.refs.title.textContent = review.view === 'grid' ? `เลือกแล้ว ${chosen} จาก ${review.entries.length}` : `${review.index + 1} / ${review.entries.length}`;
   }
   function renderPhotoReview() {
     const review = photoReview;
     if (!review) return;
-    const dialog = review.dialog;
-    dialog.replaceChildren();
-    const current = review.entries[review.index] || review.entries[0];
-    if (!current) return closePhotoReview();
+    review.refs = {};
+    review.dialog.replaceChildren();
+    if (review.entries.length === 0) return closePhotoReview();
+    review.index = Math.min(review.index, review.entries.length - 1);
+    if (review.view === 'viewer') renderPhotoViewer(review);
+    else renderPhotoGrid(review);
+  }
+  function renderPhotoGrid(review) {
     const head = el('div', 'pr-head');
-    const title = el('b', '', `รูป ${review.index + 1}/${review.entries.length}`);
-    head.append(title, button('btn ghost', '✕', () => closePhotoReview(), 'ปิด'));
-    const stage = el('div', 'pr-stage');
-    const image = el('img');
-    image.src = current.url;
-    image.alt = current.file.name;
-    const tick = button(`pr-tick${current.selected ? ' on' : ''}`, current.selected ? '✓' : '', () => {
-      current.selected = !current.selected;
-      renderPhotoReview();
-    }, current.selected ? 'รูปนี้จะถูกส่ง — แตะเพื่อไม่ส่ง' : 'รูปนี้ไม่ถูกส่ง — แตะเพื่อเลือก');
-    stage.append(image, tick);
-    if (review.entries.length > 1) {
-      stage.append(
-        button('btn ghost pr-prev', '‹', () => {
-          review.index = (review.index - 1 + review.entries.length) % review.entries.length;
-          renderPhotoReview();
-        }),
-        button('btn ghost pr-next', '›', () => {
-          review.index = (review.index + 1) % review.entries.length;
-          renderPhotoReview();
-        }),
-      );
-      let start = null;
-      stage.addEventListener('touchstart', (event) => {
-        const touch = event.touches[0];
-        start = touch ? { x: touch.clientX, y: touch.clientY } : null;
-      }, { passive: true });
-      stage.addEventListener('touchend', (event) => {
-        const touch = event.changedTouches[0];
-        if (!start || !touch) return;
-        const dx = touch.clientX - start.x;
-        const dy = touch.clientY - start.y;
-        start = null;
-        if (Math.abs(dx) < 45 || Math.abs(dx) < Math.abs(dy)) return;
-        review.index = (review.index + (dx < 0 ? 1 : -1) + review.entries.length) % review.entries.length;
-        renderPhotoReview();
-      }, { passive: true });
-    }
-    const thumbs = el('div', 'pr-thumbs');
-    review.entries.forEach((entry, index) => {
-      const thumb = button(`pr-thumb${index === review.index ? ' on' : ''}${entry.selected ? ' pick' : ''}`, null, () => {
-        review.index = index;
-        renderPhotoReview();
-      });
-      const small = el('img');
-      small.src = entry.url;
-      small.alt = entry.file.name;
-      thumb.append(small, el('span', 'pr-check', entry.selected ? '✓' : ''));
-      thumbs.append(thumb);
-    });
-    const foot = el('div', 'pr-foot');
-    if (review.entries.length > 1) {
-      const modes = el('div', 'hstack');
-      modes.append(
-        button(`btn ${review.separate ? 'ghost' : 'pri'}`, 'รวมเป็นข้อความเดียว', () => {
-          review.separate = false;
-          renderPhotoReview();
-        }, 'ใช้คำบรรยายเดียวกับทุกรูปที่เลือก'),
-        button(`btn ${review.separate ? 'pri' : 'ghost'}`, 'แยกทีละรูป', () => {
-          review.separate = true;
-          renderPhotoReview();
-        }, 'แต่ละรูปมีคำบรรยายของตัวเอง และส่งเป็นคนละ turn'),
-      );
-      foot.append(modes);
-    }
-    const caption = el('textarea');
-    caption.className = 'pr-caption';
-    caption.rows = 2;
-    caption.maxLength = 500;
-    caption.placeholder = review.separate
-      ? 'คำบรรยายของรูปนี้ (ไม่ใส่ก็ได้)'
-      : review.entries.length > 1
-        ? 'คำบรรยายรวมของทุกรูปที่เลือก (ไม่ใส่ก็ได้)'
-        : 'คำบรรยายของรูปนี้ (ไม่ใส่ก็ได้)';
-    caption.value = review.separate ? current.caption || '' : review.sharedCaption || '';
-    caption.oninput = () => {
-      if (review.separate) current.caption = caption.value;
-      else review.sharedCaption = caption.value;
+    const title = el('b');
+    review.refs.title = title;
+    const more = el('input');
+    more.type = 'file';
+    more.accept = 'image/*';
+    more.multiple = true;
+    more.hidden = true;
+    more.onchange = () => {
+      const files = [...more.files];
+      more.value = '';
+      if (files.length > 0) stageFiles(files);
     };
-    review.refs.caption = caption;
-    const selected = review.entries.filter((entry) => entry.selected);
-    const send = button('btn pri', review.separate && selected.length > 1 ? `ส่ง ${selected.length} ข้อความ` : 'ส่ง', () => {
-      const chosen = review.entries.filter((entry) => entry.selected);
-      if (chosen.length === 0) return toast('ยังไม่ได้เลือกรูป', 'แตะติ๊กมุมขวาบนของรูปก่อน', true);
-      if (!review.separate) {
-        const text = review.sharedCaption.trim();
-        for (const entry of chosen) entry.caption = text;
-        const pending = createPending(review.chatId, '', chosen, null);
-        pending.message.pendingStatus = 'กำลังอัปโหลด…';
-        closePhotoReview(false);
-        void sendPhotoPending([pending]);
-      } else {
-        const pendings = chosen.map((entry) => createPending(review.chatId, '', [entry], null));
-        closePhotoReview(false);
-        void sendPhotoPending(pendings);
+    head.append(
+      button('pr-round', '✕', () => closePhotoReview(), 'ยกเลิก'),
+      title,
+      button('pr-add', '＋ เพิ่มรูป', () => more.click(), 'เลือกรูปเพิ่ม'),
+      more,
+    );
+    const grid = el('div', 'pr-grid');
+    review.entries.forEach((entry, index) => {
+      const tile = el('div', `pr-tile${entry.selected ? ' on' : ''}`);
+      const open = el('button', 'pr-open');
+      open.setAttribute('aria-label', `ดูรูป ${index + 1}`);
+      const image = el('img');
+      image.src = entry.url;
+      image.alt = entry.file.name;
+      image.loading = 'lazy';
+      open.append(image);
+      open.onclick = () => {
+        review.index = index;
+        review.view = 'viewer';
+        renderPhotoReview();
+      };
+      const tick = el('button', 'pr-badge');
+      tick.setAttribute('aria-label', 'เลือก / ไม่เลือกรูปนี้');
+      const paint = () => {
+        const order = review.entries.filter((other) => other.selected).indexOf(entry) + 1;
+        tick.textContent = entry.selected ? String(order) : '';
+        tile.classList.toggle('on', entry.selected);
+      };
+      tick.onclick = () => {
+        entry.selected = !entry.selected;
+        for (const repaint of review.refs.paints || []) repaint();
+        refreshPhotoCount(review);
+      };
+      (review.refs.paints = review.refs.paints || []).push(paint);
+      paint();
+      tile.append(open, tick);
+      grid.append(tile);
+    });
+    review.dialog.append(head, grid, photoReviewBar(review));
+    refreshPhotoCount(review);
+  }
+  function renderPhotoViewer(review) {
+    const many = review.entries.length > 1;
+    const head = el('div', 'pr-vhead');
+    const title = el('b');
+    review.refs.title = title;
+    const tick = el('button', 'pr-tickbtn');
+    const paintTick = () => {
+      const current = review.entries[review.index];
+      tick.classList.toggle('on', current.selected);
+      tick.textContent = current.selected ? '✓' : '';
+      tick.setAttribute('aria-label', current.selected ? 'รูปนี้จะถูกส่ง — แตะเพื่อไม่ส่ง' : 'รูปนี้ไม่ถูกส่ง — แตะเพื่อเลือก');
+    };
+    tick.onclick = () => {
+      const current = review.entries[review.index];
+      current.selected = !current.selected;
+      paintTick();
+      refreshPhotoCount(review);
+    };
+    head.append(
+      button('pr-round', many ? '‹' : '✕', () => {
+        if (many) {
+          review.view = 'grid';
+          renderPhotoReview();
+        } else closePhotoReview();
+      }, many ? 'กลับไปหน้ารวมรูป' : 'ยกเลิก'),
+      title,
+      many ? tick : el('span'),
+    );
+    const stage = el('div', 'pr-vstage');
+    const image = el('img', 'pr-vimg');
+    image.draggable = false;
+    stage.append(image);
+    const zoom = { s: 1, x: 0, y: 0 };
+    const apply = () => {
+      image.style.transform = `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.s})`;
+      stage.classList.toggle('zoomed', zoom.s > 1.02);
+    };
+    const bound = () => {
+      if (zoom.s <= 1) {
+        zoom.x = 0;
+        zoom.y = 0;
+        return;
+      }
+      const box = stage.getBoundingClientRect();
+      const mx = (box.width * (zoom.s - 1)) / 2;
+      const my = (box.height * (zoom.s - 1)) / 2;
+      zoom.x = Math.max(-mx, Math.min(mx, zoom.x));
+      zoom.y = Math.max(-my, Math.min(my, zoom.y));
+    };
+    const show = (index) => {
+      review.index = (index + review.entries.length) % review.entries.length;
+      const current = review.entries[review.index];
+      image.src = current.url;
+      image.alt = current.file.name;
+      zoom.s = 1;
+      zoom.x = 0;
+      zoom.y = 0;
+      apply();
+      paintTick();
+      refreshPhotoCount(review);
+      if (review.refs.syncCaption) review.refs.syncCaption();
+      for (const [at, thumb] of (review.refs.thumbs || []).entries()) thumb.classList.toggle('on', at === review.index);
+      const active = review.refs.thumbs && review.refs.thumbs[review.index];
+      if (active && active.scrollIntoView) active.scrollIntoView({ block: 'nearest', inline: 'center' });
+    };
+    if (many) {
+      stage.append(button('pr-nav pr-prev', '‹', () => show(review.index - 1), 'รูปก่อนหน้า'), button('pr-nav pr-next', '›', () => show(review.index + 1), 'รูปถัดไป'));
+    }
+    // Pinch or wheel to zoom, drag to look around, double-tap to jump in or out; at normal size a sideways swipe turns the page.
+    const pointers = new Map();
+    let pinch = null;
+    let drag = null;
+    let lastTap = 0;
+    stage.addEventListener('pointerdown', (event) => {
+      if (event.target.closest('.pr-nav')) return;
+      pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      try {
+        stage.setPointerCapture(event.pointerId);
+      } catch {
+        // synthetic pointer
+      }
+      if (pointers.size === 2) {
+        const [a, b] = [...pointers.values()];
+        pinch = { dist: Math.hypot(a.x - b.x, a.y - b.y) || 1, scale: zoom.s };
+        drag = null;
+      } else if (pointers.size === 1) {
+        drag = { x: event.clientX, y: event.clientY, startX: event.clientX, startY: event.clientY, t: Date.now(), moved: 0 };
       }
     });
-    const actions = el('div', 'hstack');
-    actions.append(button('btn ghost', 'ยกเลิก', () => closePhotoReview()), send);
-    foot.append(caption, actions);
-    dialog.append(head, stage, thumbs, foot);
+    stage.addEventListener('pointermove', (event) => {
+      const known = pointers.get(event.pointerId);
+      if (!known) return;
+      known.x = event.clientX;
+      known.y = event.clientY;
+      if (pinch && pointers.size >= 2) {
+        const [a, b] = [...pointers.values()];
+        zoom.s = Math.max(1, Math.min(6, (pinch.scale * (Math.hypot(a.x - b.x, a.y - b.y) || 1)) / pinch.dist));
+        bound();
+        apply();
+      } else if (drag) {
+        const dx = event.clientX - drag.x;
+        const dy = event.clientY - drag.y;
+        drag.moved += Math.abs(dx) + Math.abs(dy);
+        drag.x = event.clientX;
+        drag.y = event.clientY;
+        if (zoom.s > 1) {
+          zoom.x += dx;
+          zoom.y += dy;
+          bound();
+          apply();
+        }
+      }
+    });
+    const lift = (event) => {
+      if (!pointers.has(event.pointerId)) return;
+      pointers.delete(event.pointerId);
+      if (pinch) {
+        if (pointers.size < 2) pinch = null;
+        if (zoom.s < 1.05) {
+          zoom.s = 1;
+          bound();
+          apply();
+        }
+        if (pointers.size === 1) {
+          const [rest] = [...pointers.values()];
+          drag = { x: rest.x, y: rest.y, startX: rest.x, startY: rest.y, t: Date.now(), moved: 99 };
+        } else drag = null;
+        return;
+      }
+      if (!drag || event.type === 'pointercancel') {
+        drag = null;
+        return;
+      }
+      const dx = event.clientX - drag.startX;
+      const dy = event.clientY - drag.startY;
+      const finished = drag;
+      drag = null;
+      if (zoom.s <= 1.02 && many && Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.4) return show(review.index + (dx < 0 ? 1 : -1));
+      if (finished.moved < 10 && Date.now() - finished.t < 300) {
+        const now = Date.now();
+        if (now - lastTap < 320) {
+          lastTap = 0;
+          if (zoom.s > 1.02) {
+            zoom.s = 1;
+            zoom.x = 0;
+            zoom.y = 0;
+          } else {
+            const box = stage.getBoundingClientRect();
+            zoom.s = 2.5;
+            zoom.x = (box.left + box.width / 2 - event.clientX) * 1.5;
+            zoom.y = (box.top + box.height / 2 - event.clientY) * 1.5;
+            bound();
+          }
+          apply();
+        } else lastTap = now;
+      }
+    };
+    stage.addEventListener('pointerup', lift);
+    stage.addEventListener('pointercancel', lift);
+    stage.addEventListener('wheel', (event) => {
+      event.preventDefault();
+      zoom.s = Math.max(1, Math.min(6, zoom.s * Math.exp(-event.deltaY * 0.0022)));
+      bound();
+      apply();
+    }, { passive: false });
+    review.dialog.append(head, stage);
+    if (many) {
+      const strip = el('div', 'pr-strip');
+      review.refs.thumbs = review.entries.map((entry, index) => {
+        const thumb = el('button', 'pr-thumb');
+        const small = el('img');
+        small.src = entry.url;
+        small.alt = '';
+        thumb.append(small);
+        thumb.onclick = () => show(index);
+        strip.append(thumb);
+        return thumb;
+      });
+      review.dialog.append(strip);
+    }
+    review.dialog.append(photoReviewBar(review));
+    show(review.index);
+    if (review.focusCaption && review.refs.caption) {
+      review.focusCaption = false;
+      requestAnimationFrame(() => review.refs.caption && review.refs.caption.focus());
+    }
   }
   async function sendPhotoPending(pendings) {
     window.MimiHooks?.notify?.chatSound('sent');
@@ -2916,8 +3139,9 @@
   });
   $('send').onclick = sendMessage;
   $('stop').onclick = () => send({ type: 'abort', chatId: state.chat && state.chat.id });
-  // The attach button. With a finger: a tap opens the camera, a long press the list (picture, file,
-  // sound, video). With a mouse: a click opens the list.
+  // The attach button. With a finger: press and hold, big buttons come up above it, slide to one and
+  // let go (a short tap opens the same buttons to tap). With a mouse: a click opens a list, which also
+  // has "add folder".
   const cameraInput = el('input');
   cameraInput.type = 'file';
   cameraInput.accept = 'image/*';
@@ -2928,45 +3152,168 @@
     stageFiles(event.target.files, { caption: true });
     event.target.value = '';
   };
-  if (window.matchMedia('(pointer: coarse)').matches) $('attach').title = t('composer.attachTouch');
+  const folderInput = el('input');
+  folderInput.type = 'file';
+  folderInput.multiple = true;
+  folderInput.setAttribute('webkitdirectory', '');
+  folderInput.hidden = true;
+  $('file-input').after(folderInput);
+  /** A folder's files: the visible ones, at most 20 (the most one message takes), subfolders included. */
+  folderInput.onchange = (event) => {
+    const all = [...event.target.files].filter((file) => !file.name.startsWith('.') && !/(^|\/)\.[^/]/.test(file.webkitRelativePath || ''));
+    event.target.value = '';
+    if (all.length === 0) return toast('โฟลเดอร์นี้ไม่มีไฟล์', 'ลองเลือกโฟลเดอร์อื่น', true);
+    const room = Math.max(0, 20 - state.staged.length);
+    const take = all.slice(0, Math.max(1, room));
+    if (all.length > take.length) toast(`แนบได้ ${take.length} จาก ${all.length} ไฟล์`, 'ส่งชุดนี้ก่อน แล้วค่อยแนบไฟล์ที่เหลือ', true);
+    stageFiles(take);
+  };
+  const quickItems = [
+    { key: 'image', label: 'รูปภาพ', hint: 'เลือกได้หลายรูป', accept: 'image/*', icon: svg('<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/>') },
+    { key: 'camera', label: 'ถ่ายรูป', hint: 'เปิดกล้อง', camera: true, icon: svg('<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/>') },
+    { key: 'file', label: 'ไฟล์ / เอกสาร', hint: 'PDF, TXT, MD, …', accept: '', icon: svg('<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>') },
+    { key: 'audio', label: 'ไฟล์เสียง', hint: '', accept: 'audio/*', icon: svg('<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>') },
+    { key: 'video', label: 'วิดีโอ', hint: 'ไม่เกิน 25 MB', accept: 'video/*', icon: svg('<polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/>') },
+  ];
+  const pickItem = (item) => {
+    if (item.camera) return cameraInput.click();
+    $('file-input').accept = item.accept;
+    $('file-input').click();
+  };
+  // Desktop list: the same choices plus the folder.
+  const menu = $('attach-menu');
+  menu.replaceChildren(
+    ...quickItems.map((item) => {
+      const row = button('', null, () => {
+        menu.hidden = true;
+        pickItem(item);
+      });
+      row.append(el('span', 'mi', ''), item.label);
+      row.firstChild.innerHTML = item.icon;
+      if (item.hint) row.append(el('small', '', item.hint));
+      return row;
+    }),
+  );
+  if (!window.matchMedia('(pointer: coarse)').matches) {
+    const folder = button('', null, () => {
+      menu.hidden = true;
+      folderInput.click();
+    });
+    const icon = el('span', 'mi', '');
+    icon.innerHTML = svg('<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>');
+    folder.append(icon, 'เพิ่มโฟลเดอร์', el('small', '', 'ทุกไฟล์ในโฟลเดอร์'));
+    menu.append(folder);
+  }
+
+  // Touch: the big buttons.
+  let quick = null; // { node, items: [{ item, node }], hover, hold }
+  const closeQuick = () => {
+    if (!quick) return;
+    quick.node.remove();
+    quick = null;
+    $('attach').classList.remove('pressing');
+  };
+  const quickHit = (x, y) => {
+    if (!quick) return null;
+    // Within the pill, any height counts as the nearest row, so a slightly sideways finger still picks.
+    const rect = quick.node.getBoundingClientRect();
+    if (x < rect.left - 40 || x > rect.right + 40 || y < rect.top - 10 || y > rect.bottom + 10) return null;
+    for (const entry of quick.items) {
+      const box = entry.node.getBoundingClientRect();
+      if (y >= box.top - 3 && y <= box.bottom + 3) return entry;
+    }
+    return null;
+  };
+  const quickHover = (entry) => {
+    if (!quick || quick.hover === entry) return;
+    if (quick.hover) quick.hover.node.classList.remove('hot');
+    quick.hover = entry;
+    if (entry) {
+      entry.node.classList.add('hot');
+      if (navigator.vibrate) navigator.vibrate(8);
+    }
+  };
+  const openQuick = (hold) => {
+    closeQuick();
+    const node = el('div', 'attach-quick');
+    node.setAttribute('role', 'menu');
+    const items = quickItems.map((item) => {
+      const row = el('button', 'aq-item');
+      row.setAttribute('role', 'menuitem');
+      const dot = el('span', 'aq-dot');
+      dot.innerHTML = item.icon;
+      row.append(dot, el('span', 'aq-label', item.label));
+      row.onclick = (event) => {
+        event.stopPropagation();
+        closeQuick();
+        pickItem(item);
+      };
+      return { item, node: row };
+    });
+    // The first choice sits nearest the finger: the stack is built upwards from the button.
+    node.append(...items.map((entry) => entry.node).reverse());
+    document.body.append(node);
+    const anchor = $('attach').getBoundingClientRect();
+    node.style.left = `${Math.max(10, Math.min(anchor.left, window.innerWidth - node.offsetWidth - 10))}px`;
+    node.style.bottom = `${Math.max(10, window.innerHeight - anchor.top + 12)}px`;
+    quick = { node, items, hover: null, hold };
+    $('attach').classList.add('pressing');
+  };
   let attachTouch = false;
   let attachLong = false;
   let attachTimer = null;
-  $('attach').addEventListener('pointerdown', (event) => {
+  const attach = $('attach');
+  attach.addEventListener('pointerdown', (event) => {
     attachLong = false;
-    attachTouch = event.pointerType === 'touch';
+    attachTouch = event.pointerType !== 'mouse';
     if (!attachTouch) return;
+    try {
+      attach.setPointerCapture(event.pointerId);
+    } catch {
+      // synthetic pointer
+    }
+    clearTimeout(attachTimer);
     attachTimer = setTimeout(() => {
       attachLong = true;
-      $('attach-menu').hidden = false;
+      openQuick(true);
       if (navigator.vibrate) navigator.vibrate(15);
-    }, 450);
+    }, 320);
   });
-  for (const type of ['pointerup', 'pointercancel', 'pointerleave']) $('attach').addEventListener(type, () => clearTimeout(attachTimer));
-  $('attach').addEventListener('contextmenu', (event) => event.preventDefault());
-  $('attach').onclick = (event) => {
+  attach.addEventListener('pointermove', (event) => {
+    if (!quick || !quick.hold) return;
+    quickHover(quickHit(event.clientX, event.clientY));
+  });
+  attach.addEventListener('pointerup', (event) => {
+    clearTimeout(attachTimer);
+    if (!quick || !quick.hold) return;
+    // Let go over a button: that one; anywhere else: nothing, the list just closes.
+    const entry = quickHit(event.clientX, event.clientY);
+    closeQuick();
+    if (entry) pickItem(entry.item);
+  });
+  attach.addEventListener('pointercancel', () => {
+    clearTimeout(attachTimer);
+    if (quick && quick.hold) closeQuick();
+  });
+  attach.addEventListener('contextmenu', (event) => event.preventDefault());
+  attach.onclick = (event) => {
     event.stopPropagation();
     if (attachLong) {
-      attachLong = false; // the list is already open
+      attachLong = false; // the hold already did its job
       return;
     }
-    if (attachTouch && event.detail !== 0) cameraInput.click();
-    else $('attach-menu').hidden = !$('attach-menu').hidden;
+    if (attachTouch && event.detail !== 0) {
+      if (quick) closeQuick();
+      else openQuick(false);
+    } else menu.hidden = !menu.hidden;
   };
-  for (const item of $('attach-menu').querySelectorAll('button')) {
-    item.onclick = () => {
-      $('attach-menu').hidden = true;
-      if (item.dataset.camera) return cameraInput.click();
-      $('file-input').accept = item.dataset.pick;
-      $('file-input').click();
-    };
-  }
   $('file-input').onchange = (event) => {
     stageFiles(event.target.files);
     event.target.value = '';
   };
   document.addEventListener('click', () => {
-    $('attach-menu').hidden = true;
+    menu.hidden = true;
+    closeQuick();
   });
   const box = $('box');
   for (const type of ['dragenter', 'dragover']) {
@@ -5268,6 +5615,8 @@
     /** Full URL of a core webhook path (`/api/...`); behind the accounts gateway it carries `/h/<id>`. */
     // While the quick tunnel is up, outside services must call its address, not this page's.
     webhookUrl: (path) => `${accountsMode ? location.origin + webhookBase() : state.settings?.tunnel?.url || location.origin}${path}`,
+    /** True behind the accounts gateway: the person's files live on their own core, reached with the token. */
+    accountsMode: () => accountsMode,
     ui,
     send,
     api,
@@ -5307,6 +5656,7 @@
     store,
     refreshMarks,
     stageFile,
+    stageFiles,
     sendMessage,
     renderHints,
   };

@@ -190,8 +190,24 @@ function openBuiltInBrowser() {
   require('./browser-shell.cjs').launchBuiltInBrowser(profile, { appScript: __filename });
 }
 
+/** Puts a picture from the Workspace into the chat box (caption sheet), bringing the chat window forward. */
+function sendImageToChat(name, base64) {
+  showWindow('chat');
+  if (!win || win.isDestroyed()) return false;
+  const script = `(() => {
+    if (!window.Mimi || !window.Mimi.stageFiles) return false;
+    const bin = atob(${JSON.stringify(base64)});
+    const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+    window.Mimi.stageFiles([new File([bytes], ${JSON.stringify(name)}, { type: 'image/png' })], { caption: true });
+    return true;
+  })()`;
+  win.webContents.executeJavaScript(script).catch(() => {});
+  return true;
+}
+
 function openWorkspace() {
   require('./workspace.cjs').openWorkspace({
+    sendToChat: sendImageToChat,
     icon: ICON,
     defaultRoot: process.env.MIMI_WORKSPACE || path.join(require('node:os').homedir(), 'Mimi-Workspace'),
   });

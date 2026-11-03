@@ -91,6 +91,7 @@ import { resumeWorkflow, type ResumeOutcome, type RunOptions, runWorkflow as run
 import { KnowledgeStore } from './knowledge/store.ts';
 import { UserProfileStore } from './profile/user-profile.ts';
 import { NotificationCenter } from './notify/notifications.ts';
+import { NativePushSender } from './notify/native-push.ts';
 import { loadOrCreateVapid, type VapidKeys } from './notify/web-push.ts';
 import { OVERSEER_NAME } from './overseer/overseer.ts';
 import { createOverseerTools } from './overseer/tools.ts';
@@ -688,6 +689,7 @@ export async function createCore(
     preferences: () => options.app?.preferences ?? {},
     timezone: () => config.timezone,
     log: (message) => console.error(message),
+    native: config.nativePush && (config.nativePush.fcm || config.nativePush.apns) ? new NativePushSender(config.nativePush) : undefined,
   });
   /** Every notification is kept (inbox) and pushed, then handed to whoever shows it live. */
   const notify = (notification: Notification) => {

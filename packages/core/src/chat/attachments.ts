@@ -179,9 +179,15 @@ export class AttachmentStore {
 
   /** The stored bytes; undefined when the id is unknown or the file is gone. */
   read(id: string): Buffer | undefined {
+    const file = this.filePath(id);
+    return file ? fs.readFileSync(file) : undefined;
+  }
+
+  /** Where the bytes are on disk (served with Range answers); undefined when they are gone. */
+  filePath(id: string): string | undefined {
     if (!/^[0-9a-f-]{36}$/.test(id)) return undefined;
     const file = path.join(this.dir, id);
-    return fs.existsSync(file) ? fs.readFileSync(file) : undefined;
+    return fs.existsSync(file) ? file : undefined;
   }
 
   setText(id: string, text: string): void {

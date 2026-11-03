@@ -1,0 +1,85 @@
+<Window
+    x:Class="Mimi.App.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="Mimi">
+        <Grid x:Name="Root" RowDefinitions="Auto,Auto,*,Auto" Background="{StaticResource MimiBgBrush}">
+        <Grid.KeyboardAccelerators>
+            <KeyboardAccelerator Modifiers="Control" Key="K" Invoked="OnSearchKey" />
+        </Grid.KeyboardAccelerators>
+        <!-- Header like the web app in a narrow window: back, title (the logo on the chat list), connection, pages. -->
+        <Grid x:Name="Header" ColumnDefinitions="Auto,*,Auto" Padding="6,6,6,6" Background="{StaticResource MimiPanelBrush}" BorderBrush="{StaticResource MimiLineBrush}"
+              BorderThickness="0,0,0,1" Visibility="Collapsed">
+            <Button x:Name="BackButton" Style="{StaticResource MimiHeaderButton}" FontFamily="Segoe UI" FontSize="22" Padding="8,0,8,4" Content="&#x2039;"
+                    AutomationProperties.AutomationId="BackButton" AutomationProperties.Name="กลับ" Click="OnBack" Visibility="Collapsed" />
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="9" VerticalAlignment="Center" Margin="6,0">
+                <Border x:Name="Logo" Width="26" Height="26" CornerRadius="8" Visibility="Collapsed">
+                    <Border.Background>
+                        <LinearGradientBrush StartPoint="0.2,0" EndPoint="0.8,1">
+                            <GradientStop Color="#FFE585A3" Offset="0" />
+                            <GradientStop Color="#FFA63A5C" Offset="1" />
+                        </LinearGradientBrush>
+                    </Border.Background>
+                    <TextBlock Text="M" FontWeight="Bold" FontSize="14" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                </Border>
+                <Ellipse x:Name="Dot" Width="8" Height="8" Fill="{StaticResource MimiFaintBrush}" VerticalAlignment="Center" />
+                <TextBlock x:Name="TitleText" AutomationProperties.AutomationId="TitleText" Text="Mimi" FontWeight="SemiBold" FontSize="16"
+                           TextTrimming="CharacterEllipsis" Foreground="{StaticResource MimiInkBrush}" VerticalAlignment="Center" />
+                <TextBlock x:Name="ConnText" FontFamily="Cascadia Mono, Consolas" FontSize="11" Foreground="{StaticResource MimiOkBrush}" VerticalAlignment="Center" Visibility="Collapsed" />
+            </StackPanel>
+            <StackPanel Grid.Column="2" Orientation="Horizontal">
+                <Button x:Name="SearchButton" Style="{StaticResource MimiHeaderButton}" Content="&#xE721;" AutomationProperties.AutomationId="SearchButton"
+                        AutomationProperties.Name="ค้นหา" ToolTipService.ToolTip="ค้นหาทุกแชต (Ctrl+K)" Click="OnSearch" />
+                <Button x:Name="InboxButton" Style="{StaticResource MimiHeaderButton}" AutomationProperties.AutomationId="InboxButton"
+                        AutomationProperties.Name="การแจ้งเตือน" ToolTipService.ToolTip="การแจ้งเตือน" Click="OnInbox">
+                    <Grid>
+                        <FontIcon Glyph="&#xEA8F;" FontSize="15" />
+                        <Border x:Name="InboxBadge" Background="{StaticResource MimiAccentBrush}" CornerRadius="7" MinWidth="14" Height="14" Padding="3,0"
+                                HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-6,-10,0" Visibility="Collapsed">
+                            <TextBlock x:Name="InboxCount" FontFamily="Segoe UI" FontSize="9" FontWeight="SemiBold" Foreground="{StaticResource MimiAccentInkBrush}"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                    </Grid>
+                </Button>
+                <Button x:Name="ChatsButton" Style="{StaticResource MimiHeaderButton}" Content="&#xE8BD;" AutomationProperties.AutomationId="ChatsButton"
+                        AutomationProperties.Name="แชต" ToolTipService.ToolTip="แชต" Click="OnChats" />
+                <Button x:Name="MusicButton" Style="{StaticResource MimiHeaderButton}" Content="&#xE8D6;" AutomationProperties.AutomationId="MusicButton"
+                        AutomationProperties.Name="Mimiamp" ToolTipService.ToolTip="Mimiamp" Click="OnMusic" />
+                <Button x:Name="MoreButton" Style="{StaticResource MimiHeaderButton}" Content="&#xE700;" AutomationProperties.AutomationId="MoreButton"
+                        AutomationProperties.Name="เมนู" ToolTipService.ToolTip="Agent, Hub, Workflow, Overseer, Workspace, ตั้งค่า">
+                    <Button.Flyout>
+                        <MenuFlyout Placement="BottomEdgeAlignedRight">
+                            <MenuFlyoutItem Text="Agent" Click="OnAgents"><MenuFlyoutItem.Icon><FontIcon Glyph="&#xE77B;" /></MenuFlyoutItem.Icon></MenuFlyoutItem>
+                            <MenuFlyoutItem Text="Hub" Click="OnHub"><MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8F1;" /></MenuFlyoutItem.Icon></MenuFlyoutItem>
+                            <MenuFlyoutItem Text="Workflow" Click="OnWorkflows"><MenuFlyoutItem.Icon><FontIcon Glyph="&#xE9D5;" /></MenuFlyoutItem.Icon></MenuFlyoutItem>
+                            <MenuFlyoutItem Text="AI Overseer" Click="OnOverseer"><MenuFlyoutItem.Icon><FontIcon Glyph="&#xE99A;" /></MenuFlyoutItem.Icon></MenuFlyoutItem>
+                            <MenuFlyoutItem Text="คุยกับ AI Overseer" Click="OnOverseerChat"><MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8BD;" /></MenuFlyoutItem.Icon></MenuFlyoutItem>
+                            <MenuFlyoutItem Text="Workspace (เบราว์เซอร์ · ไฟล์ · เทอร์มินัล)" Click="OnWorkspace"><MenuFlyoutItem.Icon><FontIcon Glyph="&#xE7F4;" /></MenuFlyoutItem.Icon></MenuFlyoutItem>
+                            <MenuFlyoutItem Text="ตัวช่วยตั้งค่า" Click="OnSetup"><MenuFlyoutItem.Icon><FontIcon Glyph="&#xE82F;" /></MenuFlyoutItem.Icon></MenuFlyoutItem>
+                            <MenuFlyoutSeparator />
+                            <MenuFlyoutItem Text="ตั้งค่า Mimi" Click="OnMimiSettings"><MenuFlyoutItem.Icon><FontIcon Glyph="&#xE713;" /></MenuFlyoutItem.Icon></MenuFlyoutItem>
+                            <MenuFlyoutItem Text="ตั้งค่าแอปบนเครื่องนี้" Click="OnAppSettings"><MenuFlyoutItem.Icon><FontIcon Glyph="&#xE7F4;" /></MenuFlyoutItem.Icon></MenuFlyoutItem>
+                        </MenuFlyout>
+                    </Button.Flyout>
+                </Button>
+                <Button x:Name="SettingsButton" Style="{StaticResource MimiHeaderButton}" Content="&#xE713;" AutomationProperties.AutomationId="SettingsButton"
+                        AutomationProperties.Name="ตั้งค่า" ToolTipService.ToolTip="ตั้งค่า" Click="OnSettings" />
+            </StackPanel>
+        </Grid>
+
+        <!-- Not connected right now -->
+        <Border x:Name="Offline" Grid.Row="1" Background="{StaticResource MimiRaisedBrush}" Padding="12,4" Visibility="Collapsed">
+            <TextBlock x:Name="OfflineText" AutomationProperties.AutomationId="OfflineText" FontSize="12" Foreground="{StaticResource MimiWarnBrush}" TextWrapping="Wrap" />
+        </Border>
+
+        <Grid x:Name="Pages" Grid.Row="2" />
+
+        <!-- Mini player while a song plays and the player page is not open -->
+        <Grid x:Name="MiniPlayer" Grid.Row="3" ColumnDefinitions="*,Auto,Auto" Padding="12,6" Background="{StaticResource MimiPanelBrush}" Visibility="Collapsed"
+              Tapped="OnMiniTapped">
+            <TextBlock x:Name="MiniTitle" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" FontSize="13" Foreground="{StaticResource MimiInk2Brush}" />
+            <Button x:Name="MiniPlay" Grid.Column="1" Style="{StaticResource MimiHeaderButton}" AutomationProperties.Name="เล่น/หยุด" Click="OnMiniPlay" />
+            <Button Grid.Column="2" Style="{StaticResource MimiHeaderButton}" Content="&#xE893;" AutomationProperties.Name="ถัดไป" Click="OnMiniNext" />
+        </Grid>
+    </Grid>
+</Window>

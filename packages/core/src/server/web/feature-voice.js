@@ -1,4 +1,4 @@
-// The mic button: press and hold = talk while held (release sends, slide left or up and
+// The mic button: press and hold = talk while held (release sends, slide away or up and
 // release cancels); a quick tap = start talking hands-free (tap the mic again to stop, ✕ or
 // Esc cancels). While it records: pulsing rings on the button, a bar with the time and a
 // waveform that follows the voice (mobile mode's clean screen), a hint line elsewhere.
@@ -217,6 +217,7 @@
         clearInterval(recordTimer);
         $('mic').classList.remove('rec');
         $('box').classList.remove('recording', 'rec-armed');
+        $('box').style.removeProperty('--slide');
         delete $('box').dataset.recMode;
         renderHints();
         if (mine.cancelled) return;
@@ -273,7 +274,7 @@
     const mic = $('mic');
     const HOLD_MS = 260; // longer than a tap
     const TOO_SHORT_MS = 700; // a held press shorter than this was a slip
-    const SLIDE_PX = 70;
+    const SLIDE_PX = 56;
     let press = null;
 
     const bar = el('div');
@@ -313,7 +314,10 @@
     });
     mic.addEventListener('pointermove', (event) => {
       if (!press || !press.held || !rec || rec.mode !== 'hold') return;
-      const armed = event.clientX - press.x < -SLIDE_PX || event.clientY - press.y < -SLIDE_PX;
+      // Away to either side or up cancels (the mic sits at an edge, so the way out depends on the layout).
+      const dx = event.clientX - press.x;
+      const armed = Math.abs(dx) > SLIDE_PX || event.clientY - press.y < -SLIDE_PX;
+      $('box').style.setProperty('--slide', `${Math.max(-140, Math.min(140, dx))}px`);
       if (armed === rec.armed) return;
       rec.armed = armed;
       $('box').classList.toggle('rec-armed', armed);

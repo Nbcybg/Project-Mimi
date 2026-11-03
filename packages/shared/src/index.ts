@@ -3,6 +3,7 @@ export * from './connectors.ts';
 export * from './events.ts';
 export * from './knowledge.ts';
 export * from './messages.ts';
+export * from './mimiamp.ts';
 export * from './oauth.ts';
 export * from './permissions.ts';
 export * from './protocol.ts';

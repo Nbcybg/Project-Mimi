@@ -1,53 +1,42 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <!-- Voice messages and the camera button of the chat; asked for at the first start. -->
+    <!-- Voice messages. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Mimiamp's equalizer works on the player's own audio session. -->
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
-    <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <!-- The widget's refresh job comes back after a restart. -->
+    <!-- The notification poll and the widget come back after a restart. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-    <!-- Replies reach the phone while the app is folded away: a service asks the server every half minute. -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
-    <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
     <application
+        android:name=".MimiApp"
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/appName"
         android:supportsRtl="true"
-        android:hardwareAccelerated="true"
         android:theme="@style/Theme.Mimi">
 
-        <!-- The Mimi web client in the app's own WebView, so the microphone and camera
-             are this app's permissions (in Chrome they were Chrome's). -->
+        <!-- Native Compose UI: no WebView anywhere (docs/native). -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTask"
-            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode|density"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="https" android:host="${hostName}" />
-            </intent-filter>
         </activity>
 
         <!-- Home-screen widget: the newest chats, like a messenger's. -->
         <receiver
-            android:name=".ChatWidget"
+            android:name=".widget.ChatWidget"
             android:exported="false"
             android:label="@string/widgetName">
             <intent-filter>
@@ -60,24 +49,32 @@
         </receiver>
 
         <service
-            android:name=".ChatWidgetService"
+            android:name=".widget.ChatWidgetService"
             android:exported="false"
             android:permission="android.permission.BIND_REMOTEVIEWS" />
 
+        <!-- Push from the core through Firebase Cloud Messaging (when the build has Firebase ids). -->
         <service
-            android:name=".PushService"
-            android:exported="false"
-            android:foregroundServiceType="specialUse">
-            <property
-                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Polls the user's own Mimi server for new chat replies and posts them as notifications." />
+            android:name=".push.MimiMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
         </service>
 
-        <service
-            android:name=".SyncJob"
+        <!-- Hilt makes the WorkManager workers. -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
             android:exported="false"
-            android:permission="android.permission.BIND_JOB_SERVICE" />
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                android:value="androidx.startup"
+                tools:node="remove" />
+        </provider>
 
+        <!-- Chat files opened in another app (PDF viewer, player…). -->
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.files"

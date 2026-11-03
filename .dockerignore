@@ -9,3 +9,4 @@ design
 .env
 *.lnk
 **/*.test.ts
+/mimiamp

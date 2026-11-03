@@ -1,7 +1,9 @@
-import type { Notification, NotificationItem, PreferencesView, PushDeviceView } from '@mimi/shared';
+import { createHash } from 'node:crypto';
+import type { NativePushPlatform, NativePushRegistration, Notification, NotificationItem, PreferencesView, PushDeviceView } from '@mimi/shared';
 import type { Db } from '../db/db.ts';
 import { type PushResult, type PushSubscriptionKeys, sendPush, type VapidKeys } from './web-push.ts';
 import { timeZoneName, type TimeZoneSource } from '../timezone.ts';
+import type { NativePushMessage, NativePushResult, NativePushTarget } from './native-push.ts';
 
 /** Kinds worth waking a phone for; "info" notes only go to the inbox. */
 const PUSHED = new Set<Notification['kind']>(['reminder', 'task-result', 'approval', 'message']);
@@ -21,6 +23,28 @@ interface NotificationRow {
   read_at: string | null;
 }
 
+interface NativeRow {
+  id: string;
+  platform: NativePushPlatform;
+  token: string;
+  label: string;
+  app_version: string | null;
+  bundle_id: string | null;
+  sandbox: number;
+  created_at: string;
+  last_ok_at: string | null;
+}
+
+/** The push services' hosts, shown in the device list like a Web Push endpoint's. */
+const NATIVE_SERVICE: Record<NativePushPlatform, string> = { fcm: 'fcm.googleapis.com', apns: 'api.push.apple.com' };
+const NATIVE_PREFIX = 'native:';
+
+/** What sends to FCM / APNs (NativePushSender, or a stand-in in tests). */
+export interface NativePushTransport {
+  available(platform: NativePushPlatform): boolean;
+  send(target: NativePushTarget, message: NativePushMessage, urgency: 'normal' | 'high'): Promise<NativePushResult>;
+}
+
 interface DeviceRow {
   endpoint: string;
   p256dh: string;
@@ -35,6 +59,8 @@ export interface NotificationCenterDeps {
   /** VAPID contact (`mailto:` or `https:`), sent to the push services. */
   subject: string;
   send?: (subscription: PushSubscriptionKeys, payload: unknown, urgency: 'normal' | 'high') => Promise<PushResult>;
+  /** FCM / APNs for the native apps; absent = only Web Push. */
+  native?: NativePushTransport;
   /** Quiet hours and which kinds are pushed (read on every notification). */
   preferences?: () => PreferencesView;
   timezone?: TimeZoneSource;
@@ -172,19 +198,71 @@ export class NotificationCenter {
       .run(endpoint, subscription.p256dh, subscription.auth, label.slice(0, 80), new Date().toISOString());
   }
 
+  /** Removes a browser (Web Push endpoint) or an app (`native:<platform>:<id>`). */
   unsubscribe(endpoint: string): boolean {
+    if (endpoint.startsWith(NATIVE_PREFIX)) {
+      const id = endpoint.slice(endpoint.lastIndexOf(':') + 1);
+      return this.db.prepare('DELETE FROM native_push_tokens WHERE id = ?').run(id).changes > 0;
+    }
     return this.db.prepare('DELETE FROM push_subscriptions WHERE endpoint = ?').run(endpoint).changes > 0;
+  }
+
+  /**
+   * Remembers a native app's FCM / APNs token (registering the same token again updates it).
+   * Returns the device as listed and whether this core can actually push to it.
+   */
+  registerNative(registration: NativePushRegistration): { device: PushDeviceView; delivering: boolean } {
+    const platform = registration.platform;
+    if (platform !== 'fcm' && platform !== 'apns') throw new Error('Native push: platform must be "fcm" or "apns".');
+    const token = String(registration.token ?? '').trim();
+    const shape = platform === 'apns' ? /^[0-9a-fA-F]{32,200}$/ : /^[\w:.-]{20,4096}$/;
+    if (!shape.test(token)) throw new Error(`Native push: that is not ${platform === 'apns' ? 'an APNs device token (hex)' : 'an FCM registration token'}.`);
+    const text = (value: unknown, max: number) => (typeof value === 'string' && value.trim() ? value.trim().slice(0, max) : null);
+    const id = createHash('sha256').update(token).digest('hex').slice(0, 16);
+    this.db
+      .prepare(
+        `INSERT INTO native_push_tokens (id, platform, token, label, app_version, bundle_id, sandbox, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (token) DO UPDATE SET label = excluded.label, app_version = excluded.app_version, bundle_id = excluded.bundle_id,
+           sandbox = excluded.sandbox, failures = 0`,
+      )
+      .run(id, platform, token, text(registration.label, 80) ?? '', text(registration.appVersion, 40), text(registration.bundleId, 200), registration.sandbox ? 1 : 0, new Date().toISOString());
+    const row = this.db.prepare('SELECT * FROM native_push_tokens WHERE id = ?').get(id) as NativeRow;
+    return { device: this.nativeView(row), delivering: this.deps.native?.available(platform) ?? false };
+  }
+
+  unregisterNative(token: string): boolean {
+    return this.db.prepare('DELETE FROM native_push_tokens WHERE token = ?').run(String(token ?? '').trim()).changes > 0;
+  }
+
+  private nativeView(row: NativeRow): PushDeviceView {
+    return {
+      endpoint: `${NATIVE_PREFIX}${row.platform}:${row.id}`,
+      platform: row.platform,
+      service: NATIVE_SERVICE[row.platform],
+      label: row.label,
+      createdAt: row.created_at,
+      lastOkAt: row.last_ok_at,
+    };
   }
 
   devices(): PushDeviceView[] {
     const rows = this.db.prepare('SELECT * FROM push_subscriptions ORDER BY created_at').all() as DeviceRow[];
-    return rows.map((row) => ({ endpoint: row.endpoint, service: new URL(row.endpoint).host, label: row.label, createdAt: row.created_at, lastOkAt: row.last_ok_at }));
+    const web = rows.map((row) => ({ endpoint: row.endpoint, service: new URL(row.endpoint).host, label: row.label, createdAt: row.created_at, lastOkAt: row.last_ok_at }));
+    const apps = (this.db.prepare('SELECT * FROM native_push_tokens ORDER BY created_at').all() as NativeRow[]).map((row) => this.nativeView(row));
+    return [...web, ...apps];
+  }
+
+  /** Notifications newer than `afterId`, read or not, oldest first (the native apps' poll). */
+  after(afterId: number, limit = 100): NotificationItem[] {
+    const rows = this.db.prepare('SELECT * FROM notifications WHERE id > ? ORDER BY id LIMIT ?').all(afterId, limit) as NotificationRow[];
+    return rows.map(toItem);
   }
 
   /** Sends one item to every device; dropped subscriptions are forgotten. Returns how many took it. */
   async push(item: Pick<NotificationItem, 'id' | 'kind' | 'title' | 'body' | 'chatId'>): Promise<number> {
     const rows = this.db.prepare('SELECT * FROM push_subscriptions').all() as DeviceRow[];
-    if (rows.length === 0) return 0;
+    const apps = this.deps.native ? (this.db.prepare('SELECT * FROM native_push_tokens').all() as NativeRow[]) : [];
+    if (rows.length === 0 && apps.length === 0) return 0;
     const send =
       this.deps.send ??
       ((subscription: PushSubscriptionKeys, payload: unknown, urgency: 'normal' | 'high') =>
@@ -192,24 +270,47 @@ export class NotificationCenter {
     const payload = { id: item.id, kind: item.kind, title: item.title, body: item.body.slice(0, 1000), chatId: item.chatId ?? null };
     const urgency = item.kind === 'approval' || item.kind === 'reminder' ? 'high' : 'normal';
     let delivered = 0;
-    await Promise.all(
-      rows.map(async (row) => {
+    const web = rows.map(async (row) => {
+      try {
+        const result = await send({ endpoint: row.endpoint, p256dh: row.p256dh, auth: row.auth }, payload, urgency);
+        if (result.gone) {
+          this.unsubscribe(row.endpoint);
+        } else if (result.status >= 200 && result.status < 300) {
+          delivered++;
+          this.db.prepare('UPDATE push_subscriptions SET last_ok_at = ?, failures = 0 WHERE endpoint = ?').run(new Date().toISOString(), row.endpoint);
+        } else {
+          this.failed(row.endpoint, `HTTP ${result.status}`);
+        }
+      } catch (error) {
+        this.failed(row.endpoint, (error as Error).message);
+      }
+    });
+    const message: NativePushMessage = { ...payload, unread: this.unread() };
+    const native = apps
+      .filter((row) => this.deps.native!.available(row.platform))
+      .map(async (row) => {
         try {
-          const result = await send({ endpoint: row.endpoint, p256dh: row.p256dh, auth: row.auth }, payload, urgency);
-          if (result.gone) {
-            this.unsubscribe(row.endpoint);
-          } else if (result.status >= 200 && result.status < 300) {
+          const result = await this.deps.native!.send({ platform: row.platform, token: row.token, bundleId: row.bundle_id, sandbox: row.sandbox === 1 }, message, urgency);
+          if (result.ok) {
             delivered++;
-            this.db.prepare('UPDATE push_subscriptions SET last_ok_at = ?, failures = 0 WHERE endpoint = ?').run(new Date().toISOString(), row.endpoint);
+            this.db.prepare('UPDATE native_push_tokens SET last_ok_at = ?, failures = 0 WHERE id = ?').run(new Date().toISOString(), row.id);
+          } else if (result.gone) {
+            this.db.prepare('DELETE FROM native_push_tokens WHERE id = ?').run(row.id);
           } else {
-            this.failed(row.endpoint, `HTTP ${result.status}`);
+            this.nativeFailed(row, result.reason);
           }
         } catch (error) {
-          this.failed(row.endpoint, (error as Error).message);
+          this.nativeFailed(row, (error as Error).message);
         }
-      }),
-    );
+      });
+    await Promise.all([...web, ...native]);
     return delivered;
+  }
+
+  private nativeFailed(row: NativeRow, reason: string): void {
+    this.deps.log?.(`push to ${row.platform} device ${row.id} failed: ${reason}`);
+    this.db.prepare('UPDATE native_push_tokens SET failures = failures + 1 WHERE id = ?').run(row.id);
+    this.db.prepare('DELETE FROM native_push_tokens WHERE id = ? AND failures >= ?').run(row.id, MAX_FAILURES);
   }
 
   private failed(endpoint: string, reason: string): void {

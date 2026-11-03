@@ -190,6 +190,19 @@ export class MessagesRepo {
     return rows.reverse().map(toMessage);
   }
 
+  /** Like `timeline`, but the messages after `afterId`, oldest first (a client catching up). */
+  timelineAfter(thread: string, afterId: number, limit: number): StoredMessage[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM messages
+          WHERE thread = ? AND id > ? AND hidden_at IS NULL
+            AND ((role = 'user' AND text != '') OR role = 'assistant')
+          ORDER BY id LIMIT ?`,
+      )
+      .all(thread, afterId, limit) as MessageRow[];
+    return rows.map(toMessage);
+  }
+
   byTrace(traceId: string): StoredMessage[] {
     const rows = this.db
       .prepare(`SELECT * FROM messages WHERE trace_id = ? AND hidden_at IS NULL ORDER BY id`)

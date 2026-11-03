@@ -2,6 +2,151 @@
 
 ## Unreleased
 
+### Native clients, Phase 1: the server side (client API 1)
+
+The core and the gateway now serve apps that are not the web page they ship (Android, iOS, macOS,
+Windows; specs in `docs/native/`). Nothing was removed: the web client, the Electron apps and the
+Android WebView app keep working as before.
+
+- Version check: `/health` and `welcome` say `api` (client API 1) and `minClientApi`; every HTTP
+  answer carries `x-mimi-api`; an app sends `hello.client {platform, version, api}` and one built for
+  an API the core no longer serves is closed with code 4426 ("update the app"). Policy:
+  `docs/native/api-versioning.md`.
+- Push to native apps: FCM (Android) and APNs (iOS / macOS) next to Web Push. Apps register their
+  token with `native-push-register` or `POST /api/push/register`; the settings list shows them beside
+  browsers and removes either. Credentials come from `MIMI_FCM_SERVICE_ACCOUNT` and `MIMI_APNS_KEY` /
+  `_KEY_ID` / `_TEAM_ID` / `_TOPIC`. By default a push carries no message text (Google and Apple read
+  what they deliver); the app fetches it. `MIMI_NATIVE_PUSH_CONTENT=full` sends the text. Dead tokens
+  are dropped. Windows (WNS) and a relay through the gateway are still to come.
+- Chat: a finished turn sends `chat-turn-messages` (its replies with their ids), so an app replaces the
+  streamed bubble without opening the chat again; `chat-open {afterId}` returns only newer messages
+  (catching up after a reconnect).
+- Media: chat files (`/api/files/<id>`) and YouTube songs (`/api/mimiamp/youtube/<id>/audio`) answer
+  Range requests (players can seek; AVPlayer needs it to play at all) and stream from disk.
+- Gateway: `/mimiamp/*` with a session reaches that person's own core (their songs, cached YouTube
+  audio); without one it serves its own files as before.
+- Music is no longer baked into the Docker image: the songs live in `<user>/mimiamp` on the volume
+  (the built-in demo plays until then). Upload with `POST /api/mimiamp/files?name=…` or the Railway
+  CLI (`docs/hosting.md`). Behind the gateway the web player loads those songs with the session.
+- `MIMI_SERVE_WEB=0` turns off the web pages and scripts on a core or gateway; the API, `/ws`, music,
+  backdrops and icons stay.
+- Notifications: `GET /api/notifications?afterId=` lists read and unread ones after an id;
+  `POST /api/permissions/<id>` and `POST /api/approvals/<id>` answer from a notification button
+  without a WebSocket.
+- Errors over the WebSocket name the message they answer (`requestType`); an unknown message type is
+  `E-PROTOCOL` instead of `E-INTERNAL`.
+- Mimiamp, widget and notification-poll types moved to `@mimi/shared`.
+
+### Native clients, Phase 5: the Windows app (WinUI 3)
+
+A Windows app of its own in `apps/windows/` (C# / .NET 10, WinUI 3 with the Windows App SDK) to replace
+the Electron window: no WebView, no Chromium. The Electron app still builds and ships; the release
+workflow does not build the native one yet. Details and what is not done: `apps/windows/README.md`.
+
+- Sign in to a single core (its token) or the accounts gateway (username, password, 2FA code), the
+  version check of `/health`, "this device is not mine". The token is sealed with Windows DPAPI
+  (`%APPDATA%\Mimi\session.dpapi`) and wiped on sign-out; `config.json` is the Electron app's file,
+  read and written with the same fields.
+- Chat list (direct / group, unread, typing, new chat with an agent) and a streaming chat: tool rows,
+  sub-agent lines, handoffs, permission cards (once / task / session / always), workflow approvals,
+  pictures and files (with the token), file attach and drag-and-drop, voice messages (WAV 16 kHz),
+  stop, older messages, catching up after a reconnect (`chat-open {afterId}`).
+- Mimiamp: library and playlists, YouTube (prepare, then play), shuffle / repeat, the web player's
+  ten-band EQ and presets, volume, seek, media keys and the Windows media flyout (SMTC), the agent's
+  `mimiamp` commands. Songs stream with Range requests and the token (core and gateway).
+- Tray icon and menu (the Electron app's), a floating window at the bottom right that hides on close,
+  open at sign-in, auto sign-out after idle time or when the screen locks, Windows notifications while
+  the app sits in the tray (WNS is not there yet), one instance per Windows account.
+- The PC agent stays a Node program: the app starts, stops and restarts it, gives it the token on
+  stdin and asks the consent questions; it drives Edge or Chrome instead of the Electron browser.
+- Updates from the GitHub release zip with the Electron updater's checks (SHA-256 sums, same
+  Authenticode publisher). `node scripts/build-win-native.mjs` builds the folder, the zip and a
+  per-user installer into `dist/win-native/`; `scripts/windows-icons.mjs` draws its icons.
+- Tests: 52 unit tests (protocol, chat reducer, view models with a fake socket, HTTP Range stream, EQ,
+  config, DPAPI vault, updater) and a UI Automation test that signs in, chats and plays a song on the
+  real app against a core on the same computer.
+- Builds for arm64 too (`--arch arm64`); not tried on an arm64 computer.
+
+### Native clients, Phase 6 (Windows): the rest of the chat screen
+
+- A menu on every message (right-click, or its ⋯ button): love, the six quick reactions, reply,
+  forward to another chat, copy the text, pin / unpin, and on your own messages "go back and edit"
+  (rewind, after a confirmation; the text returns to the composer and files the agents changed are
+  put back). Reactions show as chips under the bubble (click one to take it back), quotes and
+  "forwarded from" lines above it.
+- The pin bar under the header (click: go to the pin and show the next; the list with unpin when
+  there are several); a pin of an older session opens that session at the message.
+- Search every chat and session (header button or Ctrl+K), matched words marked; a hit opens its
+  session and scrolls to the message (loading older pages for it). An older session says so, and a
+  new message goes to the newest one.
+- The notification inbox behind a bell with the unread count: open one (marks it read, opens its chat)
+  or read all; notifications about the chat on screen are marked read at once.
+- Tests: 7 more unit tests (59) and the UI test now also pins, replies, searches, unpins and opens
+  the inbox.
+
+### Native clients, Phase 6 (Windows): every page of the web client
+
+- The menu (☰) opens Agent, Hub (its ten tabs), Workflow, AI Overseer and Mimi's settings (profile,
+  memory, app and system) inside the app. One generic screen runs them all: each list is a definition
+  in `apps/windows/src/Mimi.Core/Hub/Catalog.cs` (the frame that asks, the reply, the form, save,
+  delete, actions); an item opens in a form and its actions send a frame and show the answer, open a
+  sign-in link in the browser, or upload / download / delete a file. Complex values are edited as JSON.
+- Workflows can be drawn (a zoomable diagram of the trigger, the nodes and their links); editing the
+  nodes is in the form. Packs preview, install and remove; OpenAPI and n8n / Make / Zapier imports;
+  knowledge documents (text, URL, uploaded file), search and embeddings; agent pictures, VRM files and
+  motions; the gateway's 2FA and password.
+- Chat: task cards with pause / resume / cancel / undo, the session bar (title, context meter, older
+  sessions, a new session), reading answers aloud with Windows voices (`mimi.autoSpeak`, shared with
+  the other devices), the emoji panel, group chats (create, rename, members), chat CSV download and
+  delete. Mimiamp playlists rename, export and import.
+- Not there: the drag-and-drop workflow editor, node tests, the 2D stage and VRM view, per-chat looks,
+  the Workspace, the step-by-step setup wizard, a light theme, WNS (`apps/windows/README.md`).
+- Tests: 66 unit tests; a second UI test opens every page and tab, adds / edits / deletes a skill,
+  installs a pack, draws its workflow and removes the pack.
+
+### Native clients, Phase 6 (Windows): the Electron look, the editors and the Workspace
+
+WebView2 is now allowed where nothing native does the job (the project rule changed): the Workspace
+browser, the 3D character and the terminal emulator. Everything else stays WinUI.
+
+- Look: the web app's dark and light palettes (`Services/Theme.cs` recolours the shared brushes in
+  place, so a switch shows at once); the theme is the account's `mimi.theme`. The chat list is the
+  web's side panel (search, + ใหม่, the direct / group tabs, the page nav, the PC agent line); pages
+  have the narrow-window header (‹ back + title). Settings has the web's four tabs: โปรไฟล์ของฉัน
+  (account card + sign-out first), หน้าตา (theme, text size, character, sounds), ความจำ, แอปและระบบ
+  (this computer's choices, then the server's).
+- Chat: the web's header (+ session, ตัวละคร, ข้อมูล, context meter) and composer box; a stage behind
+  the messages with the chat's backdrop (its own colour / gradient / preset scene / upload, else the
+  agent's Hub scene) and the character — the picture for the newest emoji (outfit, agent sprite,
+  portrait, avatar, as `feature-stage.js` picks it) or the agent's VRM model in 3D (three-vrm in a
+  WebView2: breathing, blinking, the emoji's mood, the mouth while a reply streams in). The ข้อมูล panel
+  shows the chat and the agent's status (editable) and each chat's own look: theme, text size,
+  character on/off, how much chat shows over it, its size and place, its background.
+- Mimiamp: the web's "blue edition" skin (player LCD, transport, VOL / PAN, SHUF / REP, the equalizer
+  with values, the playlist zone), a spectrum visualizer (FFT of what plays), left/right pan, and songs
+  of this computer (open files or drop them; played from disk).
+- Forms: objects inside an item get their own sub-form instead of JSON (a mailbox's incoming and
+  outgoing server, fields shown per account kind); results are drawn readably instead of JSON — a
+  pack's report (agents, connectors, workflows, what still needs setting up, warnings), a run node by
+  node with its items, the run history — with the JSON one click away.
+- Workflow editor: a canvas to drag nodes on, links drawn from a node's output dot onto another node,
+  click a link to remove it, add nodes from the server's node types, each node's own fields from its
+  spec (conditions as rows), on-error / retries, disable / duplicate / delete, test one node with typed
+  input (`workflow-test-node`), save, run, run again from a node, history, delete. The draft rules
+  (trigger as a node, sync on save, renameFrom) are in `Mimi.Core/Hub/WorkflowDraft.cs`.
+- Setup wizard, step by step as on the web: provider (ChatGPT / Claude plans or an API key) and main
+  model → a starter agent → allowed folders → the PC agent → a test chat. It opens by itself once when
+  the server cannot chat yet and `mimi.setupDone` is not set; ☰ → ตัวช่วยตั้งค่า opens it again.
+- Workspace (☰, the tray or the nav): a window with the folder's files (tree, filter, a text editor with
+  save), a browser (WebView2, back / forward / reload, drawing on a picture of the page, copy or save
+  it) and a terminal (PowerShell under ConPTY, drawn by xterm.js).
+- A start that fails writes `start-error.txt` in the app's local folder.
+- Still missing: expression preview in the workflow editor, sticky-note editing, Mixamo motions on the
+  VRM, gallery / situation pictures over the chat, WNS. Not tried with a real `.vrm` file.
+- Tests: 75 unit tests; UI tests 3/3 (a new one switches the theme, sets a chat's look and backdrop,
+  opens Mimiamp, builds a workflow, adds a node and tests it, walks the wizard and opens the Workspace
+  with a live terminal).
+
 ### 0.8.1-prototype
 
 - PC agent: on the desktop app (Windows and macOS) it now starts by itself after sign-in, no longer waiting

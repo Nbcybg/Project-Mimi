@@ -18,6 +18,7 @@ HTTP statuses are appended where they make the code more actionable (`E-AUTH-401
 | `E-BUDGET` | The daily spending limit or the trace budget (tokens, rounds or time in one turn) is exhausted. | Raise the budget in Settings or wait for the daily reset; narrow the prompt or reduce sub-agent loops. |
 | `E-CONFIG` | An agent/tool/skill/workflow names something that does not exist, a required key or setting is missing, or the input is invalid. | Run `config_validate`; use `agent_history` / `tool_history` to undo a bad write; retest with `tool_test` or `agent_message`. |
 | `E-PROVIDER` | The provider returned a server-side failure (usually HTTP 5xx). | Retry later or switch model/provider. |
+| `E-PROTOCOL` | A client sent a WebSocket message type this core does not know (a newer app on an older core). | Update the core or the app so both speak the same client API (`/health` shows `api` / `minClientApi`; see `docs/native/api-versioning.md`). |
 | `E-INTERNAL` | An unexpected failure that matches no known category. | Read the full message, reproduce with the smallest test (`tool_test`, `agent_message`, `workflow_runs`), and report the exact step. |
 
 ## For the AI Overseer

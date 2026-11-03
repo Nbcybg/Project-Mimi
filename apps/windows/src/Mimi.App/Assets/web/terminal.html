@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<title>Mimi Terminal</title>
+<!-- The Workspace terminal's screen (the Electron workspace used xterm.js too): the app runs the shell under
+     ConPTY (Native/ConPty.cs) and passes its output here; keys typed here go back to the shell. -->
+<link rel="stylesheet" href="vendor/xterm.css">
+<style>
+  html, body { margin: 0; height: 100%; background: #120e11; overflow: hidden; }
+  #term { position: absolute; inset: 6px 4px 4px 8px; }
+  .xterm-viewport::-webkit-scrollbar { width: 9px; }
+  .xterm-viewport::-webkit-scrollbar-thumb { background: #4b3844; border-radius: 5px; }
+</style>
+<script src="vendor/xterm.js"></script>
+<script src="vendor/addon-fit.js"></script>
+</head>
+<body>
+<div id="term"></div>
+<script>
+  const post = (message) => window.chrome?.webview?.postMessage(message);
+  const term = new Terminal({
+    fontFamily: '"Cascadia Mono", Consolas, monospace',
+    fontSize: 13,
+    cursorBlink: true,
+    scrollback: 5000,
+    allowProposedApi: true,
+    theme: { background: '#120e11', foreground: '#f2e7ec', cursor: '#e08aa7', selectionBackground: 'rgba(224,138,167,.35)' },
+  });
+  const fit = new FitAddon.FitAddon();
+  term.loadAddon(fit);
+  term.open(document.getElementById('term'));
+  const resize = () => {
+    try { fit.fit(); } catch { /* not laid out yet */ }
+    post({ type: 'resize', cols: term.cols, rows: term.rows });
+  };
+  window.addEventListener('resize', resize);
+  term.onData((data) => post({ type: 'input', data }));
+  window.chrome?.webview?.addEventListener('message', (event) => {
+    const message = event.data || {};
+    if (message.type === 'output') term.write(message.data);
+    else if (message.type === 'clear') term.clear();
+    else if (message.type === 'focus') term.focus();
+    else if (message.type === 'theme') term.options.theme = { ...term.options.theme, ...message.theme };
+  });
+  resize();
+  post({ type: 'ready', cols: term.cols, rows: term.rows });
+  term.focus();
+</script>
+</body>
+</html>

@@ -1,13 +1,15 @@
 # Builds the apps and publishes them as a GitHub release when a version tag is pushed:
 #   git tag v0.6.0 && git push origin v0.6.0
-# The desktop apps (packages/desktop/updater.cjs) and the Android app (web feature-update.js)
+# The desktop apps (packages/desktop/updater.cjs) and the Android app (UpdateChecker.kt)
 # look for the newest release here.
 #
 # Secrets for the Android signing key (the same key every release, or an update cannot be
 # installed over the previous version):
 #   ANDROID_KEYSTORE_BASE64    PKCS#12 keystore, base64, key alias "mimi"
 #   ANDROID_KEYSTORE_PASSWORD  its password (store and key)
-# Repository variable MIMI_ANDROID_HOST: the server the Android app opens (https host only).
+# Repository variable MIMI_ANDROID_HOST: the server the Android app offers on its first start (https host).
+# Optional repository variables MIMI_FCM_PROJECT_ID / _APP_ID / _API_KEY / _SENDER_ID: the app's Firebase
+# ids for push (android/README.md); without them the app polls the core for notifications.
 #
 # Optional desktop signing (scripts/signing.mjs); without them the builds stay unsigned / ad hoc:
 #   WIN_CSC_BASE64, WIN_CSC_PASSWORD     Authenticode .pfx (base64) and its password
@@ -106,9 +108,8 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
+      # The native app (Kotlin + Compose, android/) builds with its own Gradle wrapper.
       - uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.11.1'
       - name: Version
         id: version
         run: |
@@ -129,11 +130,16 @@ jobs:
       - name: Build APK
         env:
           MIMI_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        # Firebase ids are optional repository variables; without them the app polls for notifications.
         run: >
-          gradle -p android assembleRelease --no-daemon
+          cd android && ./gradlew assembleRelease --no-daemon
           -PversionName=${{ steps.version.outputs.name }}
           -PversionCode=${{ steps.version.outputs.code }}
           -PmimiHost=${{ vars.MIMI_ANDROID_HOST || 'mimi-production-c4c7.up.railway.app' }}
+          -PfcmProjectId=${{ vars.MIMI_FCM_PROJECT_ID }}
+          -PfcmAppId=${{ vars.MIMI_FCM_APP_ID }}
+          -PfcmApiKey=${{ vars.MIMI_FCM_API_KEY }}
+          -PfcmSenderId=${{ vars.MIMI_FCM_SENDER_ID }}
       - run: cp android/app/build/outputs/apk/release/app-release.apk "Mimi-${{ steps.version.outputs.name }}-android.apk"
       - uses: actions/upload-artifact@v4
         with:

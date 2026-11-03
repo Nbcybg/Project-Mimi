@@ -139,6 +139,12 @@ export const ERROR_CODE_GUIDE: ErrorCodeGuide[] = [
     fix: 'Retry later or switch to another model/provider. Codes such as E-PROVIDER-500 keep the status.',
   },
   {
+    code: 'E-PROTOCOL',
+    title: 'Message this core does not know',
+    meaning: 'A client sent a WebSocket message type this core does not understand, usually a newer app talking to an older core.',
+    fix: 'Update the core (or the app) so both speak the same client API; /health shows the core\'s api and minClientApi.',
+  },
+  {
     code: 'E-INTERNAL',
     title: 'Unexpected error',
     meaning: 'Something failed that does not match a known category. The message is the best clue.',

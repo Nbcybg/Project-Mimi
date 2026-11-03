@@ -2,6 +2,7 @@ import http from 'node:http';
 import https from 'node:https';
 import type { AddressInfo } from 'node:net';
 import { type RawData, WebSocket, WebSocketServer } from 'ws';
+import { API_VERSION, MIN_CLIENT_API } from '@mimi/shared';
 import { AuthLimiter, clientAddress } from '../server/auth-limiter.ts';
 import { serveAssetLinks } from '../server/assetlinks.ts';
 import { APP_VERSION, serveWebFile } from '../server/web-files.ts';
@@ -15,7 +16,7 @@ import type { AccountStore, SessionTarget } from './accounts.ts';
  *
  * Routes:
  *   GET  /, scripts, /vendor/*, /icon.png   the web client (no sign-in)
- *   GET  /health                            { ok, version, accounts: true }
+ *   GET  /health                            { ok, version, api, minClientApi, accounts: true }
  *   POST /auth/login                        { username, password, code? } -> { token, expiresAt, username, webhookBase }
  *                                           (401 { twoFactor: true } when the account needs an authenticator code)
  *   GET  /auth/session                      Bearer token -> { username, expiresAt, webhookBase, twoFactor }
@@ -26,6 +27,8 @@ import type { AccountStore, SessionTarget } from './accounts.ts';
  *   POST /auth/password                     Bearer + { current, next } -> { ok: true }
  *   POST /auth/logout                       Bearer token -> 204; open sockets of it are closed
  *   *    /api/*                             Bearer token -> the person's core
+ *   GET  /mimiamp/*                         with a Bearer token -> the person's core (their own music);
+ *                                           without one, the songs shipped with the gateway (old web client)
  *   *    /h/<id>/api/(workflow|webhook)/<k> webhooks of one person's core (no sign-in, like a core)
  *   *    /h/<id>/oauth/callback             OAuth sign-in callback of that core (no sign-in, like a core)
  *   WS   /ws                                first frame { type: 'hello', token } -> the person's core
@@ -39,6 +42,8 @@ export interface GatewayOptions {
   clientIpHeader?: string;
   /** How often open sockets are checked against revoked or expired sessions. */
   sweepMs?: number;
+  /** Serve the built-in web client; false = MIMI_SERVE_WEB=0 (native apps only). */
+  serveWeb?: boolean;
   log?: (line: string) => void;
 }
 
@@ -204,10 +209,19 @@ export async function startGateway(options: GatewayOptions): Promise<Gateway> {
   const handle = async (request: http.IncomingMessage, response: http.ServerResponse) => {
     const url = new URL(request.url ?? '/', 'http://localhost');
     const method = request.method ?? 'GET';
-    if (method === 'GET' && serveWebFile(url.pathname, response, request.headers.range)) return;
+    response.setHeader('x-mimi-api', String(API_VERSION));
+    // Music is the person's own (on their core's volume): a device that sends its session gets
+    // that. A plain <audio src> of the old web client cannot, so it still gets the gateway's songs.
+    if ((method === 'GET' || method === 'HEAD') && url.pathname.startsWith('/mimiamp/') && bearer(request)) {
+      const target = authorize(request);
+      if (!target) sendJson(response, 401, { error: 'Missing or wrong token.' });
+      else proxy(request, response, target.coreUrl, `${url.pathname}${url.search}`, target.coreToken);
+      return;
+    }
+    if (method === 'GET' && serveWebFile(url.pathname, response, request.headers.range, undefined, { web: options.serveWeb !== false })) return;
     if (serveAssetLinks(method, url.pathname, response)) return;
     if (method === 'GET' && url.pathname === '/health') {
-      sendJson(response, 200, { ok: true, version: APP_VERSION, accounts: true });
+      sendJson(response, 200, { ok: true, version: APP_VERSION, api: API_VERSION, minClientApi: MIN_CLIENT_API, accounts: true });
       return;
     }
 

@@ -733,6 +733,21 @@
     M().toast('Mimiamp', 'นำเพลงออกจากเครื่องนี้แล้ว');
   }
 
+  /**
+   * Behind the accounts gateway the songs are on the person's own core, which the gateway only
+   * reaches for a request that carries the session; an <audio src> cannot, so fetch it first.
+   */
+  const fileAudioUrls = new Map();
+  async function gatewayFileUrl(track) {
+    const cached = fileAudioUrls.get(track.url);
+    if (cached) return cached;
+    const response = await M().api(track.url);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const url = URL.createObjectURL(await response.blob());
+    fileAudioUrls.set(track.url, url);
+    return url;
+  }
+
   async function prepareYoutube(track, token) {
     if (!track || !track.videoId) throw new Error('ไม่มีรหัสวิดีโอ YouTube');
     const cached = youtubeAudioUrls.get(track.videoId);
@@ -782,6 +797,7 @@
     try {
       if (entry.source === 'youtube') source = await prepareYoutube(entry, token);
       else if (entry.source === 'local') source = await localUrl(entry);
+      else if (entry.source === 'file' && entry.url && M().accountsMode?.()) source = await gatewayFileUrl(entry);
     } catch (error) {
       if (token !== playToken) return;
       setStatus('ERROR');

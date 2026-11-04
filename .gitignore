@@ -2,6 +2,8 @@ node_modules/
 data/
 # ...but not the Android data module (source code, not a data folder)
 !android/core/data/
+# (the package folder app/mimi/core/data/ inside it is a "data/" too, so re-include everything below)
+!android/core/data/**
 workspace/
 user/
 dist/

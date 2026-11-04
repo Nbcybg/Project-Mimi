@@ -27,6 +27,16 @@ object MimiColors {
     val userLine = Color(0xFF563746)
     val codeBg = Color(0xFF120E11)
     val act = Color(0xFFD6B98C)
+
+    // The character-style chat (app.css .solo, glass).
+    val soloTx = Color(0xCC14161C)
+    val soloTxLine = Color(0x1AFFFFFF)
+    val soloUser = Color(0xFFECE8E1)
+    val soloUserInk = Color(0xFF1F1C18)
+    val soloTime = Color(0x94FFFFFF)
+    val soloInput = Color(0x9E1C141A)
+    val glass = Color(0x29FFFFFF)
+    val glassLine = Color(0x4DFFFFFF)
 }
 
 private val scheme = darkColorScheme(

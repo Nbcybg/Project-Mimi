@@ -67,7 +67,7 @@
                         <local:Avatar Path="{x:Bind Avatar}" Initial="{x:Bind Initial}" Size="36" />
                         <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="1">
                             <TextBlock Text="{x:Bind Title}" FontSize="13.5" TextTrimming="CharacterEllipsis" Foreground="{StaticResource MimiInkBrush}" />
-                            <TextBlock Text="กำลังพิมพ์…" Foreground="{StaticResource MimiAccentTextBrush}" FontSize="12" Visibility="{x:Bind Busy}" />
+                            <TextBlock Text="กำลังตอบ…" Foreground="{StaticResource MimiAccentTextBrush}" FontSize="12" Visibility="{x:Bind Busy}" />
                             <TextBlock Text="{x:Bind Preview}" Foreground="{StaticResource MimiMutedBrush}" FontSize="12" TextTrimming="CharacterEllipsis" MaxLines="1"
                                        Visibility="{x:Bind local:ChatListView.Not(Busy)}" />
                         </StackPanel>

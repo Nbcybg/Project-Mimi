@@ -126,6 +126,7 @@ public sealed partial class ChatViewModel : ObservableObject
     private string draft = "";
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(Status), nameof(HasStatus))]
     private bool busy;
 
     [ObservableProperty]
@@ -179,7 +180,27 @@ public sealed partial class ChatViewModel : ObservableObject
 
     public bool Online => session.State is Net.SocketState.Online;
     public bool CanSend => !Uploading && (Draft.Trim().Length > 0 || Staged.Count > 0);
-    public string Status => Transcribing ? "กำลังถอดเสียง…" : Viewing ? "AI กำลังดูรูป…" : "";
+    // app.js (chat header): looking / transcribing first, then "<agent> กำลังตอบ…" while the answer is coming.
+    public string Status
+    {
+        get
+        {
+            var looks = new List<string>();
+            if (Viewing) looks.Add("กำลังดูรูป…");
+            if (Transcribing) looks.Add("กำลังถอดเสียง…");
+            if (looks.Count > 0) return string.Join(" · ", looks);
+            if (!Busy) return "";
+            if (timeline.HandoffTo is { } to)
+            {
+                return $"{session.AgentName(timeline.HandoffFrom ?? to)} กำลังส่งต่อให้ {session.AgentName(to)}…";
+            }
+            if (timeline.SubAgent is { } sub && timeline.Live is { } main)
+            {
+                return $"{session.AgentName(main.Agent)} → {session.AgentName(sub)} กำลังทำงาน…";
+            }
+            return timeline.Live is { Finished: false } live ? $"{session.AgentName(live.Agent)} กำลังตอบ…" : "กำลังตอบ…";
+        }
+    }
     public bool HasStatus => Status.Length > 0;
     public ChatTimeline Timeline => timeline;
 
@@ -319,6 +340,8 @@ public sealed partial class ChatViewModel : ObservableObject
         Busy = timeline.Busy;
         Transcribing = timeline.Transcribing;
         Viewing = timeline.Viewing;
+        OnPropertyChanged(nameof(Status)); // the answering agent can change while Busy stays on
+        OnPropertyChanged(nameof(HasStatus));
         HasMore = timeline.HasMore;
         OlderSession = timeline.Loaded && !timeline.Latest;
         if (!ReferenceEquals(timeline.PinList, before.PinList))

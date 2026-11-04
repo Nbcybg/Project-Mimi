@@ -40,14 +40,25 @@ fun spansToAnnotated(spans: List<Span>): AnnotatedString = buildAnnotatedString 
     }
 }
 
-/** Message text with the web client's formatting; selectable so it can be copied. */
+/** The text size of chat messages (the chat's own "ขนาดตัวอักษร"); unspecified = the theme's. */
+val LocalMessageFontSize = androidx.compose.runtime.compositionLocalOf { androidx.compose.ui.unit.TextUnit.Unspecified }
+
+/**
+ * Message text with the web client's formatting. [selectable] lets the person select and copy it; a chat
+ * bubble turns it off so a long press reaches the bubble's own menu (reply, copy, react, pin).
+ */
 @Composable
-fun MessageText(text: String, modifier: Modifier = Modifier) {
+fun MessageText(text: String, modifier: Modifier = Modifier, selectable: Boolean = true) {
     val blocks = remember(text) { parseBlocks(text) }
-    SelectionContainer(modifier) {
+    val size = LocalMessageFontSize.current
+    val body: @Composable () -> Unit = {
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             for (block in blocks) when (block) {
-                is Block.Paragraph -> Text(spansToAnnotated(block.spans), style = MaterialTheme.typography.bodyLarge, color = MimiColors.ink)
+                is Block.Paragraph -> Text(
+                    spansToAnnotated(block.spans),
+                    style = MaterialTheme.typography.bodyLarge.let { if (size != androidx.compose.ui.unit.TextUnit.Unspecified) it.copy(fontSize = size, lineHeight = size * 1.5f) else it },
+                    color = androidx.compose.material3.LocalContentColor.current,
+                )
                 is Block.Code -> Text(
                     block.text,
                     fontFamily = FontFamily.Monospace,
@@ -62,4 +73,5 @@ fun MessageText(text: String, modifier: Modifier = Modifier) {
             }
         }
     }
+    if (selectable) SelectionContainer(modifier) { body() } else androidx.compose.foundation.layout.Box(modifier) { body() }
 }

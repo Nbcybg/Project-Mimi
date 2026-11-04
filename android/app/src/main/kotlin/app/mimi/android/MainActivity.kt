@@ -38,6 +38,7 @@ import app.mimi.core.ui.MimiTheme
 import app.mimi.feature.auth.AuthRoute
 import app.mimi.feature.chat.ChatListRoute
 import app.mimi.feature.chat.ChatRoute
+import app.mimi.feature.chat.SearchRoute
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
@@ -85,6 +86,7 @@ class MainActivity : ComponentActivity() {
                     composable("chats") {
                         ChatListRoute(
                             onOpenChat = { navController.navigate("chat/$it") },
+                            onSearch = { navController.navigate("search") },
                             onSignOut = {
                                 scope.launch {
                                     (application as MimiApp).signedOut()
@@ -95,7 +97,20 @@ class MainActivity : ComponentActivity() {
                             banner = { UpdateBanner(updates) },
                         )
                     }
-                    composable("chat/{chatId}", arguments = listOf(navArgument("chatId") { type = NavType.LongType })) {
+                    composable("search") {
+                        SearchRoute(
+                            onBack = { navController.popBackStack() },
+                            onOpen = { chat, session, message -> navController.navigate("chat/$chat?sessionId=$session&messageId=$message") },
+                        )
+                    }
+                    composable(
+                        "chat/{chatId}?sessionId={sessionId}&messageId={messageId}",
+                        arguments = listOf(
+                            navArgument("chatId") { type = NavType.LongType },
+                            navArgument("sessionId") { type = NavType.LongType; defaultValue = -1L },
+                            navArgument("messageId") { type = NavType.LongType; defaultValue = -1L },
+                        ),
+                    ) {
                         ChatRoute(onBack = { navController.popBackStack() })
                     }
                 }

@@ -87,6 +87,44 @@ data class ChatView(
     val unread: Boolean = false,
 )
 
+/** A pinned message as the pin bar lists it (protocol.ts PinView). */
+@Serializable
+data class PinView(
+    val id: Long,
+    val sessionId: Long = 0,
+    val role: String = "",
+    val agent: String = "",
+    val text: String = "",
+    val createdAt: String = "",
+)
+
+/** A found message (protocol.ts SearchHit): where it is, who wrote it, and a snippet with the match in `**`. */
+@Serializable
+data class SearchHit(
+    val messageId: Long,
+    val chatId: Long,
+    val sessionId: Long,
+    val chatTitle: String = "",
+    val sessionTitle: String = "",
+    val role: String = "",
+    val agent: String = "",
+    val snippet: String = "",
+    val createdAt: String = "",
+)
+
+/** The size of a session (protocol.ts SessionContextView): the header meter and the context panel. */
+@Serializable
+data class SessionContextView(
+    /** Tokens the model was sent last time, or an estimate of the next prompt. */
+    val usedTokens: Long = 0,
+    val windowTokens: Long = 0,
+    /** Cache share of the input tokens over the session, 0..100; null before any call. */
+    val cacheHitPct: Double? = null,
+    val costUsd: Double = 0.0,
+    val conversationTokens: Long = 0,
+    val maxTokens: Long = 0,
+)
+
 @Serializable
 data class SessionView(
     val id: Long,
@@ -140,6 +178,10 @@ data class AgentView(
     val description: String = "",
     val avatar: String? = null,
     val portrait: String? = null,
+    /** Expression pictures by emoji key (see [lastEmojiKey]), each with a version stamp. */
+    val sprites: Map<String, String> = emptyMap(),
+    /** "sprite" (a picture) or "vrm" (a 3D model: this app shows its 2D picture). */
+    val character: String? = null,
 ) {
     val shownName: String get() = displayName?.takeIf { it.isNotBlank() } ?: name
 }

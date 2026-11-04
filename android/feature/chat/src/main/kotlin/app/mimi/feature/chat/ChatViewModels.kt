@@ -6,6 +6,9 @@ import android.provider.OpenableColumns
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import app.mimi.core.data.ChatLook
+import app.mimi.core.data.ChatLookStore
+import app.mimi.core.data.chatLookFrom
 import app.mimi.core.data.SessionStore
 import app.mimi.core.data.net.MimiSocket
 import app.mimi.core.data.net.SocketState
@@ -13,7 +16,10 @@ import app.mimi.core.data.repo.ChatRepository
 import app.mimi.core.data.repo.FileRepository
 import app.mimi.core.model.AgentView
 import app.mimi.core.model.AttachmentView
+import app.mimi.core.model.ChatMessageView
 import app.mimi.core.model.ChatTimeline
+import app.mimi.core.model.LiveSegment
+import app.mimi.core.model.lastEmojiKey
 import app.mimi.core.model.ChatView
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -23,6 +29,10 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -80,6 +90,12 @@ data class ChatUiState(
     val agents: Map<String, AgentView> = emptyMap(),
     val staged: List<Staged> = emptyList(),
     val recording: Boolean = false,
+    /** The message the next one answers (the reply bar above the composer). */
+    val replyTo: ChatMessageView? = null,
+    /** How this chat looks on this device (text size, character, bubbles, background). */
+    val look: ChatLook = ChatLook(),
+    /** The character's picture for the newest mood (absolute URL), or null. */
+    val figure: String? = null,
     val toast: String? = null,
     val connection: SocketState = SocketState.Idle,
 )
@@ -89,6 +105,7 @@ class ChatViewModel @Inject constructor(
     saved: SavedStateHandle,
     private val chats: ChatRepository,
     private val files: FileRepository,
+    private val looks: ChatLookStore,
     socket: MimiSocket,
     @ApplicationContext private val context: Context,
 ) : ViewModel() {
@@ -96,12 +113,81 @@ class ChatViewModel @Inject constructor(
     private val extra = MutableStateFlow(ChatUiState(ChatTimeline(chatId)))
     private val recorder = WavRecorder()
 
-    val state: StateFlow<ChatUiState> = combine(chats.open(chatId), chats.agents, socket.state, extra) { timeline, agents, connection, local ->
+    val state: StateFlow<ChatUiState> = combine(chats.open(chatId), chats.agents, socket.state, extra, looks.values) { timeline, agents, connection, local, shared ->
         val byName = agents.associateBy { it.name }
         val chat = timeline.chat ?: chats.chats.value.firstOrNull { it.id == chatId }
         val title = chat?.title?.ifBlank { null } ?: chat?.agents?.joinToString(", ") { byName[it]?.shownName ?: it }.orEmpty()
-        local.copy(timeline = timeline, title = title, agents = byName, connection = connection)
+        val agentName = chat?.takeIf { it.kind == "direct" }?.agents?.firstOrNull()
+        val figure = agentName?.let { figureUrl(byName[it], timeline) }
+        val look = chatLookFrom(shared, chatId, agentName)
+        local.copy(timeline = timeline, title = title, agents = byName, connection = connection, look = look, figure = figure)
     }.stateIn(viewModelScope, SharingStarted.Eagerly, extra.value)
+
+    /**
+     * The picture of the character for the newest reply's mood (feature-stage.js): the agent's picture for the
+     * last emoji, else its full-body portrait, else any expression picture, else the small avatar.
+     */
+    private fun figureUrl(agent: AgentView?, timeline: ChatTimeline): String? {
+        agent ?: return null
+        val live = timeline.live?.segments?.filterIsInstance<LiveSegment.Text>()?.lastOrNull()?.raw
+        val newest = live ?: timeline.messages.lastOrNull { it.role == "assistant" }?.text.orEmpty()
+        val name = Uri.encode(agent.name)
+        fun sprite(key: String, stamp: String) = "/api/sprite/agent/$name/$key?v=$stamp"
+        val path = lastEmojiKey(newest)?.let { key -> agent.sprites[key]?.let { sprite(key, it) } }
+            ?: agent.portrait?.let { "/api/agent-image/$name/portrait?v=$it" }
+            ?: agent.sprites.entries.firstOrNull()?.let { sprite(it.key, it.value) }
+            ?: agent.avatar?.let { "/api/agent-image/$name/avatar?v=$it" }
+        return path?.let(files::url)
+    }
+
+    /** A search hit or a deep link: the session to show and the message to scroll to (null = none). */
+    val jumpTo: Long? = saved.get<Long>("messageId")?.takeIf { it > 0 }
+
+    init {
+        val wanted = saved.get<Long>("sessionId")?.takeIf { it > 0 }
+        if (wanted != null) {
+            viewModelScope.launch {
+                state.first { it.timeline.loaded }
+                chats.openSession(chatId, wanted)
+            }
+        }
+        // The size of the session on screen, asked again when an answer finishes (the header meter).
+        viewModelScope.launch {
+            state.map { Triple(it.timeline.session?.id, it.timeline.busy, it.timeline.loaded) }.distinctUntilChanged()
+                .collect { (id, busy, loaded) -> if (loaded && id != null && !busy) chats.askContext(chatId, id) }
+        }
+    }
+
+    /** Shows another session of this chat (null = the newest). */
+    fun openSession(sessionId: Long?) = chats.openSession(chatId, sessionId)
+
+    fun newSession() = chats.newSession(chatId)
+
+    /** Why a message cannot be taken back, or null when it can (the same rules as the web). */
+    fun rewindProblem(message: ChatMessageView): String? {
+        val timeline = state.value.timeline
+        return when {
+            message.role != "user" -> "ย้อนกลับได้เฉพาะข้อความของคุณ"
+            !timeline.latest -> "ย้อนกลับได้เฉพาะใน session ล่าสุด"
+            timeline.busy -> "รอให้ตอบเสร็จก่อน หรือกดหยุด แล้วค่อยย้อนกลับ"
+            timeline.session == null -> "ยังโหลดแชตไม่เสร็จ"
+            else -> null
+        }
+    }
+
+    fun rewind(message: ChatMessageView) = chats.rewind(chatId, message.id)
+
+    /** A message taken back: its text returns to the composer, and the files a task moved are reported. */
+    val rewound = chats.rewound.filter { it.chatId == chatId }
+
+    /** Changes this chat's look; it is shared with the account's other devices under the web's keys. */
+    fun setLook(change: (ChatLook) -> ChatLook) {
+        val chat = state.value.timeline.chat
+        looks.update(chatId, chat?.takeIf { it.kind == "direct" }?.agents?.firstOrNull(), change)
+    }
+
+    /** A built-in background's picture (no token needed). */
+    fun backgroundUrl(id: String): String = files.url("/backgrounds/$id.webp")
 
     fun fileUrl(attachment: AttachmentView): String = files.fileUrl(attachment)
     fun url(path: String): String = files.url(path)
@@ -117,9 +203,19 @@ class ChatViewModel @Inject constructor(
             extra.update { it.copy(toast = "รอให้อัปโหลดไฟล์เสร็จก่อน") }
             return
         }
-        chats.send(chatId, text.trim(), ready.map { it.attachment!!.id }, ready.map { it.name })
-        extra.update { it.copy(staged = emptyList()) }
+        chats.send(chatId, text.trim(), ready.map { it.attachment!!.id }, ready.map { it.name }, extra.value.replyTo?.id)
+        extra.update { it.copy(staged = emptyList(), replyTo = null) }
     }
+
+    fun reply(message: ChatMessageView?) = extra.update { it.copy(replyTo = message) }
+
+    fun pin(message: ChatMessageView) = chats.pin(message.id, !message.pinned)
+
+    fun react(message: ChatMessageView, emoji: String) = chats.react(message.id, emoji)
+
+    fun taskControl(taskId: String, action: String) = chats.taskControl(taskId, action)
+
+    fun taskUndo(taskId: String) = chats.taskUndo(taskId)
 
     fun abort() = chats.abort(chatId)
 

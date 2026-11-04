@@ -56,6 +56,7 @@ public sealed partial class PartSelector : DataTemplateSelector
 public sealed partial class ChatView : UserControl
 {
     private readonly VoiceRecorder recorder = new();
+    private Microsoft.UI.Xaml.DispatcherTimer? recordingClock;
     private readonly Func<nint> window;
 
     public ChatView(ChatViewModel viewModel, Func<nint> window)
@@ -88,6 +89,15 @@ public sealed partial class ChatView : UserControl
     private static double textSize = 14;
 
     public static HorizontalAlignment Side(bool user) => user ? HorizontalAlignment.Right : HorizontalAlignment.Left;
+
+    // app.css .user / .tx: 14px corners with a 4px tail on the speaker's side; padding 8px 13px / 8px 12px.
+    // The character screen (.solo .tx / .user): round bubbles, 16px / 18px, padding 10px 14px / 9px 15px.
+    public static CornerRadius BubbleRadius(bool user) => solo ? new CornerRadius(user ? 18 : 16) : user ? new CornerRadius(14, 14, 4, 14) : new CornerRadius(4, 14, 14, 14);
+    public static Thickness BubblePadding(bool user) => solo ? (user ? new Thickness(15, 9, 15, 9) : new Thickness(14, 10, 14, 10)) : user ? new Thickness(13, 8, 13, 8) : new Thickness(12, 8, 12, 8);
+    public static CornerRadius UserRadius() => BubbleRadius(true);
+    public static CornerRadius AgentRadius() => BubbleRadius(false);
+    public static Thickness UserPadding() => BubblePadding(true);
+    public static Thickness AgentPadding() => BubblePadding(false);
     public static double ChatTextSize() => textSize;
     /// <summary>The send button exists only when there is something to send (web .box.empty #send).</summary>
     public static Visibility SendVisibility(bool canSend, bool busy) => canSend && !busy ? Visibility.Visible : Visibility.Collapsed;
@@ -128,6 +138,11 @@ public sealed partial class ChatView : UserControl
 
     private void OnComposerKey(object sender, KeyRoutedEventArgs e)
     {
+        if (e.Key == VirtualKey.Escape && CancelRecording())
+        {
+            e.Handled = true;
+            return;
+        }
         if (ComposerKey(e))
         {
             e.Handled = true;
@@ -429,6 +444,11 @@ public sealed partial class ChatView : UserControl
             {
                 recorder.Start();
                 MicButton.IsChecked = true;
+                ShowRecording();
+                recordingClock ??= new Microsoft.UI.Xaml.DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+                recordingClock.Tick -= OnRecordingTick;
+                recordingClock.Tick += OnRecordingTick;
+                recordingClock.Start();
                 ToolTipService.SetToolTip(MicButton, "กำลังอัด… กดอีกครั้งเพื่อแนบเสียง");
             }
             catch (Exception problem)
@@ -439,6 +459,7 @@ public sealed partial class ChatView : UserControl
             return;
         }
         MicButton.IsChecked = false;
+        EndRecordingUi();
         ToolTipService.SetToolTip(MicButton, "อัดข้อความเสียง (กดอีกครั้งเพื่อส่ง)");
         var wav = await recorder.Stop();
         if (wav.Length <= 44) return;
@@ -446,5 +467,34 @@ public sealed partial class ChatView : UserControl
         await ViewModel.Attach(stream, $"voice-{DateTime.Now:yyyyMMdd-HHmmss}.wav", "audio/wav");
         // A voice message alone goes out at once, like the web's mic button.
         if (ViewModel.Draft.Trim().Length == 0) ViewModel.Send();
+    }
+
+    /// <summary>The web's recording bar (#rec-bar): that it is recording, for how long, and how to send or drop it.</summary>
+    private void ShowRecording()
+    {
+        var seconds = (int)recorder.Elapsed.TotalSeconds;
+        ViewModel.Info = $"🔴 กำลังอัดเสียง {seconds / 60}:{seconds % 60:00} · กดไมค์อีกครั้งเพื่อส่ง · Esc เพื่อยกเลิก";
+    }
+
+    private void OnRecordingTick(object? sender, object e)
+    {
+        if (recorder.Recording) ShowRecording();
+        else EndRecordingUi();
+    }
+
+    private void EndRecordingUi()
+    {
+        recordingClock?.Stop();
+        if (ViewModel.Info.StartsWith("🔴", StringComparison.Ordinal)) ViewModel.Info = "";
+    }
+
+    /// <summary>Esc while recording drops the take without sending it.</summary>
+    private bool CancelRecording()
+    {
+        if (!recorder.Recording) return false;
+        recorder.Cancel();
+        MicButton.IsChecked = false;
+        EndRecordingUi();
+        return true;
     }
 }

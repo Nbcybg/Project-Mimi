@@ -1,6 +1,12 @@
 package app.mimi.feature.chat
 
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,6 +23,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -80,6 +87,7 @@ fun connectionLabel(state: SocketState): String? = when (state) {
 fun ChatListRoute(
     onOpenChat: (Long) -> Unit,
     onSignOut: () -> Unit,
+    onSearch: () -> Unit = {},
     banner: @Composable () -> Unit = {},
     viewModel: ChatListViewModel = hiltViewModel(),
 ) {
@@ -92,12 +100,19 @@ fun ChatListRoute(
         topBar = {
             TopAppBar(
                 title = {
-                    Column {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        // The web's logo badge (app.css .logo).
+                        Box(
+                            Modifier.size(28.dp).clip(RoundedCornerShape(8.dp)).background(Brush.linearGradient(listOf(Color(0xFFE585A3), Color(0xFFA63A5C)))),
+                            contentAlignment = Alignment.Center,
+                        ) { Text("M", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp) }
+                        Spacer(Modifier.width(10.dp))
                         Text("Mimi", fontWeight = FontWeight.Bold)
-                        connectionLabel(state.connection)?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MimiColors.muted) }
                     }
                 },
                 actions = {
+                    if (state.connection is SocketState.Online) Text("online", color = MimiColors.ok, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                    else connectionLabel(state.connection)?.let { Text(it, color = MimiColors.muted, fontSize = 12.sp) }
                     IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, contentDescription = "เมนู") }
                     DropdownMenu(menu, onDismissRequest = { menu = false }) {
                         if (state.username.isNotEmpty()) DropdownMenuItem(text = { Text(state.username, color = MimiColors.muted) }, onClick = {}, enabled = false)
@@ -111,26 +126,73 @@ fun ChatListRoute(
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
             )
         },
-        floatingActionButton = {
-            FloatingActionButton(onClick = { pickAgent = true }) { Icon(Icons.Default.Add, contentDescription = "แชตใหม่") }
-        },
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
             banner()
-            SecondaryTabRow(selectedTabIndex = if (group) 1 else 0, containerColor = MaterialTheme.colorScheme.background) {
-                Tab(selected = !group, onClick = { group = false }, text = { Text("ตัวต่อตัว") })
-                Tab(selected = group, onClick = { group = true }, text = { Text("กลุ่ม") })
+            // The web's search box (it opens the search screen).
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp).clip(RoundedCornerShape(12.dp)).background(MimiColors.codeBg)
+                    .border(1.dp, MimiColors.line, RoundedCornerShape(12.dp)).clickable(onClick = onSearch).padding(horizontal = 14.dp, vertical = 11.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Default.Search, contentDescription = null, tint = MimiColors.muted, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(10.dp))
+                Text("ค้นหาทุกแชต…", color = MimiColors.muted, fontSize = 14.sp)
+            }
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("แชต", color = MimiColors.faint, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                Text(
+                    "+ ใหม่",
+                    color = MimiColors.accentText,
+                    fontSize = 13.sp,
+                    modifier = Modifier.clip(RoundedCornerShape(8.dp)).border(1.dp, MimiColors.accent.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
+                        .clickable { pickAgent = true }.padding(horizontal = 12.dp, vertical = 5.dp),
+                )
+            }
+            // The web's segmented switch (app.css .seg): the chosen half is tinted and outlined.
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp).clip(RoundedCornerShape(12.dp)).border(1.dp, MimiColors.line, RoundedCornerShape(12.dp)).padding(3.dp),
+                horizontalArrangement = Arrangement.spacedBy(3.dp),
+            ) {
+                for ((label, isGroup) in listOf("ตัวต่อตัว" to false, "กลุ่ม" to true)) {
+                    val on = group == isGroup
+                    Box(
+                        Modifier.weight(1f).clip(RoundedCornerShape(9.dp))
+                            .background(if (on) MimiColors.accent.copy(alpha = 0.14f) else Color.Transparent)
+                            .border(1.dp, if (on) MimiColors.accent.copy(alpha = 0.5f) else Color.Transparent, RoundedCornerShape(9.dp))
+                            .clickable { group = isGroup }.padding(vertical = 9.dp),
+                        contentAlignment = Alignment.Center,
+                    ) { Text(label, color = if (on) MimiColors.accentText else MimiColors.ink2, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal) }
+                }
             }
             val rows = state.rows.filter { (it.chat.kind == "group") == group }
-            if (rows.isEmpty()) {
+            // Agents with no direct chat yet (web: "เริ่มคุยกับ").
+            val withChat = state.rows.filter { it.chat.kind == "direct" }.flatMap { it.chat.agents }.toSet()
+            val startable = if (group) emptyList() else state.agents.filter { it.name !in withChat }
+            if (rows.isEmpty() && startable.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(if (group) "ยังไม่มีแชตกลุ่ม (สร้างได้จากเว็บ)" else "ยังไม่มีแชต — กด + เพื่อเริ่มคุยกับ agent", color = MimiColors.muted)
+                    Text(if (group) "ยังไม่มีแชตกลุ่ม (สร้างได้จากเว็บ)" else "ยังไม่มีแชต — กด + ใหม่ เพื่อเริ่มคุยกับ agent", color = MimiColors.muted)
                 }
             }
             LazyColumn(Modifier.fillMaxSize()) {
                 items(rows, key = { it.chat.id }) { row ->
                     ChatRowItem(row) { onOpenChat(row.chat.id) }
-                    HorizontalDivider(color = MimiColors.line.copy(alpha = 0.4f))
+                }
+                if (startable.isNotEmpty()) {
+                    item(key = "start-title") { Text("เริ่มคุยกับ", color = MimiColors.faint, fontSize = 12.sp, modifier = Modifier.padding(start = 16.dp, top = 12.dp, bottom = 4.dp)) }
+                    items(startable, key = { "start-${it.name}" }) { agent ->
+                        Row(
+                            Modifier.fillMaxWidth().clickable { scope.launch { viewModel.directChat(agent.name)?.let(onOpenChat) } }.padding(horizontal = 16.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Box(Modifier.size(48.dp).border(1.5.dp, MimiColors.info.copy(alpha = 0.7f), CircleShape).padding(3.dp)) { Avatar(agent.shownName, null, size = 42.dp) }
+                            Spacer(Modifier.width(12.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(agent.shownName, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                                if (agent.description.isNotBlank()) Text(agent.description, color = MimiColors.muted, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium)
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -149,7 +211,7 @@ private fun ChatRowItem(row: ChatRow, onClick: () -> Unit) {
         Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Avatar(row.title, row.avatarUrl, size = 48.dp)
+        Box(Modifier.size(48.dp).border(1.5.dp, MimiColors.accent, CircleShape).padding(3.dp)) { Avatar(row.title, row.avatarUrl, size = 42.dp) }
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -158,7 +220,7 @@ private fun ChatRowItem(row: ChatRow, onClick: () -> Unit) {
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    if (row.busy) "กำลังพิมพ์…" else row.chat.preview,
+                    if (row.busy) "กำลังตอบ…" else row.chat.preview.replace("*", "").replace("`", ""),
                     color = if (row.busy) MimiColors.accentText else MimiColors.muted,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,

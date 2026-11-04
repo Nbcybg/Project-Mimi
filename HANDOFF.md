@@ -17,6 +17,33 @@
 - Q10 **ต้องครบใน native ก่อนปล่อย** (ไม่พึ่งหน้าเว็บ) → Android ตอนนี้มีแค่ MVP (ไม่มี Hub/Agent/ตั้งค่า/workflow) ต้องทำเพิ่มจนครบเท่า Windows
 - Q11 **รองรับเซิร์ฟเวอร์ทุกเวอร์ชัน** → แอปต้องทนเซิร์ฟเวอร์เก่าที่ไม่มี `api` ใน `/health` และ frame ใหม่ ๆ (ทำงานแบบลดฟีเจอร์ ไม่ปฏิเสธ)
 
+## งาน 2026-11-04 รอบที่ 8 (อ่านก่อน) — บน Mac Intel: ปรับ UI แอป Windows/Android ให้ตรง Electron + สร้าง `android/core/data` ใหม่
+
+คำสั่งของเจ้าของโปรเจกต์: "ลอง … และแก้ได้มั้ย" (ย้ายเป็น native ระยะยาว ไม่ใช้ WebView) → เทียบ UI native กับเว็บ (`app.css`) แล้วแก้
+
+- **Windows (WinUI) — แก้จากการอ่าน CSS เทียบโค้ด, ยังไม่ได้ build XAML/ดูหน้าจอจริง (เครื่องนี้ Mac)**: ต้อง build บน Windows แล้วดูก่อนปล่อย
+  - bubble แชต: มุม 14 + หาง 4, padding 8×12/13, ระยะห่างข้อความ 12, กล่อง quote (`ChatView.xaml`, `BubbleRadius/BubblePadding` ใน `ChatView.xaml.cs`); bubble ตอน stream/กำลังส่งใช้ค่าเดียวกัน (เดิม 12 ต่างจากข้อความที่เก็บแล้ว)
+  - สถานะ "กำลังตอบ / กำลังดูรูป / กำลังถอดเสียง / ส่งต่อ / sub-agent" (`ChatTimeline` เก็บ `HandoffFrom/To`, `SubAgent` + เทสต์; `ChatViewModel.Status`) · ยังไม่มีชิปลอย `.typing-chip`
+  - แชตตัวละคร (.solo): fade ตามสัดส่วนความสูง (ใส 0–18%, ทึบที่ 46%), composer แบบมือถือ (ไมค์/แนบ 48, ช่อง min 48 มุม 24, ส่งอยู่ในช่อง), bubble กลม 16/18
+  - อัดเสียง: บรรทัดเวลา + Esc ยกเลิก (`ChatView.xaml.cs`) — ยังไม่ได้ลองอัดจริง; ยังไม่มีกดค้าง/ปัดยกเลิก/`#rec-bar`
+  - ยังไม่ได้แยกโหมดมือถือ/เดสก์ท็อป (เว็บแยกที่ 820px; native ใช้แบบมือถืออย่างเดียว)
+- **Android**: `android/core/data` **หายจริง** (`.gitignore` เคยกัน `data/`; ไม่มีใน `_old/` และ zip ใน Downloads) → **เขียนใหม่** ตาม `docs/native/android-core-data-prompt.md`
+  (1,267 บรรทัด: Session/EncryptedSharedPreferences, MimiSocket, repo 5 ตัว, DataModule) · build + unit test ผ่านทุกโมดูล · ทดสอบกับ core จริง + mock LLM บน emulator: ล็อกอินด้วย token → รายการ agent → ส่งข้อความ → ได้คำตอบ
+  - **เขียนใหม่ = ไม่ใช่ของเดิม**: ถ้าหาโฟลเดอร์จริงจากเครื่อง Windows เจอ ให้เทียบ/แทนที่ แล้วลบ `MimiampRepository` + endpoint เพลงในนั้น (ตาม Q5)
+  - ออกจากระบบแล้วจำที่อยู่เซิร์ฟเวอร์ไว้ (`PersistentSessionStore.signOut`)
+  - UI ให้ตรงเว็บ: แชต direct ใช้แบบ .solo (bubble ครีม/ทึบจาง, เวลาใต้ bubble, ปุ่ม glass, ช่องพิมพ์แคปซูลมีปุ่มส่งในช่อง, ข้อความชิดล่าง), รายการแชต (โลโก้ M, online, แท็บแคปซูล, + ใหม่, วงแหวน avatar, ส่วน "เริ่มคุยกับ"), หน้าเชื่อมต่อเป็นการ์ด
+  - **ยังไม่ได้ทำ/ลอง**: แชตกลุ่ม, หน้า gateway + 2FA, อัดเสียง, แนบไฟล์/รูป, push (FCM), widget, reconnect, ตั้งค่า/ค้นหา/เมนูล่างของเว็บ, `FileRepository` ไม่มีเทสต์, `directChat` อาจได้ id ผิดถ้ามีแชต direct ของ agent เดียวกันเด้งมาพร้อมกัน
+  - debug build ต่อ `http://` ได้อยู่แล้ว (`app/src/debug/AndroidManifest.xml`) → emulator ต่อ core ที่ `http://10.0.2.2:<port>`
+  - emulator บน Mac Intel ช้ามาก (ขึ้น "System UI isn't responding" ตอนบูต): พิมพ์ผ่าน `adb input text` ตัวอักษรหายถ้าพิมพ์ยาว — แบ่งเป็นท่อน ๆ
+  - **ตามมา (รอบเดียวกัน)**: task cards + ตอบกลับ/คัดลอก/react/ปักหมุด + แถบหมุด ใน Android — `core:model` (`TaskCard`, `MessageMarks`, `PinView`, เทสต์ 3 ตัวใหม่), `ChatRepository.pin/react/taskControl/taskUndo/send(replyTo)`, UI ใน `ChatScreen.kt` (กดค้างที่ข้อความ) · ลองบน emulator กับ core จริงแล้ว: ปักหมุด, react ❤️, ตอบกลับ (กล่อง quote) · **การ์ดงานยังไม่เคยเห็นบนเครื่อง** (mock core ไม่รัน task) · ยังไม่มี: ส่งต่อ (forward), `task-kill`, แตะแถบหมุดแล้วเลื่อนไปที่ข้อความ
+  - **ตัวละคร + ตั้งค่าแชต (Android)**: รูปตัวละครหลังแชต direct ตามอีโมจิล่าสุด (`lastEmojiKey` ใน `core:model`, sprite → portrait → sprite อื่น → avatar), ฉากหลังสำเร็จรูป 11 แบบ, ขนาดตัวอักษร, ข้อความบนตัวละคร (ไม่แสดง/2 ล่าสุด/ทั้งหมด), สไลเดอร์ขนาด/ตำแหน่ง, fade ด้านบน — `ChatLookStore` บน `UiSettings` (**sync กับอุปกรณ์อื่นแล้ว**: `ui-set`, `welcome.ui`, frame `ui` ด้วย key เดียวกับเว็บ; `UiSettings` ต้องถูกสร้างตอนเริ่มแอป — inject ใน `MimiApp` — ไม่งั้นพลาด `welcome`), เมนูเฟืองมุมขวาบน · ลองบน emulator ด้วยรูป portrait รูปเดียว (ไอคอนแอป) · ยังไม่เคยเห็น sprite ต่ออีโมจิ/ชุด/VRM จริง · ยังไม่มี: ธีมต่อแชต, อัปโหลดฉากหลังเอง, กฎฉากหลังตามเวลา, แกลเลอรีทับแชต
+  - **ค้นหา + session (Android)**: `ChatRepository.search/openSession/newSession/askContext`, `core:model` (`SearchHit`, `SessionContextView`, `ServerFrame.SearchResults/SessionContext`, timeline เก็บ `sessions/latest/context`, เทสต์ 3 ตัวใหม่ + เทสต์ search กับ core จำลอง), `SearchScreen.kt` (+ช่องค้นหาในรายการแชต), ส่วน Session ในแผ่นตั้งค่าแชต + แถบ "กำลังดู session เก่า" · ลองบน emulator กับ core จริงแล้ว · ยังไม่ได้ทำ: rewind (#13), มาตรวัด context ที่หัวแชต
+  - **Rewind + การ์ดงาน (Android)**: rewind = กดค้างข้อความของตัวเอง → ย้อนกลับมาตรงนี้ → ยืนยัน (`ServerFrame.Rewound`, `ChatRepository.rewind/rewound` + reload เต็มหลัง rewound, กฎเดียวกับเว็บ: เฉพาะข้อความของเรา / session ล่าสุด / ไม่ busy) · **การ์ดงานทดสอบกับของจริงแล้ว**: core + PC agent (`npm run pc-agent` กับ `ALLOWED_DIRS` โฟลเดอร์ทดลอง, `MIMI_LOCAL_CONSENT=0`, `MIMI_PC_SHELL=0`) + mock LLM ที่เรียก `task_run` (`file-organizer`): ขั้นตอน, ขออนุญาต, สรุปผล, ปุ่มย้อนไฟล์กลับ ใช้ได้ · แก้ UI: การ์ดงานแสดงขั้นละบรรทัด, ไม่ fade ข้อความเก่าขณะมีคำถาม/งานค้าง · mock LLM ที่ใช้อยู่ใน scratchpad ของเซสชัน (ไม่ได้เก็บใน repo)
+  - **sync ตั้งค่าแชต**: ค่าเริ่มต้น `bubbles` เปลี่ยนเป็น 2 (ทั้งหมด) ตามเว็บ · ตำแหน่งตัวละครอยู่ที่ `mimi.view.mobile.<agent>.2d` (ต่อ agent, y ของเว็บเป็นบวก=ขึ้น) · ทดสอบสองทางกับ core จริง (probe `ui-set` → แอปเปลี่ยนตาม; แอปเปลี่ยน → probe ได้ frame `ui`) · ข้อจำกัด: ถ้าแก้ตอนออฟไลน์ แล้ว `welcome.ui` มาทับ ค่านั้นอาจหาย
+- ทดสอบ core ในเครื่อง: `npm ci` ที่ root (ติดตั้ง `node_modules` แล้ว) + `npm rebuild better-sqlite3` · core `MIMI_ROOT=<โฟลเดอร์ทดสอบ> PORT=8790 ... npm run serve` + `node apps/windows/tests/tools/mock-llm.cjs` (ตามหัวข้อ "UI test" ใน `apps/windows/README.md`) — **ปิดไปแล้วตอนจบรอบ**
+- ผลเทสต์ท้ายรอบ: Android ทุกโมดูลผ่าน; `Mimi.Core.Tests` 81/85 (4 ตัวที่ตกผูกกับ Windows ตกอยู่แล้ว); `mac-typecheck` ผ่าน
+- ไม่มี git ที่นี่ — ไม่มีอะไรถูก commit/push
+
 ## งาน 2026-11-03 รอบที่ 7 (อ่านก่อน) — บน Mac Intel: ที่แอป Windows ยังขาด (WNS) แล้วเริ่ม Phase 3 (แอป Mac)
 
 คำสั่งของเจ้าของโปรเจกต์: "งั้นแก้ สิ่งที่ app ขาดก่อน จบแล้วไป p3"

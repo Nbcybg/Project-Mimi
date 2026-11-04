@@ -32,19 +32,19 @@
         <local:PartSelector x:Key="PartSelector" Text="{StaticResource TextPartTemplate}" Tool="{StaticResource ToolPartTemplate}" File="{StaticResource FileTemplate}" />
         <!-- A message stored on the server. -->
         <DataTemplate x:Key="MessageTemplate" x:DataType="vm:MessageItem">
-            <Grid Margin="0,4" MaxWidth="840">
+            <Grid Margin="0,6" MaxWidth="840">
                 <Grid HorizontalAlignment="{x:Bind local:ChatView.Side(IsUser)}" MaxWidth="680">
                 <StackPanel Spacing="3" HorizontalAlignment="{x:Bind local:ChatView.Side(IsUser)}">
                     <Border Background="{x:Bind local:ChatView.Bubble(IsUser)}" BorderBrush="{x:Bind local:ChatView.BubbleLine(IsUser)}" BorderThickness="1"
-                            CornerRadius="16" Padding="13,9" Tag="{x:Bind}" ContextRequested="OnMessageContext" Tapped="OnMessageTapped">
+                            CornerRadius="{x:Bind local:ChatView.BubbleRadius(IsUser)}" Padding="{x:Bind local:ChatView.BubblePadding(IsUser)}" Tag="{x:Bind}" ContextRequested="OnMessageContext" Tapped="OnMessageTapped">
                         <StackPanel Spacing="6">
                             <StackPanel Orientation="Horizontal" Spacing="8" Visibility="{x:Bind local:ChatView.NameRow(IsUser)}">
                                 <TextBlock Text="{x:Bind Who}" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource MimiAccentTextBrush}" />
                                 <TextBlock Text="{x:Bind Mood}" FontSize="12" Foreground="{StaticResource MimiMutedBrush}" />
                             </StackPanel>
                             <TextBlock Text="{x:Bind Forwarded}" Style="{StaticResource MimiCaption}" FontStyle="Italic" Visibility="{x:Bind HasForwarded}" />
-                            <Border BorderBrush="{StaticResource MimiAccentBrush}" BorderThickness="3,0,0,0" Background="{StaticResource MimiCodeBrush}" CornerRadius="4"
-                                    Padding="8,4" Visibility="{x:Bind HasQuote}">
+                            <Border BorderBrush="{StaticResource MimiAccentBrush}" BorderThickness="2,0,0,0" Background="{StaticResource MimiAccentSoftBrush}" CornerRadius="6"
+                                    Padding="9,4" Visibility="{x:Bind HasQuote}">
                                 <TextBlock Text="{x:Bind Quote}" FontSize="12" Foreground="{StaticResource MimiInk2Brush}" TextWrapping="Wrap" MaxLines="3" TextTrimming="CharacterEllipsis" />
                             </Border>
                             <controls:MessageText Text="{x:Bind Text}" TextSize="{x:Bind local:ChatView.ChatTextSize()}" TextBrush="{x:Bind local:ChatView.InkFor(IsUser)}" Visibility="{x:Bind HasText}" />
@@ -84,9 +84,9 @@
 
         <!-- Sent by this device, not echoed yet. -->
         <DataTemplate x:Key="PendingTemplate" x:DataType="vm:PendingItem">
-            <Grid Margin="0,4" MaxWidth="840">
+            <Grid Margin="0,6" MaxWidth="840">
                 <Grid HorizontalAlignment="Right" MaxWidth="680" Opacity="0.75">
-                <Border Background="{x:Bind local:ChatView.UserBubble()}" BorderBrush="{x:Bind local:ChatView.UserBubbleLine()}" BorderThickness="1" CornerRadius="12" Padding="12,8">
+                <Border Background="{x:Bind local:ChatView.UserBubble()}" BorderBrush="{x:Bind local:ChatView.UserBubbleLine()}" BorderThickness="1" CornerRadius="{x:Bind local:ChatView.UserRadius()}" Padding="{x:Bind local:ChatView.UserPadding()}">
                     <StackPanel Spacing="4">
                         <controls:MessageText Text="{x:Bind Text}" TextSize="{x:Bind local:ChatView.ChatTextSize()}" TextBrush="{x:Bind local:ChatView.UserInk()}" />
                         <TextBlock Text="{x:Bind Files}" Style="{StaticResource MimiCaption}" />
@@ -100,9 +100,9 @@
 
         <!-- The answer streaming in now. -->
         <DataTemplate x:Key="LiveTemplate" x:DataType="vm:LiveItem">
-            <Grid Margin="0,4" MaxWidth="840">
+            <Grid Margin="0,6" MaxWidth="840">
                 <Grid HorizontalAlignment="Left" MaxWidth="680">
-                <Border Background="{x:Bind local:ChatView.AgentBubble()}" BorderBrush="{x:Bind local:ChatView.AgentBubbleLine()}" BorderThickness="1" CornerRadius="12" Padding="12,8">
+                <Border Background="{x:Bind local:ChatView.AgentBubble()}" BorderBrush="{x:Bind local:ChatView.AgentBubbleLine()}" BorderThickness="1" CornerRadius="{x:Bind local:ChatView.AgentRadius()}" Padding="{x:Bind local:ChatView.AgentPadding()}">
                     <StackPanel Spacing="6">
                         <TextBlock Text="{x:Bind Who}" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource MimiAccentTextBrush}" Visibility="{x:Bind local:ChatView.AgentNameRow()}" />
                         <ProgressRing IsActive="{x:Bind Thinking}" Width="18" Height="18" HorizontalAlignment="Left" Visibility="{x:Bind Thinking}" />
@@ -290,7 +290,7 @@
                             </Flyout>
                         </Button.Flyout>
                     </Button>
-                    <Grid Grid.Column="4" VerticalAlignment="Bottom">
+                    <Grid x:Name="SendHost" Grid.Column="4" VerticalAlignment="Bottom">
                         <Button x:Name="SendButton" AutomationProperties.AutomationId="SendButton" Style="{StaticResource AccentButtonStyle}" Content="&#xE724;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                 CornerRadius="10" Padding="9,7" AutomationProperties.Name="ส่ง" Command="{x:Bind ViewModel.SendCommand}" IsEnabled="{x:Bind ViewModel.CanSend, Mode=OneWay}"
                                 Visibility="{x:Bind local:ChatView.SendVisibility(ViewModel.CanSend, ViewModel.Busy), Mode=OneWay}" />

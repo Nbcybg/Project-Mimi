@@ -60,6 +60,11 @@ public sealed record ChatTimeline(
     bool Busy = false,
     bool Transcribing = false,
     bool Viewing = false,
+    /// <summary>A handoff in flight: who passed the turn on, and to whom, until the next agent's first event.</summary>
+    string? HandoffFrom = null,
+    string? HandoffTo = null,
+    /// <summary>A sub-agent (or skill) working for the agent that is answering.</summary>
+    string? SubAgent = null,
     /// <summary>Lines under the conversation: errors, "stopped", handoffs.</summary>
     IReadOnlyList<Note>? Notes = null,
     /// <summary>The chat's pinned messages, from every session.</summary>
@@ -131,9 +136,9 @@ public sealed record ChatTimeline(
         ServerFrame.ChatMessage message => message.ChatId != ChatId ? this : OnMessage(message),
         ServerFrame.ChatEvent chatEvent => !Showing(chatEvent.ChatId, chatEvent.SessionId) ? this : Apply(chatEvent.Agent, chatEvent.Event),
         ServerFrame.ChatTurnMessages turn => turn.ChatId != ChatId ? this : this with { Messages = MergeById(MessageList, turn.Messages), Live = null, Earlier = [] },
-        ServerFrame.Busy { ChatId: null } => this with { Busy = false, Transcribing = false, Viewing = false },
+        ServerFrame.Busy { ChatId: null } => this with { Busy = false, Transcribing = false, Viewing = false, HandoffFrom = null, HandoffTo = null, SubAgent = null },
         ServerFrame.Busy busy when busy.ChatId != ChatId => this,
-        ServerFrame.Busy { Done: true } => this with { Busy = false, Transcribing = false, Viewing = false, Live = Live is { Finished: true } ? Live : null },
+        ServerFrame.Busy { Done: true } => this with { Busy = false, Transcribing = false, Viewing = false, HandoffFrom = null, HandoffTo = null, SubAgent = null, Live = Live is { Finished: true } ? Live : null },
         ServerFrame.Busy => this with { Busy = true },
         ServerFrame.Transcribing transcribing => transcribing.ChatId == ChatId ? this with { Transcribing = transcribing.On } : this,
         ServerFrame.Viewing viewing => viewing.ChatId == ChatId ? this with { Viewing = viewing.On } : this,
@@ -236,6 +241,9 @@ public sealed record ChatTimeline(
                     Earlier = Live is { Finished: true } ? [.. EarlierList, Live] : EarlierList,
                     Live = new LiveBubble(start.Agent.Length > 0 ? start.Agent : agent),
                     Busy = true,
+                    HandoffFrom = null,
+                    HandoffTo = null,
+                    SubAgent = null,
                 };
             case AgentEvent.TextDelta delta:
             {
@@ -275,6 +283,7 @@ public sealed record ChatTimeline(
             case AgentEvent.Activity activity:
             {
                 var withHelper = Live is not null ? this with { Live = Live with { Helper = activity.Agent } } : this;
+                withHelper = withHelper with { SubAgent = activity.Event is AgentEvent.RunFinish ? null : activity.Agent };
                 // A sub-agent's permission question is the user's to answer too.
                 return activity.Event switch
                 {
@@ -301,10 +310,14 @@ public sealed record ChatTimeline(
                     "handoff" or "stop" => null,
                     _ => new Note($"หยุด: {finish.Reason}", true),
                 };
+                var handingOff = finish.Reason == "handoff" && finish.HandoffTo is not null;
                 return this with
                 {
                     Live = bubble with { Segments = segments, Speech = finish.Speech ?? bubble.Speech, Finished = true },
                     Notes = note is null ? NoteList : [.. NoteList, note],
+                    HandoffFrom = handingOff ? bubble.Agent : null,
+                    HandoffTo = handingOff ? finish.HandoffTo : null,
+                    SubAgent = null,
                 };
             }
             default:

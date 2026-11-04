@@ -24,6 +24,23 @@ public class ChatTimelineTests
     private static ChatTimeline Fold(ChatTimeline state, IEnumerable<string> frames) =>
         frames.Aggregate(state, (current, json) => current.Reduce(FrameParser.Parse(json)));
 
+    // Quotes written as ' to keep the frames readable.
+    private static string Ev(string agent, string body) =>
+        ("{'type':'chat-event','chatId':1,'sessionId':1,'agent':'" + agent + "','event':{" + body + "}}").Replace('\'', '"');
+
+    [Fact]
+    public void A_handoff_and_a_sub_agent_show_who_is_working_until_the_next_run()
+    {
+        var start = Fold(new ChatTimeline(1), ["""{"type":"busy","chatId":1}""", Ev("mimi", "'type':'run-start','agent':'mimi','model':'m'")]);
+        var sub = Fold(start, [Ev("mimi", "'type':'agent-activity','agent':'coder','event':{'type':'text-delta','text':'x'}")]);
+        Assert.Equal("coder", sub.SubAgent);
+        var handoff = Fold(sub, [Ev("mimi", "'type':'run-finish','reason':'handoff','rounds':1,'usage':{},'text':'','handoff':{'to':'milo'}")]);
+        Assert.Equal(("mimi", "milo"), (handoff.HandoffFrom, handoff.HandoffTo));
+        Assert.Null(handoff.SubAgent);
+        var next = Fold(handoff, [Ev("milo", "'type':'run-start','agent':'milo','model':'m'")]);
+        Assert.Null(next.HandoffTo);
+    }
+
     [Fact]
     public void A_streamed_turn_becomes_a_bubble_with_tools_then_the_stored_messages_replace_it()
     {

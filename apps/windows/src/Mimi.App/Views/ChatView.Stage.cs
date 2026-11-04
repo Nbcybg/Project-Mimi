@@ -28,7 +28,6 @@ public sealed partial class ChatView
     private Action<bool>? railPeek;
     private ScrollViewer? messagesScroll;
     private bool bubbleFadeQueued;
-    private const double BubbleFadeHeight = 140;
 
     private static readonly (string Key, string Label)[] StatusKeys = [("location", "ที่อยู่"), ("outfit", "ชุด"), ("current_task", "กำลังทำ"), ("mood", "อารมณ์")];
 
@@ -136,15 +135,21 @@ public sealed partial class ChatView
         ComposerBox.Padding = on ? new Thickness(0) : new Thickness(6, 4, 6, 6);
         ComposerBox.CornerRadius = new CornerRadius(on ? 0 : 14);
         Composer.Background = on ? Theme.Brush("SoloInput") : new SolidColorBrush(Microsoft.UI.Colors.Transparent);
-        Composer.CornerRadius = new CornerRadius(on ? 22 : 0);
-        Composer.Padding = on ? new Thickness(14, 9, 14, 9) : new Thickness(8, 6, 8, 6);
+        Composer.CornerRadius = new CornerRadius(on ? 24 : 0);
+        Composer.Padding = on ? new Thickness(20, 13, 58, 13) : new Thickness(8, 6, 8, 6);
+        Composer.MinHeight = on ? 48 : 0;
+        // The send button sits inside the input's right end (web: margin 0 4px 4px -52px).
+        if (SendHost.Parent is Grid line) line.ColumnSpacing = on ? 8 : 2;
+        Grid.SetColumn(SendHost, on ? 2 : 4);
+        SendHost.HorizontalAlignment = on ? HorizontalAlignment.Right : HorizontalAlignment.Stretch;
+        SendHost.Margin = on ? new Thickness(0, 0, 4, 4) : new Thickness(0);
         ComposerHint.Visibility = on ? Visibility.Collapsed : Visibility.Visible;
         EmojiButton.Visibility = on ? Visibility.Collapsed : Visibility.Visible;
         foreach (var button in new Control[] { AttachButton, MicButton })
         {
-            button.Width = on ? 40 : double.NaN;
-            button.Height = on ? 40 : double.NaN;
-            button.CornerRadius = new CornerRadius(on ? 20 : 8);
+            button.Width = on ? 48 : double.NaN;
+            button.Height = on ? 48 : double.NaN;
+            button.CornerRadius = new CornerRadius(on ? 24 : 8);
             button.BorderThickness = new Thickness(on ? 1 : 0);
             button.Background = on ? Theme.Brush("GlassButton") : new SolidColorBrush(Microsoft.UI.Colors.Transparent);
             button.BorderBrush = on ? Theme.Brush("GlassButtonLine") : null;
@@ -243,7 +248,9 @@ public sealed partial class ChatView
                 continue;
             }
             var height = (element as FrameworkElement)?.ActualHeight ?? 0;
-            element.Opacity = Math.Clamp((top + height / 2) / BubbleFadeHeight, 0, 1);
+            // mask-image: transparent 0-18% of the log's height, opaque from 46%, linear in between.
+            var shown = Messages.ActualHeight;
+            element.Opacity = shown <= 0 ? 1 : Math.Clamp(((top + height / 2) / shown - 0.18) / (0.46 - 0.18), 0, 1);
         }
     }
 

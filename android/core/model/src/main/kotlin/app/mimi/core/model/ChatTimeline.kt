@@ -1,5 +1,11 @@
 package app.mimi.core.model
 
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
+
 /**
  * What one open chat looks like, folded from the frames of `/ws` (docs/native/realtime.md 4).
  * Pure data and a pure reducer, so the streaming rules are tested on the JVM.
@@ -23,8 +29,25 @@ data class ChatTimeline(
     val viewing: Boolean = false,
     /** Lines under the conversation: errors, "stopped", handoffs. */
     val notes: List<Note> = emptyList(),
+    /** The chat's pinned messages, from every session (the pin bar). */
+    val pins: List<PinView> = emptyList(),
+    /** Tasks started in this chat while it was open (task cards). */
+    val tasks: List<TaskCard> = emptyList(),
+    /** Every session of the chat, newest first. */
+    val sessions: List<SessionView> = emptyList(),
+    /** False while an older session is on screen: new turns land in the newest one. */
+    val latest: Boolean = true,
+    /** The size of the session on screen (null until asked). */
+    val context: SessionContextView? = null,
+    /** The session [context] belongs to. */
+    val contextSession: Long = 0,
 ) {
     val lastMessageId: Long? get() = messages.lastOrNull()?.id
+}
+
+/** A task as its card shows it: the TaskView JSON, kept up to date by the `task-*` events. */
+data class TaskCard(val id: String, val task: JsonObject) {
+    val status: String get() = (task["status"] as? JsonPrimitive)?.contentOrNull.orEmpty()
 }
 
 data class PendingMessage(val clientId: String, val text: String, val attachmentNames: List<String>, val failed: String? = null)
@@ -80,22 +103,41 @@ fun ChatTimeline.reduce(frame: ServerFrame): ChatTimeline = when (frame) {
     is ServerFrame.ChatHistory -> if (frame.chat.id != chatId) this else when {
         frame.beforeId != null -> copy(messages = frame.messages.mergeById(messages), hasMore = frame.hasMore)
         frame.afterId != null && frame.session?.id == session?.id ->
-            copy(chat = frame.chat, messages = messages.mergeById(frame.messages), loaded = true)
+            copy(chat = frame.chat, messages = messages.mergeById(frame.messages), loaded = true, pins = frame.pins ?: pins)
         else -> copy(
             chat = frame.chat,
             session = frame.session,
             messages = frame.messages,
             hasMore = frame.hasMore,
             loaded = true,
+            pins = frame.pins ?: pins,
+            latest = frame.session == null || frame.sessions.isEmpty() || frame.sessions[0].id == frame.session.id,
+            sessions = frame.sessions.ifEmpty { sessions },
+            context = context?.takeIf { frame.session != null && contextSession == frame.session.id },
             live = frame.live?.toBubble() ?: live?.takeIf { busy && !it.finished },
             permissions = frame.live?.pendingPermissions ?: permissions,
             // What was sent but never echoed is gone once the log says so.
             pending = pending.filter { sent -> frame.messages.none { it.role == "user" && it.text == sent.text } },
         )
     }
-    is ServerFrame.ChatSession -> if (frame.chatId != chatId) this
-        else if (session != null && frame.session.id != session.id && frame.started) copy(session = frame.session, messages = emptyList(), live = null, notes = emptyList())
-        else copy(session = frame.session)
+    is ServerFrame.ChatSession -> when {
+        frame.chatId != chatId -> this
+        // An older session on screen stays there; the turn is in the newest one.
+        !latest && session != null && frame.session.id != session.id -> this
+        session != null && frame.session.id != session.id && frame.started -> copy(
+            session = frame.session,
+            messages = emptyList(),
+            live = null,
+            notes = emptyList(),
+            sessions = listOf(frame.session) + sessions.filter { it.id != frame.session.id },
+            latest = true,
+            context = null,
+        )
+        else -> copy(session = frame.session)
+    }
+    is ServerFrame.SessionContext -> if (frame.chatId == chatId && (session == null || frame.sessionId == session.id)) {
+        copy(context = frame.context, contextSession = frame.sessionId)
+    } else this
     is ServerFrame.ChatMessage -> if (frame.chatId != chatId) this else {
         val rest = pending.filterNot { frame.message.clientId != null && it.clientId == frame.message.clientId }
         if (!showing(frame.chatId, frame.sessionId)) copy(pending = rest)
@@ -110,6 +152,10 @@ fun ChatTimeline.reduce(frame: ServerFrame): ChatTimeline = when (frame) {
         frame.done -> copy(busy = false, transcribing = false, viewing = false, live = live?.takeIf { it.finished })
         else -> copy(busy = true)
     }
+    is ServerFrame.MessageMarks -> if (frame.chatId != chatId) this else copy(
+        pins = frame.pins,
+        messages = messages.map { if (it.id == frame.messageId) it.copy(pinned = frame.pinned, reactions = frame.reactions) else it },
+    )
     is ServerFrame.Transcribing -> if (frame.chatId == chatId) copy(transcribing = frame.on) else this
     is ServerFrame.Viewing -> if (frame.chatId == chatId) copy(viewing = frame.on) else this
     is ServerFrame.PermissionResolved -> copy(permissions = permissions.filterNot { it.id == frame.requestId })
@@ -149,6 +195,7 @@ private fun ChatTimeline.applyEvent(agent: String, event: AgentEvent): ChatTimel
         val bubble = live ?: LiveBubble(agent)
         copy(live = bubble.copy(segments = bubble.segments + LiveSegment.File(event.attachment)))
     }
+    is AgentEvent.Task -> copy(tasks = onTask(event))
     is AgentEvent.Permission -> copy(permissions = (permissions + event.request).distinctBy { it.id })
     is AgentEvent.PermissionDecision -> copy(permissions = permissions.filterNot { it.id == event.requestId })
     is AgentEvent.Activity -> {
@@ -177,4 +224,36 @@ private fun ChatTimeline.applyEvent(agent: String, event: AgentEvent): ChatTimel
         copy(live = bubble.copy(segments = segments, speech = event.speech ?: bubble.speech, finished = true), notes = note?.let { notes + it } ?: notes)
     }
     is AgentEvent.Other -> this
+}
+
+/** task-start / -update carry the whole task; the others patch a part of the card. */
+private fun ChatTimeline.onTask(event: AgentEvent.Task): List<TaskCard> {
+    val json = event.json
+    val whole = json["task"] as? JsonObject
+    val wholeId = (whole?.get("id") as? JsonPrimitive)?.contentOrNull
+    if (whole != null && wholeId != null) {
+        val card = TaskCard(wholeId, whole)
+        return if (tasks.any { it.id == wholeId }) tasks.map { if (it.id == wholeId) card else it } else tasks + card
+    }
+    val key = (json["taskId"] as? JsonPrimitive)?.contentOrNull ?: return tasks
+    val known = tasks.firstOrNull { it.id == key } ?: return tasks
+    val node = known.task.toMutableMap()
+    when (event.type) {
+        "task-step" -> {
+            val step = json["step"] as? JsonObject ?: return tasks
+            val steps = ((node["steps"] as? JsonArray)?.toMutableList()) ?: mutableListOf()
+            val at = steps.indexOfFirst { (it as? JsonObject)?.get("id") == step["id"] }
+            if (at >= 0) steps[at] = step else steps.add(step)
+            node["steps"] = JsonArray(steps)
+        }
+        "task-plan" -> json["plan"]?.let { node["plan"] = it }
+        "task-receipt" -> json["receipt"]?.let {
+            node[if ((json["undo"] as? JsonPrimitive)?.booleanOrNull == true) "undoReceipt" else "receipt"] = it
+        }
+        "task-finish" -> {
+            json["status"]?.let { node["status"] = it }
+            json["receipt"]?.let { node["receipt"] = it }
+        }
+    }
+    return tasks.map { if (it.id == key) TaskCard(key, JsonObject(node)) else it }
 }

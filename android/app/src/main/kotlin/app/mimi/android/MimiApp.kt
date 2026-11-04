@@ -10,6 +10,7 @@ import app.mimi.android.push.MimiMessagingService
 import app.mimi.android.push.NotificationWorker
 import app.mimi.android.widget.WidgetSync
 import app.mimi.core.data.SessionStore
+import app.mimi.core.data.UiSettings
 import app.mimi.core.data.di.AppScope
 import app.mimi.core.data.net.MimiSocket
 import app.mimi.core.data.repo.ChatRepository
@@ -33,6 +34,8 @@ class MimiApp : Application(), Configuration.Provider, ImageLoaderFactory {
     @Inject lateinit var socket: MimiSocket
     @Inject lateinit var chats: ChatRepository
     @Inject lateinit var push: PushRepository
+    /** Created at start so it hears every `welcome` (the shared screen settings come with it). */
+    @Inject lateinit var uiSettings: UiSettings
     @Inject lateinit var widget: WidgetSync
     @Inject @field:AppScope lateinit var scope: CoroutineScope
 

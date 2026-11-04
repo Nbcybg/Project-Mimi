@@ -12,7 +12,7 @@ public sealed partial class ChatListView : UserControl
     private static readonly (string Key, string Label)[] Pages =
     [
         ("chat", "แชต"), ("overseer", "Overseer"), ("agents", "Agent"), ("hub", "Hub"),
-        ("workflows", "Workflow"), ("mimiamp", "Mimiamp"), ("workspace", "Workspace"), ("settings", "ตั้งค่า"),
+        ("workflows", "Workflow"), ("workspace", "Workspace"), ("settings", "ตั้งค่า"),
     ];
 
     public ChatListView(ChatListViewModel viewModel)
@@ -48,7 +48,7 @@ public sealed partial class ChatListView : UserControl
     /// <summary>The person picked a chat: the window opens it.</summary>
     public event Action<long>? Open;
 
-    /// <summary>A page from the nav (chat, overseer, agents, hub, workflows, mimiamp, workspace, settings) or "search".</summary>
+    /// <summary>A page from the nav (chat, overseer, agents, hub, workflows, workspace, settings) or "search".</summary>
     public event Action<string>? Navigate;
 
     /// <summary>The line at the bottom: whether the PC agent is connected.</summary>

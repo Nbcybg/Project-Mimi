@@ -15,7 +15,6 @@ public enum Page
     Connect,
     Chats,
     Chat,
-    Music,
     Settings,
     Search,
     Inbox,
@@ -40,6 +39,7 @@ public sealed partial class MainWindow : Window
     private readonly App app;
     private readonly Dictionary<Page, FrameworkElement> pages = [];
     private bool quitting;
+    private bool chatSolo;
 
     internal MainWindow(App app)
     {
@@ -139,7 +139,7 @@ public sealed partial class MainWindow : Window
     {
         CurrentPage = page;
         foreach (var (key, view) in pages) view.Visibility = key == page ? Visibility.Visible : Visibility.Collapsed;
-        Header.Visibility = page is Page.Connect or Page.Setup ? Visibility.Collapsed : Visibility.Visible;
+        UpdateHeader();
         // The chat list is the home (the web's side panel); every other page goes back to it.
         BackButton.Visibility = page == Page.Chats ? Visibility.Collapsed : Visibility.Visible;
         Logo.Visibility = page == Page.Chats ? Visibility.Visible : Visibility.Collapsed;
@@ -149,7 +149,6 @@ public sealed partial class MainWindow : Window
         TitleText.Text = title ?? page switch
         {
             Page.Chats => "Mimi",
-            Page.Music => "Mimiamp",
             Page.Settings => "ตั้งค่า",
             Page.Search => "ค้นหา",
             Page.Inbox => "การแจ้งเตือน",
@@ -161,8 +160,22 @@ public sealed partial class MainWindow : Window
             Page.WorkflowEditor => "Workflow",
             _ => "Mimi",
         };
-        MiniVisible();
     }
+
+    /// <summary>
+    /// The character chat is the whole window (the web's .solo screen): its own glass buttons replace this
+    /// window's header until the chat is left or the character is switched off.
+    /// </summary>
+    public void SetChatSolo(bool solo)
+    {
+        chatSolo = solo;
+        UpdateHeader();
+    }
+
+    private void UpdateHeader() =>
+        Header.Visibility = CurrentPage is Page.Connect or Page.Setup || (CurrentPage == Page.Chat && chatSolo)
+            ? Visibility.Collapsed
+            : Visibility.Visible;
 
     public void SetTitle(string title)
     {
@@ -186,15 +199,6 @@ public sealed partial class MainWindow : Window
         ConnText.Foreground = (Brush)Application.Current.Resources[state is SocketState.Online ? "MimiOkBrush" : "MimiBadBrush"];
         OfflineText.Text = text;
         Offline.Visibility = text.Length > 0 && CurrentPage != Page.Connect ? Visibility.Visible : Visibility.Collapsed;
-    }
-
-    public void MiniVisible()
-    {
-        var music = app.Music;
-        MiniPlayer.Visibility = music is not null && music.HasNowPlaying && CurrentPage is not (Page.Music or Page.Connect) ? Visibility.Visible : Visibility.Collapsed;
-        if (music is null) return;
-        MiniTitle.Text = music.NowTitle;
-        MiniPlay.Content = music.PlayGlyph;
     }
 
     /// <summary>The unread count on the bell.</summary>
@@ -228,9 +232,5 @@ public sealed partial class MainWindow : Window
     /// <summary>The window's content root: the theme is set on it.</summary>
     public FrameworkElement RootElement => Root;
     private void OnChats(object sender, RoutedEventArgs e) => app.ShowChats();
-    private void OnMusic(object sender, RoutedEventArgs e) => app.ShowMusic();
     private void OnSettings(object sender, RoutedEventArgs e) => app.ShowSettings();
-    private void OnMiniTapped(object sender, Microsoft.UI.Xaml.Input.TappedRoutedEventArgs e) => app.ShowMusic();
-    private void OnMiniPlay(object sender, RoutedEventArgs e) => _ = app.Music?.Toggle();
-    private void OnMiniNext(object sender, RoutedEventArgs e) => _ = app.Music?.Next();
 }

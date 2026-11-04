@@ -1,6 +1,7 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Animation;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Mimi.App.Services;
 using Mimi.Core.Desktop;
@@ -17,6 +18,9 @@ internal sealed partial class StageView : Grid
     private readonly Border fill = new();
     private readonly Image backdrop = new() { Stretch = Stretch.UniformToFill, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
     private readonly Grid figureBox = new();
+    private readonly Grid zoomBox = new() { RenderTransformOrigin = new Windows.Foundation.Point(0.5, 1) };
+    private readonly ScaleTransform zoomScale = new();
+    private readonly Grid breath = new() { RenderTransformOrigin = new Windows.Foundation.Point(0.5, 1) };
     private readonly Image figure = new() { Stretch = Stretch.Uniform, VerticalAlignment = VerticalAlignment.Bottom, HorizontalAlignment = HorizontalAlignment.Center };
     private readonly Border shade = new() { IsHitTestVisible = false };
     private readonly VrmView vrm;
@@ -35,7 +39,28 @@ internal sealed partial class StageView : Grid
         IsHitTestVisible = false;
         backdrop.OpacityTransition = new ScalarTransition { Duration = TimeSpan.FromMilliseconds(600) };
         figure.OpacityTransition = new ScalarTransition { Duration = TimeSpan.FromMilliseconds(420) };
-        figureBox.Children.Add(figure);
+        // The web's slow breath (fig-breathe, 5.5 s): the 2D figure stretches from its feet.
+        // It needs a holder of its own: an OpacityTransition on the picture rules out a transform origin on it.
+        var scale = new ScaleTransform();
+        breath.RenderTransform = scale;
+        var breathe = new DoubleAnimation
+        {
+            From = 1,
+            To = 1.007,
+            Duration = TimeSpan.FromSeconds(2.75),
+            AutoReverse = true,
+            RepeatBehavior = RepeatBehavior.Forever,
+            EnableDependentAnimation = true,
+        };
+        Storyboard.SetTarget(breathe, scale);
+        Storyboard.SetTargetProperty(breathe, "ScaleY");
+        var board = new Storyboard();
+        board.Children.Add(breathe);
+        Loaded += (_, _) => board.Begin();
+        zoomBox.RenderTransform = zoomScale;
+        breath.Children.Add(figure);
+        zoomBox.Children.Add(breath);
+        figureBox.Children.Add(zoomBox);
         figureBox.Children.Add(vrm);
         Children.Add(fill);
         Children.Add(backdrop);
@@ -43,7 +68,12 @@ internal sealed partial class StageView : Grid
         // A soft fade at the bottom so the newest messages read over the character (.stage .fade).
         Children.Add(shade);
         vrm.StateChanged += () => DispatcherQueue.TryEnqueue(() => Place());
-        SizeChanged += (_, _) => Place();
+        SizeChanged += (_, _) =>
+        {
+            // A character scaled up to 10× must not draw over the rest of the window.
+            if (ActualWidth > 0 && ActualHeight > 0) Clip = new RectangleGeometry { Rect = new Windows.Foundation.Rect(0, 0, ActualWidth, ActualHeight) };
+            Place();
+        };
         Theme.Changed += PaintShade;
         PaintShade();
     }
@@ -51,10 +81,41 @@ internal sealed partial class StageView : Grid
     /// <summary>Whether a backdrop or a character is showing (the chat's bubbles turn to glass over it).</summary>
     public bool HasSomething { get; private set; }
 
+    /// <summary>The chat is the full-window character screen: the figure is taller and the fade is the web's .solo one.</summary>
+    public bool Solo
+    {
+        get => solo;
+        set
+        {
+            if (solo == value) return;
+            solo = value;
+            PaintShade();
+            Place();
+        }
+    }
+
+    private bool solo;
+
     public event Action? Changed;
 
     private void PaintShade()
     {
+        if (solo)
+        {
+            var fade = Theme.ColorOf("SoloFade");
+            shade.Background = new LinearGradientBrush
+            {
+                StartPoint = new Windows.Foundation.Point(0, 0),
+                EndPoint = new Windows.Foundation.Point(0, 1),
+                GradientStops =
+                {
+                    new GradientStop { Color = Windows.UI.Color.FromArgb(0, fade.R, fade.G, fade.B), Offset = 0 },
+                    new GradientStop { Color = Windows.UI.Color.FromArgb(56, fade.R, fade.G, fade.B), Offset = 0.5 },
+                    new GradientStop { Color = Windows.UI.Color.FromArgb(153, fade.R, fade.G, fade.B), Offset = 1 },
+                },
+            };
+            return;
+        }
         var bg = Theme.ColorOf("Bg");
         shade.Background = new LinearGradientBrush
         {
@@ -91,6 +152,7 @@ internal sealed partial class StageView : Grid
         if (model is not null)
         {
             vrm.Show(model);
+            vrm.Motions(data.Motions(agentName!), data.IdleMotion(agentName!));
             vrm.Mood(mood);
         }
         else vrm.Hide();
@@ -156,12 +218,18 @@ internal sealed partial class StageView : Grid
     private void Place()
     {
         var height = ActualHeight;
-        figure.Height = Math.Max(120, height * 0.92 * Math.Clamp(look.Zoom, 0.4, 2.5));
+        // The picture keeps the web's 94% of the stage; the chat's size is a scale from the feet,
+        // not a taller layout box (a taller image was held back by the window width).
+        figure.Height = Math.Max(20, height * (solo ? 0.94 : 0.92));
+        zoomScale.ScaleX = zoomScale.ScaleY = Math.Clamp(look.Zoom, 0.1, 10);
         // On the holder: the picture itself has an opacity transition, which rules out a render transform on it.
         figureBox.RenderTransform = new TranslateTransform { X = look.X / 100 * ActualWidth, Y = -look.Y / 100 * height };
         vrm.View(look.Zoom, look.X, look.Y);
         var threeD = vrm.State == "ready" && vrm.Visibility == Visibility.Visible;
         figure.Visibility = threeD ? Visibility.Collapsed : Visibility.Visible;
+        // .solo .fade is the bottom 62% only.
+        shade.VerticalAlignment = solo ? VerticalAlignment.Bottom : VerticalAlignment.Stretch;
+        shade.Height = solo ? Math.Max(0, height * 0.62) : double.NaN;
         var something = shownBackdrop.Length > 0 || threeD || (figure.Opacity > 0 && figure.Source is not null);
         shade.Visibility = something ? Visibility.Visible : Visibility.Collapsed;
         if (something != HasSomething)

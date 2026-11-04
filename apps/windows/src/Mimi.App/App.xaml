@@ -57,6 +57,32 @@
             <SolidColorBrush x:Key="MimiVioletBrush" Color="#FFC3A6F2" />
             <SolidColorBrush x:Key="MimiGlassBrush" Color="#D6141115" />
             <SolidColorBrush x:Key="MimiGlassUserBrush" Color="#F03B2733" />
+            <!-- The character chat (web .solo): brushes recoloured in place by ChatView when it opens/closes. -->
+            <SolidColorBrush x:Key="MimiGlassButtonBrush" Color="#29FFFFFF" />
+            <SolidColorBrush x:Key="MimiGlassButtonLineBrush" Color="#4DFFFFFF" />
+            <SolidColorBrush x:Key="MimiGlassInkBrush" Color="#FFFFFFFF" />
+            <SolidColorBrush x:Key="MimiGlassPanelBrush" Color="#7314161C" />
+            <SolidColorBrush x:Key="MimiSoloInputBrush" Color="#9E1C141A" />
+            <SolidColorBrush x:Key="MimiChatTxBrush" Color="{StaticResource MimiPanel}" />
+            <SolidColorBrush x:Key="MimiChatTxLineBrush" Color="{StaticResource MimiLine}" />
+            <SolidColorBrush x:Key="MimiChatUserBrush" Color="{StaticResource MimiUserBg}" />
+            <SolidColorBrush x:Key="MimiChatUserLineBrush" Color="{StaticResource MimiUserLine}" />
+            <SolidColorBrush x:Key="MimiChatInkBrush" Color="{StaticResource MimiInk}" />
+            <SolidColorBrush x:Key="MimiChatUserInkBrush" Color="{StaticResource MimiInk}" />
+            <SolidColorBrush x:Key="MimiChatTimeBrush" Color="{StaticResource MimiFaint}" />
+            <SolidColorBrush x:Key="MimiChatUserTimeBrush" Color="{StaticResource MimiFaint}" />
+
+            <Style x:Key="MimiGlassCircleButton" TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
+                <Setter Property="Width" Value="44" />
+                <Setter Property="Height" Value="44" />
+                <Setter Property="Padding" Value="0" />
+                <Setter Property="CornerRadius" Value="22" />
+                <Setter Property="Background" Value="{StaticResource MimiGlassButtonBrush}" />
+                <Setter Property="BorderBrush" Value="{StaticResource MimiGlassButtonLineBrush}" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="Foreground" Value="{StaticResource MimiGlassInkBrush}" />
+                <Setter Property="FontSize" Value="18" />
+            </Style>
 
             <!-- Fluent's accent in Mimi's pink: buttons, toggles, sliders, focus. -->
             <Color x:Key="SystemAccentColor">#FFE08AA7</Color>

@@ -38,21 +38,18 @@ import app.mimi.core.ui.MimiTheme
 import app.mimi.feature.auth.AuthRoute
 import app.mimi.feature.chat.ChatListRoute
 import app.mimi.feature.chat.ChatRoute
-import app.mimi.feature.mimiamp.MimiampCommands
-import app.mimi.feature.mimiamp.MimiampRoute
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
-/** The whole app in Compose (no WebView): sign-in → chats → chat, and Mimiamp. */
+/** The whole app in Compose (no WebView): sign-in → chats → chat. */
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
     @Inject lateinit var sessions: SessionStore
     @Inject lateinit var auth: AuthRepository
     @Inject lateinit var push: PushRepository
     @Inject lateinit var updates: UpdateChecker
-    @Inject lateinit var mimiamp: MimiampCommands
 
     /** A notification, widget row or the media notification pointed somewhere. */
     private val deepLinks = MutableSharedFlow<Intent>(replay = 1, extraBufferCapacity = 4)
@@ -72,7 +69,6 @@ class MainActivity : ComponentActivity() {
                     deepLinks.tryEmit(intent)
                 }
                 LaunchedEffect(Unit) { deepLinks.collect { follow(navController, it) } }
-                LaunchedEffect(Unit) { mimiamp.open.collect { navController.navigate("mimiamp") { launchSingleTop = true } } }
                 // Signed out by the core (expired, revoked): back to the sign-in screen.
                 LaunchedEffect(session.token) {
                     if (session.token == null && navController.currentDestination?.route != "auth") {
@@ -89,7 +85,6 @@ class MainActivity : ComponentActivity() {
                     composable("chats") {
                         ChatListRoute(
                             onOpenChat = { navController.navigate("chat/$it") },
-                            onMimiamp = { navController.navigate("mimiamp") },
                             onSignOut = {
                                 scope.launch {
                                     (application as MimiApp).signedOut()
@@ -103,7 +98,6 @@ class MainActivity : ComponentActivity() {
                     composable("chat/{chatId}", arguments = listOf(navArgument("chatId") { type = NavType.LongType })) {
                         ChatRoute(onBack = { navController.popBackStack() })
                     }
-                    composable("mimiamp") { MimiampRoute(onBack = { navController.popBackStack() }) }
                 }
             }
         }
@@ -119,7 +113,6 @@ class MainActivity : ComponentActivity() {
         val chat = intent.getLongExtra("chat", 0)
         when {
             chat > 0 -> navController.navigate("chat/$chat") { launchSingleTop = true }
-            intent.getStringExtra("open") == "mimiamp" -> navController.navigate("mimiamp") { launchSingleTop = true }
         }
         intent.removeExtra("chat")
         intent.removeExtra("open")

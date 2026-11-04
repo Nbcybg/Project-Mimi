@@ -3,7 +3,7 @@ import type { NativePushPlatform, NativePushRegistration, Notification, Notifica
 import type { Db } from '../db/db.ts';
 import { type PushResult, type PushSubscriptionKeys, sendPush, type VapidKeys } from './web-push.ts';
 import { timeZoneName, type TimeZoneSource } from '../timezone.ts';
-import type { NativePushMessage, NativePushResult, NativePushTarget } from './native-push.ts';
+import { type NativePushMessage, type NativePushResult, type NativePushTarget, wnsChannelOk } from './native-push.ts';
 
 /** Kinds worth waking a phone for; "info" notes only go to the inbox. */
 const PUSHED = new Set<Notification['kind']>(['reminder', 'task-result', 'approval', 'message']);
@@ -36,7 +36,7 @@ interface NativeRow {
 }
 
 /** The push services' hosts, shown in the device list like a Web Push endpoint's. */
-const NATIVE_SERVICE: Record<NativePushPlatform, string> = { fcm: 'fcm.googleapis.com', apns: 'api.push.apple.com' };
+const NATIVE_SERVICE: Record<NativePushPlatform, string> = { fcm: 'fcm.googleapis.com', apns: 'api.push.apple.com', wns: 'notify.windows.com' };
 const NATIVE_PREFIX = 'native:';
 
 /** What sends to FCM / APNs (NativePushSender, or a stand-in in tests). */
@@ -213,10 +213,12 @@ export class NotificationCenter {
    */
   registerNative(registration: NativePushRegistration): { device: PushDeviceView; delivering: boolean } {
     const platform = registration.platform;
-    if (platform !== 'fcm' && platform !== 'apns') throw new Error('Native push: platform must be "fcm" or "apns".');
+    if (platform !== 'fcm' && platform !== 'apns' && platform !== 'wns') throw new Error('Native push: platform must be "fcm", "apns" or "wns".');
     const token = String(registration.token ?? '').trim();
-    const shape = platform === 'apns' ? /^[0-9a-fA-F]{32,200}$/ : /^[\w:.-]{20,4096}$/;
-    if (!shape.test(token)) throw new Error(`Native push: that is not ${platform === 'apns' ? 'an APNs device token (hex)' : 'an FCM registration token'}.`);
+    const fits =
+      platform === 'wns' ? token.length <= 4096 && wnsChannelOk(token) : (platform === 'apns' ? /^[0-9a-fA-F]{32,200}$/ : /^[\w:.-]{20,4096}$/).test(token);
+    const what = { fcm: 'an FCM registration token', apns: 'an APNs device token (hex)', wns: 'a WNS channel URI (https://….notify.windows.com/…)' }[platform];
+    if (!fits) throw new Error(`Native push: that is not ${what}.`);
     const text = (value: unknown, max: number) => (typeof value === 'string' && value.trim() ? value.trim().slice(0, max) : null);
     const id = createHash('sha256').update(token).digest('hex').slice(0, 16);
     this.db

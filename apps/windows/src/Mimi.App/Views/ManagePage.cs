@@ -27,7 +27,8 @@ public sealed partial class ManagePage : UserControl
     private readonly Func<nint> window;
     private readonly IReadOnlyList<PageTab> tabs;
     private readonly Dictionary<string, (FrameworkElement View, List<EntityList> Lists)> built = [];
-    private readonly StackPanel tabBar = new() { Orientation = Orientation.Horizontal, Spacing = 4 };
+    // The web's tab row wraps on a narrow window; the Hub has ten tabs and a scroller hid half of them.
+    private readonly WrapPanel tabBar = new() { Margin = new Thickness(10, 6, 10, 4), HorizontalSpacing = 4, VerticalSpacing = 4 };
     private readonly ContentControl body = new() { HorizontalContentAlignment = HorizontalAlignment.Stretch, VerticalContentAlignment = VerticalAlignment.Stretch };
     private readonly Dictionary<string, List<FrameworkElement>> extras = [];
     private PageTab current;
@@ -39,6 +40,9 @@ public sealed partial class ManagePage : UserControl
         if (!extras.TryGetValue(tabKey, out var list)) extras[tabKey] = list = [];
         list.Add(section);
     }
+
+    /// <summary>Where the 3D preview keeps the models and motions it fetched (the app's cache folder).</summary>
+    public string ModelCache { get; set; } = Path.Combine(Path.GetTempPath(), "Mimi", "models");
 
     /// <summary>Opens an item (or a new one: row null) somewhere else than the form (the workflow editor); true = handled.</summary>
     public Func<EntityDef, EntityRow?, bool>? Opener { get; set; }
@@ -66,15 +70,6 @@ public sealed partial class ManagePage : UserControl
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         if (tabs.Count > 1)
         {
-            var scroller = new ScrollViewer
-            {
-                Content = tabBar,
-                HorizontalScrollMode = ScrollMode.Enabled,
-                HorizontalScrollBarVisibility = ScrollBarVisibility.Hidden,
-                VerticalScrollMode = ScrollMode.Disabled,
-                VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
-                Padding = new Thickness(10, 6, 10, 4),
-            };
             foreach (var tab in tabs)
             {
                 var button = new ToggleButton { Content = tab.Label, Tag = tab, Style = (Style)Application.Current.Resources["MimiPill"] };
@@ -91,7 +86,7 @@ public sealed partial class ManagePage : UserControl
                 };
                 tabBar.Children.Add(button);
             }
-            root.Children.Add(scroller);
+            root.Children.Add(tabBar);
         }
         Grid.SetRow(body, 1);
         root.Children.Add(body);
@@ -110,6 +105,7 @@ public sealed partial class ManagePage : UserControl
     public void Select(PageTab tab)
     {
         current = tab;
+        lookups.Refresh();
         foreach (var button in tabBar.Children.OfType<ToggleButton>()) button.IsChecked = ReferenceEquals(button.Tag, tab);
         if (!built.TryGetValue(tab.Key, out var page))
         {
@@ -228,9 +224,25 @@ public sealed partial class ManagePage : UserControl
         var text = new StackPanel { Spacing = 2 };
         text.Children.Add(new TextBlock { Text = row.Title, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, Foreground = Brush("MimiInkBrush"), TextTrimming = TextTrimming.CharacterEllipsis });
         if (row.Subtitle.Length > 0) text.Children.Add(new TextBlock { Text = row.Subtitle, FontSize = 12, Foreground = Brush("MimiMutedBrush"), TextWrapping = TextWrapping.Wrap, MaxLines = 2, TextTrimming = TextTrimming.CharacterEllipsis });
+        FrameworkElement content = text;
+        if (list.Def.Key == "agents" && row.Item.ValueKind == JsonValueKind.Object && row.Item.S("avatar") is { Length: > 0 } stamp)
+        {
+            var rowContent = new Grid { ColumnSpacing = 10 };
+            rowContent.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            rowContent.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            rowContent.Children.Add(new Avatar
+            {
+                Path = Mimi.Core.Net.MimiApi.AgentImagePath(row.Item.S("name"), "avatar", stamp),
+                Initial = row.Title is { Length: > 0 } title ? title[..1].ToUpperInvariant() : "?",
+                Size = 34,
+            });
+            Grid.SetColumn(text, 1);
+            rowContent.Children.Add(text);
+            content = rowContent;
+        }
         var button = new Button
         {
-            Content = text,
+            Content = content,
             HorizontalAlignment = HorizontalAlignment.Stretch,
             HorizontalContentAlignment = HorizontalAlignment.Left,
             Padding = new Thickness(10, 7, 10, 7),
@@ -238,6 +250,7 @@ public sealed partial class ManagePage : UserControl
             Background = Brush("MimiRaisedBrush"),
         };
         AutomationProperties.SetName(button, row.Title);
+        AutomationProperties.SetAutomationId(button, $"{list.Def.Key}-row-{row.Id}");
         button.Click += (_, _) => Safe(list, Edit(list, row));
         return button;
     }
@@ -253,6 +266,8 @@ public sealed partial class ManagePage : UserControl
         {
             dialog.XamlRoot = XamlRoot;
             dialog.RequestedTheme = Services.Theme.Element;
+            // WinUI caps a dialog at 548 px; the gallery and the 3D character need more.
+            dialog.Resources["ContentDialogMaxWidth"] = 960d;
             for (var tries = 0; ; tries++)
             {
                 try
@@ -330,11 +345,15 @@ public sealed partial class ManagePage : UserControl
     {
         var def = list.Def;
         if (Opener?.Invoke(def, row) == true) return;
+        lookups.Refresh();
         var item = row is null ? def.New!() : row.Item.Obj();
         if (row is not null && row.Item.ValueKind == JsonValueKind.String) item = J.O(("name", JsonValue.Create(row.Item.GetString())));
         var form = new JsonForm(item, def.Fields, lookups);
         var content = new StackPanel { Spacing = 12 };
         content.Children.Add(form);
+        // The web's agent page keeps its pictures, emoji sprites and per-tool policy in the form itself.
+        if (def.Key == "agents" && row is not null) content.Children.Add(AgentExtras(list, item));
+        if (def.Key == "presets") content.Children.Add(PresetExtras(item));
         EntityAction? chosen = null;
         var dialog = new ContentDialog
         {
@@ -402,6 +421,21 @@ public sealed partial class ManagePage : UserControl
         }
         if (action.Confirm is { } question && !await Confirm(question)) return;
         list.Error = "";
+        if (action.View == "chat")
+        {
+            App.Instance?.ChatWithAgent(item.S("name"));
+            return;
+        }
+        if (action.View == "gallery")
+        {
+            await Gallery(list, item);
+            return;
+        }
+        if (action.View == "vrm")
+        {
+            await Character(list, item);
+            return;
+        }
         if (action.View == "graph")
         {
             var graph = WorkflowGraph.Create(item, Math.Max(320, ActualWidth - 60), Math.Max(360, ActualHeight - 220));

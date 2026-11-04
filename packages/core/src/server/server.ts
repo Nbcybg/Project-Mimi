@@ -25,7 +25,6 @@ import type {
   WorkflowView,
 } from '@mimi/shared';
 import { API_VERSION, CLOSE_CLIENT_TOO_OLD, MIN_CLIENT_API, NODE_TYPES, type PermissionScope } from '@mimi/shared';
-import { musicUploadDir } from '../mimiamp/library.ts';
 import { WebSocket, WebSocketServer } from 'ws';
 import { deleteAgent, saveAgent } from '../agents/loader.ts';
 import { classifyError } from '../errors.ts';
@@ -852,10 +851,6 @@ export async function startServer(
     }
   };
   core.listeners.notification = (notification) => broadcast({ type: 'notification', notification });
-  core.listeners.mimiampCommand = (command) => {
-    broadcast({ type: 'mimiamp', command });
-    return clients.size;
-  };
 
   /** What each connected client shows: its open chat and whether its window is on screen. */
   const presence = new Map<WebSocket, { chatId: number | null; visible: boolean }>();
@@ -2140,8 +2135,6 @@ export async function startServer(
     wardrobe: core.wardrobe,
     backgrounds: core.backgrounds,
     gallery: core.gallery,
-    mimiamp: core.mimiamp,
-    mimiampChanged: () => broadcast({ type: 'mimiamp', command: { action: 'refresh' } }),
     galleryChanged: (agent: string) => broadcast({ type: 'gallery-changed', agent }),
     backgroundsChanged: () => broadcast(backgroundsMessage()),
     wardrobeChanged: () => broadcast({ type: 'wardrobe', outfits: core.wardrobe.list() }),
@@ -2221,10 +2214,10 @@ export async function startServer(
         if (removed) broadcast({ type: 'push-devices', devices: core.notifications.devices() });
         return removed;
       },
+      info: () => core.pushInfo(),
     },
     answerPermission,
     decideApproval: (id: number, approved: boolean, note?: string) => core.approvals.decide(id, approved, note),
-    musicUploadDir: () => musicUploadDir(),
     notificationsSync: (since: string | null) => {
       const { items } = core.notifications.list(100);
       const start = since ? Date.parse(since) : 0;
@@ -2310,7 +2303,7 @@ export async function startServer(
     const url = new URL(request.url ?? '/', 'http://localhost');
     // Every answer says which client API this core speaks, so an app can tell before it parses anything.
     response.setHeader('x-mimi-api', String(API_VERSION));
-    if (request.method === 'GET' && serveWebFile(url.pathname, response, request.headers.range, core.mimiamp, { web: config.serveWeb !== false })) {
+    if (request.method === 'GET' && serveWebFile(url.pathname, response, { web: config.serveWeb !== false })) {
       // the web client
     } else if (await serveCalendarPush(core.calendarSync, request, response)) {
       // a calendar provider notification or the Graph validation handshake

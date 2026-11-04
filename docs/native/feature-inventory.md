@@ -3,7 +3,7 @@
 > รวบรวมจาก `packages/core/src/server/web/app.js` และ `feature-*.js` 25 ไฟล์ (คำสั่ง WS ที่แต่ละไฟล์ส่ง และ HTTP ที่เรียก ดึงจากโค้ดจริง)
 > **ความยาก**: S = ไม่กี่วัน, M = 1–2 สัปดาห์, L = มากกว่านั้น / ต้องวิจัย (ต่อหนึ่งแพลตฟอร์ม)
 > **เฟส**: A = ต้องมีก่อนปล่อย (ใช้แทนแอปเดิมได้), B = จัดการระบบบนมือถือ, C = ฟีเจอร์หนัก (หลังทุกแพลตฟอร์มมี A+B)
-> หน้าจอหลักของเว็บ: แชต, Agent (แก้ไข agent), Hub (10 แท็บ: `app.js:3854-3865`), Mimiamp, Overseer, ตั้งค่า, workflow
+> หน้าจอหลักของเว็บ: แชต, Agent (แก้ไข agent), Hub (10 แท็บ: `app.js:3854-3865`), ~~Mimiamp~~ (ลบแล้ว), Overseer, ตั้งค่า, workflow
 
 ## 1. แชตและการใช้งานประจำวัน
 
@@ -30,8 +30,8 @@
 | 19 | widget แชตล่าสุด (Android มีแล้ว) | home screen | `GET /api/widget` | S | Glance / WidgetKit / Windows Widgets | A (Android), B (อื่น) |
 | 20 | อ่านออกเสียง (auto + ปุ่ม 🔊) | chat | `run-finish.speech`, `ui` `mimi.autoSpeak` | S | TTS ของระบบ | A |
 | 21 | เสียงแจ้ง (ส่ง / ตอบเสร็จ / ขออนุญาต) | – | `ui` `mimi.chatSound` | S | SoundPool / AVAudioPlayer | A |
-| 22 | เครื่องเล่น Mimiamp พื้นฐาน (คลัง, playlist, เล่น/หยุด/ข้าม/เลื่อน, เพิ่ม YouTube, ค้นหา, คำสั่งจาก agent) | Mimiamp | `/api/mimiamp/*`, `/mimiamp/*`, WS `mimiamp` (ดู `media.md`) | M | media session, background audio | A |
-| 23 | Mimiamp ขั้นสูง (EQ 10 แบนด์, pan, visualizer, ไฟล์ในเครื่อง, export/import playlist, หน้าต่างลอย) | Mimiamp | `/api/mimiamp/playlists/:id/export`, `/api/mimiamp/import` | L | audio DSP, file picker + persistent permission, PiP/overlay | C |
+| 22 | ~~เครื่องเล่น Mimiamp พื้นฐาน (คลัง, playlist, เล่น/หยุด/ข้าม/เลื่อน, เพิ่ม YouTube, ค้นหา, คำสั่งจาก agent)~~ **ลบแล้ว (Q5, api 2)** | Mimiamp | `/api/mimiamp/*`, `/mimiamp/*`, WS `mimiamp` (ดู `media.md`) | M | media session, background audio | A |
+| 23 | ~~Mimiamp ขั้นสูง (EQ 10 แบนด์, pan, visualizer, ไฟล์ในเครื่อง, export/import playlist, หน้าต่างลอย)~~ **ลบแล้ว (Q5, api 2)** | Mimiamp | `/api/mimiamp/playlists/:id/export`, `/api/mimiamp/import` | L | audio DSP, file picker + persistent permission, PiP/overlay | C |
 | 24 | ตัวละครบนเวที 2D (sprite ตาม emoji, portrait, ฉากหลัง, ชุด) | chat stage (`feature-stage.js`) | `agents`, `wardrobe-list`, `backgrounds-list`, `/api/sprite/*`, `/api/agent-image/*`, `/api/background-image/*`, `/backgrounds/*.webp` | M | – | B |
 | 25 | รูปจากแกลเลอรีทับแชต | chat (`feature-gallery.js`) | `gallery-list`, `/api/gallery/*` | S | – | B |
 | 26 | ตั้งค่าหน้าตาต่อแชต (ขนาดตัวอักษร, bubble, ฉาก, ตัวละคร, ธีม) | chat settings | `ui-set` key `mimi.chat.<id>.*`, `POST /api/chat-background` | S | – | B |
@@ -94,8 +94,8 @@ Phase 2  Android  : เฟส A ครบ (#1–22, 27–29, 31) + push แบ�
 Phase 3  Mac      : เฟส A + B (SwiftUI; แชร์ model/network layer กับ iOS ผ่าน Swift package)
 Phase 4  iOS      : เฟส A + B (ต้องมี APNs ก่อนปล่อย)
 Phase 5  Windows  : เฟส A + B (stack ตาม windows-stack.md)
-Phase 6  ฟีเจอร์หนัก (เฟส C): workflow canvas (#56), Node & เครื่องมือ (#47), VRM (#43), Mimiamp ขั้นสูง (#23)
-Phase 7  ปิดงาน: เลิกเสิร์ฟ UI เว็บ (เก็บ /health, /mimiamp/*, /backgrounds/*, /api/*, /ws ไว้) — ดู server-gaps.md G-SRV-1
+Phase 6  ฟีเจอร์หนัก (เฟส C): workflow canvas (#56), Node & เครื่องมือ (#47), VRM (#43)
+Phase 7  ปิดงาน: เลิกเสิร์ฟ UI เว็บ (เก็บ /health, /backgrounds/*, /api/*, /ws ไว้) — ดู server-gaps.md G-SRV-1
 ```
 
 **สถานะ Windows (Phase 5, 2026-11-03):** ทำเฉพาะขอบเขต MVP ของ prompt Phase 5 ไม่ใช่เฟส A + B ทั้งหมด —
@@ -120,21 +120,26 @@ shuffle/repeat, EQ 10 แบนด์, SMTC, คำสั่งจาก agent),
 | 18 | push ตอนแอปปิด (WNS) | เหลือ (รอ Q3) |
 | 19 | widget | เหลือ (Windows Widgets ต้องมี package identity) |
 | 20 | อ่านออกเสียง | ทำแล้ว (เสียงของ Windows) |
-| 23 | Mimiamp ขั้นสูง | ทำแล้ว: สกิน "blue edition" แบบเว็บ, EQ, pan, visualizer (FFT), เพลงในเครื่อง (เปิดไฟล์/ลากวาง), mini player, เพลย์ลิสต์ |
+| 23 | ~~Mimiamp ขั้นสูง~~ **ลบแล้ว (Q5, api 2)** | เอาออกจากแอป Windows แล้ว (2026-11-03 รอบ 6) |
 | 24 | เวทีตัวละคร 2D (รูปตามอีโมจิ + ฉากหลัง) | ทำแล้ว |
-| 25 | รูปแกลเลอรี/ภาพสถานการณ์ทับแชต | เหลือ (เอาภาพสถานการณ์ออกได้จากแผงข้อมูล แต่ยังไม่แสดงภาพ) |
+| 25 | รูปแกลเลอรี/ภาพสถานการณ์ทับแชต | ทำแล้ว (รอบ 5: เปิด / ย่อ / ปิด จำต่อ agent) |
 | 26 | หน้าตาต่อแชต (ธีม, ขนาดตัวอักษร, ตัวละคร, ข้อความบนตัวละคร, ตำแหน่ง, ฉากหลัง) | ทำแล้ว (เก็บในเครื่อง เหมือน localStorage ของเว็บ) |
 | – | ธีมสว่าง/มืด | ทำแล้ว (`mimi.theme` ใช้ร่วมทุกเครื่อง, ต่อแชตแยกได้) |
 | 30 | ตัวช่วยตั้งค่าครั้งแรก | ทำแล้ว (5 ขั้นแบบเว็บ, เปิดเองเมื่อยังแชตไม่ได้) |
 | 31 | AI Overseer | ทำแล้ว (เลือกโมเดล + คุย) |
 | 32–41 | ผู้ให้บริการ, ตั้งค่าทั่วไป, โปรไฟล์, backup, export CSV, 2FA/รหัสผ่าน, อุปกรณ์ push, สิทธิ์ตลอด, ความจำ, tunnel | ทำแล้ว (ทั่วไป) |
 | 42 | แก้ไข agent (+ รูป, VRM file, ท่า) | ทำแล้ว (ทั่วไป) |
-| 43 | VRM 3D แสดงผล | ทำแล้ว (WebView2 + three-vrm: หายใจ, กะพริบตา, อารมณ์ตามอีโมจิ, ขยับปากตอนตอบ) · ท่า Mixamo ยังไม่เล่น · ยังไม่ได้ลองกับไฟล์ .vrm จริง |
-| 44 | แกลเลอรีของ agent | บางส่วน (ดูรายการ JSON, อัปโหลด) |
+| 43 | VRM 3D แสดงผล | ทำแล้ว (WebView2 + three-vrm: หายใจ, กะพริบตา, อารมณ์ตามอีโมจิ, ขยับปากตอนตอบ) · รอบ 5: ท่า Mixamo (retarget), ท่ายืนเฉยบนหน้าแชต, หน้าตัวละคร 3D ใน Agent · ยังไม่ได้ลองกับไฟล์ .vrm/.fbx จริง |
+| 44 | แกลเลอรีของ agent | ทำแล้ว (รอบ 5: ค้นหา, หน้า, รูปย่อ, เพิ่มหลายรูป, แก้, แสดงในแชต, ลบ) |
 | 45–54 | Hub ทั้ง 10 แท็บ | ทำแล้ว (ทั่วไป) |
 | 55 | Workflow: รายการ, เปิด/ปิด, รันเอง, ประวัติ, นำเข้า | ทำแล้ว (ทั่วไป) |
-| 56 | Workflow canvas | ทำแล้ว: ลาก node, ลากเส้นเชื่อมจากจุดทางออก, ลบเส้น/node, ทำสำเนา, ปิด node, ฟอร์มของ node จาก spec, เงื่อนไขเป็นแถว, ทดสอบ node ทีละตัว, รัน, รันใหม่จาก node, ประวัติ · เหลือ preview expression, แก้โน้ตบนผัง |
-| – | Workspace (เบราว์เซอร์/เทอร์มินัล/ไฟล์) | ทำแล้ว (หน้าต่างแยก: ไฟล์ + แก้ข้อความ, เบราว์เซอร์ WebView2 + วาดบนภาพหน้าเว็บ, เทอร์มินัล ConPTY + xterm.js) |
+| 56 | Workflow canvas | ทำแล้ว: ลาก node, ลากเส้นเชื่อมจากจุดทางออก, ลบเส้น/node, ทำสำเนา, ปิด node, ฟอร์มของ node จาก spec, เงื่อนไขเป็นแถว, ทดสอบ node ทีละตัว, รัน, รันใหม่จาก node, ประวัติ · รอบ 5: preview expression, คำแนะนำ path + เลือกข้อมูล, โน้ตบนผัง, node connector + ตัวเลือกจากบริการ, ย้อน/ทำซ้ำ, คัดลอก/วาง, จัดเรียงอัตโนมัติ, node preset |
+| – | Workspace (เบราว์เซอร์/เทอร์มินัล/ไฟล์) | ทำแล้ว (หน้าต่างแยก: ไฟล์ + แก้ข้อความ, เบราว์เซอร์ WebView2 + วาดบนภาพหน้าเว็บ, เทอร์มินัล ConPTY + xterm.js) · รอบ 5: ส่งภาพที่วาดเข้าแชต |
+| – | ฟอร์มย่อยแทน JSON | ทำแล้ว (รอบ 5: preset เครื่องมือ, connection, โปรไฟล์, vars ของ workflow) |
+| – | เซิร์ฟเวอร์ในเครื่องนี้ (core บนเครื่อง, แบบ `npm run app`) | ทำแล้ว (รอบ 5: แอปเปิด/ปิด core เอง, `native-host.ts`) |
 
 เหตุผลเรื่องลำดับใน A: ผู้ใช้เดิมใช้แอปเกือบทั้งหมดผ่านแชต (เปิดแอปแล้วเข้าแชตล่าสุดทันที: `app.js:5145-5160`) ส่วน Hub ใช้ตอนตั้งค่า
 ซึ่งระหว่างนี้ยังทำผ่านเว็บได้ (เซิร์ฟเวอร์ยังเสิร์ฟ UI จนถึง Phase 7)
+
+**แอป Windows รอบ 6 (2026-11-03):** เพิ่มอัปโหลดฉากหลังของแชต + ตั้งเวลาสลับฉากหลัง, "เปิดเบราว์เซอร์ของ Mimi", `@ชื่อ` ในแชตกลุ่ม, Esc หยุดคำตอบ,
+วางรูปจาก clipboard, ตรวจรูป + คำบรรยายก่อนส่ง · เอา Mimiamp ออก (#22, #23) — ยังขาดเหมือนเดิม: WNS (#push), widget (#19)

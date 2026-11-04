@@ -17,7 +17,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -80,7 +79,6 @@ fun connectionLabel(state: SocketState): String? = when (state) {
 @Composable
 fun ChatListRoute(
     onOpenChat: (Long) -> Unit,
-    onMimiamp: () -> Unit,
     onSignOut: () -> Unit,
     banner: @Composable () -> Unit = {},
     viewModel: ChatListViewModel = hiltViewModel(),
@@ -100,7 +98,6 @@ fun ChatListRoute(
                     }
                 },
                 actions = {
-                    IconButton(onClick = onMimiamp) { Icon(Icons.Default.LibraryMusic, contentDescription = "Mimiamp") }
                     IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, contentDescription = "เมนู") }
                     DropdownMenu(menu, onDismissRequest = { menu = false }) {
                         if (state.username.isNotEmpty()) DropdownMenuItem(text = { Text(state.username, color = MimiColors.muted) }, onClick = {}, enabled = false)

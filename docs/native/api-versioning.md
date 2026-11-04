@@ -10,14 +10,14 @@
 | `API_VERSION` | `packages/shared/src/protocol.ts` | เวอร์ชันของ client API ที่ core นี้พูด: ชนิดข้อความ WS, path HTTP และ JSON ของมัน — **เพิ่มเมื่อมีการเปลี่ยนที่ทำให้แอปที่ build กับเลขเดิมพัง** เท่านั้น |
 | `MIN_CLIENT_API` | ที่เดียวกัน | client API ที่เก่าที่สุดที่ core นี้ยังรับ แอปที่ต่ำกว่านี้ถูกปิด socket ด้วย `4426` |
 
-ปัจจุบัน: `API_VERSION = 1`, `MIN_CLIENT_API = 1`
+ปัจจุบัน: `API_VERSION = 2`, `MIN_CLIENT_API = 1`
 
 เลขเหล่านี้ **ไม่ใช่** เลข release ของแอป (`version` ใน `package.json`, เช่น `0.8.1-prototype`) — release เปลี่ยนบ่อย API เปลี่ยนน้อยครั้ง
 
 ## core บอกเลขที่ไหน
 
-- `GET /health` (ไม่ต้องใช้ token): `{"ok":true,"version":"0.8.1-prototype","api":1,"minClientApi":1}` (gateway มี `"accounts":true` เพิ่ม)
-- header `x-mimi-api: 1` ในทุกคำตอบ HTTP ของ core และ gateway (รวม 401/404) — ผ่าน gateway จะเห็นทั้งสองตัวเป็นค่าเดียวกันเมื่อ deploy พร้อมกัน
+- `GET /health` (ไม่ต้องใช้ token): `{"ok":true,"version":"0.8.1-prototype","api":2,"minClientApi":1}` (gateway มี `"accounts":true` เพิ่ม)
+- header `x-mimi-api: 2` ในทุกคำตอบ HTTP ของ core และ gateway (รวม 401/404) — ผ่าน gateway จะเห็นทั้งสองตัวเป็นค่าเดียวกันเมื่อ deploy พร้อมกัน
 - frame `welcome`: `version`, `api`, `minClientApi`
 
 core เวอร์ชันก่อน Phase 1 ไม่มี field เหล่านี้ → แอปถือว่าเป็น `api = 0`
@@ -70,3 +70,4 @@ core เวอร์ชันก่อน Phase 1 ไม่มี field เห�
 |---|---|---|
 | 0 | ≤ 0.8.1-prototype | ไม่มีเลขเวอร์ชัน (สเปก Phase 0) |
 | 1 | Unreleased (Phase 1) | เพิ่ม: `/health.api/minClientApi`, `x-mimi-api`, `hello.client`, close `4426`, `welcome.version/api/minClientApi`, `chat-turn-messages`, `chat-open.afterId`, `error.requestType`, `E-PROTOCOL`, native push (`native-push-register/unregister`, `/api/push/*`), `/api/notifications?afterId=`, `/api/permissions/:id`, `/api/approvals/:id`, `/api/mimiamp/files`, Range ของ `/api/files/:id` และ `/api/mimiamp/youtube/:id/audio`, gateway ส่ง `/mimiamp/*` ต่อเมื่อมี Bearer — ไม่มีอะไรถูกลบ |
+| 2 | Unreleased | **ลบ Mimiamp** (เจ้าของโปรเจกต์ตัดสิน Q5, 2026-11-03): `/mimiamp/*`, `/api/mimiamp/*` (state, files, youtube, playlists, import), frame `mimiamp`, เครื่องมือ `mimiamp` ของ agent · `MIN_CLIENT_API` ยังเป็น 1: แอปที่ build กับ api 1 ยังต่อได้ แค่หน้าเพลงใช้ไม่ได้ (404) · ไม่ได้ประกาศ deprecated 90 วันตามนโยบายข้อ 1–2 เพราะแอป native ยังไม่ได้ปล่อย · **เพิ่ม**: platform `wns`, `GET /api/push/info`, `/push/relay` ของ gateway (ระหว่าง core กับ gateway ไม่ใช่ของแอป) |

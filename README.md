@@ -35,7 +35,6 @@ PC agent ───────────────────────�
 - **แชตกับ agent หลายตัว** — แชตเดี่ยวและแชตกลุ่ม, @mention เป็นคิว, agent คุย/ส่งงานต่อกันได้, แก้ prompt และโมเดลแยกต่อ agent
 - **ตัวละคร 3D** — VRM/VRoid พร้อมท่าทาง สีหน้า และ lip-sync, ชุดและฉากหลัง, โหมดมือถือแบบเต็มจอ
 - **เสียงและสื่อ** — ข้อความเสียง ถอดเสียง ถ่ายรูป แนบไฟล์ วิดีโอ PDF และคำบรรยายรายรูป
-- **Mimiamp** — เครื่องเล่นเพลงประกอบสไตล์ Winamp ในหน้าจอใหม่ ผู้ใช้เปิดเองหรือให้ agent เปิดเป็นหน้าต่างลอย (picture-in-picture) ก็ได้ แตะเพื่อขยายเต็มจอ (เพลงอยู่ใน `packages/core/src/server/web/mimiamp/`)
 - **ความจำและ session** — memory หลายชั้น, สรุปบทสนทนาอัตโนมัติ, context meter, งบ token/ค่าใช้จ่าย
 - **ใช้แผนรายเดือนแทน API key** — Claude Pro/Max ผ่าน Claude Code หรือ ChatGPT Plus/Pro ผ่าน "Sign in with ChatGPT" (ข้อจำกัดและเงื่อนไขเป็นไปตามผู้ให้บริการ)
 - **Workflow engine** — trigger ตามเวลา/webhook, expression, code node ที่แยก process, run history, approval, retry และ idempotency
@@ -184,7 +183,6 @@ node --test --test-timeout=60000 packages/core/src/test/<file>.test.ts
 | `MIMI_CONFIG` | `mimi.json` | ไฟล์ตั้งค่าโมเดล/compaction/memory |
 | `MIMI_TIMEZONE` | `Asia/Bangkok` | timezone ของ scheduler และ trigger |
 | `ALLOWED_DIRS` | `<user>/workspace` | โฟลเดอร์ที่ file/shell tools เข้าถึงได้ คั่นด้วย `;` |
-| `MIMI_MUSIC_DIR` | `<user>/mimiamp` → `<app>/mimiamp` → โฟลเดอร์ตัวอย่างในแพ็กเกจ | โฟลเดอร์เพลงของ Mimiamp (ใช้โฟลเดอร์แรกที่มีไฟล์เสียง) |
 | `MIMI_LOCAL_PC_TOOLS` | `1` | `0` = ให้ file/shell tools ทำงานผ่าน PC agent เท่านั้น (เหมาะกับ cloud) |
 | `MIMI_CORE_URL` | `ws://127.0.0.1:8787/ws` | ที่อยู่ core สำหรับ PC agent |
 | `MIMI_PUBLIC_URL` | — | URL สาธารณะของ core ใช้สร้าง OAuth redirect (`/oauth/callback`) |

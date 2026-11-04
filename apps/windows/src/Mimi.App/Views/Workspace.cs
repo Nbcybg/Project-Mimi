@@ -54,10 +54,13 @@ internal sealed partial class Workspace : Window
     private Polyline? stroke;
     private Windows.UI.Color pen = Windows.UI.Color.FromArgb(255, 240, 70, 110);
 
-    public Workspace(AppConfig config, Action save)
+    private readonly Func<byte[], string, Task<bool>>? sendToChat;
+
+    public Workspace(AppConfig config, Action save, Func<byte[], string, Task<bool>>? sendToChat = null)
     {
         this.config = config;
         this.save = save;
+        this.sendToChat = sendToChat;
         Title = "Mimi Workspace";
         AppWindow.SetIcon(System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "Mimi.ico"));
         var area = DisplayArea.Primary.WorkArea;
@@ -427,6 +430,7 @@ internal sealed partial class Workspace : Window
             tools.Children.Add(swatch);
         }
         tools.Children.Add(Ui.Button("ล้าง", () => ink.Children.Clear(), "ghost"));
+        if (sendToChat is not null) tools.Children.Add(Ui.Button("ส่งเข้าแชต", () => _ = SendDrawing(), "ghost", "AnnotateSend", "แนบภาพนี้ในแชตที่เปิดอยู่ แล้วพิมพ์ข้อความประกอบ"));
         tools.Children.Add(Ui.Button("คัดลอก", () => _ = CopyDrawing(), "ghost", "AnnotateCopy"));
         tools.Children.Add(Ui.Button("บันทึก PNG", () => _ = SaveDrawing(), "ghost"));
         tools.Children.Add(Ui.Button("ปิด", () => annotate.Visibility = Visibility.Collapsed, "pri"));
@@ -472,6 +476,25 @@ internal sealed partial class Workspace : Window
         var package = new DataPackage();
         package.SetBitmap(RandomAccessStreamReference.CreateFromStream(stream));
         Clipboard.SetContent(package);
+    }
+
+    private async Task SendDrawing()
+    {
+        if (sendToChat is null) return;
+        var name = $"workspace-{DateTime.Now:yyyyMMdd-HHmmss}.png";
+        if (await sendToChat(await Drawing(), name))
+        {
+            annotate.Visibility = Visibility.Collapsed;
+            return;
+        }
+        await new ContentDialog
+        {
+            XamlRoot = Content.XamlRoot,
+            RequestedTheme = Theme.Element,
+            Title = "ยังไม่มีแชตที่เปิดอยู่",
+            Content = "เปิดแชตในหน้าต่างหลักของ Mimi ก่อน แล้วกด \"ส่งเข้าแชต\" อีกครั้ง (หรือกดคัดลอกแล้ววางในแชต)",
+            CloseButtonText = "ปิด",
+        }.ShowAsync();
     }
 
     private async Task SaveDrawing()

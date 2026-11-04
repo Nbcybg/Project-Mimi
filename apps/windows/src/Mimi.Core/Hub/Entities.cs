@@ -26,6 +26,14 @@ public enum FieldKind
     ReadOnly,
     /// <summary>An object edited with its own fields (<see cref="FieldSpec.Children"/>), shown as a sub-card.</summary>
     Group,
+    /// <summary>An object of name → value edited as rows (workflow variables, settings without a spec).</summary>
+    KeyValue,
+    /// <summary>A list of objects, one sub-card per entry with <see cref="FieldSpec.Children"/>, plus "add" (profile fields).</summary>
+    Rows,
+    /// <summary>Who sees it: <c>"*"</c> (every agent) or a list of agent names.</summary>
+    Audience,
+    /// <summary>Fields worked out from the item and the lookups (<see cref="FieldSpec.Expand"/>): a connector's own credentials, a tool's settings.</summary>
+    Dynamic,
 }
 
 /// <summary>
@@ -43,7 +51,83 @@ public sealed record FieldSpec(
     /// <summary>For <see cref="FieldKind.Group"/>: the fields inside, with paths relative to this one.</summary>
     IReadOnlyList<FieldSpec>? Children = null,
     /// <summary>Shown only while this says so (given the whole item): fields of one kind of account, of one protocol…</summary>
-    Func<System.Text.Json.Nodes.JsonObject, bool>? ShowWhen = null);
+    Func<System.Text.Json.Nodes.JsonObject, bool>? ShowWhen = null,
+    /// <summary>For <see cref="FieldKind.Dynamic"/>: the fields for the item as it is now (paths from the item's root).</summary>
+    Func<System.Text.Json.Nodes.JsonObject, Lookups, IReadOnlyList<FieldSpec>>? Expand = null,
+    /// <summary>For <see cref="FieldKind.Rows"/>: a new entry (given the entries there already).</summary>
+    Func<System.Text.Json.Nodes.JsonArray, System.Text.Json.Nodes.JsonObject>? NewRow = null,
+    /// <summary>An empty value is left out instead of stored as "" (a credential kept as it was until a new one is typed).</summary>
+    bool OmitEmpty = false,
+    string? Placeholder = null);
+
+/// <summary>Form fields from what the server describes (a tool's settings, a connector's credentials: <c>ToolSettingField</c> / <c>ConnectorField</c>).</summary>
+public static class ServerFields
+{
+    /// <summary>One server field as a form field under <paramref name="parent"/> (e.g. <c>settings</c> → <c>settings.channel</c>).</summary>
+    public static FieldSpec From(JsonElement field, string parent, bool keepSecrets = false, bool omitEmpty = false)
+    {
+        var key = field.S("key");
+        var label = (field.S("label") is { Length: > 0 } shown ? shown : key) + (field.B("required") ? " *" : "");
+        var path = parent.Length > 0 ? $"{parent}.{key}" : key;
+        var hint = field.S("description") is { Length: > 0 } description ? description : null;
+        var placeholder = field.S("placeholder") is { Length: > 0 } text ? text : null;
+        var options = field.A("options").Select(option => option.ValueKind == JsonValueKind.Object
+            ? (option.S("value"), option.S("label") is { Length: > 0 } optionLabel ? optionLabel : option.S("value"))
+            : (option.ToString(), option.ToString())).ToList();
+        return field.S("type") switch
+        {
+            // A preset's secret is a {{secret.NAME}} reference, typed and shown like text.
+            "secret" when keepSecrets => new FieldSpec(path, label, FieldKind.Text, hint ?? "ใส่ {{secret.ชื่อ}} แทนตัวคีย์ (คีย์จริงเก็บใน Hub → คีย์ลับ)", OmitEmpty: omitEmpty, Placeholder: placeholder ?? "{{secret.ชื่อ}}"),
+            "secret" => new FieldSpec(path, label, FieldKind.Secret, hint, OmitEmpty: true, Placeholder: placeholder),
+            "number" => new FieldSpec(path, label, FieldKind.Number, hint, Placeholder: placeholder),
+            "boolean" => new FieldSpec(path, label, FieldKind.Bool, hint),
+            "text" => new FieldSpec(path, label, FieldKind.Multiline, hint, OmitEmpty: omitEmpty, Placeholder: placeholder),
+            "account" => new FieldSpec(path, label, FieldKind.Choice, hint, OptionsFrom: field.S("service") is { Length: > 0 } service ? $"accounts:{service}" : "accounts"),
+            "connection" => new FieldSpec(path, label, FieldKind.Choice, hint, OptionsFrom: $"connections:{field.S("connector")}"),
+            _ when options.Count > 0 => new FieldSpec(path, label, FieldKind.Choice, hint, Options: options),
+            _ => new FieldSpec(path, label, FieldKind.Text, hint, OmitEmpty: omitEmpty, Placeholder: placeholder),
+        };
+    }
+
+    /// <summary>The settings a tool preset fills in: the chosen tool's own settings, or name → value rows for a tool without a list.</summary>
+    public static IReadOnlyList<FieldSpec> PresetSettings(JsonObject preset, Lookups lookups)
+    {
+        var tool = lookups.Items("tools").FirstOrDefault(entry => entry.S("name") == preset.Str("tool"));
+        var settings = tool.ValueKind == JsonValueKind.Object ? tool.A("settings").ToList() : [];
+        if (settings.Count == 0) return [new FieldSpec("settings", "ค่าที่ตั้ง (ชื่อ → ค่า)", FieldKind.KeyValue, "ค่าลับ (secret) ใส่ {{secret.ชื่อ}} แทนตัวคีย์")];
+        return settings.Select(field => From(field, "settings", keepSecrets: true)).ToList();
+    }
+
+    /// <summary>A connection's credentials (the connector's auth fields; old values are never sent back) and, for OAuth2, its endpoints.</summary>
+    public static IReadOnlyList<FieldSpec> ConnectionFields(JsonObject connection, Lookups lookups)
+    {
+        var connector = lookups.Items("connectors").FirstOrDefault(entry => entry.S("key") == connection.Str("connector"));
+        if (connector.ValueKind != JsonValueKind.Object)
+        {
+            return [new FieldSpec("fields", "ค่าที่ต้องใช้ (ชื่อช่อง → ค่า)", FieldKind.KeyValue, "เลือก connector ก่อน · ค่าเก่าไม่แสดง ใส่ใหม่เมื่อจะเปลี่ยน")];
+        }
+        var list = connector.A("auth.fields").Select(field => From(field, "fields", omitEmpty: true)).ToList();
+        if (connector.S("auth.kind") == "oauth2")
+        {
+            list.Add(new FieldSpec("oauth", "OAuth2", FieldKind.Group, "ค่าเริ่มต้นมาจาก connector · แก้ได้ เช่น เปลี่ยน /common/ เป็น tenant ขององค์กร", Children:
+            [
+                new("authorizeUrl", "Authorization URL", Placeholder: connector.S("auth.authorizeUrl") is { Length: > 0 } authorize ? authorize : "https://…/authorize", OmitEmpty: true),
+                new("tokenUrl", "Access Token URL", Placeholder: connector.S("auth.tokenUrl") is { Length: > 0 } token ? token : "https://…/token", OmitEmpty: true),
+                new("scopes", "Scopes", FieldKind.List, string.Join(" ", connector.Strings("auth.scopes")) is { Length: > 0 } scopes ? $"ค่าเริ่มต้น: {scopes}" : null),
+            ]));
+        }
+        if (list.Count == 0) list.Add(new FieldSpec("", "บริการนี้ไม่ต้องใช้ค่าลับ", FieldKind.ReadOnly));
+        return list;
+    }
+
+    /// <summary>A new profile field with a key no other field has (feature-profile.js keyFor).</summary>
+    public static JsonObject NewProfileField(JsonArray fields)
+    {
+        var n = 1;
+        while (fields.OfType<JsonObject>().Any(field => field.Str("key") == $"field_{n}")) n++;
+        return new JsonObject { ["key"] = $"field_{n}", ["label"] = "", ["value"] = "", ["visibleTo"] = "*" };
+    }
+}
 
 /// <summary>
 /// Something to do with an item (or the whole page when <see cref="ForItem"/> is false): optional

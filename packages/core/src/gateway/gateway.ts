@@ -6,6 +6,9 @@ import { API_VERSION, MIN_CLIENT_API } from '@mimi/shared';
 import { AuthLimiter, clientAddress } from '../server/auth-limiter.ts';
 import { serveAssetLinks } from '../server/assetlinks.ts';
 import { APP_VERSION, serveWebFile } from '../server/web-files.ts';
+import { NativePushSender, nativePushConfig } from '../notify/native-push.ts';
+import type { NativePushTransport } from '../notify/notifications.ts';
+import type { RelayRequest } from '../notify/push-relay.ts';
 import type { AccountStore, SessionTarget } from './accounts.ts';
 
 /**
@@ -27,10 +30,11 @@ import type { AccountStore, SessionTarget } from './accounts.ts';
  *   POST /auth/password                     Bearer + { current, next } -> { ok: true }
  *   POST /auth/logout                       Bearer token -> 204; open sockets of it are closed
  *   *    /api/*                             Bearer token -> the person's core
- *   GET  /mimiamp/*                         with a Bearer token -> the person's core (their own music);
- *                                           without one, the songs shipped with the gateway (old web client)
  *   *    /h/<id>/api/(workflow|webhook)/<k> webhooks of one person's core (no sign-in, like a core)
  *   *    /h/<id>/oauth/callback             OAuth sign-in callback of that core (no sign-in, like a core)
+ *   GET  /push/relay                        a core's own token -> { platforms, wnsRemoteId? } (what the gateway can push to)
+ *   POST /push/relay                        a core's own token + { target, message, urgency } -> the push service's answer
+ *                                           (the FCM / APNs / WNS keys live only here: MIMI_PUSH_RELAY_URL on the cores)
  *   WS   /ws                                first frame { type: 'hello', token } -> the person's core
  */
 
@@ -44,6 +48,8 @@ export interface GatewayOptions {
   sweepMs?: number;
   /** Serve the built-in web client; false = MIMI_SERVE_WEB=0 (native apps only). */
   serveWeb?: boolean;
+  /** What pushes for the cores (the relay); default: the keys in this gateway's environment. */
+  push?: NativePushTransport & { wnsRemoteId?: string };
   log?: (line: string) => void;
 }
 
@@ -166,6 +172,41 @@ export async function startGateway(options: GatewayOptions): Promise<Gateway> {
     return target;
   };
 
+  // The relay: the gateway's own keys (never relayed further).
+  const pushConfig = nativePushConfig();
+  const push = options.push ?? (pushConfig.fcm || pushConfig.apns || pushConfig.wns ? new NativePushSender({ ...pushConfig, relayUrl: undefined }) : undefined);
+  const relay = async (request: http.IncomingMessage, response: http.ServerResponse) => {
+    const address = addressOf(request);
+    const owner = limiter.blocked(address) ? null : accounts.coreOwner(bearer(request));
+    if (!owner) {
+      limiter.fail(address);
+      sendJson(response, 401, { error: 'Missing or wrong core token.' });
+      return;
+    }
+    limiter.succeed(address);
+    const platforms = (['fcm', 'apns', 'wns'] as const).filter((platform) => push?.available(platform));
+    if (request.method === 'GET') {
+      sendJson(response, 200, { platforms, ...(push?.wnsRemoteId ? { wnsRemoteId: push.wnsRemoteId } : {}) });
+      return;
+    }
+    const body = (await readJson(request, 16 * 1024)) as Partial<RelayRequest> | null;
+    const target = body?.target;
+    const message = body?.message;
+    if (!target || typeof target.token !== 'string' || !['fcm', 'apns', 'wns'].includes(target.platform) || !message || typeof message.id !== 'number') {
+      sendJson(response, 400, { error: 'Send { target, message, urgency }.' });
+      return;
+    }
+    if (!push?.available(target.platform)) {
+      sendJson(response, 200, { ok: false, gone: false, status: 0, reason: `no ${target.platform} credentials on the gateway` });
+      return;
+    }
+    try {
+      sendJson(response, 200, await push.send(target, message, body.urgency === 'high' ? 'high' : 'normal'));
+    } catch (error) {
+      sendJson(response, 200, { ok: false, gone: false, status: 0, reason: (error as Error).message.slice(0, 200) });
+    }
+  };
+
   const endSockets = (sessionId: string | null) => {
     for (const [socket, entry] of live) {
       if (sessionId ? entry.sessionId === sessionId : !accounts.sessionLive(entry.sessionId)) socket.close(4003, 'signed out');
@@ -210,16 +251,12 @@ export async function startGateway(options: GatewayOptions): Promise<Gateway> {
     const url = new URL(request.url ?? '/', 'http://localhost');
     const method = request.method ?? 'GET';
     response.setHeader('x-mimi-api', String(API_VERSION));
-    // Music is the person's own (on their core's volume): a device that sends its session gets
-    // that. A plain <audio src> of the old web client cannot, so it still gets the gateway's songs.
-    if ((method === 'GET' || method === 'HEAD') && url.pathname.startsWith('/mimiamp/') && bearer(request)) {
-      const target = authorize(request);
-      if (!target) sendJson(response, 401, { error: 'Missing or wrong token.' });
-      else proxy(request, response, target.coreUrl, `${url.pathname}${url.search}`, target.coreToken);
+    if (method === 'GET' && serveWebFile(url.pathname, response, { web: options.serveWeb !== false })) return;
+    if (serveAssetLinks(method, url.pathname, response)) return;
+    if (url.pathname === '/push/relay' && (method === 'GET' || method === 'POST')) {
+      await relay(request, response);
       return;
     }
-    if (method === 'GET' && serveWebFile(url.pathname, response, request.headers.range, undefined, { web: options.serveWeb !== false })) return;
-    if (serveAssetLinks(method, url.pathname, response)) return;
     if (method === 'GET' && url.pathname === '/health') {
       sendJson(response, 200, { ok: true, version: APP_VERSION, api: API_VERSION, minClientApi: MIN_CLIENT_API, accounts: true });
       return;

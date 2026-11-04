@@ -94,6 +94,16 @@ internal sealed class StageData
         return agent.S("model").Length > 0 ? $"/api/agent-model/{E(name)}?v={agent.S("model")}" : null;
     }
 
+    /// <summary>The agent's Mixamo motions (name, file path with its version) for the 3D character.</summary>
+    public IReadOnlyList<(string Name, string Path)> Motions(string name) =>
+        Agent(name) is { } agent
+            ? agent.A("motions").Where(motion => motion.S("name").Length > 0).Select(motion => (motion.S("name"), $"/api/agent-motion/{E(name)}/{E(motion.S("name"))}?v={motion.S("version")}")).ToList()
+            : [];
+
+    /// <summary>The motion the agent plays while it stands (agent.md idleMotion), when it has that motion.</summary>
+    public string? IdleMotion(string name) =>
+        Agent(name) is { } agent && agent.S("idleMotion") is { Length: > 0 } idle && agent.A("motions").Any(motion => motion.S("name") == idle) ? idle : null;
+
     /// <summary>Every picture the agent could show for this emoji, best first (feature-stage.js candidates).</summary>
     public IReadOnlyList<FigureTarget> Candidates(string name, string? mood)
     {
@@ -126,9 +136,12 @@ internal sealed class StageData
     /// </summary>
     public BackdropTarget? Backdrop(ChatLook look, string? agentName)
     {
-        if (look.Background is { } own && own.Str("type") is { Length: > 0 } kind && kind != "none")
+        // The chat's own choice, as its time rules have it now; "none" there means no backdrop at all.
+        var now = DateTime.Now;
+        if (BackgroundRules.For(look.Background, look.BackgroundRules, now.Hour * 60 + now.Minute,
+            id => scenes.Any(item => item.S("id") == id && item.S("image").Length > 0)) is { } own)
         {
-            return kind switch
+            return own.Str("type") switch
             {
                 "solid" => new($"solid:{own.Str("color")}", Color: own.Str("color")),
                 "gradient" => new($"gradient:{own.Str("from")}:{own.Str("to")}", From: own.Str("from"), To: own.Str("to"),

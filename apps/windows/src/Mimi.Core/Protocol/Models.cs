@@ -174,62 +174,14 @@ public sealed record AgentView(string Name, string? DisplayName = null, string D
     public string ShownName => string.IsNullOrWhiteSpace(DisplayName) ? Name : DisplayName!;
 }
 
+/// <summary><c>GET /api/push/info</c>: the push services that work and the Entra ID app id a WNS channel is made for.</summary>
+public sealed record PushInfo(IReadOnlyList<string>? Platforms = null, string? WnsRemoteId = null)
+{
+    public bool Wns => (Platforms ?? []).Contains("wns") && Guid.TryParse(WnsRemoteId, out _);
+}
+
 public sealed record NotificationSyncItem(long Id, string Kind, string Title = "", string Body = "", long? ChatId = null, string CreatedAt = "", bool Read = false);
 
 public sealed record WidgetChat(long Id, string Title = "", string Agent = "", string? Avatar = null, string Preview = "", string? LastMessageAt = null, int Unread = 0);
 
 public sealed record WidgetView(IReadOnlyList<WidgetChat>? Chats = null, long? BusyChat = null);
-
-// ---------- Mimiamp (packages/shared/src/mimiamp.ts) ----------
-
-public sealed record MimiampTrack(
-    string Id,
-    string Source,
-    string Title,
-    string? File = null,
-    string? VideoId = null,
-    string? Artist = null,
-    string? Album = null,
-    double? Duration = null,
-    string Url = "",
-    string? Thumbnail = null);
-
-public sealed record MimiampPlaylistItem(
-    string Id,
-    string Source,
-    string Title,
-    string? TrackId = null,
-    string? File = null,
-    string? VideoId = null,
-    string? LocalId = null,
-    string? Artist = null,
-    string? Album = null,
-    double? Duration = null,
-    string? Thumbnail = null,
-    string AddedAt = "");
-
-public sealed record MimiampPlaylist(string Id, string Name, string CreatedAt = "", string UpdatedAt = "", IReadOnlyList<MimiampPlaylistItem>? Items = null)
-{
-    public IReadOnlyList<MimiampPlaylistItem> Entries => Items ?? [];
-}
-
-public sealed record YoutubeStatus(bool Ready = false, bool Google = false, string? Error = null);
-
-public sealed record MimiampState(IReadOnlyList<MimiampTrack>? Tracks = null, IReadOnlyList<MimiampPlaylist>? Playlists = null, YoutubeStatus? Youtube = null)
-{
-    public IReadOnlyList<MimiampTrack> TrackList => Tracks ?? [];
-    public IReadOnlyList<MimiampPlaylist> PlaylistList => Playlists ?? [];
-}
-
-public sealed record YoutubeSearchResult(string VideoId, string Title, string? Artist = null, double? Duration = null, string? Thumbnail = null);
-
-public sealed record YoutubeSearchReply(IReadOnlyList<YoutubeSearchResult>? Results = null, string Source = "none", string? Error = null);
-
-public sealed record YoutubePrepared(string VideoId, string Url, string Mime = "");
-
-public sealed record TrackReply(MimiampTrack? Track = null);
-
-public sealed record PlaylistReply(MimiampPlaylist Playlist);
-
-/// <summary>What an agent tells the player (protocol.ts MimiampCommand).</summary>
-public sealed record MimiampCommand(string Action, string? Query = null, double? Level = null, double? Seconds = null);

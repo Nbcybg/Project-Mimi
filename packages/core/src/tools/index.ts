@@ -32,8 +32,6 @@ import { createMemoryTools } from './memory-tools.ts';
 import { ToolRegistry } from './registry.ts';
 import { createWakeTools } from './wake-tools.ts';
 import { createNotifyTools, type NotifyUser } from '../notify/notify-tools.ts';
-import { createMimiampTools, type MimiampControl, type MimiampLibrary, type MimiampYoutubeAdder } from './mimiamp-tools.ts';
-import type { MimiampPlaylists } from '../mimiamp/playlists.ts';
 import { createWebTools } from './web-tools.ts';
 
 export interface ToolServices {
@@ -68,14 +66,6 @@ export interface ToolServices {
   media?: MediaToolDeps;
   /** Posts to the agent's chat and notifies the user (notify_user); without it the tool is not offered. */
   notifyUser?: NotifyUser;
-  /** Controls the Mimiamp player in open apps (mimiamp); without it the tool is not offered. */
-  mimiamp?: MimiampControl;
-  /** Mimiamp songs: local files and saved YouTube links. */
-  mimiampLibrary?: MimiampLibrary;
-  /** Mimiamp playlists, edited by the agent. */
-  mimiampPlaylists?: MimiampPlaylists;
-  /** Adds a YouTube link to Mimiamp as audio only. */
-  mimiampYoutube?: MimiampYoutubeAdder;
 }
 
 /** Every tool an agent file may list. The mesh tools (send_to, reply) are added per run. */
@@ -101,9 +91,6 @@ export function createToolRegistry(services: ToolServices): ToolRegistry {
     ...(services.gallery && services.media ? createGalleryTools(services.gallery, services.status, services.media.attachments) : []),
     ...createWakeTools(),
     ...(services.notifyUser ? createNotifyTools(services.notifyUser) : []),
-    ...(services.mimiamp
-      ? createMimiampTools(services.mimiamp, services.mimiampLibrary, services.mimiampPlaylists, services.mimiampYoutube)
-      : []),
     ...createWebTools({ key: services.key ?? ((name) => process.env[name]) }),
     createSkillTool(services.skills),
     ...(services.knowledge ? createKnowledgeTools(services.knowledge) : []),

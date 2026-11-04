@@ -2,6 +2,53 @@
 
 ## Unreleased
 
+### Mimiamp removed (client API 2)
+
+The project owner decided to drop the built-in music player everywhere (answer to Q5 in
+`docs/native/README.md`). To play music, an agent opens the computer's own music app with the PC tools.
+
+- Server: `/mimiamp/*`, `/api/mimiamp/*` (state, uploads, YouTube search/prepare/audio, playlists,
+  import/export), the `mimiamp` frame and the agent's `mimiamp` tool are gone (404 / not sent);
+  `MIMI_MUSIC_DIR` is no longer read; `@distube/ytdl-core` is no longer a dependency. `API_VERSION` is 2,
+  `MIN_CLIENT_API` stays 1 (an app built for api 1 still connects; only its music page fails).
+  Widget / notification-poll types moved to `packages/shared/src/views.ts`.
+- Web client: the Mimiamp page, `feature-mimiamp.js` and its styles are gone.
+- Windows app: the player page, mini player, tray item, media keys / SMTC, EQ / spectrum and
+  `windows.localTracks` etc. in `config.json` are gone; a `mimiamp` frame from an older core is skipped.
+- Android app: `feature/mimiamp` (Media3 player service, EQ) and its route are gone; same skipping.
+- Repository: the 285 MB demo songs (`mimiamp/`) are removed. Songs already uploaded to a volume
+  (`<user>/mimiamp`) stay there unused (`docs/hosting.md`).
+
+### Native clients, Phase 3: the Mac app (SwiftUI) — first cut
+
+`apps/macos/`: a SwiftPM package that builds with the Command Line Tools only (no Xcode) and
+`Support/build-app.sh` wraps into `Mimi.app` (ad hoc signed). MimiKit (protocol, HTTP + WebSocket,
+chat reducer, view models; shared with a later iOS app), MimiDesktop (the PC agent built in — Q7 —, the
+core on this computer through `native-host.ts`, config.json shared with the Electron app, the token in the
+login keychain) and the app: sign-in (core token or gateway + 2FA), chat list, streaming chat with tool
+rows, permission and approval cards, files, pins, reactions, mentions, menu bar item, notifications,
+auto-lock. 28 tests, two of them against a real core and the real PC agent. Not yet: the management
+pages, setup wizard, search, inbox, sessions, voice, the stage, Workspace, updater, APNs, VRM.
+
+### Windows app: what the Electron app still had (round 6)
+
+- Chat background: upload a picture from this computer for one chat (`POST /api/chat-background`),
+  and time spans that switch the background (06:00–18:00 / 18:00–06:00…), as the web's panel does.
+  A chat set to "no background" now shows none (it fell back to the agent's scene before).
+- "เปิดเบราว์เซอร์ของ Mimi" (tray and settings): the agent's own browser profile in Edge / Chrome, with the
+  PC agent's flags, so sites can be signed in to by hand and the agent takes the window over.
+- Composer: `@name` suggestions in a group (Tab / Enter / click), Esc on an empty box stops the reply,
+  Ctrl+V of a picture or files attaches them, and pictures (picked, dropped, pasted or sent from the
+  Workspace) open a review where each can be left out and given a caption (`X-Mimi-Caption`).
+- Push to Windows: WNS raw pushes (`MIMI_WNS_TENANT_ID` / `_CLIENT_ID` / `_CLIENT_SECRET`, channel URIs only on
+  `*.notify.windows.com`); the app asks `GET /api/push/info`, registers its channel at each sign-in, and on a push
+  fetches the text and shows the toast (started into the tray when it was not running). Falls back to the socket
+  where Windows App SDK push is not supported. Not tried against the real WNS yet.
+- Push relay (Q3): a core with `MIMI_PUSH_RELAY_URL` sends pushes it has no keys for to the gateway's
+  `POST /push/relay`, authenticated by its own core token; the FCM / APNs / WNS keys can live on the gateway only.
+- Windows widget: not possible yet — it needs a signed MSIX / sparse package (package identity).
+- `.gitignore`: `data/` also hid `android/core/data/` (the Android data module); it is re-included.
+
 ### Native clients, Phase 1: the server side (client API 1)
 
 The core and the gateway now serve apps that are not the web page they ship (Android, iOS, macOS,
@@ -103,6 +150,39 @@ workflow does not build the native one yet. Details and what is not done: `apps/
   the Workspace, the step-by-step setup wizard, a light theme, WNS (`apps/windows/README.md`).
 - Tests: 66 unit tests; a second UI test opens every page and tab, adds / edits / deletes a skill,
   installs a pack, draws its workflow and removes the pack.
+
+### Native clients, Phase 6 (Windows): what the Electron app still had over it
+
+Written on a Mac: compiled there (every C# file, with stubs for the XAML compiler's output —
+`apps/windows/tests/tools/mac-typecheck/check.sh`) and unit-tested, but not yet run on Windows.
+
+- Workflow editor: expressions preview their value for the last run's data, else the trigger's sample
+  (`workflow-expr-preview`); paths are suggested after `$json.` / `$node[…]` inside `{{ }}`, and
+  "{ } เลือกข้อมูล" lists every path (the input, earlier nodes, `$vars`, built-ins). Sticky notes can be
+  added, moved, resized, recoloured, edited and removed. A connector node picks service → version →
+  operation → connection and shows that operation's own fields (kept in `config.input`), with choices
+  read from the service (`connector-operation-options`) once the fields they depend on are set;
+  connector and pool triggers show their entry's fields. Undo / redo (Ctrl+Z / Ctrl+Y), copy / paste /
+  duplicate / delete keys, auto-layout, and node presets shared through `mimi.nodePreset.*` as on the
+  web. Workflow variables are name → value rows.
+- VRM: Mixamo motions (.fbx retargeted to the VRM rig, as `feature-vrm.js`); the agent's idle motion
+  loops on the chat stage; Agent → "ตัวละคร 3D" plays, stops and deletes motions and sets the idle one.
+- The situation picture lies over the chat like an event picture (open, minimised to the corner, or
+  closed to a button, remembered per agent until another picture comes), and the agent's gallery has
+  its own manager: search, pages, many pictures at once (with 256 px previews), title / tags /
+  description, show in the chat, delete.
+- Sub-forms instead of JSON: a tool preset gets its tool's own settings, a connection its connector's
+  credentials (blank = keep) and OAuth2 endpoints, the profile a card per field (label, value, who sees
+  it, this computer only, key).
+- Workspace: "ส่งเข้าแชต" attaches the drawing to the open chat, as the Electron app did.
+- "ใช้เซิร์ฟเวอร์ในเครื่องนี้": the app starts the core on this computer itself
+  (`packages/core/src/app/native-host.ts` with the bundled node, 127.0.0.1, the token in the app
+  settings as `npm run app` keeps it), signs in to it and starts it with the app; quitting stops it,
+  signing out stops it for good. A Mimi already running there is used and left alone. PC tools go
+  through the app's PC agent (`localPcTools: false`). The Windows build carries the core
+  (`scripts/pack-core.mjs`, about 240 MB of dependencies).
+- Tests: 87 Windows unit tests (82 pass on macOS — the 5 others need Windows paths / DPAPI; one new test
+  starts the real core), `native-host.test.ts` on the server.
 
 ### Native clients, Phase 6 (Windows): the Electron look, the editors and the Workspace
 

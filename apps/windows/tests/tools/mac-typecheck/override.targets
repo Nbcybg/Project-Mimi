@@ -1,0 +1,10 @@
+<Project>
+  <!-- check.sh only (macOS / Linux): the XAML compiler runs on Windows only; stubs stand in for what it generates. -->
+  <Target Name="MarkupCompilePass1" />
+  <Target Name="MarkupCompilePass2" />
+  <Target Name="AddStubs" BeforeTargets="CoreCompile" Condition="'$(MSBuildProjectName)' == 'Mimi.App'">
+    <ItemGroup>
+      <Compile Include="$(XamlStubDir)/*.cs" />
+    </ItemGroup>
+  </Target>
+</Project>

@@ -13,7 +13,7 @@ package id ยังเป็น `app.mimi.android` และเซ็นด้�
 | เชื่อมต่อ / ล็อกอิน | ใส่ที่อยู่เซิร์ฟเวอร์ → `/health` บอกว่าเป็น core คนเดียว (ใส่ token) หรือ gateway (username + password + รหัส 2FA) · เช็ก `minClientApi` · "เครื่องนี้ไม่ใช่ของฉัน" = ไม่จำ token | `auth-and-session.md`, `api-versioning.md` |
 | รายการแชต | แท็บ ตัวต่อตัว / กลุ่ม, ยังไม่อ่าน, กำลังพิมพ์, รูป agent · ปุ่ม + เริ่มแชตกับ agent | `realtime.md` 4 |
 | แชต | streaming ทีละ delta, แถวเครื่องมือ, sub-agent, handoff, การ์ดขออนุญาต (ครั้งนี้/งานนี้/session/ตลอด), อนุมัติ workflow, ข้อความแบบเว็บ (code block, `code`, **ตัวหนา**, *การกระทำ*, ลิงก์, @mention), รูปในแชต + ดูเต็มจอ, แนบไฟล์, ข้อความเสียง (WAV 16 kHz), หยุด, โหลดข้อความเก่า | `realtime.md`, `media.md` 2 |
-| Mimiamp | คลังเพลง + เพลย์ลิสต์ (สร้าง/ลบ/เพิ่ม/เอาออก), เพิ่ม/ค้นหา YouTube, shuffle / repeat, EQ 10 แบนด์ (`android.media.audiofx.Equalizer`), เล่นต่อในพื้นหลังด้วย Media3 + MediaSession + notification, ทำตามคำสั่งของ agent (`mimiamp` frame) | `media.md` 1 |
+| ~~Mimiamp~~ | **เอาออกแล้ว** (Q5, 2026-11-03: `feature/mimiamp` ถูกลบ, frame `mimiamp` ของ core เก่าถูกข้าม) | – |
 | แจ้งเตือน | FCM (เมื่อ build มี Firebase ids และ core มีกุญแจ FCM) + poll `/api/notifications?afterId=` ทุก ~15 นาทีด้วย WorkManager | `push-and-background.md` |
 | Widget | แชตล่าสุดบนหน้าจอหลัก (`GET /api/widget`) แตะแถว = เปิดแชตนั้น | `api-contract.md` A.6 |
 | อัปเดตแอป | ถาม GitHub ว่ามี release ที่ใหม่กว่าไหม แล้วขึ้นแถบให้ดาวน์โหลด APK | – |
@@ -49,7 +49,6 @@ android/
   core/ui/          ธีมมืดแบบเว็บ, การแสดงข้อความ, avatar
   feature/auth/     เชื่อมต่อ + ล็อกอิน
   feature/chat/     รายการแชต + หน้าแชต + อัดเสียง
-  feature/mimiamp/  เครื่องเล่น, PlaybackService (Media3), EQ, คำสั่งจาก agent
 ```
 
 MVVM + Coroutines/Flow + Hilt · ฟีเจอร์ใหม่ = โมดูลใหม่ใต้ `feature/` + route ใน `MainActivity`

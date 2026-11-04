@@ -92,4 +92,5 @@ public sealed partial class SettingsView : UserControl
     private void OnUpdate(object sender, RoutedEventArgs e) => _ = app.InstallUpdate();
 
     private void OnOpenWeb(object sender, RoutedEventArgs e) => app.OpenWeb();
+    private void OnOpenAgentBrowser(object sender, RoutedEventArgs e) => app.OpenAgentBrowser();
 }

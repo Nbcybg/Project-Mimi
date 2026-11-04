@@ -79,7 +79,6 @@ sealed interface ServerFrame {
     data class Notification(val kind: String, val title: String, val body: String, val chatId: Long?, val id: Long?) : ServerFrame
     /** An event of background work outside any chat (it may ask for permission). */
     data class Background(val event: AgentEvent) : ServerFrame
-    data class Mimiamp(val command: MimiampCommand) : ServerFrame
     data class Error(val message: String, val code: String?, val chatId: Long?, val clientId: String?, val requestType: String?) : ServerFrame
     data class SecurityAlert(val at: String) : ServerFrame
     data class Unknown(val type: String) : ServerFrame
@@ -169,7 +168,6 @@ private fun parseKnown(json: JsonObject): ServerFrame = when (val type = json.st
         ServerFrame.Notification(item.str("kind").orEmpty(), item.str("title").orEmpty(), item.str("body").orEmpty(), item.long("chatId"), item.long("id"))
     }
     "event" -> ServerFrame.Background(parseAgentEvent(json["event"]!!.jsonObject))
-    "mimiamp" -> ServerFrame.Mimiamp(json.decode<MimiampCommand>("command")!!)
     "error" -> ServerFrame.Error(json.str("message").orEmpty(), json.str("code"), json.long("chatId"), json.str("clientId"), json.str("requestType"))
     "security-alert" -> ServerFrame.SecurityAlert(json.str("at").orEmpty())
     else -> ServerFrame.Unknown(type.orEmpty())

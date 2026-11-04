@@ -8,8 +8,6 @@ import { type Attachment, type AttachmentStore, AttachmentQuotaError, MAX_ATTACH
 import type { WardrobeStore } from '../wardrobe/wardrobe-store.ts';
 import type { BackgroundStore } from '../backgrounds/background-store.ts';
 import type { GalleryStore } from '../gallery/gallery-store.ts';
-import type { MimiampService } from '../mimiamp/service.ts';
-import { isAudioFile } from '../mimiamp/library.ts';
 import type { NativePushRegistration, PermissionScope, PushDeviceView } from '@mimi/shared';
 import { serveFileRange } from './web-files.ts';
 
@@ -30,10 +28,6 @@ export interface HttpApiDeps {
   wardrobe: WardrobeStore;
   backgrounds: BackgroundStore;
   gallery: GalleryStore;
-  /** Mimiamp's songs and playlists (absent in installs without the music folder). */
-  mimiamp?: MimiampService;
-  /** Called after a Mimiamp playlist or YouTube song changed. */
-  mimiampChanged?(): void;
   /** Called after a gallery picture was added, changed or removed. */
   galleryChanged(agent: string): void;
   /** Called after a backdrop's picture changed. */
@@ -69,56 +63,16 @@ export interface HttpApiDeps {
   nativePush?: {
     register(registration: NativePushRegistration): { device: PushDeviceView; delivering: boolean };
     unregister(token: string): boolean;
+    /** What the app needs before it registers: the platforms that work and the WNS remote id. */
+    info?(): Promise<unknown>;
   };
   /** Answers a tool's permission request; false when it is no longer waiting. */
   answerPermission?(requestId: string, allow: boolean, scope?: PermissionScope): boolean;
   /** Answers a workflow's approval request; false when it is no longer waiting. */
   decideApproval?(id: number, approved: boolean, note?: string): boolean;
-  /** Folder uploaded songs are written to; null when the server has none. */
-  musicUploadDir?(): string | null;
 }
 
-/** A song upload is bigger than a chat file: a long lossless track. */
-const MAX_SONG_BYTES = 200 * 1024 * 1024;
 const SCOPES = new Set<PermissionScope>(['once', 'task', 'session', 'always']);
-
-/** Writes a request body straight to a file (no buffering), refusing more than `limit` bytes. */
-function writeBody(request: http.IncomingMessage, file: string, limit: number): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const temp = `${file}.${process.pid}.${Date.now()}.part`;
-    const out = fs.createWriteStream(temp, { mode: 0o600 });
-    let size = 0;
-    const fail = (error: Error) => {
-      out.destroy();
-      fs.rmSync(temp, { force: true });
-      reject(error);
-    };
-    request.on('data', (chunk: Buffer) => {
-      size += chunk.length;
-      if (size > limit) {
-        request.destroy();
-        fail(new HttpError(413, `The file is larger than ${Math.round(limit / 1024 / 1024)} MB.`));
-        return;
-      }
-      if (!out.write(chunk)) {
-        request.pause();
-        out.once('drain', () => request.resume());
-      }
-    });
-    request.on('end', () =>
-      out.end(() => {
-        try {
-          fs.renameSync(temp, file);
-          resolve(size);
-        } catch (error) {
-          fail(error as Error);
-        }
-      }),
-    );
-    request.on('error', (error) => fail(error));
-    out.on('error', (error) => fail(error));
-  });
-}
 
 export function toAttachmentView(attachment: Attachment): AttachmentView {
   const { id, kind, name, mime, size, text, caption, deletedAt } = attachment;
@@ -191,175 +145,6 @@ async function readJson(request: http.IncomingMessage): Promise<Record<string, u
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new HttpError(400, 'The request body must be a JSON object.');
   return parsed as Record<string, unknown>;
-}
-
-/**
- * `/api/mimiamp/...`: the player's saved YouTube songs and the user's playlists. Every
- * mutation tells the open players to reload, so a song an agent added shows up at once.
- */
-async function handleMimiampApi(
-  service: MimiampService,
-  rest: string[],
-  url: URL,
-  request: http.IncomingMessage,
-  response: http.ServerResponse,
-  changed?: () => void,
-  upload?: { dir: string | null; check(bytes: number): void },
-): Promise<void> {
-  const method = request.method ?? 'GET';
-  const [part, id, action] = rest;
-
-  // POST /api/mimiamp/files?name=<song.mp3>   body = the audio file   -> { track }
-  // DELETE /api/mimiamp/files/<song.mp3>
-  if (part === 'files' && upload) {
-    if (!upload.dir) throw new HttpError(409, 'This server has no music folder for uploads (set MIMI_USER or MIMI_MUSIC_DIR).');
-    if (method === 'POST' && id === undefined) {
-      const name = String(url.searchParams.get('name') ?? '').trim();
-      if (!isAudioFile(name)) throw new HttpError(400, 'Name the song with an audio extension (.mp3, .m4a, .flac, .wav, .ogg, .opus…), no folders.');
-      const declared = Number(request.headers['content-length'] ?? 0);
-      if (declared > MAX_SONG_BYTES) throw new HttpError(413, `The file is larger than ${MAX_SONG_BYTES / 1024 / 1024} MB.`);
-      upload.check(declared);
-      fs.mkdirSync(upload.dir, { recursive: true });
-      await writeBody(request, path.join(upload.dir, name), MAX_SONG_BYTES);
-      changed?.();
-      const track = service.tracks().find((entry) => entry.source === 'file' && entry.file === name);
-      sendJson(response, 200, { track: track ?? null });
-      return;
-    }
-    if (method === 'DELETE' && id !== undefined && rest.length === 2) {
-      if (!isAudioFile(id)) throw new HttpError(400, 'Not a song file name.');
-      const file = path.join(upload.dir, id);
-      if (!fs.existsSync(file)) throw new HttpError(404, 'No such song in the upload folder.');
-      fs.rmSync(file);
-      changed?.();
-      sendJson(response, 200, { ok: true });
-      return;
-    }
-    throw new HttpError(405, 'Method not allowed.');
-  }
-
-  if ((part === undefined || part === 'state') && method === 'GET') {
-    sendJson(response, 200, service.state());
-    return;
-  }
-
-  if (part === 'youtube') {
-    if (id === undefined && method === 'POST') {
-      const body = await readJson(request);
-      const link = String(body.url ?? '').trim();
-      if (!link) throw new HttpError(400, 'Paste a YouTube link.');
-      const track = await service.addYoutube(link);
-      const playlist = typeof body.playlist === 'string' && body.playlist.trim() ? service.playlists.get(body.playlist) : undefined;
-      if (playlist) service.playlists.addTrack(playlist.id, track);
-      changed?.();
-      sendJson(response, 200, { track, ...(playlist ? { playlist: service.playlists.get(playlist.id) } : {}) });
-      return;
-    }
-    if (id === 'search' && method === 'GET') {
-      sendJson(response, 200, await service.searchYoutube(url.searchParams.get('q') ?? ''));
-      return;
-    }
-    if (id === undefined) throw new HttpError(404, 'Not found.');
-    if (action === 'prepare' && method === 'POST') {
-      const audio = await service.prepareYoutube(id);
-      changed?.();
-      sendJson(response, 200, { videoId: audio.videoId, url: `/mimiamp/youtube/${audio.videoId}.audio`, mime: audio.mime });
-      return;
-    }
-    if (action === 'audio' && method === 'GET') {
-      const audio = service.audio(id);
-      if (!audio) throw new HttpError(404, 'This YouTube song is not downloaded yet.');
-      serveFileRange(audio.file, `${audio.videoId}${path.extname(audio.file)}`, audio.mime, response, request.headers.range);
-      return;
-    }
-    if (action === undefined && method === 'DELETE') {
-      if (!service.removeYoutube(id)) throw new HttpError(404, 'No such YouTube song.');
-      changed?.();
-      sendJson(response, 200, { ok: true });
-      return;
-    }
-    throw new HttpError(405, 'Method not allowed.');
-  }
-
-  if (part === 'playlists') {
-    if (id === undefined) {
-      if (method === 'GET') {
-        sendJson(response, 200, { playlists: service.playlists.list() });
-        return;
-      }
-      if (method === 'POST') {
-        const body = await readJson(request);
-        const playlist = service.playlists.create(body.name);
-        changed?.();
-        sendJson(response, 200, { playlist });
-        return;
-      }
-      throw new HttpError(405, 'Method not allowed.');
-    }
-    const playlist = service.playlists.get(id);
-    if (!playlist) throw new HttpError(404, `No playlist "${id}".`);
-
-    if (action === undefined) {
-      if (method === 'GET') {
-        sendJson(response, 200, { playlist });
-        return;
-      }
-      if (method === 'PATCH' || method === 'PUT') {
-        const body = await readJson(request);
-        const updated = service.playlists.rename(playlist.id, body.name);
-        changed?.();
-        sendJson(response, 200, { playlist: updated });
-        return;
-      }
-      if (method === 'DELETE') {
-        service.playlists.remove(playlist.id);
-        changed?.();
-        sendJson(response, 200, { ok: true });
-        return;
-      }
-      throw new HttpError(405, 'Method not allowed.');
-    }
-
-    if (action === 'items' && rest.length === 3 && method === 'POST') {
-      const body = await readJson(request);
-      const updated =
-        typeof body.trackId === 'string' && body.trackId.trim()
-          ? (() => {
-              const track = service.findTrack(body.trackId);
-              if (!track) throw new HttpError(404, `No track "${body.trackId}".`);
-              return service.playlists.addTrack(playlist.id, track);
-            })()
-          : service.playlists.addItem(playlist.id, body);
-      changed?.();
-      sendJson(response, 200, { playlist: updated });
-      return;
-    }
-
-    if (action === 'items' && rest.length === 4 && method === 'DELETE') {
-      const result = service.playlists.removeItem(playlist.id, rest[2]!);
-      if (!result.removed) throw new HttpError(404, 'No such item in the playlist.');
-      changed?.();
-      sendJson(response, 200, { playlist: result.playlist });
-      return;
-    }
-
-    if (action === 'export' && method === 'GET') {
-      sendJson(response, 200, service.exportPlaylist(playlist.id));
-      return;
-    }
-
-    throw new HttpError(404, 'Not found.');
-  }
-
-  if (part === 'import' && method === 'POST') {
-    const body = await readJson(request);
-    const playlist = service.playlists.import(body.playlist ?? body);
-    changed?.();
-    sendJson(response, 200, { playlist });
-    return;
-  }
-
-  throw new HttpError(404, 'Not found.');
 }
 
 /**
@@ -496,6 +281,9 @@ export async function handleHttpApi(
       } else {
         sendJson(response, 200, deps.notificationsSync(url.searchParams.get('since')));
       }
+    } else if (resource === 'push' && request.method === 'GET' && rest[0] === 'info' && rest.length === 1 && deps.nativePush?.info) {
+      // GET /api/push/info -> { platforms: ["fcm"|"apns"|"wns"…], wnsRemoteId? }
+      sendJson(response, 200, await deps.nativePush.info());
     } else if (resource === 'push' && request.method === 'POST' && rest.length === 1 && deps.nativePush) {
       const body = await readJson(request);
       if (rest[0] === 'register') {
@@ -724,8 +512,6 @@ export async function handleHttpApi(
       } else {
         throw new HttpError(405, 'Method not allowed.');
       }
-    } else if (resource === 'mimiamp' && deps.mimiamp) {
-      await handleMimiampApi(deps.mimiamp, rest, url, request, response, deps.mimiampChanged, deps.musicUploadDir ? { dir: deps.musicUploadDir(), check: checkMedia } : undefined);
     } else {
       throw new HttpError(404, 'Not found.');
     }

@@ -1,78 +1,11 @@
-# สื่อ: เพลง (Mimiamp), ไฟล์แนบ, เสียงพูด, รูป, VRM/3D
+# สื่อ: ไฟล์แนบ, เสียงพูด, รูป, VRM/3D
 
 > endpoint ทั้งหมดอยู่ใน `api-contract.md` ส่วน A ไฟล์นี้บอกว่า **ฝั่ง native ต้องใช้อะไร** และกับดักที่เจอจากโค้ด/การทดสอบ
 
-## 1. Mimiamp (เครื่องเล่นเพลง)
+## 1. Mimiamp (เครื่องเล่นเพลง) — ลบแล้ว
 
-### 1.1 ที่มาของเพลง
-
-| แหล่ง (`MimiampTrack.source`) | คืออะไร | เล่นจาก |
-|---|---|---|
-| `file` | ไฟล์เสียงในโฟลเดอร์เพลงของเซิร์ฟเวอร์ (`MIMI_MUSIC_DIR` → `<user>/mimiamp` → `<app>/mimiamp` → โฟลเดอร์ demo ในตัว: `packages/core/src/mimiamp/library.ts:73-93`) | `track.url` = `/mimiamp/<ชื่อไฟล์ url-encoded>` (ไม่ต้องใช้ token, รองรับ Range) |
-| `youtube` | ลิงก์ YouTube ที่ผู้ใช้เพิ่ม เซิร์ฟเวอร์ดาวน์โหลด **เฉพาะเสียง** มา cache (`packages/core/src/mimiamp/service.ts:355-380`) | ต้อง `POST …/prepare` ก่อน แล้วเล่นจาก `/mimiamp/youtube/<id>.audio` หรือ `/api/mimiamp/youtube/<id>/audio` |
-| `local` (เฉพาะใน playlist item) | ไฟล์บน **อุปกรณ์ของผู้ฟังเอง** ไม่เคยอัปโหลด (`playlists.ts:14-15`) เว็บเก็บ handle ใน IndexedDB (`feature-mimiamp.js:527-570`) | ไฟล์ในเครื่อง; อุปกรณ์อื่นแสดงเป็น "ไฟล์บนเครื่องอื่น" เล่นไม่ได้ (`feature-mimiamp.js:411-445`) |
-
-ชนิดไฟล์ที่เซิร์ฟเวอร์เสิร์ฟ: `.mp3 .m4a .aac .ogg .oga .opus .wav .flac .weba .webm` (`library.ts:11-22`)
-— ExoPlayer/Media3 เล่นได้ทั้งหมด; **AVPlayer (iOS/macOS) ไม่เล่น `.ogg`/`.opus`/`.webm`/`.weba`** ต้องข้ามหรือใช้ decoder เพิ่ม (เช่น VLCKit / FFmpeg)
-Windows `MediaPlayer` เล่น ogg/opus/flac ได้บน Windows 10 1809+ (ต้องมี Web Media Extensions สำหรับ ogg)
-
-### 1.2 Flow ที่แอปต้องทำ
-
-```
-เปิดหน้า Mimiamp ─▶ GET /api/mimiamp/state      → tracks[], playlists[], youtube{ready,google,error?}
-เล่นเพลง file     ─▶ GET <base>/mimiamp/<file>  (Range)
-เล่นเพลง youtube  ─▶ POST /api/mimiamp/youtube/<id>/prepare  (อาจใช้เวลา: แสดง "PREPARING")
-                  ─▶ เล่นจาก URL ที่ได้ (ดู 1.3)
-เพิ่มจากลิงก์     ─▶ POST /api/mimiamp/youtube {url, playlist?}
-ค้นหา YouTube     ─▶ GET  /api/mimiamp/youtube/search?q=
-แก้ playlist      ─▶ /api/mimiamp/playlists… (ทุกครั้งเซิร์ฟเวอร์ broadcast mimiamp/refresh)
-WS {type:'mimiamp', command} ─▶ ทำตาม command (1.4)
-```
-
-เว็บเดิม: `feature-mimiamp.js:486-500` (state), `:736-760` (prepare), `:775-810` (เล่น)
-
-### 1.3 URL เสียงที่ควรใช้ — ขึ้นกับโหมดเซิร์ฟเวอร์
-
-| เพลง | core (คนเดียว) | gateway (หลายผู้ใช้) |
-|---|---|---|
-| `file` | `/mimiamp/<file>` ✓ Range | `/mimiamp/<file>` ได้ **ไฟล์ในโฟลเดอร์ของ gateway** ไม่ใช่ของ core (`gateway.ts:207` เรียก `serveWebFile` โดยไม่มี service) — ตรงกันเฉพาะเพลง demo ที่มากับ image เดียวกัน; เพลงใน `<user>/mimiamp` ของผู้ใช้ **เข้าไม่ถึง** |
-| `youtube` | `/mimiamp/youtube/<id>.audio` ✓ Range | `/mimiamp/youtube/<id>.audio` **404 เสมอ** (ทดสอบแล้ว) → ต้องใช้ `/api/mimiamp/youtube/<id>/audio` + Bearer ซึ่ง **ไม่มี Range** และอ่านทั้งไฟล์ (`http-api.ts:181-187`) |
-
-เว็บเดิมหลบปัญหานี้ด้วยการดาวน์โหลด `/api/mimiamp/youtube/<id>/audio` ทั้งไฟล์มาเป็น blob ก่อนเล่น (`feature-mimiamp.js:750-755`)
-**[api 1] แก้แล้ว:** gateway ส่ง `/mimiamp/*` ที่มี `Authorization: Bearer` ต่อไป core ของคนนั้น (Range ผ่านได้) และ
-`/api/mimiamp/youtube/<id>/audio` รองรับ Range → **แอป native เล่นทุกเพลงจาก `<base>` + `track.url` พร้อม header Bearer ได้เลย ทั้งสองโหมด**
-(YouTube: `POST …/prepare` ก่อน) ตารางด้านบนคือพฤติกรรมของ core ก่อน api 1 — ถ้า `/health.api` ไม่มี ให้ดาวน์โหลดเพลง YouTube ทั้งไฟล์ลง cache ก่อนเล่นแบบเว็บ
-
-เพลงของผู้ใช้อยู่ใน `<user>/mimiamp` บน volume (image ไม่มีเพลงแล้ว) อัปโหลดได้ด้วย `POST /api/mimiamp/files?name=` (`api-contract.md` A.7, `docs/hosting.md`)
-
-### 1.4 คำสั่งจาก agent (`{"type":"mimiamp","command":MimiampCommand}`)
-
-`protocol.ts:685-708`; เว็บทำตาม `feature-mimiamp.js:2235-2339`
-
-| `action` | ทำอะไร |
-|---|---|
-| `open` | เปิด/แสดงเครื่องเล่น (เว็บเปิดแบบลอย) |
-| `play` + `query?` | ไม่มี query = เล่นต่อ/เล่นเพลงแรก; มี query = หาเพลงที่ `id/title/artist/album/file/videoId` ตรง (ไม่สนตัวพิมพ์) ก่อน แล้วค่อยหาแบบ "มีคำนี้" ในคิวปัจจุบัน → ถ้าไม่เจอ โหลด state ใหม่แล้วหาในคลังทั้งหมด |
-| `pause` / `stop` / `next` / `previous` | ตามชื่อ |
-| `volume` + `level` (0–100) | ตั้งเสียง |
-| `seek` + `seconds` | เลื่อนตำแหน่ง |
-| `playlist-play` + `query` (id หรือชื่อ playlist) | เปิด playlist แล้วเล่นเพลงแรก |
-| `refresh` | โหลด `/api/mimiamp/state` ใหม่ |
-
-เซิร์ฟเวอร์ broadcast ไป **ทุกอุปกรณ์ที่เปิดอยู่** (`server.ts:854-857`) แอปควรมีตัวเลือก "เล่นบนอุปกรณ์นี้เท่านั้นเมื่อถูกสั่ง"
-หรือทำตามเฉพาะอุปกรณ์ที่ foreground (เว็บทำตามทุกตัว) — คำถามให้เจ้าของโปรเจกต์ข้อ Q5
-
-### 1.5 สิ่งที่ native ต้องใช้
-
-| ความสามารถ | เว็บใช้ | Android | iOS / macOS | Windows |
-|---|---|---|---|---|
-| เล่น + Range + header | `<audio>` + blob | Media3 ExoPlayer, `DefaultHttpDataSource.Factory().setDefaultRequestProperties(mapOf("Authorization" to …))` | `AVPlayer` + `AVURLAsset(url, options: ["AVURLAssetHTTPHeaderFieldsKey": …])` (key ไม่เป็นทางการ) หรือดาวน์โหลดลงไฟล์ก่อน | `MediaPlayer` + `MediaSource.CreateFromStream` / `HttpRandomAccessStream` ที่ใส่ header เอง |
-| เล่นต่อเมื่อออกจากแอป + ปุ่มบนหน้าจอล็อก | Media Session API (`feature-mimiamp.js:263-282, 384-410`) | `MediaSessionService` (Media3) + foreground service type `mediaPlayback` | `AVAudioSession(.playback)` + `MPNowPlayingInfoCenter` + `MPRemoteCommandCenter`, Background Modes: audio | `SystemMediaTransportControls` |
-| EQ 10 แบนด์ (60–16k Hz, ±12 dB) + pan | Web Audio `BiquadFilter` + `StereoPanner` (`feature-mimiamp.js:17-28, 285-310`) | `android.media.audiofx.Equalizer` (แบนด์ตามเครื่อง) หรือ `AudioProcessor` เองใน ExoPlayer | `AVAudioEngine` + `AVAudioUnitEQ` (ใช้กับ `AVPlayer` ตรง ๆ ไม่ได้ ต้องเล่นผ่าน engine) | `AudioGraph` + `EqualizerEffectDefinition` (4 แบนด์) หรือ NAudio |
-| spectrum / visualizer | `AnalyserNode` | `Visualizer` (ต้องสิทธิ์ `RECORD_AUDIO`) หรือ `AudioProcessor` | `installTap` บน `AVAudioEngine` | `AudioGraph` frame output |
-| ไฟล์ในเครื่อง (`local`) | IndexedDB + File System Access | `ACTION_OPEN_DOCUMENT` + `takePersistableUriPermission` | `UIDocumentPickerViewController` + security-scoped bookmark | `FileOpenPicker` + `FutureAccessList` |
-
-EQ/visualizer เป็นงาน L ที่ไม่ต้องมีในรอบแรก (ดู `feature-inventory.md`)
+**ลบแล้วใน api 2** (Mimiamp ถูกเอาออกทั้งหมด — คำตอบ Q5 ใน `README.md`): `/mimiamp/*`, `/api/mimiamp/*`, เสียง YouTube และ frame `mimiamp` ไม่มีแล้ว ตอบ `404` / ไม่ส่ง
+ถ้าผู้ใช้อยากฟังเพลง agent เปิดแอปเพลงของเครื่องด้วยเครื่องมือ PC (`open_path`, `computer_app`, `computer_key`) แทน
 
 ## 2. ไฟล์แนบในแชต
 

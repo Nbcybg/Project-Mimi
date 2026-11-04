@@ -52,7 +52,9 @@
   <ItemGroup>
     <Content Include="$(RepoRoot)packages\core\src\server\web\backgrounds\*.webp" Link="Assets\backgrounds\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="$(Modules)three\build\three.module.js;$(Modules)three\build\three.core.js" Link="Assets\web\vendor\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" Condition="Exists('$(Modules)three')" />
-    <Content Include="$(Modules)three\examples\jsm\loaders\GLTFLoader.js" Link="Assets\web\vendor\addons\loaders\GLTFLoader.js" CopyToOutputDirectory="PreserveNewest" Condition="Exists('$(Modules)three')" />
+    <Content Include="$(Modules)three\examples\jsm\loaders\GLTFLoader.js;$(Modules)three\examples\jsm\loaders\FBXLoader.js" Link="Assets\web\vendor\addons\loaders\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" Condition="Exists('$(Modules)three')" />
+    <Content Include="$(Modules)three\examples\jsm\libs\fflate.module.js" Link="Assets\web\vendor\addons\libs\fflate.module.js" CopyToOutputDirectory="PreserveNewest" Condition="Exists('$(Modules)three')" />
+    <Content Include="$(Modules)three\examples\jsm\curves\NURBSCurve.js;$(Modules)three\examples\jsm\curves\NURBSUtils.js" Link="Assets\web\vendor\addons\curves\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" Condition="Exists('$(Modules)three')" />
     <Content Include="$(Modules)three\examples\jsm\utils\BufferGeometryUtils.js;$(Modules)three\examples\jsm\utils\SkeletonUtils.js" Link="Assets\web\vendor\addons\utils\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" Condition="Exists('$(Modules)three')" />
     <Content Include="$(Modules)@pixiv\three-vrm\lib\three-vrm.module.js" Link="Assets\web\vendor\three-vrm.module.js" CopyToOutputDirectory="PreserveNewest" Condition="Exists('$(Modules)@pixiv')" />
     <Content Include="$(Modules)@xterm\xterm\lib\xterm.js;$(Modules)@xterm\xterm\css\xterm.css;$(Modules)@xterm\addon-fit\lib\addon-fit.js" Link="Assets\web\vendor\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" Condition="Exists('$(Modules)@xterm')" />

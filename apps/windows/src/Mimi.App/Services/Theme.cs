@@ -44,6 +44,19 @@ internal static class Theme
         // Chat text over a character or a background (figure-tx / glass).
         ["Glass"] = (0xD6141115, 0xEBFFFAFC),
         ["GlassUser"] = (0xF03B2733, 0xF2F6DFE8),
+        // The character-chat screen (app.css .solo / html[data-mode="mobile"] .solo).
+        ["GlassButton"] = (0x29FFFFFF, 0x8CFFFFFF),
+        ["GlassButtonLine"] = (0x4DFFFFFF, 0x3878465A),
+        ["GlassInk"] = (0xFFFFFFFF, 0xFF3D2533),
+        ["GlassPanel"] = (0x7314161C, 0xB8FFFAFC),
+        ["SoloInput"] = (0x9E1C141A, 0xC7FFFAFC),
+        ["SoloTx"] = (0xB314161C, 0xE6FFFAFC),
+        ["SoloTxLine"] = (0x1AFFFFFF, 0x3DCB6B8A),
+        ["SoloUser"] = (0xFFECE8E1, 0xFFCB6B8A),
+        ["SoloUserInk"] = (0xFF1F1C18, 0xFFFFFFFF),
+        ["SoloTime"] = (0x94FFFFFF, 0x8C3D2533),
+        ["SoloUserTime"] = (0x8C1F1C18, 0x8CFFFFFF),
+        ["SoloFade"] = (0xFF0E0F13, 0xFFF8EBF0),
     };
 
     public static string Current { get; private set; } = "dark";

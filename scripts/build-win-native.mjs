@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { packCore } from './pack-core.mjs';
 import { packPcAgent, copyPcAgentPackages } from './pack-pc-agent.mjs';
 import { signWindows } from './signing.mjs';
 
@@ -74,6 +75,10 @@ if (ARCH === (process.arch === 'arm64' ? 'arm64' : 'x64')) {
   console.warn(`[build] node.exe of this computer is ${process.arch}: the ${ARCH} build runs the PC agent with the node on PATH`);
 }
 
+// 2b. The core for "เซิร์ฟเวอร์ในเครื่องนี้" (Desktop/LocalCore.cs starts core/packages/core/src/app/native-host.ts
+// with the same node.exe); better-sqlite3 keeps only the binary of this build's arch.
+packCore(ROOT, STAGE, { platform: `win32-${ARCH}`, log });
+
 // 3. Authenticode (when a certificate is set), before packing, so the zip the app updates from carries it.
 const signed = signWindows([path.join(STAGE, 'Mimi.exe')]);
 
@@ -85,7 +90,7 @@ fs.writeFileSync(
       ? `   ครั้งแรก Windows SmartScreen อาจถามยืนยัน ให้ดูว่าผู้เผยแพร่ถูกต้องแล้วกด Run\r\n`
       : `   ครั้งแรก Windows SmartScreen อาจเตือน (แอปยังไม่ได้ลงนาม) ให้กด "More info" แล้ว "Run anyway"\r\n`) +
     `2. ใส่ที่อยู่เซิร์ฟเวอร์ (https://...) แล้วเข้าสู่ระบบ\r\n` +
-    `3. ไอคอน Mimi อยู่ที่ถาดระบบ: เปิดแชต, Mimiamp, PC agent, ออกจากระบบอัตโนมัติ, ออกจากระบบ\r\n\r\n` +
+    `3. ไอคอน Mimi อยู่ที่ถาดระบบ: เปิดแชต, PC agent, ออกจากระบบอัตโนมัติ, ออกจากระบบ\r\n\r\n` +
     `- แชต ความจำ ไฟล์ และคีย์อยู่บนเซิร์ฟเวอร์ เครื่องนี้เก็บแค่การตั้งค่า (%APPDATA%\\Mimi\\config.json) และ token\r\n` +
     `  ที่เข้ารหัสด้วย Windows DPAPI (%APPDATA%\\Mimi\\session.dpapi) — ลบเมื่อออกจากระบบ\r\n` +
     `- ปิดหน้าต่าง = ซ่อนไว้ที่ถาดระบบ ออกจากแอปจริง ๆ ที่เมนูของไอคอน Mimi\r\n`,

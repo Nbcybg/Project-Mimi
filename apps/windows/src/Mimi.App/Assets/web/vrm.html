@@ -3,8 +3,9 @@
 <head>
 <meta charset="utf-8">
 <title>Mimi VRM</title>
-<!-- The 3D character of the chat stage (the web's feature-vrm.js, the parts the stage uses): a VRM model that
-     breathes and blinks, shows the mood of the newest emoji and moves its mouth while a reply streams in.
+<!-- The 3D character of the chat stage (the web's feature-vrm.js): a VRM model that breathes and blinks, shows the
+     mood of the newest emoji and moves its mouth while a reply streams in, and plays the agent's Mixamo motions
+     (.fbx, retargeted to the VRM rig) — the idle motion while it stands, any motion on request.
      Shown by Controls/VrmView.cs in a WebView2; messages from the app arrive as JSON. -->
 <style>
   html, body { margin: 0; height: 100%; overflow: hidden; background: transparent; }
@@ -22,6 +23,7 @@
 <script type="module">
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
 
 const post = (message) => window.chrome?.webview?.postMessage(message);
@@ -37,7 +39,14 @@ sun.position.set(1, 2, 2);
 scene.add(sun);
 
 let vrm = null;
+let mixer = null;
+let action = null;
 let current = '';
+/** The motions the app handed over ({ name, url }), the clips retargeted for the model on screen, and what plays. */
+let motionList = [];
+const clips = new Map();
+let idleName = null;
+let playing = null;
 let view = { yaw: 0, pitch: 0, zoom: 1, x: 0, y: 0 };
 let mood = null;
 let talkUntil = 0;
@@ -60,6 +69,109 @@ function expressionOf(key) {
   return null;
 }
 
+// ---------- Mixamo -> VRM retarget (feature-vrm.js, after the pixiv/three-vrm example) ----------
+const MIXAMO_RIG = {
+  mixamorigHips: 'hips', mixamorigSpine: 'spine', mixamorigSpine1: 'chest', mixamorigSpine2: 'upperChest',
+  mixamorigNeck: 'neck', mixamorigHead: 'head',
+  mixamorigLeftShoulder: 'leftShoulder', mixamorigLeftArm: 'leftUpperArm', mixamorigLeftForeArm: 'leftLowerArm', mixamorigLeftHand: 'leftHand',
+  mixamorigLeftHandThumb1: 'leftThumbMetacarpal', mixamorigLeftHandThumb2: 'leftThumbProximal', mixamorigLeftHandThumb3: 'leftThumbDistal',
+  mixamorigLeftHandIndex1: 'leftIndexProximal', mixamorigLeftHandIndex2: 'leftIndexIntermediate', mixamorigLeftHandIndex3: 'leftIndexDistal',
+  mixamorigLeftHandMiddle1: 'leftMiddleProximal', mixamorigLeftHandMiddle2: 'leftMiddleIntermediate', mixamorigLeftHandMiddle3: 'leftMiddleDistal',
+  mixamorigLeftHandRing1: 'leftRingProximal', mixamorigLeftHandRing2: 'leftRingIntermediate', mixamorigLeftHandRing3: 'leftRingDistal',
+  mixamorigLeftHandPinky1: 'leftLittleProximal', mixamorigLeftHandPinky2: 'leftLittleIntermediate', mixamorigLeftHandPinky3: 'leftLittleDistal',
+  mixamorigRightShoulder: 'rightShoulder', mixamorigRightArm: 'rightUpperArm', mixamorigRightForeArm: 'rightLowerArm', mixamorigRightHand: 'rightHand',
+  mixamorigRightHandPinky1: 'rightLittleProximal', mixamorigRightHandPinky2: 'rightLittleIntermediate', mixamorigRightHandPinky3: 'rightLittleDistal',
+  mixamorigRightHandRing1: 'rightRingProximal', mixamorigRightHandRing2: 'rightRingIntermediate', mixamorigRightHandRing3: 'rightRingDistal',
+  mixamorigRightHandMiddle1: 'rightMiddleProximal', mixamorigRightHandMiddle2: 'rightMiddleIntermediate', mixamorigRightHandMiddle3: 'rightMiddleDistal',
+  mixamorigRightHandIndex1: 'rightIndexProximal', mixamorigRightHandIndex2: 'rightIndexIntermediate', mixamorigRightHandIndex3: 'rightIndexDistal',
+  mixamorigRightHandThumb1: 'rightThumbMetacarpal', mixamorigRightHandThumb2: 'rightThumbProximal', mixamorigRightHandThumb3: 'rightThumbDistal',
+  mixamorigLeftUpLeg: 'leftUpperLeg', mixamorigLeftLeg: 'leftLowerLeg', mixamorigLeftFoot: 'leftFoot', mixamorigLeftToeBase: 'leftToes',
+  mixamorigRightUpLeg: 'rightUpperLeg', mixamorigRightLeg: 'rightLowerLeg', mixamorigRightFoot: 'rightFoot', mixamorigRightToeBase: 'rightToes',
+};
+
+/** The FBX's clip (a Mixamo skeleton) made to play on the VRM's humanoid rig. */
+function retarget(asset, model) {
+  const clip = THREE.AnimationClip.findByName(asset.animations, 'mixamo.com') || asset.animations[0];
+  if (!clip) throw new Error('ไฟล์ FBX นี้ไม่มี animation');
+  const hips = asset.getObjectByName('mixamorigHips');
+  if (!hips) throw new Error('FBX นี้ไม่ใช่ rig ของ Mixamo');
+  const hipsScale = model.humanoid.normalizedRestPose.hips.position[1] / hips.position.y;
+  const restInverse = new THREE.Quaternion();
+  const parentRest = new THREE.Quaternion();
+  const quat = new THREE.Quaternion();
+  const vrm0 = model.meta.metaVersion === '0';
+  const tracks = [];
+  for (const track of clip.tracks) {
+    const [rigName, property] = track.name.split('.');
+    const boneName = MIXAMO_RIG[rigName];
+    const bone = boneName && model.humanoid.getNormalizedBoneNode(boneName);
+    const rigNode = asset.getObjectByName(rigName);
+    if (!bone || !rigNode) continue;
+    rigNode.getWorldQuaternion(restInverse).invert();
+    rigNode.parent.getWorldQuaternion(parentRest);
+    if (track instanceof THREE.QuaternionKeyframeTrack) {
+      const values = track.values.slice();
+      for (let i = 0; i < values.length; i += 4) {
+        quat.fromArray(values, i).premultiply(parentRest).multiply(restInverse);
+        quat.toArray(values, i);
+      }
+      tracks.push(new THREE.QuaternionKeyframeTrack(`${bone.name}.${property}`, track.times, vrm0 ? values.map((v, i) => (i % 2 === 0 ? -v : v)) : values));
+    } else if (track instanceof THREE.VectorKeyframeTrack) {
+      const values = track.values.map((v, i) => (vrm0 && i % 3 !== 1 ? -v : v) * hipsScale);
+      tracks.push(new THREE.VectorKeyframeTrack(`${bone.name}.${property}`, track.times, values));
+    }
+  }
+  if (tracks.length === 0) throw new Error('Retarget ไม่สำเร็จ — ตัวละครนี้ยังไม่ได้ auto-rig แบบ Mixamo');
+  return new THREE.AnimationClip('vrm-' + clip.name, clip.duration, tracks);
+}
+
+/** Loads and retargets every motion of the list for the model on screen; tells the app which ones work. */
+async function loadMotions() {
+  const model = vrm;
+  if (!model) return;
+  const loaded = [];
+  const failed = [];
+  for (const entry of motionList) {
+    if (clips.has(entry.name)) {
+      loaded.push(entry.name);
+      continue;
+    }
+    try {
+      const asset = await new FBXLoader().loadAsync(entry.url);
+      if (model !== vrm) return;
+      clips.set(entry.name, retarget(asset, model));
+      loaded.push(entry.name);
+    } catch (error) {
+      failed.push({ name: entry.name, message: String(error && error.message || error) });
+    }
+  }
+  post({ type: 'motions', loaded, failed });
+  if (!playing && idleName && clips.has(idleName)) play(idleName, true);
+}
+
+/** Plays a motion (looped, or once and then back to the idle motion / the breathing pose); null stops. */
+function play(name, loop) {
+  if (!vrm || !mixer) return;
+  if (action) action.fadeOut(0.25);
+  const clip = name ? clips.get(name) : null;
+  if (!clip) {
+    action = null;
+    playing = null;
+    mixer.stopAllAction();
+    vrm.humanoid.resetNormalizedPose();
+    if (name === null && idleName && clips.has(idleName)) return play(idleName, true);
+    post({ type: 'playing', name: null });
+    return;
+  }
+  const next = mixer.clipAction(clip);
+  next.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, Infinity);
+  next.clampWhenFinished = !loop;
+  next.reset().fadeIn(0.25).play();
+  action = next;
+  playing = name;
+  post({ type: 'playing', name });
+}
+
 function resize() {
   const w = window.innerWidth || 1, h = window.innerHeight || 1;
   renderer.setSize(w, h, false);
@@ -77,7 +189,7 @@ function frame() {
   if (head) head.getWorldPosition(target);
   const height = Math.max(target.y, 0.5);
   const lookY = height * 0.82 + view.y * 0.01 * height;
-  const distance = (height * 1.45) / Math.max(0.3, view.zoom);
+  const distance = (height * 1.45) / Math.max(0.1, view.zoom);
   const yaw = (view.yaw || 0) * Math.PI / 180;
   camera.position.set(Math.sin(yaw) * distance - view.x * 0.01 * height, lookY + (view.pitch || 0) * 0.01, Math.cos(yaw) * distance);
   camera.lookAt(-view.x * 0.01 * height, lookY, 0);
@@ -102,6 +214,11 @@ async function load(url) {
     }
     vrm = next;
     scene.add(vrm.scene);
+    mixer = new THREE.AnimationMixer(vrm.scene);
+    mixer.addEventListener('finished', () => play(null, false));
+    action = null;
+    playing = null;
+    clips.clear();
     // Arms down from the T-pose.
     const arm = (name, z) => { const bone = vrm.humanoid?.getNormalizedBoneNode(name); if (bone) bone.rotation.z = z; };
     arm('leftUpperArm', -1.2);
@@ -109,6 +226,7 @@ async function load(url) {
     vrm.update(0);
     resize();
     post({ type: 'ready' });
+    loadMotions();
   } catch (error) {
     if (url === current) post({ type: 'failed', message: String(error && error.message || error) });
   }
@@ -126,10 +244,18 @@ function tick() {
   elapsed += delta;
   const time = elapsed;
   if (vrm) {
-    const chest = vrm.humanoid?.getNormalizedBoneNode('chest') || vrm.humanoid?.getNormalizedBoneNode('spine');
-    if (chest) chest.rotation.x = Math.sin(time * 1.6) * 0.012;
-    const head = vrm.humanoid?.getNormalizedBoneNode('head');
-    if (head) head.rotation.y = Math.sin(time * 0.5) * 0.05;
+    if (action) {
+      // A Mixamo motion moves the body; the face below stays the stage's.
+      mixer.update(delta);
+    } else {
+      const chest = vrm.humanoid?.getNormalizedBoneNode('chest') || vrm.humanoid?.getNormalizedBoneNode('spine');
+      if (chest) chest.rotation.x = Math.sin(time * 1.6) * 0.012;
+      const head = vrm.humanoid?.getNormalizedBoneNode('head');
+      if (head) head.rotation.y = Math.sin(time * 0.5) * 0.05;
+      const arm = (name, z) => { const bone = vrm.humanoid?.getNormalizedBoneNode(name); if (bone) { bone.rotation.set(0, 0, z); } };
+      arm('leftUpperArm', -1.2);
+      arm('rightUpperArm', 1.2);
+    }
     // Blinks every few seconds.
     nextBlink -= delta;
     const blink = nextBlink < 0 ? Math.max(0, 1 - Math.abs(nextBlink + 0.08) / 0.08) : 0;
@@ -150,7 +276,23 @@ window.chrome?.webview?.addEventListener('message', (event) => {
   else if (message.type === 'mood') mood = expressionOf(message.key);
   else if (message.type === 'talk') talkUntil = performance.now() + 1200;
   else if (message.type === 'view') { view = { ...view, ...message.view }; frame(); }
-  else if (message.type === 'clear') { current = ''; if (vrm) { scene.remove(vrm.scene); VRMUtils.deepDispose(vrm.scene); vrm = null; } }
+  else if (message.type === 'clear') { current = ''; clips.clear(); action = null; playing = null; mixer = null; if (vrm) { scene.remove(vrm.scene); VRMUtils.deepDispose(vrm.scene); vrm = null; } }
+  else if (message.type === 'motions') {
+    const list = Array.isArray(message.list) ? message.list : [];
+    const names = new Set(list.map((entry) => entry.name));
+    // A motion that changed (new url) or went away is dropped and loaded again.
+    for (const entry of motionList) {
+      const now = list.find((item) => item.name === entry.name);
+      if (!now || now.url !== entry.url) clips.delete(entry.name);
+    }
+    for (const name of [...clips.keys()]) if (!names.has(name)) clips.delete(name);
+    motionList = list;
+    const idleBefore = idleName;
+    idleName = message.idle || null;
+    if (playing && (!clips.has(playing) || playing === idleBefore && idleBefore !== idleName)) play(null, false);
+    loadMotions();
+  }
+  else if (message.type === 'play') play(message.name || null, message.loop !== false);
 });
 
 resize();

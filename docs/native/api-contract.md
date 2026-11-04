@@ -10,7 +10,7 @@
 
 - **เวอร์ชัน [api 1]:** ทุกคำตอบ HTTP มี header `x-mimi-api: <API_VERSION>`; เช็กความเข้ากันได้ตาม `api-versioning.md` ก่อนใช้งาน
 - **Base URL** คือ origin ของเซิร์ฟเวอร์ที่ผู้ใช้กรอก (core หรือ gateway) ทุก path ด้านล่างต่อจาก origin นั้น
-  path ที่เซิร์ฟเวอร์ส่งกลับมาใน JSON (เช่น `"/mimiamp/Sunset%20Train.wav"`, `"/api/agent-image/mimi/avatar?v=…"`) เป็น
+  path ที่เซิร์ฟเวอร์ส่งกลับมาใน JSON (เช่น `"/api/files/12"`, `"/api/agent-image/mimi/avatar?v=…"`) เป็น
   **path สัมพัทธ์** ต้องต่อกับ base URL เอง
 - **Auth:** `Authorization: Bearer <token>` ทุก `/api/*` ยกเว้น webhook (ดู A.9) — ไม่มี cookie ไม่มี CORS
   (`packages/core/src/server/http-api.ts:279-283, 332`)
@@ -30,15 +30,10 @@
 | Method | Path | ตอบ | อ้างอิง |
 |---|---|---|---|
 | GET | `/health` | core: `{"ok":true,"version":"0.8.1-prototype","api":1,"minClientApi":1}` · gateway: `{…,"accounts":true}` **[api 1: `api`, `minClientApi`]** | `server.ts:2291-2294`, `gateway.ts:209-212` |
-| GET | `/mimiamp/tracks.json` | `{"tracks":[MimiampTrack…]}` | `web-files.ts:191-201` |
-| GET | `/mimiamp/<ชื่อไฟล์ url-encoded>` | เสียง รองรับ `Range` (206/416) | `web-files.ts:218-233` |
-| GET | `/mimiamp/youtube/<videoId 11 ตัว>.audio` | เสียง YouTube ที่ cache แล้ว รองรับ `Range`; ยังไม่ดาวน์โหลด = `404 {"error":"This YouTube song is not downloaded yet."}` | `web-files.ts:202-217` |
 | GET | `/backgrounds/<name>.webp` | ภาพฉากหลังสำเร็จรูป (`public, max-age=31536000, immutable`) | `web-files.ts:246-267` |
 | GET | `/icon.png`, `/icon-192.png`, `/icon-512.png`, `/icon-maskable-512.png`, `/apple-touch-icon.png` | ไอคอนแอป | `web-files.ts:122-129` |
 
-**ผ่าน gateway [api 1]:** `GET /mimiamp/*` ที่ส่ง `Authorization: Bearer <session>` ถูกส่งต่อไป **core ของคนนั้น** (เพลงของเขาเอง, YouTube ที่ cache แล้ว,
-Range ผ่านได้) token ผิด = `401` ถ้าไม่ส่ง Bearer gateway ตอบด้วยเพลงในโฟลเดอร์ของตัวเองเหมือนเดิม (สำหรับ `<audio src>` ของเว็บเก่า)
-→ **แอป native ส่ง Bearer กับ `/mimiamp/*` เสมอ** (ก่อน api 1 gateway ไม่ส่งต่อ และ YouTube ตอบ 404 เสมอ — `server-gaps.md` G-MEDIA-1)
+เพลง (`/mimiamp/*`) เคยอยู่ในตารางนี้ — **ลบแล้วใน api 2** (Mimiamp ถูกเอาออกทั้งหมด — คำตอบ Q5 ใน `README.md`): `/mimiamp/*`, `/api/mimiamp/*`, เสียง YouTube และ frame `mimiamp` ไม่มีแล้ว ตอบ `404` / ไม่ส่ง
 
 **`MIMI_SERVE_WEB=0` [api 1]:** หน้าเว็บ/สคริปต์ (`/`, `/app.js`, `/vendor/*`, `/sounds/*`, `/sw.js` …) ตอบ `404` ข้อความ `…(MIMI_SERVE_WEB=0)…`
 ส่วนทุกอย่างในตารางนี้ยังเสิร์ฟตามปกติ — แอป native ต้อง bundle เสียง `chat_1..3.mp3` เอง
@@ -139,16 +134,17 @@ X-Mimi-Caption: <คำอธิบาย url-encoded>        (ไม่บั�
 [{"id":13,"kind":"reminder","title":"ยา","body":"กินยา","chatId":null,"createdAt":"2026-11-02T…","read":false}]
 ```
 
-ชนิดของคำตอบ widget/notifications อยู่ใน `packages/shared/src/mimiamp.ts` (`WidgetView`, `NotificationSyncItem`) **[api 1]**
+ชนิดของคำตอบ widget/notifications อยู่ใน `packages/shared/src/views.ts` (`WidgetView`, `NotificationSyncItem`) **[api 1]**
 
 ### A.6.1 Push token ของแอป native [api 1]
 
 | Method | Path | body | ตอบ |
 |---|---|---|---|
-| POST | `/api/push/register` | `NativePushRegistration`: `{"platform":"fcm"\|"apns","token":"…","label"?:"Pixel 8","appVersion"?:"1.0.0","bundleId"?:"app.mimi.ios","sandbox"?:true}` | `{"ok":true,"device":PushDeviceView,"delivering":true\|false}` |
+| POST | `/api/push/register` | `NativePushRegistration`: `{"platform":"fcm"\|"apns"\|"wns","token":"…","label"?:"Pixel 8","appVersion"?:"1.0.0","bundleId"?:"app.mimi.ios","sandbox"?:true}` | `{"ok":true,"device":PushDeviceView,"delivering":true\|false}` |
 | POST | `/api/push/unregister` | `{"token":"…"}` | `{"ok":true,"removed":true\|false}` |
+| GET | `/api/push/info` **[api 2]** | – | `{"platforms":["fcm"\|"apns"\|"wns"…],"wnsRemoteId"?:"<Entra ID app id>"}` — บริการที่ core นี้ (กุญแจของตัวเองหรือ relay ของ gateway) ส่งได้ · แอป Windows ใช้ `wnsRemoteId` สร้าง channel · core เก่าไม่มี = `404` |
 
-- FCM token: `[\w:.-]{20,4096}`; APNs token: hex 32–200 ตัว ผิดรูปแบบ = `400 {"error":"Native push: …"}`
+- FCM token: `[\w:.-]{20,4096}`; APNs token: hex 32–200 ตัว; WNS **[api 2]**: channel URI `https://<…>.notify.windows.com/…` เท่านั้น (ไม่มี port/user) ผิดรูปแบบ = `400 {"error":"Native push: …"}`
 - ลงทะเบียน token เดิมซ้ำ = อัปเดต (ไม่เพิ่มอุปกรณ์) — เรียกทุกครั้งที่แอปเริ่มและเมื่อ FCM/APNs ให้ token ใหม่ (`onNewToken`, `didRegisterForRemoteNotificationsWithDeviceToken`)
 - `delivering: false` = core นี้ไม่มีกุญแจของแพลตฟอร์มนั้น (`MIMI_FCM_SERVICE_ACCOUNT` / `MIMI_APNS_*`): เก็บ token ไว้แต่จะไม่ได้ push → ใช้ poll `afterId` แทน
 - `device.endpoint` = `native:<platform>:<id 16 hex>` (ไม่มี token จริง) ใช้กับ `push-unsubscribe` ได้เหมือน endpoint ของ Web Push
@@ -164,34 +160,10 @@ X-Mimi-Caption: <คำอธิบาย url-encoded>        (ไม่บั�
 
 ผลเหมือน WS `permission-response` / `approval-decide` ทุกอย่าง (อุปกรณ์อื่นได้ `permission-resolved` / `chat-changed`)
 
-### A.7 Mimiamp (เครื่องเล่นเพลง)
+### A.7 Mimiamp (เครื่องเล่นเพลง) — ลบแล้ว
 
-ทั้งหมดต้องมี token, JSON ตอบกลับ; หลังแก้ไขทุกครั้งเซิร์ฟเวอร์ broadcast `{"type":"mimiamp","command":{"action":"refresh"}}` (`server.ts:2131`)
-(`http-api.ts:142-276`) — ชนิด `MimiampTrack` (`packages/core/src/mimiamp/library.ts:27-44`), `MimiampPlaylist` (`playlists.ts:7-31`)
-
-| Method | Path | body | ตอบ |
-|---|---|---|---|
-| GET | `/api/mimiamp/state` (หรือ `/api/mimiamp`) | – | `{"tracks":[…],"playlists":[…],"youtube":{"ready":true,"google":false,"error"?:"…"}}` |
-| POST | `/api/mimiamp/youtube` | `{"url":"https://youtu.be/…","playlist"?:"<id หรือชื่อ>"}` | `{"track":MimiampTrack,"playlist"?:…}` · ไม่มี url = `400 "Paste a YouTube link."` |
-| GET | `/api/mimiamp/youtube/search?q=…` | – | `{"results":[{videoId,title,artist?,duration?,thumbnail?}],"source":"google"\|"youtube"\|"none","error"?}` |
-| POST | `/api/mimiamp/youtube/<videoId>/prepare` | – | ดาวน์โหลดเสียงเข้า cache (อาจนานหลายวินาที) → `{"videoId":"…","url":"/mimiamp/youtube/<id>.audio","mime":"audio/…"}` |
-| GET | `/api/mimiamp/youtube/<videoId>/audio` | – | เสียง รองรับ `Range` **[api 1]** (ก่อนหน้า: ทั้งไฟล์) · ยังไม่ prepare = `404` |
-| POST | `/api/mimiamp/files?name=<song.mp3>` **[api 1]** | bytes ของไฟล์เสียง (≤200 MB) | `{"track":MimiampTrack}` ลง `MIMI_MUSIC_DIR` หรือ `<user>/mimiamp` · ชื่อไม่ใช่ไฟล์เสียง/มีโฟลเดอร์ = `400` · ใหญ่เกิน = `413` · ไม่มีโฟลเดอร์อัปโหลด = `409` |
-| DELETE | `/api/mimiamp/files/<song.mp3>` **[api 1]** | – | `{"ok":true}` · ไม่มี = `404` |
-| DELETE | `/api/mimiamp/youtube/<videoId>` | – | `{"ok":true}` · ไม่มี = `404` |
-| GET / POST | `/api/mimiamp/playlists` | POST `{"name":"…"}` | `{"playlists":[…]}` / `{"playlist":…}` |
-| GET / PATCH(PUT) / DELETE | `/api/mimiamp/playlists/<id หรือชื่อ>` | PATCH `{"name":"…"}` | `{"playlist":…}` / `{"ok":true}` · ไม่มี = `404 No playlist "x".` |
-| POST | `/api/mimiamp/playlists/<id>/items` | `{"trackId":"file:…"}` หรือ item `{source,file?,videoId?,localId?,title,artist?,duration?,thumbnail?}` | `{"playlist":…}` |
-| DELETE | `/api/mimiamp/playlists/<id>/items/<itemId>` | – | `{"playlist":…}` |
-| GET | `/api/mimiamp/playlists/<id>/export` | – | `{"format":"mimiamp-playlist","version":1,"exportedAt":"…","playlist":{…}}` |
-| POST | `/api/mimiamp/import` | `{"playlist":<export>}` | `{"playlist":…}` |
-
-ข้อจำกัด: ชื่อ playlist ≤80 ตัว, title ≤300 ตัว, ≤500 รายการต่อ playlist (`playlists.ts:40-43`) จริง (`/api/mimiamp/state` ของเซิร์ฟเวอร์ทดสอบ, 10 เพลงในตัว):
-
-```json
-{"tracks":[{"id":"file:Sunset Train.wav","source":"file","file":"Sunset Train.wav","title":"Sunset Train","artist":"Suno","album":"Mimiamp","duration":182,"url":"/mimiamp/Sunset%20Train.wav"}, …],
- "playlists":[],"youtube":{"ready":true,"google":false}}
-```
+**ลบแล้วใน api 2** (Mimiamp ถูกเอาออกทั้งหมด — คำตอบ Q5 ใน `README.md`): `/mimiamp/*`, `/api/mimiamp/*`, เสียง YouTube และ frame `mimiamp` ไม่มีแล้ว ตอบ `404` / ไม่ส่ง
+แอปต้องทนเซิร์ฟเวอร์เก่า (api ≤ 1) ที่ยังส่ง `{"type":"mimiamp",…}`: ข้ามไปเงียบ ๆ เหมือน frame ที่ไม่รู้จัก
 
 ### A.8 อื่น ๆ ที่ต้องมี token
 

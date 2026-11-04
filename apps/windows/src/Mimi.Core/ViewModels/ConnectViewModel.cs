@@ -216,6 +216,44 @@ public sealed partial class ConnectViewModel(MimiApi api) : ObservableObject
         }
     }
 
+    /// <summary>The app can run the core on this computer itself (its files are there).</summary>
+    [ObservableProperty]
+    private bool canUseLocal;
+
+    /// <summary>
+    /// "ใช้เซิร์ฟเวอร์ในเครื่องนี้": starts the core on this computer (<paramref name="start"/>) and signs in to it with
+    /// its own token, with no address or password to type (launcher.ts did the same for the Electron app).
+    /// </summary>
+    public async Task UseLocal(Func<Task<LocalCoreReady>> start)
+    {
+        Error = "";
+        Busy = true;
+        LocalCoreReady ready;
+        try
+        {
+            ready = await start();
+        }
+        catch (InvalidOperationException problem)
+        {
+            Error = $"เปิดเซิร์ฟเวอร์ในเครื่องนี้ไม่ได้: {problem.Message}";
+            return;
+        }
+        finally
+        {
+            Busy = false;
+        }
+        ServerText = ready.Address;
+        await Check();
+        if (Step != ConnectStep.Token)
+        {
+            if (Error.Length == 0) Error = "เซิร์ฟเวอร์ในเครื่องนี้เป็นแบบหลายบัญชี — เข้าสู่ระบบด้วยชื่อผู้ใช้";
+            return;
+        }
+        Token = ready.Token;
+        NotMyDevice = false;
+        await SignIn();
+    }
+
     /// <summary>A config.json server the app starts with; a bad one is ignored.</summary>
     public static string StartServer(AppConfig config) => config.Server;
 }

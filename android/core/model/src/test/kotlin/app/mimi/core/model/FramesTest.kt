@@ -20,6 +20,8 @@ class FramesTest {
         assertEquals(ServerFrame.Unknown("from-the-future"), parseServerFrame("""{"type":"from-the-future","x":1}"""))
         assertEquals(ServerFrame.Unknown(""), parseServerFrame("not json"))
         assertEquals(ServerFrame.Unknown("chat-message"), parseServerFrame("""{"type":"chat-message"}"""))
+        // A server older than api 2 still sends Mimiamp commands; the app has no player and skips them.
+        assertEquals(ServerFrame.Unknown("mimiamp"), parseServerFrame("""{"type":"mimiamp","command":{"action":"play"}}"""))
     }
 
     @Test

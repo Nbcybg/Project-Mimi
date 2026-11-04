@@ -103,8 +103,8 @@ core ส่ง push ไปแอป native ตามกติกาเดีย�
 | cursor `GET /api/notifications?afterId=` (ได้ทั้งอ่านแล้ว/ยังไม่อ่าน) | **แก้แล้ว** |
 | badge (`unread`) | **แก้แล้ว** (APNs `badge`, FCM `data.unread`) |
 | ตอบ permission/approval จากปุ่มบน notification ผ่าน HTTP | **แก้แล้ว** (`api-contract.md` A.6.2) |
-| WNS (Windows) | **เหลือ** — ทำพร้อม Phase 5 |
-| relay ผ่าน gateway (กุญแจอยู่ที่เดียว) | **เหลือ** — ตอนนี้ใส่กุญแจใน env ของทุก core (คำถาม Q3 ยังไม่ได้ตัดสินใจ) |
+| WNS (Windows) | **แก้แล้ว** (api 2): raw push `{id, kind, chatId, unread, title, body, content}` ไป channel URI ด้วย token ของ Entra ID app (`MIMI_WNS_*`) · แอป Windows ดึงข้อความเองแล้วแสดง toast · ยังไม่ได้ทดสอบกับ WNS จริง · แอปแบบ self-contained ต้องมี Singleton package ของ Windows App Runtime ในเครื่อง ไม่งั้น `IsSupported()` = false และใช้ socket แบบเดิม |
+| relay ผ่าน gateway (กุญแจอยู่ที่เดียว) | **แก้แล้ว** (Q3): core ตั้ง `MIMI_PUSH_RELAY_URL` → `POST /push/relay` ของ gateway ด้วย core token ของตัวเอง ได้คำตอบของบริการ push กลับ (token ที่ตายก็ถูกลบที่ core) · กุญแจของ core เองถ้ามีใช้ก่อน |
 | เข้ารหัสเนื้อหาเอง (แบบ Web Push) | **ไม่ทำ** — ใช้ `minimal` + แอปดึงข้อความเองแทน (ตามข้อเสนอ Q4) |
 
 ## 4. งานเบื้องหลังของแอป (ไม่ใช่ push)

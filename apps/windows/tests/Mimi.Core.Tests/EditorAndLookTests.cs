@@ -2,7 +2,6 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Mimi.Core.Desktop;
 using Mimi.Core.Hub;
-using Mimi.Core.Mimiamp;
 using Mimi.Core.ViewModels;
 
 namespace Mimi.Core.Tests;
@@ -91,53 +90,18 @@ public sealed class WorkflowDraftTests
     }
 }
 
-public sealed class SpectrumAndLookTests
+public sealed class LookTests
 {
     [Fact]
-    public void A_tone_lights_the_bar_of_its_frequency()
-    {
-        var spectrum = new Spectrum();
-        var samples = new float[Spectrum.Size * 2];
-        for (var i = 0; i < Spectrum.Size; i++)
-        {
-            var value = (float)Math.Sin(2 * Math.PI * 1000 * i / 44100.0);
-            samples[2 * i] = value;
-            samples[2 * i + 1] = value;
-        }
-        spectrum.Feed(samples, 2, 44100);
-        var bars = spectrum.Bars(16);
-        var loudest = Array.IndexOf(bars, bars.Max());
-        // 40 Hz–16 kHz in 16 log steps: 1 kHz falls in bar 8 or 9.
-        Assert.InRange(loudest, 7, 9);
-        Assert.True(bars[0] < bars[loudest]);
-        spectrum.Clear();
-        Assert.All(spectrum.Bars(16), level => Assert.True(level < 0.05f));
-    }
-
-    [Fact]
-    public void Pan_keeps_the_centre_and_fades_one_side()
-    {
-        Assert.Equal((1f, 1f), Spectrum.PanGains(0));
-        Assert.Equal((1f, 0f), Spectrum.PanGains(-1));
-        Assert.Equal((0.5f, 1f), Spectrum.PanGains(0.5f));
-        Assert.Equal((0f, 1f), Spectrum.PanGains(3));
-    }
-
-    [Fact]
-    public void Chat_looks_theme_and_mimiamp_choices_survive_a_restart()
+    public void Chat_looks_and_theme_survive_a_restart()
     {
         var dir = Directory.CreateTempSubdirectory("mimi-look-");
         try
         {
             var file = Path.Combine(dir.FullName, "config.json");
-            var song = Path.Combine(dir.FullName, "song.mp3");
-            File.WriteAllBytes(song, [0]);
             var config = AppConfig.Defaults(dir.FullName);
             config.Theme = "light";
             config.TextSize = 2;
-            config.Pan = -0.25f;
-            config.LocalTracks.Add(song);
-            config.LocalTracks.Add(Path.Combine(dir.FullName, "gone.mp3"));
             var look = config.Look(42, create: true);
             look.Theme = "dark";
             look.Background = new JsonObject { ["type"] = "preset", ["preset"] = "floral" };
@@ -148,8 +112,6 @@ public sealed class SpectrumAndLookTests
             var read = AppConfig.Read(file, dir.FullName);
             Assert.Equal("light", read.Theme);
             Assert.Equal(2, read.TextSize);
-            Assert.Equal(-0.25f, read.Pan);
-            Assert.Equal([song], read.LocalTracks);
             Assert.Equal("dark", read.Look(42).Theme);
             Assert.Equal("floral", read.Look(42).Background!["preset"]!.GetValue<string>());
             Assert.Equal(1.4, read.Look(42).Zoom);
@@ -162,15 +124,5 @@ public sealed class SpectrumAndLookTests
         {
             dir.Delete(recursive: true);
         }
-    }
-
-    [Fact]
-    public void A_song_of_this_computer_plays_from_its_file()
-    {
-        var track = MimiampViewModel.LocalTrack(@"C:\Music\เพลง ดี.mp3");
-        Assert.Equal("local", track.Source);
-        Assert.Equal("เพลง ดี", track.Title);
-        Assert.StartsWith("file:///", track.Url);
-        Assert.True(new Uri(track.Url).IsFile);
     }
 }

@@ -79,11 +79,9 @@ The workspace and the built-in apps (this is the manual; answer from it):
   browser_snapshot to read it; browser_screenshot when the layout matters. browser_fill_secret fills a vault secret
   into a password/payment field and always needs a fresh approval. Since run_shell is built in for you, never add a
   separate untrusted-content web search tool; the browser tools are the safe way to read the web here.
-- Mimiamp is the music player built into the Mimi app. The mimiamp tool lists the songs a developer added and can
-  open/play/pause/stop/next/previous, set volume (0–100) and seek (seconds). Call it with action "list" first; the
-  library is empty until audio files are placed in <user>/mimiamp or <app>/mimiamp (or MIMI_MUSIC_DIR). "open" shows the floating
-  player, and the sound comes out of the open Mimi app; if the user has no app open, nothing plays.
-- Screens of the web client: Chat, Overseer, Agent, Hub, Mimiamp and Settings. Hub holds the model pool, skills, nodes,
+- Mimi has no music player of its own. To play music, open the user's music app or a song with the PC tools
+  (open_path, computer_app, computer_key for the media keys) when the PC agent is connected.
+- Screens of the web client: Chat, Overseer, Agent, Hub and Settings. Hub holds the model pool, skills, nodes,
   accounts, vault, mail, triggers, knowledge, wardrobe, backgrounds, MCP/CLI links and packs. A user asking "where do I
   set X" usually means one of these screens; name the screen and the tab instead of only naming a file.
 

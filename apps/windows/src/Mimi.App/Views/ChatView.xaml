@@ -9,11 +9,12 @@
     AllowDrop="True" DragOver="OnDragOver" Drop="OnDrop">
     <UserControl.Resources>
         <DataTemplate x:Key="TextPartTemplate" x:DataType="x:String">
-            <controls:MessageText Text="{x:Bind}" />
+            <controls:MessageText Text="{x:Bind}" TextSize="{x:Bind local:ChatView.ChatTextSize()}" />
         </DataTemplate>
 
         <DataTemplate x:Key="ToolPartTemplate" x:DataType="vm:ToolRow">
-            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="6" Padding="8,4" Margin="0,2" Background="{StaticResource MimiCodeBrush}" CornerRadius="6">
+            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="6" Padding="8,4" Margin="0,2" Background="{StaticResource MimiCodeBrush}" CornerRadius="6"
+                  Visibility="{x:Bind local:ChatView.PromptVisibility()}">
                 <TextBlock Text="{x:Bind Mark}" Foreground="{StaticResource MimiOkBrush}" FontFamily="Segoe UI Symbol" />
                 <StackPanel Grid.Column="1">
                     <TextBlock FontSize="12" Foreground="{StaticResource MimiInk2Brush}" TextTrimming="CharacterEllipsis">
@@ -31,79 +32,85 @@
         <local:PartSelector x:Key="PartSelector" Text="{StaticResource TextPartTemplate}" Tool="{StaticResource ToolPartTemplate}" File="{StaticResource FileTemplate}" />
         <!-- A message stored on the server. -->
         <DataTemplate x:Key="MessageTemplate" x:DataType="vm:MessageItem">
-            <Grid Margin="0,4" HorizontalAlignment="{x:Bind local:ChatView.Side(IsUser)}" MaxWidth="560">
-                <Border Background="{x:Bind local:ChatView.Bubble(IsUser)}" BorderBrush="{x:Bind local:ChatView.BubbleLine(IsUser)}" BorderThickness="1"
-                        CornerRadius="16" Padding="13,9" Tag="{x:Bind}" ContextRequested="OnMessageContext">
-                    <StackPanel Spacing="6">
-                        <StackPanel Orientation="Horizontal" Spacing="8" Visibility="{x:Bind local:ChatView.Not(IsUser)}">
-                            <TextBlock Text="{x:Bind Who}" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource MimiAccentTextBrush}" />
-                            <TextBlock Text="{x:Bind Mood}" FontSize="12" Foreground="{StaticResource MimiMutedBrush}" />
-                        </StackPanel>
-                        <TextBlock Text="{x:Bind Forwarded}" Style="{StaticResource MimiCaption}" FontStyle="Italic" Visibility="{x:Bind HasForwarded}" />
-                        <Border BorderBrush="{StaticResource MimiAccentBrush}" BorderThickness="3,0,0,0" Background="{StaticResource MimiCodeBrush}" CornerRadius="4"
-                                Padding="8,4" Visibility="{x:Bind HasQuote}">
-                            <TextBlock Text="{x:Bind Quote}" FontSize="12" Foreground="{StaticResource MimiInk2Brush}" TextWrapping="Wrap" MaxLines="3" TextTrimming="CharacterEllipsis" />
-                        </Border>
-                        <controls:MessageText Text="{x:Bind Text}" Visibility="{x:Bind HasText}" />
-                        <ItemsControl ItemsSource="{x:Bind Files}" ItemTemplate="{StaticResource FileTemplate}" />
-                        <TextBlock Text="{x:Bind Tools}" Style="{StaticResource MimiCaption}" Visibility="{x:Bind HasTools}" />
-                        <StackPanel Orientation="Horizontal" Spacing="8" Visibility="{x:Bind WaitsForApproval}">
-                            <Button Content="อนุมัติ" Style="{StaticResource AccentButtonStyle}" Tag="{x:Bind}" Click="OnApprove" />
-                            <Button Content="ปฏิเสธ" Tag="{x:Bind}" Click="OnReject" />
-                        </StackPanel>
-                        <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="4">
-                            <!-- Reactions (click one to take it back) and the pin mark. -->
-                            <StackPanel Orientation="Horizontal" Spacing="4" Visibility="{x:Bind HasMarks}">
-                                <ItemsControl ItemsSource="{x:Bind ReactionList}" Tag="{x:Bind}">
-                                    <ItemsControl.ItemsPanel>
-                                        <ItemsPanelTemplate>
-                                            <StackPanel Orientation="Horizontal" Spacing="4" />
-                                        </ItemsPanelTemplate>
-                                    </ItemsControl.ItemsPanel>
-                                    <ItemsControl.ItemTemplate>
-                                        <DataTemplate x:DataType="x:String">
-                                            <Button Content="{x:Bind}" Padding="6,1" MinHeight="0" FontSize="13" CornerRadius="10" Click="OnReactionChip"
-                                                    ToolTipService.ToolTip="เอารีแอ็กชันออก" />
-                                        </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
-                                <TextBlock Text="📌" FontSize="12" VerticalAlignment="Center" Visibility="{x:Bind Pinned}" />
+            <Grid Margin="0,4" MaxWidth="840">
+                <Grid HorizontalAlignment="{x:Bind local:ChatView.Side(IsUser)}" MaxWidth="680">
+                <StackPanel Spacing="3" HorizontalAlignment="{x:Bind local:ChatView.Side(IsUser)}">
+                    <Border Background="{x:Bind local:ChatView.Bubble(IsUser)}" BorderBrush="{x:Bind local:ChatView.BubbleLine(IsUser)}" BorderThickness="1"
+                            CornerRadius="16" Padding="13,9" Tag="{x:Bind}" ContextRequested="OnMessageContext" Tapped="OnMessageTapped">
+                        <StackPanel Spacing="6">
+                            <StackPanel Orientation="Horizontal" Spacing="8" Visibility="{x:Bind local:ChatView.NameRow(IsUser)}">
+                                <TextBlock Text="{x:Bind Who}" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource MimiAccentTextBrush}" />
+                                <TextBlock Text="{x:Bind Mood}" FontSize="12" Foreground="{StaticResource MimiMutedBrush}" />
                             </StackPanel>
-                            <TextBlock Grid.Column="1" Text="{x:Bind Time}" FontSize="11" Foreground="{StaticResource MimiFaintBrush}" VerticalAlignment="Center" />
-                            <Button Grid.Column="2" Content="&#xE712;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="11" Padding="4,1" MinHeight="0"
-                                    Background="Transparent" BorderThickness="0" Tag="{x:Bind}" Click="OnMessageMore"
-                                    AutomationProperties.Name="ตัวเลือกข้อความ" ToolTipService.ToolTip="ตอบกลับ / ส่งต่อ / คัดลอก / ปักหมุด (หรือคลิกขวาที่ข้อความ)" />
-                        </Grid>
+                            <TextBlock Text="{x:Bind Forwarded}" Style="{StaticResource MimiCaption}" FontStyle="Italic" Visibility="{x:Bind HasForwarded}" />
+                            <Border BorderBrush="{StaticResource MimiAccentBrush}" BorderThickness="3,0,0,0" Background="{StaticResource MimiCodeBrush}" CornerRadius="4"
+                                    Padding="8,4" Visibility="{x:Bind HasQuote}">
+                                <TextBlock Text="{x:Bind Quote}" FontSize="12" Foreground="{StaticResource MimiInk2Brush}" TextWrapping="Wrap" MaxLines="3" TextTrimming="CharacterEllipsis" />
+                            </Border>
+                            <controls:MessageText Text="{x:Bind Text}" TextSize="{x:Bind local:ChatView.ChatTextSize()}" TextBrush="{x:Bind local:ChatView.InkFor(IsUser)}" Visibility="{x:Bind HasText}" />
+                            <ItemsControl ItemsSource="{x:Bind Files}" ItemTemplate="{StaticResource FileTemplate}" />
+                            <TextBlock Text="{x:Bind Tools}" Style="{StaticResource MimiCaption}" Visibility="{x:Bind local:ChatView.ToolsVisibility(HasTools)}" />
+                            <StackPanel Orientation="Horizontal" Spacing="8" Visibility="{x:Bind WaitsForApproval}">
+                                <Button Content="อนุมัติ" Style="{StaticResource AccentButtonStyle}" Tag="{x:Bind}" Click="OnApprove" />
+                                <Button Content="ปฏิเสธ" Tag="{x:Bind}" Click="OnReject" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+                    <!-- Under the bubble, as the web's .mrow: left for the agent, right for the user. -->
+                    <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="{x:Bind local:ChatView.Side(IsUser)}">
+                        <ItemsControl ItemsSource="{x:Bind ReactionList}" Tag="{x:Bind}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel Orientation="Horizontal" Spacing="4" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="x:String">
+                                    <Button Content="{x:Bind}" Padding="6,1" MinHeight="0" FontSize="13" CornerRadius="10" Click="OnReactionChip"
+                                            ToolTipService.ToolTip="เอารีแอ็กชันออก" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <TextBlock Text="📌" FontSize="12" VerticalAlignment="Center" Visibility="{x:Bind Pinned}" />
+                        <TextBlock Text="{x:Bind Time}" FontSize="11" Foreground="{x:Bind local:ChatView.TimeFor(IsUser)}" VerticalAlignment="Center" />
+                        <Button Content="&#xE712;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="11" Padding="4,1" MinHeight="0"
+                                Background="Transparent" BorderThickness="0" Foreground="{x:Bind local:ChatView.InkFor(IsUser)}" Tag="{x:Bind}" Click="OnMessageMore"
+                                AutomationProperties.Name="ตัวเลือกข้อความ" ToolTipService.ToolTip="ตอบกลับ / ส่งต่อ / คัดลอก / ปักหมุด (หรือคลิกขวาที่ข้อความ)" />
                     </StackPanel>
-                </Border>
+                </StackPanel>
+                </Grid>
             </Grid>
         </DataTemplate>
 
         <!-- Sent by this device, not echoed yet. -->
         <DataTemplate x:Key="PendingTemplate" x:DataType="vm:PendingItem">
-            <Grid Margin="0,4" HorizontalAlignment="Right" MaxWidth="560" Opacity="0.75">
-                <Border Background="{StaticResource MimiUserBrush}" BorderBrush="{StaticResource MimiUserLineBrush}" BorderThickness="1" CornerRadius="12" Padding="12,8">
+            <Grid Margin="0,4" MaxWidth="840">
+                <Grid HorizontalAlignment="Right" MaxWidth="680" Opacity="0.75">
+                <Border Background="{x:Bind local:ChatView.UserBubble()}" BorderBrush="{x:Bind local:ChatView.UserBubbleLine()}" BorderThickness="1" CornerRadius="12" Padding="12,8">
                     <StackPanel Spacing="4">
-                        <controls:MessageText Text="{x:Bind Text}" />
+                        <controls:MessageText Text="{x:Bind Text}" TextSize="{x:Bind local:ChatView.ChatTextSize()}" TextBrush="{x:Bind local:ChatView.UserInk()}" />
                         <TextBlock Text="{x:Bind Files}" Style="{StaticResource MimiCaption}" />
-                        <TextBlock Text="กำลังส่ง…" FontSize="11" Foreground="{StaticResource MimiFaintBrush}" Visibility="{x:Bind local:ChatView.Not(HasFailed)}" />
+                        <TextBlock Text="กำลังส่ง…" FontSize="11" Foreground="{x:Bind local:ChatView.UserTime()}" Visibility="{x:Bind local:ChatView.Not(HasFailed)}" />
                         <TextBlock Text="{x:Bind Failed}" FontSize="12" Foreground="{StaticResource MimiBadBrush}" TextWrapping="Wrap" Visibility="{x:Bind HasFailed}" />
                     </StackPanel>
                 </Border>
+                </Grid>
             </Grid>
         </DataTemplate>
 
         <!-- The answer streaming in now. -->
         <DataTemplate x:Key="LiveTemplate" x:DataType="vm:LiveItem">
-            <Grid Margin="0,4" HorizontalAlignment="Left" MaxWidth="560">
-                <Border Background="{StaticResource MimiPanelBrush}" BorderBrush="{StaticResource MimiLineBrush}" BorderThickness="1" CornerRadius="12" Padding="12,8">
+            <Grid Margin="0,4" MaxWidth="840">
+                <Grid HorizontalAlignment="Left" MaxWidth="680">
+                <Border Background="{x:Bind local:ChatView.AgentBubble()}" BorderBrush="{x:Bind local:ChatView.AgentBubbleLine()}" BorderThickness="1" CornerRadius="12" Padding="12,8">
                     <StackPanel Spacing="6">
-                        <TextBlock Text="{x:Bind Who}" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource MimiAccentTextBrush}" />
+                        <TextBlock Text="{x:Bind Who}" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource MimiAccentTextBrush}" Visibility="{x:Bind local:ChatView.AgentNameRow()}" />
                         <ProgressRing IsActive="{x:Bind Thinking}" Width="18" Height="18" HorizontalAlignment="Left" Visibility="{x:Bind Thinking}" />
                         <ItemsControl ItemsSource="{x:Bind Parts}" ItemTemplateSelector="{StaticResource PartSelector}" />
-                        <TextBlock Text="{x:Bind Helper}" Style="{StaticResource MimiCaption}" />
+                        <TextBlock Text="{x:Bind Helper}" Style="{StaticResource MimiCaption}" Visibility="{x:Bind local:ChatView.HelperVisibility(Helper)}" />
                     </StackPanel>
                 </Border>
+                </Grid>
             </Grid>
         </DataTemplate>
 
@@ -114,7 +121,7 @@
 
         <!-- A tool asks before it runs (realtime.md 5). -->
         <DataTemplate x:Key="PermissionTemplate" x:DataType="vm:PermissionItem">
-            <Border Margin="0,6" Background="{StaticResource MimiRaisedBrush}" BorderBrush="{StaticResource MimiWarnBrush}" BorderThickness="1" CornerRadius="12" Padding="12,10">
+            <Border Margin="0,6" MaxWidth="840" Background="{StaticResource MimiRaisedBrush}" BorderBrush="{StaticResource MimiWarnBrush}" BorderThickness="1" CornerRadius="12" Padding="12,10">
                 <StackPanel Spacing="8">
                     <TextBlock Text="{x:Bind Who}" FontSize="12" Foreground="{StaticResource MimiWarnBrush}" FontWeight="SemiBold" />
                     <TextBlock Text="{x:Bind Title}" TextWrapping="Wrap" Foreground="{StaticResource MimiInkBrush}" />
@@ -138,7 +145,7 @@
 
         <!-- A task card: goal, status, steps, plan / receipt, and its buttons (feature-inventory #10). -->
         <DataTemplate x:Key="TaskTemplate" x:DataType="vm:TaskItem">
-            <Border Margin="0,6" Background="{StaticResource MimiRaisedBrush}" BorderBrush="{StaticResource MimiInfoBrush}" BorderThickness="1" CornerRadius="12" Padding="12,10">
+            <Border Margin="0,6" MaxWidth="840" Background="{StaticResource MimiRaisedBrush}" BorderBrush="{StaticResource MimiInfoBrush}" BorderThickness="1" CornerRadius="12" Padding="12,10">
                 <StackPanel Spacing="6">
                     <Grid ColumnDefinitions="*,Auto">
                         <TextBlock Text="{x:Bind Goal}" FontWeight="SemiBold" TextWrapping="Wrap" Foreground="{StaticResource MimiInkBrush}" />
@@ -161,7 +168,7 @@
     </UserControl.Resources>
 
     <Grid RowDefinitions="Auto,*,Auto,Auto">
-        <StackPanel>
+        <StackPanel x:Name="ChatHeader">
             <!-- The session on screen, its context meter, and the chat's menu. -->
             <Grid ColumnDefinitions="*,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="4" Padding="12,5,6,5" Background="{StaticResource MimiPanelBrush}"
                   BorderBrush="{StaticResource MimiLineBrush}" BorderThickness="0,0,0,1">
@@ -212,7 +219,7 @@
 
         <Grid x:Name="StageHost" Grid.Row="1" />
         <ListView x:Name="Messages" Grid.Row="1" AutomationProperties.AutomationId="Messages" ItemsSource="{x:Bind ViewModel.Items}" ItemTemplateSelector="{StaticResource RowSelector}"
-                  SelectionMode="None" IsItemClickEnabled="False" Padding="10,6,10,6">
+                  SelectionMode="None" IsItemClickEnabled="False" Padding="10,6,10,6" Background="Transparent">
             <ListView.Header>
                 <HyperlinkButton Content="โหลดข้อความก่อนหน้า" HorizontalAlignment="Center" Command="{x:Bind ViewModel.LoadOlderCommand}" Visibility="{x:Bind ViewModel.HasMore, Mode=OneWay}" />
             </ListView.Header>
@@ -230,7 +237,8 @@
             </ListView.ItemsPanel>
         </ListView>
 
-        <StackPanel Grid.Row="2" Padding="12,0" Spacing="4">
+        <StackPanel x:Name="BottomDock" Grid.Row="2" Grid.RowSpan="2" MaxWidth="840" VerticalAlignment="Stretch" Spacing="0">
+        <StackPanel Padding="12,0" Spacing="4">
             <TextBlock Text="{x:Bind ViewModel.Status, Mode=OneWay}" Style="{StaticResource MimiCaption}" Visibility="{x:Bind ViewModel.HasStatus, Mode=OneWay}" />
             <TextBlock AutomationProperties.AutomationId="ChatError" Text="{x:Bind ViewModel.Error, Mode=OneWay}" Foreground="{StaticResource MimiBadBrush}" FontSize="12" TextWrapping="Wrap" />
             <TextBlock AutomationProperties.AutomationId="ChatInfo" Text="{x:Bind ViewModel.Info, Mode=OneWay}" Style="{StaticResource MimiCaption}" Visibility="{x:Bind ViewModel.HasInfo, Mode=OneWay}" />
@@ -262,16 +270,18 @@
         </StackPanel>
 
         <!-- The web's composer (.composer .box): text on top, attach / mic / emoji / send under it. -->
-        <StackPanel Grid.Row="3" Padding="10,4,10,8" Spacing="3">
+        <StackPanel x:Name="ComposerArea" Padding="10,4,10,8" Spacing="3">
             <Border x:Name="ComposerBox" Background="{StaticResource MimiPanelBrush}" BorderBrush="{StaticResource MimiLineStrongBrush}" BorderThickness="1" CornerRadius="14" Padding="6,4,6,6">
-                <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto" ColumnSpacing="2">
-                    <Button Style="{StaticResource MimiHeaderButton}" Content="&#xE723;" ToolTipService.ToolTip="แนบไฟล์" AutomationProperties.Name="แนบไฟล์" Click="OnAttach" VerticalAlignment="Bottom"
+                <!-- The web's mobile order: mic, attach, text, emoji, send; no send while there is nothing to send. -->
+                <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto" ColumnSpacing="2">
+                    <ToggleButton x:Name="MicButton" Content="&#xE720;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Background="Transparent" BorderThickness="0"
+                                  ToolTipService.ToolTip="อัดข้อความเสียง (กดอีกครั้งเพื่อส่ง)" AutomationProperties.Name="อัดเสียง" Click="OnMic" VerticalAlignment="Bottom"
+                                  Visibility="{x:Bind local:ChatView.MicVisibility(ViewModel.CanSend, ViewModel.Busy), Mode=OneWay}" />
+                    <Button x:Name="AttachButton" Grid.Column="1" Style="{StaticResource MimiHeaderButton}" Content="&#xE723;" ToolTipService.ToolTip="แนบไฟล์" AutomationProperties.Name="แนบไฟล์" Click="OnAttach" VerticalAlignment="Bottom"
                             Foreground="{StaticResource MimiMutedBrush}" />
-                    <TextBox Grid.Column="1" x:Name="Composer" AutomationProperties.AutomationId="Composer" AutomationProperties.Name="พิมพ์ข้อความ"
+                    <TextBox Grid.Column="2" x:Name="Composer" AutomationProperties.AutomationId="Composer" AutomationProperties.Name="พิมพ์ข้อความ"
                              PlaceholderText="พิมพ์ข้อความ…" AcceptsReturn="True" TextWrapping="Wrap" MaxHeight="160" BorderThickness="0" Background="Transparent"
                              Text="{x:Bind ViewModel.Draft, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" PreviewKeyDown="OnComposerKey" IsSpellCheckEnabled="False" />
-                    <ToggleButton Grid.Column="2" x:Name="MicButton" Content="&#xE720;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Background="Transparent" BorderThickness="0"
-                                  ToolTipService.ToolTip="อัดข้อความเสียง (กดอีกครั้งเพื่อส่ง)" AutomationProperties.Name="อัดเสียง" Click="OnMic" VerticalAlignment="Bottom" />
                     <Button Grid.Column="3" x:Name="EmojiButton" Content="🙂" Background="Transparent" BorderThickness="0" Padding="6,4" VerticalAlignment="Bottom"
                             AutomationProperties.Name="อีโมจิ" ToolTipService.ToolTip="อีโมจิ (หรือกด Win + .)">
                         <Button.Flyout>
@@ -281,15 +291,42 @@
                         </Button.Flyout>
                     </Button>
                     <Grid Grid.Column="4" VerticalAlignment="Bottom">
-                        <Button AutomationProperties.AutomationId="SendButton" Style="{StaticResource AccentButtonStyle}" Content="&#xE724;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                        <Button x:Name="SendButton" AutomationProperties.AutomationId="SendButton" Style="{StaticResource AccentButtonStyle}" Content="&#xE724;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                 CornerRadius="10" Padding="9,7" AutomationProperties.Name="ส่ง" Command="{x:Bind ViewModel.SendCommand}" IsEnabled="{x:Bind ViewModel.CanSend, Mode=OneWay}"
-                                Visibility="{x:Bind local:ChatView.Not(ViewModel.Busy), Mode=OneWay}" />
-                        <Button AutomationProperties.AutomationId="StopButton" Content="&#xE71A;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" AutomationProperties.Name="หยุด"
+                                Visibility="{x:Bind local:ChatView.SendVisibility(ViewModel.CanSend, ViewModel.Busy), Mode=OneWay}" />
+                        <Button x:Name="StopButton" AutomationProperties.AutomationId="StopButton" Content="&#xE71A;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" AutomationProperties.Name="หยุด"
                                 CornerRadius="10" Padding="9,7" ToolTipService.ToolTip="หยุด" Command="{x:Bind ViewModel.StopCommand}" Visibility="{x:Bind ViewModel.Busy, Mode=OneWay}" />
                     </Grid>
                 </Grid>
             </Border>
-            <TextBlock Text="Enter ส่ง · Shift+Enter ขึ้นบรรทัดใหม่" FontSize="11" Foreground="{StaticResource MimiFaintBrush}" Margin="8,0,0,0" />
+            <TextBlock x:Name="ComposerHint" Text="Enter ส่ง · Shift+Enter ขึ้นบรรทัดใหม่" FontSize="11" Foreground="{StaticResource MimiFaintBrush}" Margin="8,0,0,0" />
+        </StackPanel>
+        </StackPanel>
+
+        <!-- Character chat (web .solo): the stage runs behind everything; glass buttons and pins float on top. -->
+        <StackPanel x:Name="SoloBar" Grid.Row="1" Grid.RowSpan="3" Padding="12,10,12,0" VerticalAlignment="Top" Spacing="8" Visibility="Collapsed">
+            <Grid ColumnDefinitions="Auto,*,Auto">
+                <Button x:Name="SoloBack" Style="{StaticResource MimiGlassCircleButton}" Content="≡" FontFamily="Segoe UI" FontSize="24"
+                        AutomationProperties.AutomationId="BackButton" AutomationProperties.Name="กลับ" ToolTipService.ToolTip="กลับไปรายการแชต" Click="OnSoloBack" />
+                <Button x:Name="SoloSettings" Grid.Column="2" Style="{StaticResource MimiGlassCircleButton}" Content="&#xE713;"
+                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="17" AutomationProperties.AutomationId="RailButton"
+                        AutomationProperties.Name="ข้อมูล" ToolTipService.ToolTip="ข้อมูลและหน้าตาของแชตนี้" Click="OnRail" />
+            </Grid>
+            <!-- The pin bar of the normal header, the same data, floating over the stage (mobile .solo .pinbar). -->
+            <Border Background="{StaticResource MimiGlassPanelBrush}" BorderBrush="{StaticResource MimiGlassButtonLineBrush}" BorderThickness="1"
+                    CornerRadius="16" Visibility="{x:Bind ViewModel.HasPins, Mode=OneWay}">
+                <Grid ColumnDefinitions="*,Auto">
+                    <Button AutomationProperties.AutomationId="PinBar" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Background="Transparent"
+                            BorderThickness="0" Padding="12,4" Command="{x:Bind ViewModel.NextPinCommand}">
+                        <StackPanel>
+                            <TextBlock Text="{x:Bind ViewModel.PinLabel, Mode=OneWay}" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource MimiAccentTextBrush}" />
+                            <TextBlock Text="{x:Bind ViewModel.PinText, Mode=OneWay}" FontSize="12" Foreground="{StaticResource MimiInk2Brush}" TextTrimming="CharacterEllipsis" />
+                        </StackPanel>
+                    </Button>
+                    <Button Grid.Column="1" Style="{StaticResource MimiHeaderButton}" FontSize="12" Click="OnPinsMore"
+                            Content="{x:Bind local:ChatView.PinsGlyph(ViewModel.ManyPins), Mode=OneWay}" AutomationProperties.Name="ปักหมุดทั้งหมด" ToolTipService.ToolTip="ปักหมุดทั้งหมด / เลิกปักหมุด" />
+                </Grid>
+            </Border>
         </StackPanel>
     </Grid>
 </UserControl>

@@ -488,6 +488,14 @@ public sealed partial class ChatViewModel : ObservableObject
     /// <summary>Every agent, for the members of a group: (name, shown name).</summary>
     public IReadOnlyList<(string Name, string Shown)> AllAgents => session.Agents.Values.OrderBy(agent => agent.ShownName).Select(agent => (agent.Name, agent.ShownName)).ToList();
 
+    /// <summary>In a group, the members to offer for the "@…" the caret is in (app.js renderMention); empty elsewhere.</summary>
+    public IReadOnlyList<(string Name, string Shown)> MentionOptions(string text, int caret)
+    {
+        if (Chat is not { Kind: "group" } group || Mentions.At(text, caret) is not { } typing) return [];
+        var members = group.AgentNames.Select(name => (name, session.Agents.TryGetValue(name, out var agent) ? agent.ShownName : name));
+        return Mentions.Options(members, typing.Typed);
+    }
+
     public void UpdateChat(string? title, IReadOnlyList<string>? agents)
     {
         var json = new System.Text.Json.Nodes.JsonObject { ["chatId"] = ChatId };
@@ -706,14 +714,14 @@ public sealed partial class ChatViewModel : ObservableObject
         else Open(ChatId, pin.SessionId, pin.Id);
     }
 
-    /// <summary>Uploads a file to send with the next message (api-contract.md A.3, ≤ 25 MB).</summary>
-    public async Task Attach(Stream content, string name, string mime)
+    /// <summary>Uploads a file to send with the next message (api-contract.md A.3, ≤ 25 MB), a picture with its caption.</summary>
+    public async Task Attach(Stream content, string name, string mime, string? caption = null)
     {
         Error = "";
         Uploading = true;
         try
         {
-            var file = await session.Api.Upload(content, name, mime);
+            var file = await session.Api.Upload(content, name, mime, string.IsNullOrWhiteSpace(caption) ? null : caption.Trim());
             Staged.Add(file);
         }
         catch (Exception problem) when (problem is MimiHttpException or HttpRequestException or TaskCanceledException)

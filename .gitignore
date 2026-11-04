@@ -1,5 +1,7 @@
 node_modules/
 data/
+# ...but not the Android data module (source code, not a data folder)
+!android/core/data/
 workspace/
 user/
 dist/

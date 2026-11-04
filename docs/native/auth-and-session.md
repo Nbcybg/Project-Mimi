@@ -122,7 +122,7 @@ frame นี้มาจาก gateway ไม่ได้มาจาก core (c
 |---|---|
 | HTTP `/api/*` | header `Authorization: Bearer <token>` (`server.ts:2138`) — ไม่มี cookie, ไม่มี query token |
 | WebSocket `/ws` | ส่งใน frame แรก `{"type":"hello","role":"client","token":"<token>","name":"android"}` ภายใน 10 วินาที |
-| `/mimiamp/*`, `/backgrounds/*.webp`, `/health`, `/icon*.png` | ไม่ต้องใช้ token (ไฟล์สาธารณะของแอป: `packages/core/src/server/web-files.ts:239-290`) |
+| `/backgrounds/*.webp`, `/health`, `/icon*.png` | ไม่ต้องใช้ token (ไฟล์สาธารณะของแอป: `packages/core/src/server/web-files.ts:239-290`) |
 
 `<img>` ในเว็บส่ง header ไม่ได้ เว็บจึง fetch แล้วทำ blob URL (`app.js:261-270`) แอป native ใช้ HTTP client ใส่ header ได้ตรง ๆ
 (Coil/Glide/Kingfisher/URLSession ตั้ง header ได้)

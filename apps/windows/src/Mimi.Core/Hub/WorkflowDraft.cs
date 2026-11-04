@@ -166,6 +166,102 @@ public sealed class WorkflowDraft
         }
     }
 
+    /// <summary>
+    /// "จัดเรียง" (feature-canvas.js autoLayout): columns by the longest path from the starts, each column's
+    /// rows ordered by where their parents sit; <paramref name="outputsOf"/> gives a node's number of outputs (its height).
+    /// </summary>
+    public void AutoLayout(Func<JsonObject, int> outputsOf)
+    {
+        var nodes = NodeList.ToList();
+        var parents = nodes.ToDictionary(IdOf, _ => new List<string>());
+        foreach (var node in nodes)
+        {
+            foreach (var target in Targets(node))
+            {
+                if (parents.TryGetValue(target, out var list)) list.Add(IdOf(node));
+            }
+        }
+        var level = new Dictionary<string, int>();
+        int Visit(string id, HashSet<string> seen)
+        {
+            if (level.TryGetValue(id, out var known)) return known;
+            if (!seen.Add(id)) return 0;
+            var value = (parents.TryGetValue(id, out var from) ? from.Select(parent => Visit(parent, seen)).DefaultIfEmpty(-1).Max() : -1) + 1;
+            level[id] = value;
+            return value;
+        }
+        foreach (var node in nodes) Visit(IdOf(node), []);
+        var rowOf = new Dictionary<string, int>();
+        foreach (var column in nodes.GroupBy(node => level[IdOf(node)]).OrderBy(group => group.Key))
+        {
+            var list = column.ToList();
+            if (column.Key > 0)
+            {
+                double Score(JsonObject node)
+                {
+                    var rows = parents[IdOf(node)].Where(rowOf.ContainsKey).Select(parent => rowOf[parent]).ToList();
+                    return rows.Count > 0 ? rows.Average() : 0;
+                }
+                list = list.OrderBy(Score).ToList();
+            }
+            double y = 60;
+            for (var row = 0; row < list.Count; row++)
+            {
+                rowOf[IdOf(list[row])] = row;
+                Move(list[row], 60 + column.Key * 270, y);
+                y += Math.Max(62, 30 + Math.Max(1, outputsOf(list[row])) * 20) + 46;
+            }
+        }
+    }
+
+    // ---------- sticky notes ----------
+
+    public static readonly string[] NoteColors = ["yellow", "blue", "green", "pink"];
+
+    public JsonArray Notes => Workflow["notes"] as JsonArray ?? (JsonArray)(Workflow["notes"] = new JsonArray());
+
+    public IEnumerable<JsonObject> NoteList => (Workflow["notes"] as JsonArray)?.OfType<JsonObject>() ?? [];
+
+    /// <summary>A new empty note centred on (x, y).</summary>
+    public JsonObject AddNote(double x, double y)
+    {
+        var n = 1;
+        while (NoteList.Any(note => S(note["id"]) == $"note{n}")) n++;
+        var note = new JsonObject
+        {
+            ["id"] = $"note{n}",
+            ["text"] = "",
+            ["position"] = new JsonArray(Math.Round(Math.Max(0, x - 110)), Math.Round(Math.Max(0, y - 65))),
+            ["color"] = "yellow",
+        };
+        Notes.Add(note);
+        return note;
+    }
+
+    public void RemoveNote(string id)
+    {
+        if (NoteList.FirstOrDefault(note => S(note["id"]) == id) is { } note) Notes.Remove(note);
+    }
+
+    /// <summary>The note's next colour (yellow → blue → green → pink → yellow).</summary>
+    public static void CycleColor(JsonObject note)
+    {
+        var index = Array.IndexOf(NoteColors, S(note["color"]));
+        note["color"] = NoteColors[(index + 1) % NoteColors.Length];
+    }
+
+    /// <summary>A copied node pasted in as a new one (fresh id, no links), at a place or next to the original.</summary>
+    public JsonObject Paste(JsonObject copied, (double X, double Y)? at = null)
+    {
+        var copy = (JsonObject)copied.DeepClone();
+        copy["id"] = NextId();
+        copy["links"] = new JsonObject { ["main"] = new JsonArray() };
+        var place = at ?? (Position(copied) is { } was ? (was.X + 40, was.Y + 90) : (60, 60));
+        Move(copy, place.X, place.Y);
+        Nodes.Add(copy);
+        return copy;
+    }
+
     public string NextId()
     {
         var n = NodeList.Count() + 1;
@@ -197,23 +293,69 @@ public sealed class WorkflowDraft
             case "http":
                 config["method"] = "GET";
                 break;
+            case "trigger_mail":
+                (config["source"], config["maxMessages"], config["markRead"]) = ("google", 5, true);
+                break;
+            case "trigger_calendar":
+                (config["source"], config["changeTypes"], config["maxEvents"], config["everyMinutes"]) = ("google", "any", 20, 15);
+                break;
+            case "llm":
+                (config["format"], config["name"], config["prompt"]) = ("text", "text", "{{ $json.text }}");
+                break;
+            case "split_out":
+                config["include"] = "none";
+                break;
+            case "knowledge":
+                (config["operation"], config["output"], config["query"], config["limit"]) = ("search", "context", "{{ $json.text }}", 5);
+                break;
+            case "datetime":
+                (config["operation"], config["unit"], config["format"], config["name"]) = ("format", "days", "th", "date");
+                break;
+            case "file":
+                (config["operation"], config["format"], config["source"]) = ("read", "text", "content");
+                break;
+            case "extract_file":
+                (config["path"], config["type"], config["header"]) = ("{{ $json.path }}", "auto", "header");
+                break;
+            case "telegram":
+                (config["tokenSecret"], config["chatId"], config["parseMode"]) = ("TELEGRAM_BOT_TOKEN", "{{ $json.chatId }}", "plain");
+                break;
+            case "loop":
+                (config["batchSize"], config["parallel"], config["onItemError"]) = (1, 1, "stop");
+                break;
+            case "switch":
+                (config["mode"], config["cases"]) = ("value", new JsonArray(""));
+                break;
+            case "sort":
+                (config["direction"], config["type"]) = ("asc", "auto");
+                break;
+            case "limit":
+                (config["max"], config["keep"]) = (10, "first");
+                break;
+            case "aggregate":
+                config["mode"] = "collect";
+                break;
+            case "remove_duplicates":
+                config["keep"] = "first";
+                break;
+            case "merge":
+                config["mode"] = "append";
+                break;
+            case "wait":
+                (config["amount"], config["unit"]) = (1, "seconds");
+                break;
+            case "respond":
+                config["status"] = 200;
+                break;
         }
+        if (type == "approval") config["timeoutMinutes"] = 60;
         var node = new JsonObject { ["id"] = NextId(), ["type"] = type, ["title"] = title, ["config"] = config, ["links"] = new JsonObject { ["main"] = new JsonArray() } };
         Move(node, x, y);
         Nodes.Add(node);
         return node;
     }
 
-    public JsonObject Duplicate(JsonObject node)
-    {
-        var copy = (JsonObject)node.DeepClone();
-        copy["id"] = NextId();
-        copy["links"] = new JsonObject { ["main"] = new JsonArray() };
-        var at = Position(node) ?? (60, 60);
-        Move(copy, at.X + 40, at.Y + 90);
-        Nodes.Add(copy);
-        return copy;
-    }
+    public JsonObject Duplicate(JsonObject node) => Paste(node);
 
     public void Remove(string id)
     {

@@ -17,7 +17,7 @@ import type { CustomToolSpec, McpServerSpec, McpServerView, ToolPreset, ToolSett
  * a change would break a client built for the previous number; additions keep it.
  * See docs/native/api-versioning.md.
  */
-export const API_VERSION = 1;
+export const API_VERSION = 2;
 /** The oldest client API this core still serves; an older client is told to update. */
 export const MIN_CLIENT_API = 1;
 /** Close code for a client whose `hello.client.api` is below MIN_CLIENT_API. */
@@ -313,13 +313,13 @@ export interface PushDeviceView {
   lastOkAt: string | null;
 }
 
-/** Push services of native apps: Firebase Cloud Messaging (Android) and Apple Push (iOS / macOS). */
-export type NativePushPlatform = 'fcm' | 'apns';
+/** Push services of native apps: Firebase Cloud Messaging (Android), Apple Push (iOS / macOS), Windows Push (WNS). */
+export type NativePushPlatform = 'fcm' | 'apns' | 'wns';
 
 /** What a native app registers to get push messages (WS `native-push-register` or `POST /api/push/register`). */
 export interface NativePushRegistration {
   platform: NativePushPlatform;
-  /** The FCM registration token, or the APNs device token (hex). */
+  /** The FCM registration token, the APNs device token (hex), or the WNS channel URI (https://….notify.windows.com/…). */
   token: string;
   /** Shown in the device list, e.g. "Pixel 8". */
   label?: string;
@@ -721,32 +721,6 @@ export interface MemoryView {
   updatedAt: string;
 }
 
-/** What the built-in Mimiamp player can be told to do. */
-export type MimiampAction =
-  | 'open'
-  | 'play'
-  | 'pause'
-  | 'stop'
-  | 'next'
-  | 'previous'
-  | 'volume'
-  | 'seek'
-  /** Play a playlist by id or name. */
-  | 'playlist-play'
-  /** Playlists changed on the server; open screens load them again. */
-  | 'refresh';
-
-/** A command from an agent (or the app) to the Mimiamp player in the open clients. */
-export interface MimiampCommand {
-  action: MimiampAction;
-  /** Track title, artist or file name (play only). */
-  query?: string;
-  /** Volume, 0–100. */
-  level?: number;
-  /** Position in the track, in seconds. */
-  seconds?: number;
-}
-
 /** Sent by UI clients. */
 export type ClientMessage =
   | { type: 'hello'; role: 'client'; token: string; name?: string; client?: ClientInfo }
@@ -1125,8 +1099,6 @@ export type ServerMessage =
   /** A picture was added, changed or removed (the manager asks for the list again). */
   | { type: 'gallery-changed'; agent: string }
   | { type: 'backgrounds'; items: BackgroundView[]; settings: BackgroundSettingsView; saved?: string }
-  /** The agent asked the Mimiamp player to open, play, pause and so on. */
-  | { type: 'mimiamp'; command: MimiampCommand }
   | { type: 'profile'; profile: UserProfileView; saved?: boolean }
   | { type: 'notifications'; items: NotificationItem[]; unread: number }
   | { type: 'backups'; backups: Array<{ name: string; bytes: number; createdAt: string }>; dir: string; created?: string }

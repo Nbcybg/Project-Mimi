@@ -180,68 +180,8 @@ data class NativePushRegistration(
 @Serializable
 data class PushRegistered(val ok: Boolean = false, val delivering: Boolean = false)
 
-// ---------- Mimiamp (packages/shared/src/mimiamp.ts) ----------
-
-@Serializable
-data class MimiampTrack(
-    val id: String,
-    val source: String,
-    val file: String? = null,
-    val videoId: String? = null,
-    val title: String,
-    val artist: String? = null,
-    val album: String? = null,
-    val duration: Double? = null,
-    val url: String = "",
-    val thumbnail: String? = null,
-)
-
-@Serializable
-data class MimiampPlaylistItem(
-    val id: String,
-    val trackId: String? = null,
-    val source: String,
-    val file: String? = null,
-    val videoId: String? = null,
-    val localId: String? = null,
-    val title: String,
-    val artist: String? = null,
-    val album: String? = null,
-    val duration: Double? = null,
-    val thumbnail: String? = null,
-    val addedAt: String = "",
-)
-
-@Serializable
-data class MimiampPlaylist(val id: String, val name: String, val createdAt: String = "", val updatedAt: String = "", val items: List<MimiampPlaylistItem> = emptyList())
-
-@Serializable
-data class YoutubeStatus(val ready: Boolean = false, val google: Boolean = false, val error: String? = null)
-
-@Serializable
-data class MimiampState(val tracks: List<MimiampTrack> = emptyList(), val playlists: List<MimiampPlaylist> = emptyList(), val youtube: YoutubeStatus = YoutubeStatus())
-
-@Serializable
-data class YoutubeSearchResult(val videoId: String, val title: String, val artist: String? = null, val duration: Double? = null, val thumbnail: String? = null)
-
-@Serializable
-data class YoutubeSearchReply(val results: List<YoutubeSearchResult> = emptyList(), val source: String = "none", val error: String? = null)
-
-@Serializable
-data class TrackReply(val track: MimiampTrack? = null)
-
-@Serializable
-data class PlaylistReply(val playlist: MimiampPlaylist)
-
-@Serializable
-data class PlaylistsReply(val playlists: List<MimiampPlaylist> = emptyList())
-
 @Serializable
 data class OkReply(val ok: Boolean = false)
-
-/** What an agent tells the player (protocol.ts MimiampCommand). */
-@Serializable
-data class MimiampCommand(val action: String, val query: String? = null, val level: Double? = null, val seconds: Double? = null)
 
 /**
  * The oldest core API this app works with. API 0 cores (before Phase 1) still chat, but lack

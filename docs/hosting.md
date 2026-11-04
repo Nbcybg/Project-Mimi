@@ -223,39 +223,21 @@ core จึงรับรหัสล็อกอินที่ `https://<โ�
   `railway volume files download /backups/<ไฟล์>.tar.gz ./` เป็นประจำ (เช่น สัปดาห์ละครั้ง)
 - เปิด Backups ของ volume ในหน้า Railway ด้วย (ตามแผนที่ใช้อยู่) ใช้กู้ทั้ง volume เมื่อพลาดหนัก
 
-### เพลงของ Mimiamp บนเซิร์ฟเวอร์
+### เพลงของ Mimiamp (เอาออกแล้ว)
 
-ตั้งแต่ Unreleased (Phase 1 ของแอป native) image ของ Docker **ไม่มีโฟลเดอร์ `mimiamp/` ของโปรเจกต์แล้ว** (285 MB ทำให้ image ใหญ่และทุกคนได้เพลงชุดเดียวกัน)
-เพลงอยู่ใน volume ที่ `<user>/mimiamp` (บน Railway คือ `/app/user/mimiamp`) ระหว่างที่โฟลเดอร์นั้นยังไม่มีไฟล์เสียง เครื่องเล่นใช้เพลง demo ในตัว
-(`packages/core/src/server/web/mimiamp/`) เพลงแรกที่อัปโหลดทำให้โฟลเดอร์ของผู้ใช้แทนที่ demo ทั้งชุด
-
-อัปโหลดได้ 2 ทาง:
-
-1. **ผ่าน API ของ core** (ใช้ได้ทั้งคนเดียวและหลายผู้ใช้ ไม่ต้องหยุด service) — ไฟล์ละไม่เกิน 200 MB ชื่อไฟล์ต้องลงท้ายด้วยนามสกุลเสียง
-   (`.mp3 .m4a .aac .ogg .oga .opus .wav .flac .weba .webm`) ห้ามมีโฟลเดอร์ ชื่อซ้ำ = ทับไฟล์เดิม
-
-   ```bash
-   curl -X POST "https://<โดเมน>/api/mimiamp/files?name=Sunset%20Train.wav" -H "Authorization: Bearer <token>" -H "Content-Type: audio/wav" --data-binary @"Sunset Train.wav"
-   ```
-
-   `<token>` คือ `MIMI_TOKEN` (core คนเดียว) หรือ session token จาก `POST /auth/login` (ผ่าน gateway ใช้โดเมนของ gateway ได้เลย)
-   ลบ: `curl -X DELETE "https://<โดเมน>/api/mimiamp/files/Sunset%20Train.wav" -H "Authorization: Bearer <token>"`
-   แอปที่เปิดอยู่โหลดรายการเพลงใหม่เอง
-
-2. **ผ่าน Railway CLI** (หลายไฟล์ทีเดียว): `railway volume files upload "./mimiamp/Sunset Train.wav" "/mimiamp/Sunset Train.wav"`
-   (path ใน volume เริ่มจาก `/` = `/app/user`) อัปโหลด `tracks.json` ไปที่ `/mimiamp/tracks.json` ด้วยถ้าต้องการชื่อเพลง/ศิลปิน
-   — ย้ายเพลงเดิมที่เคยอยู่ใน image: อัปโหลดทุกไฟล์ในโฟลเดอร์ `mimiamp/` ของโปรเจกต์ (รวม `tracks.json`) ขึ้นไปแบบนี้ครั้งเดียว
-
-เครื่องที่บ้าน / VPS + Docker: วางไฟล์ใน `./user/mimiamp/` ที่ mount อยู่แล้ว หรือตั้ง `MIMI_MUSIC_DIR` ไปที่โฟลเดอร์ที่ mount เพิ่ม
-(ถ้าตั้ง `MIMI_MUSIC_DIR` การอัปโหลดผ่าน API จะเขียนลงโฟลเดอร์นั้น)
+Mimiamp ถูกเอาออกทั้งหมดตั้งแต่ client API 2 (เจ้าของโปรเจกต์ตัดสิน 2026-11-03) — core ไม่เสิร์ฟ `/mimiamp/*` / `/api/mimiamp/*` แล้ว
+และไม่อ่าน `MIMI_MUSIC_DIR` · เพลงที่เคยอัปโหลดไว้ใน volume (`<user>/mimiamp`, บน Railway `/app/user/mimiamp`) ยังอยู่ แต่ไม่มีอะไรใช้
+ลบเองได้เมื่อแน่ใจ (`railway volume files` หรือผ่าน shell ของ service) · YouTube ที่เคย cache ไว้อยู่ใน `<data>/mimiamp` ลบได้เช่นกัน
 
 ### แอป native: ตัวแปรเพิ่มเติม
 
 | ตัวแปร | ค่า | ใช้ทำอะไร |
 |---|---|---|
-| `MIMI_SERVE_WEB` | `0` = ปิด (ค่าเริ่มต้นเปิด) | ไม่เสิร์ฟหน้าเว็บ/สคริปต์ (เหลือเฉพาะ API, `/ws`, `/health`, เพลง `/mimiamp/*`, ฉาก `/backgrounds/*`, ไอคอน) — ใช้เมื่อทุกคนใช้แอป native แล้ว ตั้งได้ทั้ง core และ gateway |
+| `MIMI_SERVE_WEB` | `0` = ปิด (ค่าเริ่มต้นเปิด) | ไม่เสิร์ฟหน้าเว็บ/สคริปต์ (เหลือเฉพาะ API, `/ws`, `/health`, ฉาก `/backgrounds/*`, ไอคอน) — ใช้เมื่อทุกคนใช้แอป native แล้ว ตั้งได้ทั้ง core และ gateway |
 | `MIMI_FCM_SERVICE_ACCOUNT` | JSON ของ service account (ทั้งก้อน) หรือ path ของไฟล์ | ส่ง push ไปแอป Android ผ่าน FCM HTTP v1 (`MIMI_FCM_PROJECT_ID` ใช้แทน `project_id` ในไฟล์ได้) |
 | `MIMI_APNS_KEY` / `MIMI_APNS_KEY_ID` / `MIMI_APNS_TEAM_ID` / `MIMI_APNS_TOPIC` | PEM ของไฟล์ `.p8` (หรือ path), Key ID, Team ID, bundle id | ส่ง push ไปแอป iOS/Mac ผ่าน APNs |
+| `MIMI_WNS_TENANT_ID` / `MIMI_WNS_CLIENT_ID` / `MIMI_WNS_CLIENT_SECRET` | Entra ID (Azure AD) app ที่ลงทะเบียนกับ WNS: tenant, client (= remote id ของแอป Windows), secret | ส่ง push ไปแอป Windows (raw push; แอปดึงข้อความเอง) |
+| `MIMI_PUSH_RELAY_URL` | ที่อยู่ของ gateway ที่ core เห็น (เช่น `http://gateway.railway.internal:8080`) | ตั้งที่ **core**: push ที่ core ไม่มีกุญแจเองส่งผ่าน `POST /push/relay` ของ gateway ด้วย `MIMI_TOKEN` ของ core — ใส่กุญแจ FCM/APNs/WNS ไว้ที่ gateway ที่เดียว (Q3) |
 | `MIMI_NATIVE_PUSH_CONTENT` | `minimal` (ค่าเริ่มต้น) / `full` | `minimal` = push ไม่มีข้อความจริง (Google/Apple อ่านไม่ได้) แอปดึงข้อความเองจาก `/api/notifications`; `full` = ใส่หัวข้อและเนื้อหา |
 
 โหมดหลายผู้ใช้: ตอนนี้ใส่กุญแจ FCM/APNs ใน **core ของแต่ละคน** (relay ผ่าน gateway ยังไม่ได้ทำ — `docs/native/server-gaps.md` G-PUSH-2)

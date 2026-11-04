@@ -19,9 +19,7 @@ stack ตามที่เสนอใน [`windows-stack.md`](../../docs/nativ
 | กล่องแจ้งเตือน (Phase 6) | กระดิ่งพร้อมจำนวนที่ยังไม่อ่าน: รายการจาก core ทุกครั้งที่ต่อ, ของใหม่เข้ามาสด, คลิก = อ่านแล้ว + เปิดแชต, อ่านทั้งหมด · แจ้งเตือนของแชตที่กำลังดูอยู่ถูกทำเป็นอ่านแล้วทันที | `feature-notify.js` |
 | การ์ดงาน, session, อ่านออกเสียง, กลุ่ม (Phase 6) | การ์ด task (ขั้นตอน, แผน, ผล, หยุด/ทำต่อ/ยกเลิก/ย้อนไฟล์) · แถบ session ใต้ header: ชื่อ session + มาตรวัด context/cache/ค่าใช้จ่าย, เมนู session (เปิด session เก่า, เริ่มใหม่) · เมนูแชต: อ่านออกเสียงอัตโนมัติ (`ui-set mimi.autoSpeak` ใช้ร่วมทุกเครื่อง, เสียง Windows ภาษาไทยถ้ามี), แก้ชื่อ/สมาชิกกลุ่ม, ดาวน์โหลดแชตเป็น CSV, ลบแชต · 🔊 ในเมนูข้อความ · ปุ่มอีโมจิชุดเดียวกับเว็บ · สร้างแชตกลุ่มจากเมนู "แชตใหม่" | `app.js`, `feature-chat.js` |
 | หน้าจัดการ (Phase 6) | เมนู ☰: **Agent** (แก้ทุกช่อง, รูป avatar/portrait, โมเดล VRM, ท่า Mixamo, แกลเลอรี, แบบ agent สำเร็จรูป), **Hub** 10 แท็บเหมือนเว็บ (กองโมเดล, Skill, Node & เครื่องมือ: preset/เครื่องมือเอง/MCP/connector+นำเข้า OpenAPI/รายการเครื่องมือ, Trigger + ชนิด trigger, บัญชี: Google/Microsoft/กล่องเมล/connection/ปฏิทิน/คีย์ค้นหา, คีย์ลับ, คลังความรู้ (เอกสาร, เพิ่มข้อความ/URL/ไฟล์, ค้นหา, embed), ตู้เสื้อผ้า, ฉากหลัง, แพ็ก (ดูก่อน/ติดตั้ง/ถอน)), **Workflow** (แก้ด้วยฟอร์ม + JSON ของ node, ดูผังแบบ zoom ได้, รัน, เปิด/ปิด, ประวัติ, รันจาก node, นำเข้า n8n/Make/Zapier), **AI Overseer** (เลือกโมเดล + คุย), **ตั้งค่า Mimi** (โปรไฟล์, งบ/แจ้งเตือน, เครื่องที่รับ push, สำรองข้อมูล + ดาวน์โหลด, 2FA/เปลี่ยนรหัสผ่านของ gateway, ความจำ, ผู้ให้บริการโมเดล + ChatGPT/Claude แบบรายเดือน, โมเดลเริ่มต้น/เขตเวลา/session/โควตา/โฟลเดอร์, สิทธิ์ "อนุญาตตลอด", Cloudflare tunnel) | `Mimi.Core/Hub/Catalog.cs` |
-| Mimiamp | คลังเพลง + เพลย์ลิสต์ (สร้าง/ลบ/เพิ่มเพลง), เพิ่มลิงก์ YouTube (prepare ก่อนเล่น), shuffle / repeat, EQ 10 แบนด์ + preset ชุดเดียวกับเว็บ (peaking Q=1 เขียนเองใน `Mimi.Core`), ความดัง, เลื่อนตำแหน่ง, ปุ่มมีเดียของคีย์บอร์ด + แผงมีเดียของ Windows (SMTC), mini player, คำสั่ง `mimiamp` จาก agent | media 1 |
-| เล่นเสียง | อ่านเพลงผ่าน `HttpRangeStream` (Range + Bearer ทั้ง core และ gateway) → Media Foundation → EQ → WASAPI | media 1.3, 1.5 |
-| ถาดระบบ | ไอคอน + เมนูชุดเดียวกับ Electron (เปิด Mimi, Mimiamp, ตั้งค่า, PC agent, shell, ออกจากระบบอัตโนมัติ, ซ่อนเมื่อคลิกที่อื่น, อยู่บนสุด, เปลี่ยนเซิร์ฟเวอร์, ออกจากระบบ, ออก) · คลิก = แสดง/ซ่อนหน้าต่าง | `remote.cjs` buildMenu |
+| ถาดระบบ | ไอคอน + เมนูชุดเดียวกับ Electron (เปิด Mimi, ตั้งค่า, PC agent, shell, ออกจากระบบอัตโนมัติ, ซ่อนเมื่อคลิกที่อื่น, อยู่บนสุด, เปลี่ยนเซิร์ฟเวอร์, ออกจากระบบ, ออก) · คลิก = แสดง/ซ่อนหน้าต่าง | `remote.cjs` buildMenu |
 | หน้าต่าง | หน้าต่างลอย 410 × 820 มุมขวาล่าง จำตำแหน่ง/ขนาด, ปิด = ซ่อนไปถาด, เปิดได้ทีละตัวต่อผู้ใช้ Windows (เปิดซ้ำ = แสดงตัวเดิม) | `remote.cjs` |
 | แจ้งเตือน | Windows toast จาก frame `notification` ขณะแอปอยู่ในถาด + ตามของที่พลาดด้วย `/api/notifications?afterId=` หลังต่อใหม่ · คลิก = เปิดแชตนั้น · ไม่แจ้งแชตที่กำลังดูอยู่ · `security-alert` ของ gateway | push-and-background 1, 2 |
 | เปิดตอนเข้าสู่ระบบ | HKCU `Run` ชื่อ `app.mimi` (ชื่อเดียวกับที่ Electron ใช้ จึงแทนกัน ไม่ซ้อน) เริ่มแบบซ่อนในถาด (`--background`) | – |
@@ -41,7 +39,7 @@ stack ตามที่เสนอใน [`windows-stack.md`](../../docs/nativ
 | โครงหน้าต่าง | หน้ารายการแชต = แผงข้างของเว็บ (ค้นหา, + ใหม่, แท็บ ตัวต่อตัว/กลุ่ม, nav 8 หน้า, สถานะ PC agent), หน้าอื่นมีหัวแบบเว็บหน้าแคบ (‹ + ชื่อ) | `Views/ChatListView.*`, `MainWindow.*` |
 | ตั้งค่า | 4 แท็บแบบเว็บ: โปรไฟล์ของฉัน (การ์ดบัญชี + ออกจากระบบ), หน้าตา (ธีม, ขนาดข้อความ, ตัวละคร, เสียง), ความจำ, แอปและระบบ (เครื่องนี้ + ของเซิร์ฟเวอร์) | `Views/SettingsSections.cs` |
 | แชต | หัวแบบเว็บ (+ session, ตัวละคร, ข้อมูล, มาตรวัด context) + กล่องพิมพ์แบบเว็บ · **เวที**: ฉากหลัง (ของแชต หรือฉากใน Hub ของ agent) + ตัวละคร 2D ตามอีโมจิล่าสุด หรือ **VRM 3D** · แผง "ข้อมูล": สถานะ agent (แก้ได้) + **หน้าตาต่อแชต** (ธีม, ขนาดข้อความ, ตัวละคร, ข้อความบนตัวละคร, ขนาด/ตำแหน่ง, ฉากหลัง: สีเดียว/ไล่สี/ฉาก/อัปโหลด) | `Controls/StageView.cs`, `Controls/VrmView.cs`, `Assets/web/vrm.html`, `Services/StageData.cs`, `Views/ChatView.Stage.cs` |
-| Mimiamp | สกิน "blue edition" แบบเว็บ, visualizer (FFT), pan, เพลงในเครื่อง (เปิดไฟล์/ลากวาง เล่นจากดิสก์) | `Views/MimiampView.*`, `Mimi.Core/Mimiamp/Spectrum.cs` |
+| ~~Mimiamp~~ | สกิน "blue edition", visualizer, pan, เพลงในเครื่อง — **เอาออกแล้วในรอบที่ 6** (Q5) | – |
 | ฟอร์ม | ฟอร์มย่อยแทน JSON (`FieldKind.Group` + `ShowWhen`): กล่องเมลขาเข้า/ขาออกเป็นช่อง ๆ แสดงตามชนิดบัญชี · ผลการกระทำแสดงแบบอ่านได้ (รายงานแพ็ก, ผลรัน workflow ทีละ node, ประวัติการรัน) มี "ดู JSON" พับไว้ | `Controls/JsonForm.cs`, `Controls/ResultView.cs` |
 | Workflow editor | ผังลากวาง: ลาก node, ลากจากจุดทางออกไปวางบน node = เชื่อม, คลิกเส้น = ลบ, เพิ่ม node ตามชนิดที่เซิร์ฟเวอร์ส่งมา, ฟอร์มของ node จาก field spec (เงื่อนไขเป็นแถว), เมื่อผิดพลาด/ลองใหม่, ปิด/ทำสำเนา/ลบ node, **ทดสอบ node ทีละตัว**, บันทึก, รัน, รันใหม่จาก node, ประวัติ, ลบ | `Views/WorkflowEditor.cs`, `Controls/SpecForm.cs`, `Mimi.Core/Hub/WorkflowDraft.cs` |
 | ตัวช่วยตั้งค่า | 5 ขั้นแบบเว็บ: ผู้ให้บริการ + โมเดลหลัก → agent สำเร็จรูป → โฟลเดอร์ → PC agent → แชตทดสอบ · เปิดเองครั้งแรกเมื่อยังแชตไม่ได้ (`mimi.setupDone`) | `Views/SetupWizard.cs` |
@@ -50,12 +48,39 @@ stack ตามที่เสนอใน [`windows-stack.md`](../../docs/nativ
 ไฟล์ของเว็บที่ใช้ (`three`, `@pixiv/three-vrm`, `@xterm/*` จาก `node_modules` และฉากสำเร็จรูป `backgrounds/*.webp`) ถูกคัดลอกเข้า `Assets/` ตอน build
 (`Mimi.App.csproj`) — ต้อง `npm install` ที่ root ก่อน build · ข้อมูลของ WebView2 อยู่ใน `%LOCALAPPDATA%\Mimi\WebView2` และถูกลบตอนออกจากระบบ
 
+**รอบที่ 5 (2026-11-03, ทำบน Mac Intel) — ฟีเจอร์ที่ยังขาดเทียบกับ Electron:**
+
+| ส่วน | ทำอะไร | โค้ด |
+|---|---|---|
+| Workflow editor | **preview expression** ("= ค่า" ใต้ช่อง หน่วง 350 ms, `workflow-expr-preview` กับข้อมูลของการรันล่าสุด หรือตัวอย่างของ trigger) · **คำแนะนำ path** หลัง `$json.` / `$node[…]` ใน `{{ }}` (↑ ↓ Enter/Tab, Esc) · ปุ่ม **"{ } เลือกข้อมูล"** (ค้นหา field ของข้อมูลเข้า, ผลของ node ก่อนหน้า, `$vars`, ค่าพื้นฐาน) · **โน้ตบนผัง** (📝 เพิ่ม, ลากแถบบนย้าย, มุมขวาล่างขยาย, แก้ข้อความในที่, เปลี่ยนสี 4 สี, ลบ) · **node Connector**: บริการ → version → operation → connection แล้วช่องของ operation นั้น (เก็บใน `config.input`), ตัวเลือกที่อ่านจากบริการ (`connector-operation-options`, รอช่องที่ต้องกรอกก่อน, จำผลไว้), ช่อง "อนุญาต write/delete" · trigger ของ connector / pool แสดงช่องของตัวที่เลือก · **ย้อน / ทำซ้ำ** (↶ ↷, Ctrl+Z / Ctrl+Y) · Ctrl+C / Ctrl+V / Ctrl+D / Delete บนผัง · **จัดเรียงอัตโนมัติ** · **node preset** ("บันทึกเป็น preset…" → "+ node" → Preset ของฉัน, ใช้ร่วมทุกเครื่องผ่าน `mimi.nodePreset.*` เหมือนเว็บ) · ตัวแปร `$vars` เป็นแถว ชื่อ → ค่า | `Views/WorkflowEditor.cs`, `Controls/SpecForm.cs`, `Mimi.Core/Hub/WorkflowAssist.cs`, `WorkflowDraft.cs` |
+| VRM | **ท่า Mixamo** (.fbx → retarget เข้ากระดูก VRM แบบ `feature-vrm.js`) · ท่ายืนเฉย (`idleMotion`) เล่นวนบนหน้าแชต แทนท่าหายใจ · หน้า "ตัวละคร 3D" ใน Agent: ดูโมเดล, เล่นท่า (วน/ครั้งเดียว), หยุด, ลบท่า, เลือก + บันทึกท่ายืนเฉย · ท่าที่ใช้ไม่ได้ (FBX ที่ไม่ใช่ rig ของ Mixamo) บอกเหตุผล | `Assets/web/vrm.html`, `Controls/VrmView.cs`, `Views/ManagePage.Character.cs`, `Services/StageData.cs` |
+| ภาพสถานการณ์ (#25) | ภาพจากแกลเลอรีที่ agent (`gallery_show`) หรือผู้ใช้ตั้ง (`status.situation`) **ทับแชต** แบบ event CG: เปิด / ย่อเป็นรูปเล็กมุมขวาบน / ปิดเหลือปุ่ม 🖼 · จำต่อ agent จนกว่าจะเป็นภาพใหม่ (เหมือน `mimi.cg` ของเว็บ, เก็บใน `config.json` → `scenes`) | `Controls/SceneOverlay.cs`, `Views/ChatView.Stage.cs` |
+| แกลเลอรี (#44) | หน้าจัดการแทนผล JSON: ค้นหา (ชื่อ/แท็ก/คำอธิบาย), หน้าละ 48, รูปย่อ, **เพิ่มหลายรูปพร้อมกัน** (ทำรูปย่อ 256 px JPEG ให้), แก้ชื่อ/แท็ก/คำอธิบาย, แสดงในแชต / เอาออก, ลบ | `Views/ManagePage.Gallery.cs` |
+| ฟอร์มย่อยแทน JSON | `FieldKind.KeyValue` (แถว ชื่อ → ค่า), `Rows` (การ์ดต่อรายการ + เพิ่ม/ลบ), `Audience` (agent ทุกตัว / เฉพาะที่เลือก), `Dynamic` (ช่องตามที่เซิร์ฟเวอร์บอก) — **preset เครื่องมือ** ใช้ช่อง `settings` ของเครื่องมือที่เลือก (secret = `{{secret.ชื่อ}}`), **connection** ใช้ช่อง `auth.fields` ของ connector (เว้นว่าง = คงเดิม) + OAuth2 endpoint/scopes, **โปรไฟล์** เป็นการ์ดต่อข้อมูล (ชื่อ, ค่า, ใครเห็น, เก็บในเครื่องนี้, key), **vars ของ workflow** เป็นแถว | `Controls/JsonForm.cs`, `Mimi.Core/Hub/Entities.cs` (`ServerFields`), `Catalog.cs`, `Lookups.cs` |
+| Workspace | ปุ่ม **"ส่งเข้าแชต"** ในโหมดวาด: แนบภาพในแชตที่เปิดอยู่ แล้วโฟกัสช่องพิมพ์ให้พิมพ์ข้อความประกอบ (`sendImageToChat` ของ Electron) | `Views/Workspace.cs`, `App.xaml.cs` |
+| **เซิร์ฟเวอร์ในเครื่องนี้** | ปุ่ม "ใช้เซิร์ฟเวอร์ในเครื่องนี้" ในหน้าเชื่อมต่อ: แอปเปิด core บนเครื่องเอง (`packages/core/src/app/native-host.ts` ด้วย node.exe ในชุด, 127.0.0.1, token ใน `app-settings.json` แบบ launcher.ts), อ่านที่อยู่ + token จากบรรทัด `@@mimi-host@@{…}`, เข้าสู่ระบบให้เอง และเปิดทุกครั้งที่เปิดแอป · ปิดแอป = ปิด core (ปิด stdin) · ออกจากระบบ = หยุด core และเลิกเปิดเอง · มี Mimi รันอยู่แล้ว (แอป Electron) = ใช้ตัวนั้นและไม่ปิดมัน · PC tools ไม่รันใน core (`localPcTools: false`) — ใช้ PC agent ของแอปพร้อมกล่องขออนุญาต · ชุดติดตั้งมี `core/` (`scripts/pack-core.mjs`) | `Mimi.Core/Desktop/LocalCore.cs`, `Views/ConnectView.xaml.cs`, `App.xaml.cs`, `packages/core/src/app/native-host.ts` |
+
+**รอบที่ 6 (2026-11-03, บน Mac Intel) — เอา Mimiamp ออก + ที่ Electron/เว็บยังมีเกิน:**
+
+| ส่วน | ทำอะไร | โค้ด |
+|---|---|---|
+| เอา Mimiamp ออก (Q5) | หน้าเพลง, mini player, เมนูถาด, ปุ่มมีเดีย/SMTC, EQ/spectrum, ค่าเพลงใน `config.json` ถูกลบ · frame `mimiamp` จาก core เก่าถูกข้าม | – |
+| ฉากหลังของแชต | **อัปโหลดรูปจากเครื่อง** สำหรับแชตนี้ (`POST /api/chat-background`, ≤12 MB) · **ตั้งเวลาสลับฉากหลัง** (ช่วงเวลา → ตามพื้นหลังหลัก / สี / ไล่สี / ฉาก / รูปที่อัปโหลด, ข้ามเที่ยงคืนได้, ดูใหม่ทุก 30 วินาที) · แก้: "ไม่มี" = ไม่มีฉากหลังจริง (เดิมไปใช้ฉากของ agent) | `Views/ChatView.Background.cs`, `Mimi.Core/Desktop/BackgroundRules.cs` |
+| เบราว์เซอร์ของ Mimi | เมนูถาด + ตั้งค่า → "เปิดเบราว์เซอร์ของ Mimi": Edge/Chrome ด้วยโปรไฟล์ของ agent และ flag ชุดเดียวกับ PC agent (DevTools port) ให้ล็อกอินเว็บเองแล้ว agent ใช้หน้าต่างนั้นต่อ | `Mimi.Core/Desktop/AgentBrowser.cs`, `App.OpenAgentBrowser` |
+| กล่องพิมพ์ | `@ชื่อ` ในแชตกลุ่ม (Tab/Enter/คลิก) · Esc ตอนช่องว่าง = หยุดคำตอบ · Ctrl+V รูป/ไฟล์ = แนบ · **ตรวจรูปก่อนส่ง**: พรีวิว, เลือกรูป, คำบรรยายต่อรูป (`X-Mimi-Caption`) — ใช้กับเลือกไฟล์ ลากวาง วาง และ "ส่งเข้าแชต" ของ Workspace | `Views/ChatView.{Composer,Pictures}.cs`, `Mimi.Core/Chat/Mentions.cs` |
+
+| WNS (push ตอนแอปปิด/หลับ) | `Services/WindowsPush.cs` (Windows App SDK `PushNotificationManager`): ถ้า `GET /api/push/info` บอกว่ามี `wns` + `wnsRemoteId` → สร้าง channel → `POST /api/push/register {platform:"wns"}` ทุกครั้งที่ล็อกอิน · raw push ตอน socket ไม่อยู่ = ดึง `/api/notifications?afterId=` แล้วแสดง toast · แอปไม่ได้เปิดอยู่ → Windows เปิดแอปเข้าถาด (เหมือนเริ่มพร้อมเครื่อง) · ออกจากระบบ = ยกเลิก channel · **ไม่รองรับ (`IsSupported()` = false) = ใช้ socket แบบเดิม** — build แบบ self-contained อาจต้องมี Singleton package ของ Windows App Runtime ในเครื่อง; ยังไม่ได้ทดสอบกับ WNS จริง (ต้องลงทะเบียน Entra ID app) | `App.RegisterPush`, `NotificationsFromPush` |
+| Widget (#19) | **ยังทำไม่ได้**: widget ของ Windows 11 ต้องเป็นแอปที่มี package identity (MSIX หรือ sparse package) ซึ่งต้อง**ลงนามด้วยใบรับรอง** — แอปนี้แจกเป็น zip/setup.exe ที่ยังไม่ลงนาม (Q9) จึงติดตั้ง widget provider ไม่ได้ | – |
+
+วิธีเทียบรอบนี้: ทุกชนิด frame ที่เว็บส่ง/รับ และทุก path `/api/*` ที่เว็บเรียก เทียบกับสตริงในโค้ด C# — ที่เหลือมีแค่ Web Push (`push-key`/`push-subscribe`, แอป native ใช้ WNS แทน)
+และ `google-auth-url`/`microsoft-auth-url` (ทางเก่า แอปใช้ `oauth-account-connect`) · แล้วไล่ฟีเจอร์ของ `packages/desktop/` (ถาด, IPC) และกล่องพิมพ์ของ `app.js` ด้วยตา
+
 ยังไม่มี / ยังไม่ได้ลอง (ตามจริง):
-- workflow editor: preview expression (`workflow-expr-preview`), แก้โน้ตบนผัง (แสดงอย่างเดียว), เลือก option ของ connector จาก API (`connector-operation-options`)
-- VRM: ท่า Mixamo (`motions`, `idleMotion`) ยังไม่เล่น · **ยังไม่ได้ลองกับไฟล์ .vrm จริง** (ในเครื่องนี้ไม่มีไฟล์ตัวอย่าง — ตรวจแค่ว่าหน้า three-vrm โหลดได้ไม่มี error)
-- รูปแกลเลอรี/ภาพสถานการณ์ทับแชต (#25)
-- ฟอร์มย่อยแทน JSON ทำแล้วเฉพาะกล่องเมล; ค่า preset เครื่องมือ, ช่องของ connection และข้อมูลโปรไฟล์ยังแก้เป็น JSON
-- Workspace: ยังไม่มีปุ่ม "ส่งภาพที่วาดเข้าแชต" (Electron มี) — คัดลอกแล้ววางในแชตได้
+- **รอบที่ 5 ทั้งหมด compile ผ่านแต่ยังไม่ได้รันบน Windows** (ทำบน Mac): ตรวจด้วย `tests/tools/mac-typecheck/check.sh` (C# จริงทุกไฟล์, แต่ XAML ไม่ได้ถูก compile — รอบนี้ไม่ได้แก้ไฟล์ .xaml) ·
+  UI test (FlaUI) ยังไม่มีขั้นของฟีเจอร์รอบที่ 5 · ส่วนที่ทดสอบได้บน Mac: unit test ของ Core 82/87 บน Mac (+12 ตัว: `WorkflowAssistTests`, `LocalCoreTests` ที่เปิด core จริง, `ManageTests` ช่องจากเซิร์ฟเวอร์) และ `native-host.test.ts` ของเซิร์ฟเวอร์
+- VRM: **ยังไม่ได้ลองกับไฟล์ .vrm / .fbx จริง** (ตรวจแค่ syntax ของหน้า) · ท่า Mixamo เล่นทั้งบนหน้าแชต (ท่ายืนเฉย) และหน้าตัวละคร — เว็บเล่นเฉพาะใน editor ของ agent
+- ชุดติดตั้งใหญ่ขึ้นมาก: `core/node_modules` ~240 MB (ส่วนใหญ่คือ binary ของ `@anthropic-ai/claude-agent-sdk` สำหรับ Claude plan) · build arm64 บนเครื่อง x64 ได้ SDK ของ x64 (เหมือน node.exe)
+- WNS (รอ Q3) และ Windows widget (ต้องมี package identity) ยังไม่มี
 
 ## โครงสร้าง
 
@@ -83,6 +108,19 @@ dotnet build apps/windows/src/Mimi.App/Mimi.App.csproj -p:Platform=x64
 dotnet test apps/windows/tests/Mimi.Core.Tests
 ```
 
+**บน macOS / Linux** (ไม่มี XAML compiler ของ Windows): unit test ของ Core รันได้ (5 ตัวที่ผูก path `C:\` / DPAPI ของ Windows จะตก — ปกติ)
+และตรวจ C# ของแอปได้ด้วย stub แทนโค้ดที่ XAML compiler สร้าง — XAML เองไม่ถูกตรวจ ต้อง build บน Windows ก่อนปล่อย:
+
+```bash
+dotnet test apps/windows/tests/Mimi.Core.Tests -p:EnableWindowsTargeting=true
+```
+
+```bash
+apps/windows/tests/tools/mac-typecheck/check.sh
+```
+
+(.NET 10 SDK บน Mac ติดตั้งแบบไม่ต้องใช้ sudo ด้วย `dotnet-install.sh --channel 10.0 --install-dir ~/.dotnet`)
+
 build แบบ Debug เป็น framework-dependent: ถ้า .NET 10 ไม่ได้อยู่ใน `C:\Program Files\dotnet` ให้ตั้ง `DOTNET_ROOT` ก่อนเปิด `Mimi.exe`
 (build ที่แจกจ่ายเป็น self-contained ไม่ต้องติดตั้งอะไร)
 
@@ -95,14 +133,14 @@ $env:MIMI_WINDOWS_HOME = "$env:TEMP\mimi-win-test"; .\apps\windows\src\Mimi.App\
 
 แล้วใส่ `http://localhost:8787` (http ใช้ได้เฉพาะเซิร์ฟเวอร์บนเครื่องนี้ นอกนั้นต้อง https) และ `MIMI_TOKEN` ของ core
 
-**UI test** — ต้องมี core ในเครื่องที่มี agent อย่างน้อยหนึ่งตัว, เพลงอย่างน้อยหนึ่งเพลง และ LLM ที่ตอบคำว่า "streaming" พร้อมทวนข้อความผู้ใช้
+**UI test** — ต้องมี core ในเครื่องที่มี agent อย่างน้อยหนึ่งตัว และ LLM ที่ตอบคำว่า "streaming" พร้อมทวนข้อความผู้ใช้
 ใช้ LLM จำลอง [`tests/tools/mock-llm.cjs`](tests/tools/mock-llm.cjs) (OpenAI-compatible, ไม่ออกเน็ต, port 9911) ได้แบบนี้ — โฟลเดอร์ทดสอบแยกจาก `user/` จริง:
 
 1. `node apps/windows/tests/tools/mock-llm.cjs`
 2. โฟลเดอร์ทดสอบ (เช่น `%TEMP%\mimi-core-test`) มี `mimi.json` ที่ `model` = `mock/mock-chat` และ provider `mock`
    (`npm: @ai-sdk/openai-compatible`, `api: http://127.0.0.1:9911/v1`, `env: ["MOCK_API_KEY"]`) และ `user/agents/mimi/agent.md`
    (frontmatter `name: mimi`, `tools: []`, `can_message: []`)
-3. core: `MIMI_ROOT=<โฟลเดอร์ทดสอบ> MIMI_USER=user MIMI_TOKEN=<token ยาว> MOCK_API_KEY=x MIMI_MODELS_OFFLINE=1 MIMI_CALENDAR_SYNC=0 MIMI_MUSIC_DIR=<repo>/mimiamp npm run serve`
+3. core: `MIMI_ROOT=<โฟลเดอร์ทดสอบ> MIMI_USER=user MIMI_TOKEN=<token ยาว> MOCK_API_KEY=x MIMI_MODELS_OFFLINE=1 MIMI_CALENDAR_SYNC=0 npm run serve`
 
 ไม่ตั้งตัวแปรด้านล่าง = ข้ามเทสต์นี้:
 
@@ -110,7 +148,7 @@ $env:MIMI_WINDOWS_HOME = "$env:TEMP\mimi-win-test"; .\apps\windows\src\Mimi.App\
 $env:MIMI_UI_TEST_CORE = "http://localhost:8787"; $env:MIMI_UI_TEST_TOKEN = "<MIMI_TOKEN>"; dotnet test apps/windows/tests/Mimi.App.UiTests
 ```
 
-(`MIMI_UI_TEST_SHOTS=<โฟลเดอร์>` = เก็บภาพหน้าแชต/เพลง และภาพ + โครง UIA ตอนเทสต์ล้ม)
+(`MIMI_UI_TEST_SHOTS=<โฟลเดอร์>` = เก็บภาพหน้าแชต และภาพ + โครง UIA ตอนเทสต์ล้ม)
 
 ## แจกจ่าย
 
@@ -149,6 +187,10 @@ node scripts/build-win-native.mjs
 - รอบที่ 4 (หน้าตาแบบ Electron, editor, Workspace): unit test **75** ตัวผ่าน, UI test **3/3** ผ่าน — ตัวใหม่ (`FeatureTourTests.cs`) สลับธีมสว่าง/มืด,
   ตั้งหน้าตาของแชต + ฉากหลัง, เปิด Mimiamp, สร้าง workflow ใหม่ → บันทึก → เพิ่ม node "set" → ทดสอบ node นั้น (ผ่าน) → บันทึก, เดินตัวช่วยตั้งค่า, เปิด Workspace
   จนเทอร์มินัลขึ้น prompt · ภาพของ UI test ตอนนี้ถ่ายเฉพาะหน้าต่างของแอป (PrintWindow) ไม่ถ่ายจอส่วนอื่น
+- **รอบ 5–7 รันบน Windows แล้ว (2026-11-03 คืน)**: build Debug + Release ผ่าน (XAML ด้วย), unit test **84/84**, UI test **3/3** ทั้งกับ Debug และ
+  `dist/win-native/Mimi/Mimi.exe` (Release) · core ในชุด (`core/` + `node\node.exe`) เปิดแล้วตอบ `/health` ได้ · เพิ่มค่าเริ่มต้นของ node ใหม่ใน workflow
+  ให้ตรงกับเว็บ (llm, file, extract_file, loop, wait, switch, …) + กลุ่ม "ไฟล์" ในเมนูเพิ่ม node · ⚠️ `node_modules` ที่คัดลอกมาจาก Mac ใช้ไม่ได้
+  (ลิงก์ workspace กลายเป็นโฟลเดอร์จริง → core ล่มด้วย `ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`) ต้อง `npm ci` ใหม่บน Windows
 - บน VM เครื่องนี้ ภาพหน้าจอของ UI test ตอนอยู่หน้าจัดการบางครั้งออกมาดำทั้งบาน (ข้อมูลใน UI Automation ครบและเทสต์ผ่าน) — ยังไม่รู้สาเหตุ ควรเปิดดูด้วยตาบนเครื่องจริง
 
 ยังไม่ได้ทำ / ยังไม่ได้ทดสอบ (ตามจริง):
@@ -160,7 +202,6 @@ node scripts/build-win-native.mjs
 - ยังไม่ได้ทดสอบมือ: ถาด/เมนู, toast + คลิกเปิดแชต, ปุ่มมีเดีย/SMTC, EQ ฟังด้วยหูจริง, อัดเสียง (ไม่มีไมค์ทดสอบ), แนบไฟล์/ลากวาง,
   การ์ดขออนุญาต + approval กับเครื่องมือจริง, PC agent + กล่อง consent, ล็อกอัตโนมัติ, เปิดตอนเข้าสู่ระบบ, ตัวอัปเดต (ยังไม่มี release ของแอปนี้),
   ติดตั้งด้วย setup.exe ทับแอป Electron, ล็อกอินผ่าน gateway + 2FA กับ gateway จริง (มีแค่ unit test), YouTube จริง
-- เพลง `.ogg/.opus/.webm` ต้องมี Web Media Extensions ของ Windows (Media Foundation) — ยังไม่ได้ตรวจ
 - เปิดแอปครั้งแรกหลังย้ายจาก Electron ต้องล็อกอินใหม่ (session.bin ของ Electron เข้ารหัสด้วยกุญแจของ Chromium ไม่ได้อ่าน)
 - ไม่มี Workspace / เบราว์เซอร์ในตัว (Phase 6) — PC agent ใช้ Edge/Chrome ของเครื่อง
 - ยังไม่ได้ทดสอบมือหรือกับบริการจริง: หน้าจัดการทุกปุ่มนอกจากที่ UI test กด (OAuth Google/Microsoft, กล่องเมลจริง, MCP server, นำเข้า OpenAPI/n8n,

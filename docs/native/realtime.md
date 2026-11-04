@@ -226,7 +226,7 @@ Chat (ChatView)             id, kind: direct|group, agents[], title, preview, un
 | `status {agent, status}` | สถานะของ agent (location, outfit, mood, current_task, situation) |
 | `agents`, `settings`, `skills`, `tools`, `workflows`, `triggers`, `knowledge`, `wardrobe`, `backgrounds`, `profile`, `secrets`, `oauth-accounts`, `connector-connections`, `packs`, `overseer` | ข้อมูลชุดนั้นเปลี่ยน (มักมี `saved`) — แทนที่ทั้งชุด |
 | `gallery-changed {agent}` | รูปในแกลเลอรีของ agent เปลี่ยน → ขอ `gallery-list` ใหม่ถ้ากำลังเปิด |
-| `mimiamp {command}` | agent สั่งเครื่องเล่นเพลง (ดู `media.md`) |
+| `mimiamp {command}` | **ลบแล้วใน api 2** — core เก่า (api ≤ 1) ยังส่งได้ แอปข้ามไป |
 | `ui {values}` | ค่าหน้าจอที่ใช้ร่วมกันเปลี่ยนจากอุปกรณ์อื่น |
 | `security-alert` | gateway เท่านั้น (ดู `auth-and-session.md`) |
 | `user-message`, `history` | ของคำสั่งเก่า `send`/`history` (CLI) แอป native ไม่ต้องใช้ |

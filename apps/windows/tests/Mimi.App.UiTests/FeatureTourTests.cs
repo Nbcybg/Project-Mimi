@@ -4,7 +4,7 @@ using FlaUI.Core.Definitions;
 namespace Mimi.App.UiTests;
 
 /// <summary>
-/// The pages that came with the Electron-like look: the themes, a chat's own look and its stage, Mimiamp's skin,
+/// The pages that came with the Electron-like look: the themes, a chat's own look and its stage,
 /// the workflow editor (add a node, link, save, test one node), the setup wizard and the Workspace window.
 /// </summary>
 public sealed partial class SignInChatMusicTests
@@ -21,7 +21,12 @@ public sealed partial class SignInChatMusicTests
             newChat.AsButton().Invoke();
             var agent = Retry(() => app!.GetAllTopLevelWindows(automation).SelectMany(top => top.FindAllDescendants(cf => cf.ByControlType(ControlType.ListItem))).FirstOrDefault(), "agent in the new-chat list");
             Thread.Sleep(700);
-            agent.Click();
+            for (var tries = 0; tries < 4 && Find(window, "Composer") is null; tries++)
+            {
+                window.SetForeground();
+                agent.Click();
+                for (var wait = 0; wait < 20 && Find(window, "Composer") is null; wait++) Thread.Sleep(150);
+            }
         }
         else
         {
@@ -36,7 +41,7 @@ public sealed partial class SignInChatMusicTests
     }
 
     [CoreFact]
-    public void The_new_pages_work_theme_chat_look_mimiamp_workflow_editor_wizard_workspace()
+    public void The_new_pages_work_theme_chat_look_workflow_editor_wizard_workspace()
     {
         var window = Launch();
         try
@@ -49,10 +54,10 @@ public sealed partial class SignInChatMusicTests
             // Settings → หน้าตา: light, then back to dark.
             ById(window, "SettingsButton").AsButton().Invoke();
             Press(ById(window, "tab-look"));
-            ById(window, "theme-light").Click();
+            Press(ById(window, "theme-light"));
             Thread.Sleep(600);
             Shot(window, "tour-settings-light");
-            ById(window, "theme-dark").Click();
+            Press(ById(window, "theme-dark"));
             Thread.Sleep(400);
             Press(ById(window, "tab-app"));
             Thread.Sleep(600);
@@ -62,28 +67,48 @@ public sealed partial class SignInChatMusicTests
             ById(window, "BackButton").AsButton().Invoke();
             OpenAChat(window);
             ById(window, "RailButton").AsButton().Invoke();
+            // The web's status tab: search, new session and the session/context area.
+            Retry(() => app!.GetAllTopLevelWindows(automation).Append(window).Select(top => top.FindFirstDescendant(cf => cf.ByAutomationId("rail-search"))).FirstOrDefault(found => found is not null), "the chat search button", 30);
+            Retry(() => app!.GetAllTopLevelWindows(automation).Append(window).Select(top => top.FindFirstDescendant(cf => cf.ByAutomationId("rail-new-session"))).FirstOrDefault(found => found is not null), "the new-session button", 30);
             var lookTab = Retry(() => app!.GetAllTopLevelWindows(automation).Append(window).Select(top => top.FindFirstDescendant(cf => cf.ByAutomationId("rail-look"))).FirstOrDefault(found => found is not null), "the look tab");
             lookTab!.Click();
-            Retry(() => app!.GetAllTopLevelWindows(automation).Append(window).Select(top => top.FindFirstDescendant(cf => cf.ByAutomationId("chat-theme-light"))).FirstOrDefault(found => found is not null), "the chat's theme").Click();
-            Thread.Sleep(500);
-            Retry(() => app!.GetAllTopLevelWindows(automation).Append(window).Select(top => top.FindFirstDescendant(cf => cf.ByAutomationId("chat-size-2"))).FirstOrDefault(found => found is not null), "the chat's text size").Click();
-            Thread.Sleep(500);
-            // The stage: a preset scene behind this chat.
-            Press(Retry(() => app!.GetAllTopLevelWindows(automation).Append(window).Select(top => top.FindFirstDescendant(cf => cf.ByAutomationId("chat-bg-preset"))).FirstOrDefault(found => found is not null), "the chat's background")!);
+            // The text-size control and the character's size slider (the web's 2D size, 0.1–10×).
+            Press(Retry(() => app!.GetAllTopLevelWindows(automation).Append(window).Select(top => top.FindFirstDescendant(cf => cf.ByAutomationId("chat-size-2"))).FirstOrDefault(found => found is not null), "the chat's text size"));
             Thread.Sleep(1200);
             Shot(window, "tour-chat-look");
-            Press(Retry(() => app!.GetAllTopLevelWindows(automation).Append(window).Select(top => top.FindFirstDescendant(cf => cf.ByAutomationId("chat-bg-default"))).FirstOrDefault(found => found is not null), "the chat's background")!);
-            // Back to the app's look for this chat.
-            Retry(() => app!.GetAllTopLevelWindows(automation).Append(window).Select(top => top.FindFirstDescendant(cf => cf.ByAutomationId("chat-theme-"))).FirstOrDefault(found => found is not null), "the chat's theme").Click();
-            Retry(() => app!.GetAllTopLevelWindows(automation).Append(window).Select(top => top.FindFirstDescendant(cf => cf.ByAutomationId("chat-size-1"))).FirstOrDefault(found => found is not null), "the chat's text size").Click();
+            // The background picker (preview, type tabs, preset thumbnails) further down the panel.
+            var railScroll = Retry(() => app!.GetAllTopLevelWindows(automation).Append(window).Select(top => top.FindFirstDescendant(cf => cf.ByAutomationId("rail-scroll"))).FirstOrDefault(found => found is not null), "the rail scroll");
+            if (railScroll.Patterns.Scroll.IsSupported) railScroll.Patterns.Scroll.Pattern.SetScrollPercent(-1, 100);
+            Thread.Sleep(500);
+            // Pick the in-app backgrounds: the preview grid of presets must appear.
+            Press(Retry(() => app!.GetAllTopLevelWindows(automation).Append(window).Select(top => top.FindFirstDescendant(cf => cf.ByAutomationId("chat-bg-preset"))).FirstOrDefault(found => found is not null), "the in-app background tab"));
+            Thread.Sleep(600);
+            var railScrollAgain = Retry(() => app!.GetAllTopLevelWindows(automation).Append(window).Select(top => top.FindFirstDescendant(cf => cf.ByAutomationId("rail-scroll"))).FirstOrDefault(found => found is not null), "the rail scroll again");
+            if (railScrollAgain.Patterns.Scroll.IsSupported) railScrollAgain.Patterns.Scroll.Pattern.SetScrollPercent(-1, 100);
+            Thread.Sleep(500);
+            Shot(window, "tour-chat-bg");
             window.SetForeground();
             FlaUI.Core.Input.Keyboard.Press(FlaUI.Core.WindowsAPI.VirtualKeyShort.ESCAPE);
+            Thread.Sleep(400);
 
-            // Mimiamp's skin.
-            ById(window, "MusicButton").AsButton().Invoke();
-            Retry(() => ById(window, "Tracks").FindAllDescendants(cf => cf.ByControlType(ControlType.ListItem)).Length > 0 ? window : null, "songs", 30);
-            ById(window, "Pan");
-            Shot(window, "tour-mimiamp");
+            // The character screen has only its glass buttons; back to the list for the rest.
+            ById(window, "BackButton").AsButton().Invoke();
+            ById(window, "ChatList");
+
+            // The agent form's own parts: avatar/portrait previews, emoji sprites and the permission matrix.
+            ById(window, "MoreButton").AsButton().Invoke();
+            MenuItem(window, "Agent");
+            var agentRow = Retry(() => window.FindAllDescendants(cf => cf.ByControlType(ControlType.Button))
+                .FirstOrDefault(button => (button.Properties.AutomationId.ValueOrDefault ?? "").StartsWith("agents-row-", StringComparison.Ordinal)), "an agent row", 30);
+            agentRow.AsButton().Invoke();
+            Retry(() => TextContaining(window, "รูปของ agent"), "the agent's pictures", 30);
+            Retry(() => TextContaining(window, "รูปตามอีโมจิ (sprite)"), "the agent's sprites", 30);
+            Retry(() => TextContaining(window, "เครื่องมือ / Quick Work"), "the agent's tools", 30);
+            Retry(() => TextContaining(window, "Workflow ของ agent นี้"), "the agent's workflows", 30);
+            Retry(() => TextContaining(window, "ข้อมูลผู้ใช้ที่ agent เห็น"), "the profile preview", 30);
+            Thread.Sleep(800);
+            Shot(window, "tour-agent-form");
+            FlaUI.Core.Input.Keyboard.Press(FlaUI.Core.WindowsAPI.VirtualKeyShort.ESCAPE);
 
             // A new workflow: add a node after the agent, save, test one node alone.
             ById(window, "MoreButton").AsButton().Invoke();

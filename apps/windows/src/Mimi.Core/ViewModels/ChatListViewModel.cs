@@ -22,7 +22,8 @@ public sealed partial class ChatListViewModel : ObservableObject
         {
             Refresh();
             Agents.Clear();
-            foreach (var agent in session.Agents.Values.OrderBy(agent => agent.Name != session.DefaultAgent).ThenBy(agent => agent.ShownName))
+            // The Overseer is the setup helper, not a normal chat partner (the web's renderAgents hides it too).
+            foreach (var agent in session.Agents.Values.Where(agent => agent.Name != "overseer").OrderBy(agent => agent.Name != session.DefaultAgent).ThenBy(agent => agent.ShownName))
             {
                 Agents.Add(new AgentChoice(agent.Name, agent.ShownName, agent.Description));
             }

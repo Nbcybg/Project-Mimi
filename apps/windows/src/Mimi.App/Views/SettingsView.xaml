@@ -27,6 +27,8 @@
                     <Button Content="เพิ่มโฟลเดอร์…" Click="OnAddFolder" />
                     <Button Content="เอาออก" Click="OnRemoveFolder" />
                 </StackPanel>
+                <Button Content="เปิดเบราว์เซอร์ของ Mimi" Click="OnOpenAgentBrowser" Style="{StaticResource MimiGhostButton}"
+                        ToolTipService.ToolTip="Edge/Chrome ด้วยโปรไฟล์ของ agent — ล็อกอินเว็บที่ให้ agent ใช้ไว้ที่นี่ (เก็บไว้หลังปิด)" />
             </StackPanel>
 
             <StackPanel Spacing="6">

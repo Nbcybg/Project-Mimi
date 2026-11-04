@@ -37,7 +37,8 @@ public static class Catalog
         new("displayName", "ชื่อที่แสดง"),
         new("description", "คำอธิบายสั้น ๆ"),
         new("intro", "การ์ดแนะนำตัว (agent อื่นเห็น)", FieldKind.Multiline),
-        new("systemPrompt", "บุคลิกและคำสั่ง (system prompt)", FieldKind.Multiline),
+        new("systemPrompt", "บุคลิกและคำสั่ง (system prompt)", FieldKind.Multiline,
+            "ตัวแปรที่ใช้ได้: {{user}} = ข้อมูลผู้ใช้จากโปรไฟล์, {{char}} = agent นี้, {{id <ชื่อ agent>}} = agent อื่น, {{tim}} = เวลา — ข้อมูลผู้ใช้ถูกเติมตอนรัน ไม่ต้องพิมพ์เอง"),
         new("models.model", "โมเดลหลัก (core) — ตอบทุกอย่าง", FieldKind.Choice, "ว่าง = ใช้โมเดลเริ่มต้นในตั้งค่า", OptionsFrom: "models"),
         new("models.small_model", "โมเดลเล็ก (สรุป ความจำ งานเบื้องหลัง)", FieldKind.Choice, OptionsFrom: "models"),
         new("models.vision_model", "ตัวช่วยอ่านรูป / PDF / วิดีโอ → ข้อความ", FieldKind.Choice, OptionsFrom: "models"),
@@ -45,11 +46,8 @@ public static class Catalog
         new("models.image_model", "สร้างรูปภาพ (generate_image)", FieldKind.Choice, OptionsFrom: "models"),
         new("models.speech_model", "สร้างเสียงพูด (text_to_speech)", FieldKind.Choice, OptionsFrom: "models"),
         new("models.video_model", "สร้างวิดีโอ (generate_video)", FieldKind.Choice, OptionsFrom: "models"),
-        new("tools", "เครื่องมือที่ใช้ได้", FieldKind.List, "บรรทัดละหนึ่งชื่อ", OptionsFrom: "tools"),
-        new("lazyTools", "โหลดเครื่องมือเมื่อจำเป็น (tool_search)", FieldKind.Bool),
         new("skills", "Skill ที่ใช้ได้", FieldKind.List, OptionsFrom: "skills"),
         new("canMessage", "ส่งข้อความหา agent เหล่านี้ได้", FieldKind.List, OptionsFrom: "agents"),
-        new("permissions", "สิทธิ์ต่อเครื่องมือ (ชื่อ → allow / ask / deny)", FieldKind.Json, "เช่น {\"run_shell\": \"ask\"}"),
         new("budgets.maxRounds", "รอบสูงสุดต่อคำถาม", FieldKind.Number),
         new("budgets.maxTokens", "token สูงสุดต่อคำถาม", FieldKind.Number),
         new("character", "แสดงตัวเป็น", FieldKind.Choice, Options: [("sprite", "รูปนิ่ง (sprite)"), ("vrm", "โมเดล 3D (VRM)")]),
@@ -74,17 +72,13 @@ public static class Catalog
         Requests: ["agent-save", "agent-delete"],
         Actions:
         [
-            new("อัปโหลดรูปโปรไฟล์ (avatar)", (_, _) => null, UploadPath: (agent, _) => $"/api/agent-image/{Uri.EscapeDataString(agent.S("name"))}/avatar", UploadFilter: "image"),
-            new("อัปโหลดรูปเต็มตัว (portrait)", (_, _) => null, UploadPath: (agent, _) => $"/api/agent-image/{Uri.EscapeDataString(agent.S("name"))}/portrait", UploadFilter: "image"),
-            new("ลบรูปโปรไฟล์", (_, _) => null, DeletePath: agent => $"/api/agent-image/{Uri.EscapeDataString(agent.S("name"))}/avatar", Confirm: "ลบรูปโปรไฟล์?", When: agent => agent.S("avatar").Length > 0),
-            new("ลบรูปเต็มตัว", (_, _) => null, DeletePath: agent => $"/api/agent-image/{Uri.EscapeDataString(agent.S("name"))}/portrait", Confirm: "ลบรูปเต็มตัว?", When: agent => agent.S("portrait").Length > 0),
+            new("ทักแชต agent นี้", (_, _) => null, View: "chat"),
+            new("ตัวละคร 3D: ดู / เล่นท่า / ท่ายืนเฉย", (_, _) => null, View: "vrm", When: agent => agent.S("model").Length > 0),
             new("อัปโหลดโมเดล 3D (.vrm)", (_, _) => null, UploadPath: (agent, _) => $"/api/agent-model/{Uri.EscapeDataString(agent.S("name"))}", UploadFilter: ".vrm"),
             new("ลบโมเดล 3D", (_, _) => null, DeletePath: agent => $"/api/agent-model/{Uri.EscapeDataString(agent.S("name"))}", Confirm: "ลบโมเดล 3D?", When: agent => agent.S("model").Length > 0),
             new("เพิ่มท่า (Mixamo .fbx)", (_, _) => null, Ask: [new("name", "ชื่อท่า")],
                 UploadPath: (agent, input) => $"/api/agent-motion/{Uri.EscapeDataString(agent.S("name"))}/{Uri.EscapeDataString(input.Str("name"))}", UploadFilter: ".fbx"),
-            new("แกลเลอรีรูป", (agent, _) => F("gallery-list", ("agent", N(agent.S("name"))), ("limit", 60)), Reply: "gallery"),
-            new("อัปโหลดรูปเข้าแกลเลอรี", (_, _) => null, Ask: [new("title", "ชื่อรูป")],
-                UploadPath: (agent, input) => $"/api/gallery/{Uri.EscapeDataString(agent.S("name"))}?title={Uri.EscapeDataString(input.Str("title"))}", UploadFilter: "image"),
+            new("แกลเลอรีภาพสถานการณ์ (ค้นหา / เพิ่มหลายรูป / แก้ / แสดงในแชต)", (_, _) => null, View: "gallery"),
         ]);
 
     /// <summary>The setup wizard's starter agents (feature-setup.js): pick one and it becomes an ordinary agent.</summary>
@@ -119,7 +113,7 @@ public static class Catalog
         reply => reply.A("settings.presets"),
         preset => preset.S("name"),
         preset => preset.S("name"),
-        preset => preset.S("model"),
+        preset => J.Join([preset.S("model"), preset.S("temperature") is { Length: > 0 } temperature ? $"temp {temperature}" : "", preset.S("topP") is { Length: > 0 } topP ? $"top_p {topP}" : "", preset.S("topK") is { Length: > 0 } topK ? $"top_k {topK}" : ""], " · "),
         New: () => J.O(("name", N("")), ("model", N(""))),
         Save: (preset, before) => F("preset-save", ("preset", preset), ("renameFrom", before is not null ? N(before) : null)),
         Delete: preset => F("preset-delete", ("name", N(preset.S("name")))),
@@ -127,9 +121,6 @@ public static class Catalog
         [
             new("name", "ชื่อ preset"),
             new("model", "โมเดล", FieldKind.Choice, OptionsFrom: "models-only"),
-            new("temperature", "temperature", FieldKind.Number, "ว่าง = ค่าเริ่มต้นของโมเดล"),
-            new("topP", "top_p", FieldKind.Number),
-            new("topK", "top_k", FieldKind.Number),
             new("maxOutputTokens", "token ตอบสูงสุด", FieldKind.Number),
             new("minTokens", "token ตอบอย่างน้อย", FieldKind.Number),
             new("presencePenalty", "presence penalty", FieldKind.Number),
@@ -145,7 +136,7 @@ public static class Catalog
         reply => reply.A("skills"),
         skill => skill.S("name"),
         skill => skill.B("builtin") ? $"{skill.S("name")} (มากับแอป)" : skill.S("name"),
-        skill => skill.S("description"),
+        skill => J.Join([skill.S("model") is { Length: > 0 } model ? $"โมเดล {model}" : "", skill.S("description"), skill.A("tools").Count() > 0 ? $"{skill.A("tools").Count()} tools" : ""], " · "),
         New: () => J.O(("name", N("")), ("description", N("")), ("model", N("")), ("tools", new JsonArray()), ("body", N(""))),
         Save: (skill, before) => F("skill-save", ("skill", skill.Without("builtin")), ("renameFrom", before is not null ? N(before) : null)),
         Delete: skill => F("skill-delete", ("name", N(skill.S("name")))),
@@ -184,7 +175,7 @@ public static class Catalog
             new("tool", "เครื่องมือ", FieldKind.Choice, OptionsFrom: "tools"),
             new("label", "ชื่อที่แสดง"),
             new("description", "คำอธิบาย", FieldKind.Multiline),
-            new("settings", "ค่าที่ตั้ง (JSON: ชื่อ → ค่า)", FieldKind.Json, "ค่าลับ (secret) ใส่ {{secret.ชื่อ}} แทนตัวคีย์"),
+            new("settings", "ค่าที่ตั้งของเครื่องมือนี้", FieldKind.Dynamic, Expand: ServerFields.PresetSettings),
         ],
         Requests: ["tool-preset-save", "tool-preset-delete"]);
 
@@ -447,9 +438,8 @@ public static class Catalog
         [
             new("connector", "connector", FieldKind.Choice, OptionsFrom: "connectors"),
             new("name", "ชื่อ connection"),
-            new("fields", "ค่าที่ต้องใช้ (JSON: ชื่อช่อง → ค่า)", FieldKind.Json, "เช่น {\"apiKey\":\"…\"} · ค่าเก่าไม่แสดง ใส่ใหม่เมื่อจะเปลี่ยน"),
+            new("fields", "ค่าที่ต้องใช้", FieldKind.Dynamic, "ค่าเก่าไม่แสดง — เว้นว่าง = คงเดิม, ใส่ใหม่เมื่อจะเปลี่ยน", Expand: ServerFields.ConnectionFields),
             new("default", "ใช้เป็นค่าเริ่มต้นของ connector นี้", FieldKind.Bool),
-            new("oauth", "OAuth2 (authorizeUrl, tokenUrl, scopes)", FieldKind.Json),
         ],
         Requests: ["connector-connection-save", "connector-connection-remove", "connector-connection-default", "connector-connection-connect"],
         Actions:
@@ -780,7 +770,17 @@ public static class Catalog
         _ => "โปรไฟล์ของฉัน",
         profile => $"{profile.A("fields").Count()} ข้อมูล",
         Save: (profile, _) => F("profile-save", ("profile", profile)),
-        Fields: [new("fields", "ข้อมูล (JSON: [{key, label, value, visibleTo}])", FieldKind.Json, "visibleTo: \"*\" หรือ [\"mimi\", …]")],
+        Fields:
+        [
+            new("fields", "ข้อมูลของฉัน", FieldKind.Rows, "agent รู้ข้อมูลเหล่านี้ตามที่ตั้งว่าใครเห็น", NewRow: ServerFields.NewProfileField, Children:
+            [
+                new("label", "ชื่อที่เรียก (เช่น ที่อยู่บ้าน)"),
+                new("value", "ค่า", FieldKind.Multiline),
+                new("visibleTo", "ใครเห็น", FieldKind.Audience),
+                new("localOnly", "เก็บในเครื่องนี้เท่านั้น (ไม่เขียนลง profile.json ที่อาจ sync / สำรองไปที่อื่น — เหมาะกับเลขบัญชี เลขบัตร)", FieldKind.Bool),
+                new("key", "key (a-z, 0-9, _ ขึ้นต้นด้วยตัวอักษร)", Hint: "ชื่อที่ agent ใช้อ้าง เช่น home_address"),
+            ]),
+        ],
         Requests: ["profile-save"],
         Single: true);
 

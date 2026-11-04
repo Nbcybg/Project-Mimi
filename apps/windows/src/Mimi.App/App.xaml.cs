@@ -55,15 +55,15 @@ public sealed partial class App : Application
     private WinUiDispatcher ui = null!;
     private TrayIcon? tray;
     private Toasts toasts = null!;
-    private MediaKeys? keys;
-    private AudioPlayer player = null!;
+    private readonly WindowsPush push = new();
+    /// <summary>This computer's WNS channel as the signed-in server knows it.</summary>
+    private string? pushChannel;
     private PcAgentHost pc = null!;
     private ConnectViewModel connect = null!;
     private ChatListViewModel chatList = null!;
     private ChatViewModel chat = null!;
     private ChatView chatView = null!;
     private ChatListView chatListView = null!;
-    private MimiampView musicView = null!;
     private SettingsView settingsView = null!;
     private SearchView searchView = null!;
     private InboxViewModel inbox = null!;
@@ -87,7 +87,6 @@ public sealed partial class App : Application
     /// <summary>The window, for the file pickers of the pages.</summary>
     internal nint WindowHandle => window.Handle;
     internal MimiSession Session { get; private set; } = null!;
-    internal MimiampViewModel? Music { get; private set; }
     internal Images Images { get; private set; } = null!;
     internal UpdateInfo? PendingUpdate { get; private set; }
     internal string PcStatus => Config.PcAgent.Enabled ? (current is null ? "รอเข้าสู่ระบบ" : pc.Status) : "ปิด";
@@ -96,11 +95,23 @@ public sealed partial class App : Application
     {
         Instance = this;
         this.instance = instance;
-        background = args.Contains("--background");
+        // Started by a push while it was not running: into the tray, like a start with Windows.
+        background = args.Contains("--background") || IsPushStart();
         InitializeComponent();
         UnhandledException += (_, e) =>
         {
             Trace.WriteLine(e.Exception);
+            // MIMI_DEBUG_LOG=<file>: the same note for a test that cannot see the screen.
+            if (Environment.GetEnvironmentVariable("MIMI_DEBUG_LOG") is { Length: > 0 } file)
+            {
+                try
+                {
+                    File.AppendAllText(file, $"{DateTime.Now:HH:mm:ss.fff} unhandled: {e.Exception}\n");
+                }
+                catch (IOException)
+                {
+                }
+            }
             e.Handled = true;
         };
     }
@@ -143,13 +154,14 @@ public sealed partial class App : Application
             if (chatId is { } id && current is not null) OpenChat(id);
         });
         toasts.Register();
-        player = new AudioPlayer(() => Session.Api);
+        push.Received += payload => ui.Post(() => _ = NotificationsFromPush());
+        push.Start();
         pc = new PcAgentHost(PcLaunch);
         pc.StatusChanged += _ => ui.Post(RefreshTray);
         pc.Consent += request => ui.Post(() => AskConsent(request));
 
         window = new MainWindow(this);
-        connect = new ConnectViewModel(Session.Api);
+        connect = new ConnectViewModel(Session.Api) { CanUseLocal = localLaunch is not null };
         connect.Done += signedIn => ui.Post(() => OnSignedIn(signedIn));
         chatList = new ChatListViewModel(Session);
         chat = new ChatViewModel(Session);
@@ -178,17 +190,6 @@ public sealed partial class App : Application
         };
         settingsView = new SettingsView(this);
         chatView.Attach(this, stageData, folders.Cache);
-        Music = new MimiampViewModel(Session, player, ui, Config, () => SaveConfig(later: true));
-        Music.OpenRequested += ShowMusic;
-        Music.PropertyChanged += (_, e) =>
-        {
-            if (e.PropertyName is nameof(MimiampViewModel.NowTitle) or nameof(MimiampViewModel.Playing))
-            {
-                window.MiniVisible();
-                keys?.Show(Music.NowTitle, Music.NowDetail, Music.Playing);
-            }
-        };
-        musicView = new MimiampView(Music);
         var search = new SearchViewModel(Session);
         search.OpenRequested += (chatId, sessionId, messageId) => OpenChat(chatId, sessionId, messageId);
         searchView = new SearchView(search);
@@ -198,10 +199,9 @@ public sealed partial class App : Application
         {
             if (e.PropertyName == nameof(InboxViewModel.Unread)) window.InboxUnread(inbox.Unread, inbox.Badge);
         };
-        window.AddPage(Page.Connect, new ConnectView(connect));
+        window.AddPage(Page.Connect, new ConnectView(connect, StartLocalCore));
         window.AddPage(Page.Chats, chatListView);
         window.AddPage(Page.Chat, chatView);
-        window.AddPage(Page.Music, musicView);
         window.AddPage(Page.Search, searchView);
         window.AddPage(Page.Inbox, new InboxView(inbox));
         lookups = new Lookups(Session);
@@ -214,7 +214,7 @@ public sealed partial class App : Application
             (Page.MimiSettings, Catalog.SettingsTabs, "MimiSettingsPage"),
         })
         {
-            var view = new ManagePage(Session, lookups, () => window.Handle, tabs, id);
+            var view = new ManagePage(Session, lookups, () => window.Handle, tabs, id) { ModelCache = Path.Combine(folders.Cache, "models") };
             managed[page] = view;
             window.AddPage(page, view);
         }
@@ -245,6 +245,7 @@ public sealed partial class App : Application
         managed[Page.MimiSettings].AddSection("profile", SettingsSections.Account(this));
         managed[Page.MimiSettings].AddSection("look", SettingsSections.Appearance(this));
         managed[Page.MimiSettings].AddSection("app", settingsView);
+        managed[Page.MimiSettings].AddSection("app", SettingsSections.Credits());
         Session.Raw += (type, json) =>
         {
             // The theme is the account's (mimi.theme, shared by its devices).
@@ -255,19 +256,6 @@ public sealed partial class App : Application
                 ApplyTheme();
             }
         };
-
-        try
-        {
-            keys = new MediaKeys();
-            keys.PlayPause += () => ui.Post(() => _ = Music.Toggle());
-            keys.Next += () => ui.Post(() => _ = Music.Next());
-            keys.Previous += () => ui.Post(() => _ = Music.Previous());
-            keys.Stop += () => ui.Post(Music.StopPlaying);
-        }
-        catch (Exception error)
-        {
-            Trace.WriteLine($"media keys: {error.Message}");
-        }
 
         Session.StateChanged += OnSocketState;
         Session.Frame += OnFrame;
@@ -283,7 +271,10 @@ public sealed partial class App : Application
         {
             if (current is not null && Config.AutoLockMinutes > 0) _ = SignOut("locked");
         });
-        instance.Activated += (_, _) => ui.Post(ShowWindow);
+        instance.Activated += (_, activation) =>
+        {
+            if (activation.Kind != ExtendedActivationKind.Push) ui.Post(ShowWindow);
+        };
 
         // Auto-lock: off unless chosen (remote.cjs: checked every 30 s).
         lockTimer = DispatcherQueue.GetForCurrentThread().CreateTimer();
@@ -309,8 +300,47 @@ public sealed partial class App : Application
 
     // ---------- signing in and out ----------
 
+    // ---------- the core on this computer (LocalCore, packages/core/src/app/native-host.ts) ----------
+
+    private readonly LocalCore localCore = new();
+    private readonly LocalCore.Launch? localLaunch = LocalCore.Find(AppContext.BaseDirectory, Path.Combine(AppContext.BaseDirectory, "node", "node.exe"));
+    private string localAddress = "";
+
+    /// <summary>Starts the core on this computer (once); its address is remembered so signing in to it keeps it starting with the app.</summary>
+    internal async Task<LocalCoreReady> StartLocalCore()
+    {
+        if (localLaunch is null) throw new InvalidOperationException("ชุดติดตั้งนี้ไม่มี core (ใช้ตัวติดตั้งที่มีเซิร์ฟเวอร์ในตัว)");
+        var ready = await localCore.Start(localLaunch);
+        localAddress = ready.Address;
+        return ready;
+    }
+
+    /// <summary>The app starts with the core on this computer: start it, then go on with the saved session (or sign in to it again on a new port).</summary>
+    private async Task ResumeLocal()
+    {
+        try
+        {
+            var ready = await StartLocalCore();
+            if (current is not null && current.Server == ready.Address) return; // the socket gets through once the core is up
+            ui.Post(() =>
+            {
+                if (current is not null) Session.End();
+                OnSignedIn(new SignedIn(ready.Address, ready.Token, "", Gateway: false, Remember: true, new Health(Ok: true)));
+            });
+        }
+        catch (InvalidOperationException problem)
+        {
+            ui.Post(() =>
+            {
+                window.Show(Page.Connect);
+                connect.Error = $"เปิดเซิร์ฟเวอร์ในเครื่องนี้ไม่ได้: {problem.Message}";
+            });
+        }
+    }
+
     private void Start()
     {
+        if (Config.LocalServer && localLaunch is not null) _ = ResumeLocal();
         current = Config.Server.Length > 0 ? vault.Load(Config.Server) : null;
         if (current is null)
         {
@@ -336,6 +366,8 @@ public sealed partial class App : Application
     private void OnSignedIn(SignedIn signedIn)
     {
         Config.Server = signedIn.Server;
+        // Signing in to the core this app started keeps it starting with the app; another server ends that.
+        Config.LocalServer = localAddress.Length > 0 && signedIn.Server == localAddress;
         SaveConfig();
         var session = new SavedSession(signedIn.Server, signedIn.Token, signedIn.Username, signedIn.Remember);
         vault.Store(session);
@@ -355,7 +387,25 @@ public sealed partial class App : Application
             var was = current;
             current = null;
             await pc.Stop();
-            Music?.StopPlaying();
+            // Signed out of the core this app runs: it stops and no longer starts with the app.
+            if (Config.LocalServer)
+            {
+                Config.LocalServer = false;
+                await localCore.Stop();
+            }
+            if (pushChannel is { } channel)
+            {
+                try
+                {
+                    await Session.Api.UnregisterPush(channel);
+                }
+                catch (Exception error) when (error is MimiHttpException or HttpRequestException or TaskCanceledException)
+                {
+                    // the server forgets a channel that stops answering
+                }
+                pushChannel = null;
+            }
+            push.Stop();
             if (was is not null && Session.Gateway) await Session.Api.Logout(was.Token);
             Session.End();
             chat.Close();
@@ -411,7 +461,7 @@ public sealed partial class App : Application
                 break;
             case SocketState.Online:
                 _ = CatchUpNotifications();
-                _ = Music?.Refresh();
+                _ = RegisterPush();
                 chat.Visible(window.Showing && window.CurrentPage == Page.Chat);
                 break;
         }
@@ -437,6 +487,50 @@ public sealed partial class App : Application
                 toasts.Show("Mimi: มีการเข้าสู่ระบบใหม่", "บัญชีนี้เพิ่งเข้าสู่ระบบจากอุปกรณ์อื่น ถ้าไม่ใช่คุณ ให้เปลี่ยนรหัสผ่าน", null);
                 break;
         }
+    }
+
+    private static bool IsPushStart()
+    {
+        try
+        {
+            return AppInstance.GetCurrent().GetActivatedEventArgs().Kind == ExtendedActivationKind.Push;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Once per sign-in: when the server (its own keys or the gateway's relay) can push to Windows, make the channel
+    /// for its Entra ID app and register it (push-and-background.md 2.2). A server without WNS: nothing changes.
+    /// </summary>
+    private async Task RegisterPush()
+    {
+        if (current is null || pushChannel is not null) return;
+        try
+        {
+            var info = await Session.Api.PushInfo();
+            if (!info.Wns) return;
+            if (!push.Supported) push.Start();
+            var channel = await push.Channel(Guid.Parse(info.WnsRemoteId!));
+            if (channel is null || current is null) return;
+            await Session.Api.RegisterWns(channel, Environment.MachineName, Version);
+            pushChannel = channel;
+        }
+        catch (Exception error) when (error is MimiHttpException or HttpRequestException or TaskCanceledException or System.Text.Json.JsonException)
+        {
+            Trace.WriteLine($"push: {error.Message}");
+        }
+    }
+
+    /// <summary>A push while the socket is away (asleep, reconnecting): fetch what came and show it; with the socket up its frame already did.</summary>
+    private async Task NotificationsFromPush()
+    {
+        if (current is null || Session.Socket.IsOnline) return;
+        Session.Socket.Wake();
+        notificationsSynced = false;
+        await CatchUpNotifications();
     }
 
     /// <summary>What came while the socket was gone; the very first time only remembers where things stand.</summary>
@@ -472,7 +566,6 @@ public sealed partial class App : Application
     internal void WindowVisibilityChanged(bool visible)
     {
         chat.Visible(visible && window.CurrentPage == Page.Chat);
-        musicView.Showing(visible && window.CurrentPage == Page.Music);
     }
 
     internal void WindowActiveChanged(bool active)
@@ -486,7 +579,6 @@ public sealed partial class App : Application
         if (window.CurrentPage == Page.Chat) chat.Close();
         chatList.Refresh();
         window.Show(Page.Chats);
-        musicView.Showing(false);
         ApplyTheme();
     }
 
@@ -537,9 +629,6 @@ public sealed partial class App : Application
             case "workflows":
                 ShowManage(Page.Workflows);
                 break;
-            case "mimiamp":
-                ShowMusic();
-                break;
             case "workspace":
                 ShowWorkspace();
                 break;
@@ -554,7 +643,6 @@ public sealed partial class App : Application
         if (current is null) return;
         if (window.CurrentPage == Page.Chat) chat.Close();
         window.Show(Page.Setup);
-        musicView.Showing(false);
         setup.Open();
         ApplyTheme();
     }
@@ -583,10 +671,24 @@ public sealed partial class App : Application
     {
         if (workspace is null)
         {
-            workspace = new Workspace(Config, () => SaveConfig(later: true));
+            workspace = new Workspace(Config, () => SaveConfig(later: true), SendToChat);
             workspace.Closed += (_, _) => workspace = null;
         }
         workspace.Activate();
+    }
+
+    /// <summary>
+    /// The Workspace's drawing goes to the open chat as an attachment waiting for a caption (main.cjs sendImageToChat);
+    /// false when no chat is open.
+    /// </summary>
+    private async Task<bool> SendToChat(byte[] png, string name)
+    {
+        if (current is null || chat.ChatId == 0) return false;
+        if (window.CurrentPage != Page.Chat) window.Show(Page.Chat);
+        ShowWindow();
+        await chatView.SendPicture(png, name);
+        chatView.FocusComposer();
+        return true;
     }
 
     // ---------- the look (Services/Theme.cs) ----------
@@ -595,6 +697,9 @@ public sealed partial class App : Application
     internal string? ChatThemeOverride => window.CurrentPage == Page.Chat && chat.ChatId != 0 ? Config.Look(chat.ChatId).Theme : null;
 
     internal void ApplyTheme() => Services.Theme.Apply(ChatThemeOverride ?? Config.Theme, window.RootElement, window.AppWindow);
+
+    /// <summary>The chat switched to the full-window character screen (or back): the window header follows.</summary>
+    internal void ChatSoloChanged(bool solo) => window.SetChatSolo(solo);
 
     internal void SetAppTheme(string theme)
     {
@@ -612,6 +717,9 @@ public sealed partial class App : Application
         chatView.ApplyLook();
     }
 
+    /// <summary>Opens the direct chat with this agent, starting one when there is none (the web's "ทักแชต").</summary>
+    internal void ChatWithAgent(string name) => chatList.NewChat(name);
+
     internal void OpenChat(long chatId) => OpenChat(chatId, null, null);
 
     /// <summary>Opens a chat; with a session and message (a search hit) it shows that session scrolled to the message.</summary>
@@ -620,7 +728,6 @@ public sealed partial class App : Application
         if (current is null) return;
         window.Show(Page.Chat, Session.Chats.FirstOrDefault(item => item.Id == chatId) is { } found ? Session.ChatTitle(found) : "แชต");
         chat.Open(chatId, sessionId, messageId);
-        musicView.Showing(false);
         ApplyTheme();
         chatView.ApplyLook();
         chatView.FocusComposer();
@@ -631,7 +738,6 @@ public sealed partial class App : Application
         if (current is null) return;
         if (window.CurrentPage == Page.Chat) chat.Close();
         window.Show(Page.Search);
-        musicView.Showing(false);
         searchView.FocusField();
     }
 
@@ -641,7 +747,6 @@ public sealed partial class App : Application
         if (current is null || !managed.TryGetValue(page, out var view)) return;
         if (window.CurrentPage == Page.Chat) chat.Close();
         window.Show(page);
-        musicView.Showing(false);
         view.Showing();
         ApplyTheme();
     }
@@ -672,16 +777,6 @@ public sealed partial class App : Application
         if (current is null) return;
         if (window.CurrentPage == Page.Chat) chat.Close();
         window.Show(Page.Inbox);
-        musicView.Showing(false);
-    }
-
-    internal void ShowMusic()
-    {
-        if (current is null) return;
-        if (window.CurrentPage == Page.Chat) chat.Close();
-        window.Show(Page.Music);
-        musicView.Showing(true);
-        if (Music is not null && Music.Tracks.Count == 0) _ = Music.Refresh();
     }
 
     /// <summary>Settings, at a tab: profile (the account), look, memory or app (this computer, providers…).</summary>
@@ -690,7 +785,6 @@ public sealed partial class App : Application
         if (current is null) return;
         if (window.CurrentPage == Page.Chat) chat.Close();
         window.Show(Page.MimiSettings);
-        musicView.Showing(false);
         settingsView.Refresh();
         managed[Page.MimiSettings].SelectKey(tab);
         ApplyTheme();
@@ -735,6 +829,30 @@ public sealed partial class App : Application
     internal void OpenWeb()
     {
         if (Session.Server is { } server) Process.Start(new ProcessStartInfo(server) { UseShellExecute = true });
+    }
+
+    /// <summary>The agent's own browser profile in Edge/Chrome, to sign in to sites by hand (Electron's "เปิดเบราว์เซอร์ของ Mimi").</summary>
+    internal void OpenAgentBrowser()
+    {
+        if (current is null || Config.Server.Length == 0) return;
+        var browser = AgentBrowser.Find(Environment.GetEnvironmentVariable, File.Exists);
+        if (browser is null)
+        {
+            toasts.Show("เปิดเบราว์เซอร์ของ Mimi ไม่ได้", "ไม่พบ Edge หรือ Chrome บนเครื่องนี้ (หรือตั้ง MIMI_BROWSER_PATH)", null);
+            return;
+        }
+        var profile = folders.AgentBrowserDir(Config.Server, current.Username);
+        Directory.CreateDirectory(profile);
+        var start = new ProcessStartInfo(browser) { UseShellExecute = false };
+        foreach (var argument in AgentBrowser.Arguments(profile)) start.ArgumentList.Add(argument);
+        try
+        {
+            Process.Start(start);
+        }
+        catch (Exception error) when (error is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            toasts.Show("เปิดเบราว์เซอร์ของ Mimi ไม่ได้", error.Message, null);
+        }
     }
 
     /// <summary>Downloads a chat file into the cache and opens it with its Windows app.</summary>
@@ -964,16 +1082,12 @@ public sealed partial class App : Application
         items.Add(new TrayItem("เปิด Mimi", () => ui.Post(ShowWindow)));
         if (signedIn)
         {
-            items.Add(new TrayItem("Mimiamp", () => ui.Post(() =>
-            {
-                ShowWindow();
-                ShowMusic();
-            })));
             items.Add(new TrayItem("ตั้งค่า", () => ui.Post(() =>
             {
                 ShowWindow();
                 ShowSettings("app");
             })));
+            items.Add(new TrayItem("เปิดเบราว์เซอร์ของ Mimi", () => ui.Post(OpenAgentBrowser)));
             items.Add(new TrayItem("Workspace", () => ui.Post(ShowWorkspace)));
         }
         items.Add(TrayItem.Separator);
@@ -1020,9 +1134,9 @@ public sealed partial class App : Application
         quitting = true;
         lockTimer?.Stop();
         _ = pc.Stop();
-        player.Dispose();
+        // Closing its stdin stops the core this app started (a Mimi that was already running stays).
+        _ = localCore.Stop();
         speaker?.Dispose();
-        keys?.Dispose();
         Session.Dispose();
         tray?.Dispose();
         tray = null;

@@ -2,7 +2,6 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using Mimi.Core.Desktop;
-using Mimi.Core.Mimiamp;
 using Mimi.Core.Net;
 using Mimi.Core.Protocol;
 
@@ -98,16 +97,16 @@ public class AddressAndConfigTests
             Assert.Equal(new WindowBounds(10, 20, 410, 820), config.Window.Bounds);
             Assert.True(config.Window.HideOnBlur);
 
-            config.Volume = 35;
-            config.EqGains[2] = 4.5f;
+            config.TextSize = 2;
+            config.LastNotificationId = 41;
             config.Write(file);
             var json = JsonDocument.Parse(File.ReadAllText(file)).RootElement;
             Assert.Equal("kept", json.GetProperty("somethingNew").GetString());
             Assert.False(json.GetProperty("pcAgent").GetProperty("enabled").GetBoolean());
             Assert.Equal(1, json.GetProperty("pcAgent").GetProperty("autoOn").GetInt32());
             var again = AppConfig.Read(file, home);
-            Assert.Equal(35, again.Volume);
-            Assert.Equal(4.5f, again.EqGains[2]);
+            Assert.Equal(2, again.TextSize);
+            Assert.Equal(41, again.LastNotificationId);
         }
         finally
         {
@@ -160,92 +159,6 @@ public class AddressAndConfigTests
         Assert.StartsWith(@"C:\Users\x\AppData\Local\Mimi\agent-browser\", dir);
         Assert.DoesNotContain("tester", dir);
         Assert.Equal(dir, folders.AgentBrowserDir("https://mimi.example.com", "tester"));
-    }
-}
-
-public class MimiampTests
-{
-    private static MimiampTrack Track(string name, string? artist = null) => new($"file:{name}.mp3", "file", name, File: $"{name}.mp3", Artist: artist, Url: $"/mimiamp/{name}.mp3");
-
-    [Fact]
-    public void An_agents_query_finds_an_exact_match_first_then_words()
-    {
-        var tracks = new[] { Track("Sunset Train 2"), Track("Sunset Train"), Track("Rain", "Suno") };
-        Assert.Equal("Sunset Train", PlayQueue.Find(tracks, "sunset train")?.Title);
-        Assert.Equal("Sunset Train 2", PlayQueue.Find(tracks, "train")?.Title);
-        Assert.Equal("Rain", PlayQueue.Find(tracks, "SUNO")?.Title);
-        Assert.Null(PlayQueue.Find(tracks, "jazz"));
-    }
-
-    [Fact]
-    public void Repeat_and_shuffle_step_through_the_queue()
-    {
-        var tracks = Enumerable.Range(1, 4).Select(i => Track($"t{i}")).ToList();
-        var queue = new PlayQueue(new Random(7));
-        queue.Load(tracks, 2);
-        Assert.Equal("t3", queue.Current?.Title);
-        Assert.Equal("t4", queue.Ended()?.Title);
-        Assert.Null(queue.Ended()); // the end, no repeat
-        queue.Repeat = RepeatMode.All;
-        Assert.Equal("t1", queue.Next()?.Title);
-        queue.Repeat = RepeatMode.One;
-        Assert.Equal("t1", queue.Ended()?.Title);
-        queue.Repeat = RepeatMode.Off;
-        queue.SetShuffle(true);
-        Assert.Equal("t1", queue.Current?.Title); // shuffling keeps the song that plays
-        var seen = new HashSet<string> { queue.Current!.Title };
-        for (var i = 0; i < 3; i++) seen.Add(queue.Next(byUser: false)!.Title);
-        Assert.Equal(4, seen.Count); // every song once
-    }
-
-    [Fact]
-    public void A_playlist_lists_library_songs_and_youtube_items_in_order()
-    {
-        var library = new[] { Track("a"), Track("b") };
-        var playlist = new MimiampPlaylist("p1", "เพลย์ลิสต์", Items:
-        [
-            new MimiampPlaylistItem("i1", "file", "b", TrackId: "file:b.mp3"),
-            new MimiampPlaylistItem("i2", "youtube", "คลิป", VideoId: "abcdefghijk"),
-            new MimiampPlaylistItem("i3", "local", "บนเครื่องอื่น", LocalId: "x"),
-        ]);
-        var list = PlayQueue.TracksOf(playlist, library);
-        Assert.Equal(["b", "คลิป"], list.Select(track => track.Title));
-        Assert.Equal("youtube", list[1].Source);
-        Assert.Equal("1:01:01", PlayQueue.Clock(3661));
-        Assert.Equal("3:05", PlayQueue.Clock(185.9));
-    }
-
-    [Fact]
-    public void The_equalizer_boosts_and_cuts_where_its_bands_are()
-    {
-        var eq = new Equalizer();
-        eq.Prepare(44100, 2);
-        Assert.InRange(eq.ResponseDb(1000), -0.01, 0.01); // flat
-        eq.SetGain(0, 12);
-        Assert.InRange(eq.ResponseDb(60), 11, 13);
-        Assert.InRange(eq.ResponseDb(8000), -0.5, 0.5);
-        eq.SetGains(Equalizer.Presets["Full Treble"]);
-        Assert.True(eq.ResponseDb(12000) > 6);
-        Assert.True(eq.ResponseDb(60) < -4);
-        eq.SetGain(3, 40);
-        Assert.Equal(12, eq.Gains[3]); // clamped to ±12 dB
-    }
-
-    [Fact]
-    public void The_equalizer_runs_over_samples_and_pans()
-    {
-        var eq = new Equalizer { Enabled = false, Pan = -1 };
-        eq.Prepare(48000, 2);
-        var samples = new float[] { 0.5f, 0.5f, 0.5f, 0.5f };
-        eq.Process(samples);
-        Assert.Equal([0.5f, 0f, 0.5f, 0f], samples); // all left
-        eq.Pan = 0;
-        eq.Enabled = true;
-        eq.SetGains(Equalizer.Presets["Bass Boost"]);
-        var tone = Enumerable.Range(0, 48000).SelectMany(i => Enumerable.Repeat((float)(0.1 * Math.Sin(2 * Math.PI * 60 * i / 48000.0)), 2)).ToArray();
-        eq.Process(tone);
-        var peak = tone.Skip(48000).Max(); // after the filters settle
-        Assert.InRange(peak, 0.25, 0.4); // ~ +9 dB at 60 Hz
     }
 }
 
@@ -443,7 +356,7 @@ public class HttpTests
         using var server = new LocalServer { Handle = context => ServeRange(context, body, honour) };
         using var http = new HttpClient();
         var api = new MimiApi(http, () => server.Url, () => "tok");
-        await using var stream = await HttpRangeStream.Open(http, (from, to) => api.RangeRequest(api.Absolute("/mimiamp/song.wav"), from, to));
+        await using var stream = await HttpRangeStream.Open(http, (from, to) => api.RangeRequest(api.Absolute("/api/files/12"), from, to));
         Assert.Equal(body.Length, stream.Length);
         var buffer = new byte[1000];
         stream.Seek(600_000, SeekOrigin.Begin);

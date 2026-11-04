@@ -9,7 +9,6 @@
     "@ai-sdk/google": "^4.0.93",
     "@ai-sdk/openai": "^4.0.106",
     "@ai-sdk/openai-compatible": "^3.0.67",
-    "@distube/ytdl-core": "^5.2.0",
     "@fontsource/noto-sans-thai": "^5.3.0",
     "@mimi/pc-agent": "*",
     "@mimi/shared": "*",

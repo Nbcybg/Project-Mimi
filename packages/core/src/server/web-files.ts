@@ -4,8 +4,6 @@ import type http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { renderIconPng } from '../app/icon.ts';
-import { AUDIO_TYPES, listMimiampTracks, trackPath } from '../mimiamp/library.ts';
-import type { MimiampService } from '../mimiamp/service.ts';
 
 // The built-in web client, served by a core and by the accounts gateway alike.
 
@@ -50,7 +48,6 @@ const WEB_FILES: Record<string, [string, string]> = {
   '/feature-notify.js': ['feature-notify.js', 'text/javascript; charset=utf-8'],
   '/feature-mail.js': ['feature-mail.js', 'text/javascript; charset=utf-8'],
   '/feature-update.js': ['feature-update.js', 'text/javascript; charset=utf-8'],
-  '/feature-mimiamp.js': ['feature-mimiamp.js', 'text/javascript; charset=utf-8'],
   '/feature-vrm.js': ['feature-vrm.js', 'text/javascript; charset=utf-8'],
   // The chat sounds: sent, reply finished, asking for permission.
   '/sounds/chat_1.mp3': ['sounds/chat_1.mp3', 'audio/mpeg'],
@@ -130,12 +127,7 @@ const ICONS: Record<string, () => Buffer> = {
 const icons = new Map<string, Buffer>();
 
 /**
- * Mimiamp's library: the track list as JSON, and the audio files themselves. The files are
- * the developer's (shipped with the app, or MIMI_MUSIC_DIR); browsers need Range answers to
- * seek in a long song without downloading it all again.
- */
-/**
- * Answers a range request for one file (songs, chat media); players need this to seek
+ * Answers a range request for one file (chat media); players need this to seek
  * without reloading, and AVPlayer will not play a video from a server without it.
  */
 export function serveFileRange(
@@ -192,65 +184,17 @@ export function serveFileRange(
   stream.pipe(response);
 }
 
-function serveMimiamp(pathname: string, response: http.ServerResponse, range?: string, service?: MimiampService): boolean {
-  if (pathname === '/mimiamp/tracks.json') {
-    const body = Buffer.from(JSON.stringify({ tracks: service ? service.tracks() : listMimiampTracks() }));
-    response.writeHead(200, {
-      'content-type': 'application/json; charset=utf-8',
-      'content-length': body.length,
-      'cache-control': 'no-store',
-      'x-content-type-options': 'nosniff',
-    });
-    response.end(body);
-    return true;
-  }
-  const youtube = /^\/mimiamp\/youtube\/([A-Za-z0-9_-]{11})\.audio$/.exec(pathname);
-  if (youtube) {
-    const audio = service?.audio(youtube[1]!);
-    if (!audio) {
-      const body = Buffer.from(JSON.stringify({ error: 'This YouTube song is not downloaded yet.' }));
-      response.writeHead(404, {
-        'content-type': 'application/json; charset=utf-8',
-        'content-length': body.length,
-        'cache-control': 'no-store',
-      });
-      response.end(body);
-      return true;
-    }
-    serveFileRange(audio.file, `${audio.videoId}${path.extname(audio.file)}`, audio.mime, response, range);
-    return true;
-  }
-  if (!pathname.startsWith('/mimiamp/')) return false;
-  let name: string;
-  try {
-    name = decodeURIComponent(pathname.slice('/mimiamp/'.length));
-  } catch {
-    response.writeHead(400).end();
-    return true;
-  }
-  const file = trackPath(name);
-  if (!file) {
-    response.writeHead(404).end();
-    return true;
-  }
-  serveFileRange(file, name, AUDIO_TYPES[path.extname(name).toLowerCase()] ?? 'application/octet-stream', response, range);
-  return true;
-}
-
 /**
  * Answers a GET for the built-in web client (pages, scripts, 3D libraries, icon), which
  * needs no token. Shared with the accounts gateway. Returns false for any other path.
  * With `web: false` (MIMI_SERVE_WEB=0) the pages and scripts are gone; what the native
- * apps still load from here (music, backdrops, icons) is served either way.
+ * apps still load from here (backdrops, icons) is served either way.
  */
 export function serveWebFile(
   pathname: string,
   response: http.ServerResponse,
-  range?: string,
-  service?: MimiampService,
   options: { web?: boolean } = {},
 ): boolean {
-  if (serveMimiamp(pathname, response, range, service)) return true;
   if (options.web === false && (WEB_FILES[pathname] || pathname.startsWith('/vendor/'))) {
     response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
     response.end('The web client is turned off on this server (MIMI_SERVE_WEB=0). Use a Mimi app.');

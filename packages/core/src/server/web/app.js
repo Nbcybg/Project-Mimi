@@ -3404,7 +3404,7 @@
     state.view = view;
     applyTheme();
     setTimeout(() => reportPresence(), 0);
-    for (const name of ['chat', 'overseer', 'agents', 'hub', 'mimiamp', 'settings']) $(`view-${name}`).hidden = name !== view;
+    for (const name of ['chat', 'overseer', 'agents', 'hub', 'settings']) $(`view-${name}`).hidden = name !== view;
     for (const item of $('nav').children) item.classList.toggle('on', item.dataset.view === view);
     if (view === 'overseer') {
       window.MimiHooks?.overseer?.render?.();
@@ -3412,10 +3412,8 @@
     }
     if (view === 'agents') renderAgents();
     if (view === 'hub') renderHub();
-    if (view === 'mimiamp') window.MimiHooks?.mimiamp?.render?.();
     if (view === 'settings') renderSettings();
     if (view === 'chat' && !state.chat && !logInner.firstChild) emptyState();
-    window.MimiHooks?.mimiamp?.onView?.(view);
     renderRail();
   }
   for (const item of $('nav').children) {
@@ -5707,10 +5705,6 @@
         }
         if (message.type === 'backgrounds') {
           window.MimiHooks?.backgrounds?.onMessage(message);
-          return;
-        }
-        if (message.type === 'mimiamp') {
-          window.MimiHooks?.mimiamp?.onMessage(message);
           return;
         }
         if (message.type === 'wardrobe') {

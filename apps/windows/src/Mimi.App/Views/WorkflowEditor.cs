@@ -15,14 +15,17 @@ using Mimi.Core;
 using Mimi.Core.Hub;
 using Mimi.Core.Protocol;
 using Windows.Foundation;
+using Windows.System;
 using Path = Microsoft.UI.Xaml.Shapes.Path;
 
 namespace Mimi.App.Views;
 
 /// <summary>
 /// The workflow editor (feature-workflows.js / feature-canvas.js): nodes on a canvas you drag around, links drawn
-/// by dragging from a node's output dot onto another node, a panel with the selected node's own fields (from the
-/// server's node specs), and "test this node" with input you type. Save, run and the run history sit on top.
+/// by dragging from a node's output dot onto another node, sticky notes, a panel with the selected node's own fields
+/// (from the server's node specs; a connector node's from the service and operation, with options read from the
+/// service), expressions previewed against the last run, "test this node" with input you type, undo / redo,
+/// auto-layout and node presets. Save, run and the run history sit on top.
 /// </summary>
 internal sealed partial class WorkflowEditor : UserControl
 {
@@ -32,6 +35,7 @@ internal sealed partial class WorkflowEditor : UserControl
     private readonly Canvas canvas = new() { Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent) };
     private readonly Canvas linkLayer = new();
     private readonly Canvas nodeLayer = new();
+    private readonly Canvas noteLayer = new();
     private readonly ScrollViewer scroller;
     private readonly ContentControl panel = new() { HorizontalContentAlignment = HorizontalAlignment.Stretch };
     private readonly TextBlock heading = new() { FontSize = 15, FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center };
@@ -39,6 +43,15 @@ internal sealed partial class WorkflowEditor : UserControl
     private readonly Dictionary<string, Border> cards = [];
     private List<JsonElement> nodeTypes = [];
     private List<JsonElement> pool = [];
+    private List<JsonElement> connectors = [];
+    private List<JsonElement> connections = [];
+    /// <summary>The last run's result (workflow-result.result): what the expressions are previewed with.</summary>
+    private JsonElement lastRun;
+    private readonly DraftHistory history = new();
+    private readonly Dictionary<string, IReadOnlyList<(string Value, string Label)>> optionCache = [];
+    private long requests;
+    private int checkpointTicket;
+    private static JsonObject? clipboard;
     private WorkflowDraft? draft;
     private string? selected;
     private (string From, string Output, string To)? selectedLink;
@@ -57,6 +70,7 @@ internal sealed partial class WorkflowEditor : UserControl
         this.session = session;
         this.lookups = lookups;
         AutomationProperties.SetAutomationId(this, "WorkflowEditor");
+        canvas.Children.Add(noteLayer);
         canvas.Children.Add(linkLayer);
         canvas.Children.Add(nodeLayer);
         scroller = new ScrollViewer
@@ -88,6 +102,9 @@ internal sealed partial class WorkflowEditor : UserControl
         addMenu.Opening += (_, _) => FillAddMenu(addMenu);
         add.Flyout = addMenu;
         var tools = Ui.Row(4,
+            Ui.Button("↶", Undo, "ghost", "UndoWorkflow", "ย้อน (Ctrl+Z)"),
+            Ui.Button("↷", Redo, "ghost", "RedoWorkflow", "ทำซ้ำ (Ctrl+Y)"),
+            Ui.Button("📝", AddNote, "ghost", "AddNote", "เพิ่มโน้ต"),
             add,
             Ui.Button("บันทึก", () => _ = Save(), "pri", "SaveWorkflow"),
             Ui.Button("รัน", () => _ = Run(), id: "RunWorkflow", tip: "บันทึกแล้วรันด้วยข้อมูลเข้าที่พิมพ์"),
@@ -118,6 +135,7 @@ internal sealed partial class WorkflowEditor : UserControl
         Content = root;
 
         session.Raw += OnRaw;
+        Shortcuts();
         Theme.Changed += () =>
         {
             scroller.Background = Theme.Brush("Bg");
@@ -130,9 +148,17 @@ internal sealed partial class WorkflowEditor : UserControl
 
     private void OnRaw(string type, JsonElement json)
     {
-        if (type != "workflows") return;
-        nodeTypes = json.A("nodeTypes").Select(item => item.Clone()).ToList();
-        pool = json.A("pool").Select(item => item.Clone()).ToList();
+        switch (type)
+        {
+            case "workflows":
+                nodeTypes = json.A("nodeTypes").Select(item => item.Clone()).ToList();
+                pool = json.A("pool").Select(item => item.Clone()).ToList();
+                break;
+            case "tools" or "connector-connections":
+                if (json.At("connectors").ValueKind == JsonValueKind.Array) connectors = json.A("connectors").Select(item => item.Clone()).ToList();
+                if (json.At("connections").ValueKind == JsonValueKind.Array) connections = json.A("connections").Select(item => item.Clone()).ToList();
+                break;
+        }
     }
 
     private JsonElement? Spec(string type) => nodeTypes.FirstOrDefault(spec => spec.S("type") == type) is { ValueKind: JsonValueKind.Object } spec ? spec : null;
@@ -143,6 +169,7 @@ internal sealed partial class WorkflowEditor : UserControl
     public void Open(JsonElement? workflow)
     {
         if (nodeTypes.Count == 0) session.Send(ClientFrames.Simple("workflows-list"));
+        if (connectors.Count == 0) session.Send(ClientFrames.Simple("connector-connections"));
         var firstAgent = lookups.Get("agents").FirstOrDefault().Value ?? session.DefaultAgent;
         draft = workflow is { } existing
             ? new WorkflowDraft(existing.Obj(), isNew: false, originalName: existing.S("name"))
@@ -150,6 +177,9 @@ internal sealed partial class WorkflowEditor : UserControl
         dirty = false;
         selected = null;
         selectedLink = null;
+        lastRun = default;
+        optionCache.Clear();
+        history.Reset(draft.Workflow);
         Status(draft.IsNew ? "workflow ใหม่ — ตั้งชื่อในแผงด้านล่างแล้วกดบันทึก" : "", "Muted");
         Redraw();
         ShowPanel();
@@ -166,6 +196,85 @@ internal sealed partial class WorkflowEditor : UserControl
     {
         dirty = true;
         Heading();
+        _ = Checkpoint();
+    }
+
+    /// <summary>An undo step once the edits pause (a step per keystroke would fill the history while typing).</summary>
+    private async Task Checkpoint()
+    {
+        var ticket = ++checkpointTicket;
+        await Task.Delay(500);
+        if (ticket == checkpointTicket && draft is not null) history.Checkpoint(draft.Workflow);
+    }
+
+    private void Undo() => Restore(draft is null ? null : history.Undo(draft.Workflow), "ย้อนไม่ได้แล้ว");
+
+    private void Redo() => Restore(history.Redo(), "ไม่มีอะไรให้ทำซ้ำ");
+
+    private void Restore(JsonObject? workflow, string none)
+    {
+        if (draft is null) return;
+        checkpointTicket++;
+        if (workflow is null)
+        {
+            Status(none, "Muted");
+            return;
+        }
+        // The file it is saved under stays (the web keeps draft.name of an existing workflow).
+        if (!draft.IsNew) workflow["name"] = draft.Workflow.Str("name");
+        draft = new WorkflowDraft(workflow, draft.IsNew, draft.OriginalName);
+        if (selected is { } id && draft.Node(id) is null) selected = null;
+        selectedLink = null;
+        dirty = true;
+        Status("", "Muted");
+        Redraw();
+        ShowPanel();
+    }
+
+    /// <summary>Ctrl+Z / Ctrl+Y / Ctrl+C / Ctrl+V / Ctrl+D / Delete on the canvas; a text field keeps its own.</summary>
+    private void Shortcuts()
+    {
+        void Add(VirtualKey key, VirtualKeyModifiers modifiers, Action act)
+        {
+            var accelerator = new KeyboardAccelerator { Key = key, Modifiers = modifiers };
+            accelerator.Invoked += (_, args) =>
+            {
+                if (XamlRoot is null || FocusManager.GetFocusedElement(XamlRoot) is TextBox or PasswordBox or NumberBox or ComboBox { IsEditable: true }) return;
+                args.Handled = true;
+                act();
+            };
+            KeyboardAccelerators.Add(accelerator);
+        }
+        Add(VirtualKey.Z, VirtualKeyModifiers.Control, Undo);
+        Add(VirtualKey.Y, VirtualKeyModifiers.Control, Redo);
+        Add(VirtualKey.Z, VirtualKeyModifiers.Control | VirtualKeyModifiers.Shift, Redo);
+        Add(VirtualKey.C, VirtualKeyModifiers.Control, () =>
+        {
+            if (selected is { } id && draft?.Node(id) is { } node && !WorkflowDraft.IsTrigger(WorkflowDraft.TypeOf(node)))
+            {
+                clipboard = (JsonObject)node.DeepClone();
+                Status($"คัดลอก {id} แล้ว — Ctrl+V เพื่อวาง", "Muted");
+            }
+        });
+        Add(VirtualKey.V, VirtualKeyModifiers.Control, () =>
+        {
+            if (draft is null || clipboard is null) return;
+            var copy = draft.Paste(clipboard);
+            Dirty();
+            Select(WorkflowDraft.IdOf(copy));
+        });
+        Add(VirtualKey.D, VirtualKeyModifiers.Control, () =>
+        {
+            if (selected is not { } id || draft?.Node(id) is not { } node || WorkflowDraft.IsTrigger(WorkflowDraft.TypeOf(node))) return;
+            var copy = draft.Duplicate(node);
+            Dirty();
+            Select(WorkflowDraft.IdOf(copy));
+        });
+        Add(VirtualKey.Delete, VirtualKeyModifiers.None, () =>
+        {
+            if (selectedLink is { } link) RemoveLink(link.From, link.Output, link.To);
+            else if (selected is { } id) RemoveNode(id);
+        });
     }
 
     private void Heading()
@@ -215,21 +324,12 @@ internal sealed partial class WorkflowEditor : UserControl
             width = Math.Max(width, x + CardWidth + 300);
             height = Math.Max(height, y + 300);
         }
-        foreach (var note in (draft.Workflow["notes"] as JsonArray)?.OfType<JsonObject>() ?? [])
+        DrawNotes();
+        foreach (var note in draft.NoteList)
         {
-            if (note["position"] is not JsonArray { Count: 2 } at) continue;
-            var sticky = new Border
-            {
-                Width = note["width"]?.GetValue<double>() ?? 200,
-                MinHeight = 60,
-                Background = new SolidColorBrush(Windows.UI.Color.FromArgb(230, 255, 236, 153)),
-                CornerRadius = new CornerRadius(6),
-                Padding = new Thickness(8),
-                Child = new TextBlock { Text = note.Str("text"), TextWrapping = TextWrapping.Wrap, Foreground = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 60, 50, 20)), FontSize = 12 },
-            };
-            Canvas.SetLeft(sticky, at[0]!.GetValue<double>());
-            Canvas.SetTop(sticky, at[1]!.GetValue<double>());
-            nodeLayer.Children.Insert(0, sticky);
+            var (x, y) = NotePlace(note);
+            width = Math.Max(width, x + NoteSize(note).Width + 200);
+            height = Math.Max(height, y + NoteSize(note).Height + 200);
         }
         canvas.Width = width;
         canvas.Height = height;
@@ -356,6 +456,7 @@ internal sealed partial class WorkflowEditor : UserControl
             Dirty();
             Select(WorkflowDraft.IdOf(copy));
         }));
+        menu.Items.Add(Item("บันทึกเป็น preset…", () => _ = SavePreset(node)));
         menu.Items.Add(Item("ลบ node", () => RemoveNode(id)));
         card.ContextFlyout = menu;
         return card;
@@ -502,13 +603,15 @@ internal sealed partial class WorkflowEditor : UserControl
         var ai = new MenuFlyoutSubItem { Text = "AI" };
         var data = new MenuFlyoutSubItem { Text = "ข้อมูล" };
         var flow = new MenuFlyoutSubItem { Text = "ทางแยก / ควบคุม" };
+        var files = new MenuFlyoutSubItem { Text = "ไฟล์" };
         var other = new MenuFlyoutSubItem { Text = "บริการ / อื่น ๆ" };
         foreach (var spec in nodeTypes)
         {
             var type = spec.S("type");
             var target = WorkflowDraft.IsTrigger(type) ? triggers
-                : type is "agent" or "agent_call" or "llm" or "classify" or "extract" ? ai
-                : type is "set" or "code" or "filter" or "sort" or "limit" or "aggregate" or "remove_duplicates" or "split_out" or "datetime" or "json_schema" or "debug" or "assert" ? data
+                : type is "agent" or "agent_call" or "llm" or "classify" or "extract" or "knowledge" ? ai
+                : type is "set" or "code" or "filter" or "sort" or "limit" or "aggregate" or "remove_duplicates" or "split_out" or "datetime" or "json_schema" or "debug" or "assert" or "plugin" ? data
+                : type is "file" or "extract_file" or "sheets" ? files
                 : type is "if" or "switch" or "merge" or "wait" or "stop" or "loop" or "workflow" or "approval" or "respond" ? flow
                 : other;
             var item = new MenuFlyoutItem { Text = spec.S("label") };
@@ -516,7 +619,69 @@ internal sealed partial class WorkflowEditor : UserControl
             item.Click += (_, _) => AddNode(type, spec.S("label"));
             target.Items.Add(item);
         }
-        foreach (var group in new[] { triggers, ai, data, flow, other }.Where(group => group.Items.Count > 0)) menu.Items.Add(group);
+        foreach (var group in new[] { triggers, ai, data, files, flow, other }.Where(group => group.Items.Count > 0)) menu.Items.Add(group);
+        var presets = NodePresets.Read(session.UiValues);
+        if (presets.Count == 0) return;
+        var mine = new MenuFlyoutSubItem { Text = "Preset ของฉัน" };
+        var forget = new MenuFlyoutSubItem { Text = "ลบ preset" };
+        foreach (var preset in presets)
+        {
+            var item = new MenuFlyoutItem { Text = preset.Title };
+            ToolTipService.SetToolTip(item, $"{preset.Type}{(preset.Description.Length > 0 ? $" · {preset.Description}" : "")}");
+            item.Click += (_, _) => AddPreset(preset);
+            mine.Items.Add(item);
+            var remove = new MenuFlyoutItem { Text = preset.Title };
+            remove.Click += (_, _) =>
+            {
+                session.SetUi(NodePresets.Prefix + preset.Id, null);
+                Status($"ลบ preset \"{preset.Title}\" แล้ว", "Muted");
+            };
+            forget.Items.Add(remove);
+        }
+        menu.Items.Add(new MenuFlyoutSeparator());
+        menu.Items.Add(mine);
+        menu.Items.Add(forget);
+    }
+
+    /// <summary>A node from a preset: its type with the saved settings copied in, placed as "+ node" places one.</summary>
+    private void AddPreset(NodePresets.Preset preset)
+    {
+        if (draft is null) return;
+        var label = Spec(preset.Type)?.S("label") is { Length: > 0 } typeLabel ? typeLabel : preset.Type;
+        var before = selected;
+        AddNode(preset.Type, preset.Title.Length > 0 ? preset.Title : label);
+        if (selected is { } id && id != before && draft.Node(id) is { } node)
+        {
+            node["config"] = preset.Config.DeepClone();
+            Dirty();
+            Select(id);
+        }
+    }
+
+    private async Task SavePreset(JsonObject node)
+    {
+        var name = new TextBox { Text = node.Str("title") is { Length: > 0 } title ? title : Spec(WorkflowDraft.TypeOf(node))?.S("label") ?? WorkflowDraft.TypeOf(node), PlaceholderText = "ชื่อ preset" };
+        var description = new TextBox { PlaceholderText = "ไว้ทำอะไร (ไม่บังคับ)" };
+        var body = new StackPanel { Spacing = 8 };
+        body.Children.Add(Ui.Hint("ค่าที่ตั้งไว้ใน node นี้จะถูกเก็บไว้ (ใช้ร่วมทุกเครื่องของบัญชีนี้) · วางซ้ำได้จาก \"+ node\" → Preset ของฉัน"));
+        body.Children.Add(Ui.Field("ชื่อ preset", name));
+        body.Children.Add(Ui.Field("คำอธิบาย", description));
+        if (await Dialog("บันทึกเป็น node preset", body, "บันทึก") != ContentDialogResult.Primary) return;
+        if (name.Text.Trim().Length == 0)
+        {
+            Status("ยังไม่ได้ตั้งชื่อ preset", "Bad");
+            return;
+        }
+        try
+        {
+            var (key, value) = NodePresets.Make(name.Text.Trim(), description.Text.Trim(), node, DateTimeOffset.Now);
+            session.SetUi(key, value);
+            Status($"บันทึก preset \"{name.Text.Trim()}\" แล้ว ✓", "Ok");
+        }
+        catch (InvalidOperationException error)
+        {
+            Status($"บันทึกไม่ได้: {error.Message}", "Bad");
+        }
     }
 
     private void AddNode(string type, string label)
@@ -573,13 +738,11 @@ internal sealed partial class WorkflowEditor : UserControl
             new("agent", "เป็นของ agent", FieldKind.Choice, OptionsFrom: "agents"),
             new("enabled", "เปิดใช้ (ทริกเกอร์ทำงานเอง)", FieldKind.Bool),
             new("errorWorkflow", "workflow ที่รันเมื่อผิดพลาด", Hint: "ชื่อ workflow ของ agent เดียวกัน (ไม่บังคับ)"),
-            new("vars", "ตัวแปร ($vars)", FieldKind.Json, "เช่น {\"city\":\"Bangkok\"} แล้วใช้ {{ $vars.city }}"),
+            new("vars", "ตัวแปร ($vars)", FieldKind.KeyValue, "เช่น city = Bangkok แล้วใช้ {{ $vars.city }}"),
         };
         var form = new JsonForm(flow, fields, lookups);
         // Every edit marks the draft unsaved.
-        foreach (var box in Descendants<TextBox>(form)) box.TextChanged += (_, _) => Dirty();
-        foreach (var box in Descendants<ComboBox>(form)) box.SelectionChanged += (_, _) => Dirty();
-        foreach (var box in Descendants<CheckBox>(form)) box.Click += (_, _) => Dirty();
+        form.Edited += Dirty;
         stack.Children.Add(form);
         if (flow.Str("webhook") is { Length: > 0 } hook) stack.Children.Add(Ui.Field("Webhook", Ui.Mono($"{session.Server?.TrimEnd('/')}{hook}")));
         if (!draft.IsNew)
@@ -589,23 +752,6 @@ internal sealed partial class WorkflowEditor : UserControl
                 Ui.Button("ลบ workflow นี้", () => _ = Delete(), "ghost")));
         }
         return stack;
-    }
-
-    private static IEnumerable<T> Descendants<T>(DependencyObject root) where T : DependencyObject
-    {
-        if (root is Panel panel)
-        {
-            foreach (var child in panel.Children)
-            {
-                if (child is T match) yield return match;
-                foreach (var inner in Descendants<T>(child)) yield return inner;
-            }
-        }
-        else if (root is Border { Child: { } child })
-        {
-            if (child is T match) yield return match;
-            foreach (var inner in Descendants<T>(child)) yield return inner;
-        }
     }
 
     private FrameworkElement NodePanel(JsonObject node)
@@ -633,14 +779,21 @@ internal sealed partial class WorkflowEditor : UserControl
         };
         stack.Children.Add(Ui.Field("ชื่อ node", title));
         var config = node["config"] as JsonObject ?? (JsonObject)(node["config"] = new JsonObject());
-        var fields = spec?.A("fields").ToList() ?? [];
-        // A trigger from the pool: its own fields come from the pool entry (feature-workflows.js triggerEntryOf).
-        if (type == "trigger_custom" && config.Str("pool") is { Length: > 0 } poolName && pool.FirstOrDefault(entry => entry.S("name") == poolName) is { ValueKind: JsonValueKind.Object } entry)
-        {
-            fields = fields.Concat(entry.A("fields")).ToList();
-        }
-        var form = new SpecForm(config, fields, lookups);
+        // Connector nodes and pool triggers get the fields of what they are set to (feature-workflows.js fieldsOfNode).
+        var fields = WorkflowAssist.FieldsOf(node, nodeTypes, pool, connectors, connections);
+        var form = new SpecForm(config, fields, lookups, Help(node));
         form.Edited += Dirty;
+        form.Picked += key =>
+        {
+            // A connector field that reads its options from this one starts over; a new service or operation redraws the fields.
+            var dependents = WorkflowAssist.DependentsOf(fields, key).ToList();
+            if (dependents.Count > 0 && config["input"] is JsonObject input)
+            {
+                foreach (var dependent in dependents) input.Remove(dependent);
+                optionCache.Clear();
+            }
+            if (WorkflowAssist.Reshapes(type, key) || dependents.Count > 0) panel.Content = NodePanel(node);
+        };
         stack.Children.Add(form);
 
         // How the node behaves when it fails, and switching it off.
@@ -710,12 +863,227 @@ internal sealed partial class WorkflowEditor : UserControl
     }
 
     /// <summary>The trigger's sample (what a run would start with), as the web prefills the test box.</summary>
-    private string SampleInput()
+    private string SampleInput() =>
+        draft is null ? "{}" : WorkflowAssist.TriggerSample(draft, pool).ToJsonString(new JsonSerializerOptions { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
+
+    /// <summary>The expression preview, the path picker and the connector options for one node's form.</summary>
+    private SpecFormHelp Help(JsonObject node) => new(
+        Preview: async text =>
+        {
+            if (draft is null) return (false, "");
+            var (json, nodes, _) = WorkflowAssist.Sample(draft, node, lastRun, pool);
+            var reqId = ++requests;
+            try
+            {
+                var reply = await session.Ask(WorkflowAssist.PreviewFrame(reqId, text, json, nodes, draft.Workflow["vars"]), "workflow-expr-preview", "workflow-expr-preview",
+                    answer => answer.At("reqId").ValueKind == JsonValueKind.Number && answer.At("reqId").GetInt64() == reqId, TimeSpan.FromSeconds(15));
+                return reply.B("ok") ? (true, reply.S("value")) : (false, reply.S("error"));
+            }
+            catch (Exception error) when (error is TimeoutException or InvalidOperationException)
+            {
+                return (false, error.Message);
+            }
+        },
+        Paths: () => draft is null ? [] : WorkflowAssist.Groups(draft, node, lastRun, pool),
+        ConnectorOptions: async (field, config) =>
+        {
+            var reqId = ++requests;
+            if (WorkflowAssist.OptionsQuestion(field, config, reqId, out _) is not { } question) return null;
+            var cacheKey = question.Without("reqId").ToJsonString();
+            if (optionCache.TryGetValue(cacheKey, out var cached)) return cached;
+            try
+            {
+                var reply = await session.Ask(question.ToJsonString(), "connector-options", "connector-operation-options",
+                    answer => answer.At("reqId").ValueKind == JsonValueKind.Number && answer.At("reqId").GetInt64() == reqId, TimeSpan.FromSeconds(30));
+                if (!reply.B("ok")) return null;
+                IReadOnlyList<(string Value, string Label)> options = reply.A("options").Select(option => (option.S("value"), option.S("label") is { Length: > 0 } label ? label : option.S("value"))).ToList();
+                optionCache[cacheKey] = options;
+                return options;
+            }
+            catch (Exception error) when (error is TimeoutException or InvalidOperationException)
+            {
+                return null;
+            }
+        });
+
+    // ---------- sticky notes ----------
+
+    private static readonly Dictionary<string, (byte R, byte G, byte B)> NoteTint = new()
     {
-        var trigger = draft?.NodeList.FirstOrDefault(node => WorkflowDraft.IsTrigger(WorkflowDraft.TypeOf(node)));
-        var poolName = trigger is null ? "manual" : WorkflowDraft.PoolOf(trigger) ?? "manual";
-        var sample = pool.FirstOrDefault(entry => entry.S("name") == poolName).At("sample");
-        return sample.ValueKind == JsonValueKind.Object ? JsonSerializer.Serialize(sample, new JsonSerializerOptions { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }) : "{}";
+        ["yellow"] = (255, 236, 153),
+        ["blue"] = (179, 218, 255),
+        ["green"] = (190, 236, 186),
+        ["pink"] = (255, 200, 221),
+    };
+
+    private static (double X, double Y) NotePlace(JsonObject note) =>
+        note["position"] is JsonArray { Count: 2 } at && at[0] is JsonValue x && at[1] is JsonValue y && x.TryGetValue<double>(out var px) && y.TryGetValue<double>(out var py) ? (px, py) : (60, 60);
+
+    private static (double Width, double Height) NoteSize(JsonObject note) =>
+        (note["width"] is JsonValue w && w.TryGetValue<double>(out var width) ? width : 220, note["height"] is JsonValue h && h.TryGetValue<double>(out var height) ? height : 130);
+
+    private void AddNote()
+    {
+        if (draft is null) return;
+        // In the middle of what is on screen.
+        var zoom = Math.Max(0.1, scroller.ZoomFactor);
+        var note = draft.AddNote((scroller.HorizontalOffset + scroller.ActualWidth / 2) / zoom, (scroller.VerticalOffset + scroller.ActualHeight / 2) / zoom);
+        Dirty();
+        Redraw();
+        if (noteLayer.Children.OfType<Border>().LastOrDefault()?.Child is Grid { Children: [_, TextBox text, ..] }) text.Focus(FocusState.Programmatic);
+        Status($"เพิ่มโน้ต {note.Str("id")} แล้ว — ลากแถบบนเพื่อย้าย, มุมขวาล่างเพื่อขยาย", "Muted");
+    }
+
+    /// <summary>The notes under the nodes (feature-canvas.js drawNotes): dragged by their strip, resized by the corner, text edited in place.</summary>
+    private void DrawNotes()
+    {
+        noteLayer.Children.Clear();
+        if (draft is null) return;
+        foreach (var note in draft.NoteList)
+        {
+            var id = note.Str("id");
+            var (r, g, b) = NoteTint.TryGetValue(note.Str("color"), out var tint) ? tint : NoteTint["yellow"];
+            var ink = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 60, 50, 20));
+            var (w, h) = NoteSize(note);
+            var grid = new Grid();
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(22) });
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            var strip = new Grid { Background = new SolidColorBrush(Windows.UI.Color.FromArgb(40, 0, 0, 0)) };
+            strip.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            strip.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            strip.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            AutomationProperties.SetName(strip, $"แถบของโน้ต {id}");
+            var color = new Button { Content = "●", FontSize = 11, Padding = new Thickness(6, 0, 6, 0), Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent), BorderThickness = new Thickness(0), Foreground = ink };
+            ToolTipService.SetToolTip(color, "เปลี่ยนสี");
+            AutomationProperties.SetName(color, $"เปลี่ยนสีโน้ต {id}");
+            color.Click += (_, _) =>
+            {
+                WorkflowDraft.CycleColor(note);
+                Dirty();
+                DrawNotes();
+            };
+            var remove = new Button { Content = "✕", FontSize = 11, Padding = new Thickness(6, 0, 6, 0), Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent), BorderThickness = new Thickness(0), Foreground = ink };
+            ToolTipService.SetToolTip(remove, "ลบโน้ต");
+            AutomationProperties.SetName(remove, $"ลบโน้ต {id}");
+            remove.Click += (_, _) =>
+            {
+                draft!.RemoveNote(id);
+                Dirty();
+                DrawNotes();
+            };
+            Grid.SetColumn(color, 1);
+            Grid.SetColumn(remove, 2);
+            strip.Children.Add(color);
+            strip.Children.Add(remove);
+            var text = new TextBox
+            {
+                Text = note.Str("text"),
+                PlaceholderText = "โน้ต…",
+                AcceptsReturn = true,
+                TextWrapping = TextWrapping.Wrap,
+                FontSize = 12,
+                Foreground = ink,
+                Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent),
+                BorderThickness = new Thickness(0),
+                IsSpellCheckEnabled = false,
+            };
+            AutomationProperties.SetName(text, $"โน้ต {id}");
+            text.TextChanged += (_, _) =>
+            {
+                if (note.Str("text") == text.Text) return;
+                note["text"] = text.Text;
+                Dirty();
+            };
+            Grid.SetRow(text, 1);
+            var corner = new Microsoft.UI.Xaml.Shapes.Polygon
+            {
+                Points = { new Point(14, 0), new Point(14, 14), new Point(0, 14) },
+                Fill = new SolidColorBrush(Windows.UI.Color.FromArgb(90, 0, 0, 0)),
+                HorizontalAlignment = HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Bottom,
+            };
+            AutomationProperties.SetName(corner, $"ขยายโน้ต {id}");
+            Grid.SetRow(corner, 1);
+            grid.Children.Add(strip);
+            grid.Children.Add(text);
+            grid.Children.Add(corner);
+            var box = new Border
+            {
+                Width = w,
+                Height = h,
+                Child = grid,
+                Background = new SolidColorBrush(Windows.UI.Color.FromArgb(235, r, g, b)),
+                CornerRadius = new CornerRadius(6),
+                BorderBrush = new SolidColorBrush(Windows.UI.Color.FromArgb(60, 0, 0, 0)),
+                BorderThickness = new Thickness(1),
+            };
+            var (x, y) = NotePlace(note);
+            Canvas.SetLeft(box, x);
+            Canvas.SetTop(box, y);
+            noteLayer.Children.Add(box);
+
+            // Dragging the strip moves the note; dragging the corner resizes it.
+            Point start = default;
+            (double X, double Y, double W, double H) origin = default;
+            string? gesture = null;
+            void Begin(UIElement handle, string kind, PointerRoutedEventArgs e)
+            {
+                if (e.OriginalSource is DependencyObject source && (IsWithin(source, color) || IsWithin(source, remove))) return;
+                gesture = kind;
+                start = e.GetCurrentPoint(canvas).Position;
+                var (nx, ny) = NotePlace(note);
+                origin = (nx, ny, box.Width, box.Height);
+                handle.CapturePointer(e.Pointer);
+                e.Handled = true;
+            }
+            void Track(PointerRoutedEventArgs e)
+            {
+                if (gesture is null) return;
+                var at = e.GetCurrentPoint(canvas).Position;
+                if (gesture == "move")
+                {
+                    Canvas.SetLeft(box, Math.Max(0, origin.X + at.X - start.X));
+                    Canvas.SetTop(box, Math.Max(0, origin.Y + at.Y - start.Y));
+                }
+                else
+                {
+                    box.Width = Math.Max(140, origin.W + at.X - start.X);
+                    box.Height = Math.Max(70, origin.H + at.Y - start.Y);
+                }
+                e.Handled = true;
+            }
+            void End(UIElement handle, PointerRoutedEventArgs e)
+            {
+                if (gesture is null) return;
+                handle.ReleasePointerCapture(e.Pointer);
+                var at = e.GetCurrentPoint(canvas).Position;
+                var moved = Math.Abs(at.X - start.X) + Math.Abs(at.Y - start.Y) >= 3;
+                if (moved && gesture == "move") note["position"] = new JsonArray(Math.Round(Math.Max(0, origin.X + at.X - start.X)), Math.Round(Math.Max(0, origin.Y + at.Y - start.Y)));
+                if (moved && gesture == "size")
+                {
+                    note["width"] = Math.Round(box.Width);
+                    note["height"] = Math.Round(box.Height);
+                }
+                gesture = null;
+                if (moved) Dirty();
+                e.Handled = true;
+            }
+            strip.PointerPressed += (_, e) => Begin(strip, "move", e);
+            strip.PointerMoved += (_, e) => Track(e);
+            strip.PointerReleased += (_, e) => End(strip, e);
+            corner.PointerPressed += (_, e) => Begin(corner, "size", e);
+            corner.PointerMoved += (_, e) => Track(e);
+            corner.PointerReleased += (_, e) => End(corner, e);
+        }
+    }
+
+    private static bool IsWithin(DependencyObject element, DependencyObject parent)
+    {
+        for (var current = element; current is not null; current = VisualTreeHelper.GetParent(current))
+        {
+            if (ReferenceEquals(current, parent)) return true;
+        }
+        return false;
     }
 
     // ---------- talking to the server ----------
@@ -779,6 +1147,7 @@ internal sealed partial class WorkflowEditor : UserControl
                 ["input"] = data as JsonObject,
                 ["pins"] = true,
             }), "workflow-result", "workflow-run", timeout: TimeSpan.FromMinutes(5));
+            lastRun = reply.At("result").Clone();
             Status(reply.At("result").B("ok") ? "รันเสร็จ" : "รันแล้วมีข้อผิดพลาด", reply.At("result").B("ok") ? "Ok" : "Bad");
             await Dialog("ผลการรัน", ResultView.Build("workflow-result", reply));
         }
@@ -836,6 +1205,7 @@ internal sealed partial class WorkflowEditor : UserControl
                 ["nodeId"] = nodeId,
                 ["runId"] = last.At("id").GetInt64(),
             }), "workflow-result", "workflow-run-from", timeout: TimeSpan.FromMinutes(5));
+            lastRun = reply.At("result").Clone();
             await Dialog($"รันจาก {nodeId}", ResultView.Build("workflow-result", reply));
         }
         catch (Exception error) when (error is TimeoutException or InvalidOperationException or FormatException)
@@ -900,6 +1270,16 @@ internal sealed partial class WorkflowEditor : UserControl
         moreMenu = new MenuFlyout();
         moreMenu.Items.Add(Item("ตั้งค่า workflow", () => Select(null)));
         moreMenu.Items.Add(Item("ประวัติการรัน", () => _ = History()));
+        moreMenu.Items.Add(Item("จัดเรียง node อัตโนมัติ", () =>
+        {
+            if (draft is null) return;
+            draft.AutoLayout(node => Outputs(node).Count);
+            Dirty();
+            Redraw();
+            Fit();
+        }));
+        moreMenu.Items.Add(Item("ย้อน (Ctrl+Z)", Undo));
+        moreMenu.Items.Add(Item("ทำซ้ำ (Ctrl+Y)", Redo));
         moreMenu.Items.Add(Item("พอดีจอ", Fit));
         moreMenu.Items.Add(Item("ซูม 100%", () => scroller.ChangeView(null, null, 1f)));
         moreMenu.Items.Add(new MenuFlyoutSeparator());

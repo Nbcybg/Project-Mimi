@@ -104,9 +104,10 @@ internal static class Ui
                 IsChecked = Equals(value, current),
             };
             if (id is not null) AutomationProperties.SetAutomationId(button, $"{id}-{value}");
-            button.Click += (_, _) =>
+            // Checked, not Click: UI Automation toggles the button, and a programmatic toggle must pick too.
+            button.Checked += (_, _) =>
             {
-                foreach (var other in buttons) other.IsChecked = ReferenceEquals(other, button);
+                foreach (var other in buttons) if (!ReferenceEquals(other, button)) other.IsChecked = false;
                 pick(value);
             };
             buttons.Add(button);

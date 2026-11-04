@@ -1,6 +1,7 @@
 # Server gaps: สิ่งที่เซิร์ฟเวอร์ต้องเพิ่ม/แก้เพื่อรองรับแอป native
 
 > Phase 0 ไม่แก้โค้ดเซิร์ฟเวอร์ ไฟล์นี้คือรายการงานของ Phase 1 — **Phase 1 ทำแล้ว (Unreleased, client API 1)**: สถานะของแต่ละข้ออยู่ในตารางและใต้หัวข้อ
+> **2026-11-03 (api 2):** Mimiamp ถูกเอาออกทั้งหมด (Q5) — ข้อ G-MEDIA-1, ส่วน Mimiamp ของ G-MEDIA-2 / G-TYPES-1 และแถว `mimiamp` ในตารางล่าง ๆ ไม่เกี่ยวแล้ว (เก็บไว้เป็นประวัติ)
 > **ความสำคัญ**: P1 = ต้องมีก่อนปล่อยแอปแรก, P2 = ต้องมีก่อนปล่อยครบทุกแพลตฟอร์ม, P3 = ทำเมื่อสะดวก
 > **ขนาด**: S ≤ 1 วัน, M 2–5 วัน, L > 1 สัปดาห์ (รวมเทสต์)
 > แต่ละข้อยืนยันจากโค้ด (และทดสอบกับเซิร์ฟเวอร์ในเครื่องเมื่อเขียนว่า "ทดสอบแล้ว")
@@ -11,10 +12,10 @@
 |---|---|---|---|---|
 | G-VER-1 | ไม่มีการเช็กเวอร์ชัน client/server | P1 | S | **แก้แล้ว** (api 1) |
 | G-CHAT-1 | ข้อความ assistant ไม่มาเป็น `chat-message` ต้อง `chat-open` ใหม่ทุก turn | P1 | M | **แก้แล้ว** (`chat-turn-messages` + `chat-open.afterId`) |
-| G-MEDIA-1 | Mimiamp ผ่าน gateway: `/mimiamp/*` ไม่ถึง core, YouTube 404 | P1 | M | **แก้แล้ว** (gateway ส่งต่อเมื่อมี Bearer; เว็บโหลดผ่าน token) |
+| G-MEDIA-1 | Mimiamp ผ่าน gateway: `/mimiamp/*` ไม่ถึง core, YouTube 404 | P1 | M | ~~แก้แล้ว~~ **ไม่เกี่ยวแล้ว (Mimiamp ลบใน api 2)** · เดิม: **แก้แล้ว** (gateway ส่งต่อเมื่อมี Bearer; เว็บโหลดผ่าน token) |
 | G-MEDIA-2 | `/api/files/:id` และ `/api/mimiamp/youtube/:id/audio` ไม่รองรับ Range | P1 | S | **แก้แล้ว** |
-| G-PUSH-1 | ไม่มี endpoint ลงทะเบียน push token ของ native (FCM/APNs/WNS) | P1 | M | **แก้แล้ว** (FCM/APNs; WNS เหลือ) |
-| G-PUSH-2 | ไม่มีตัวส่ง FCM / APNs / WNS และที่เก็บกุญแจ | P1 (iOS) | L | **แก้บางส่วน**: ตัวส่ง FCM + APNs เสร็จ; WNS และ relay ที่ gateway เหลือ |
+| G-PUSH-1 | ไม่มี endpoint ลงทะเบียน push token ของ native (FCM/APNs/WNS) | P1 | M | **แก้แล้ว** (FCM/APNs; WNS ใน api 2) |
+| G-PUSH-2 | ไม่มีตัวส่ง FCM / APNs / WNS และที่เก็บกุญแจ | P1 (iOS) | L | **แก้แล้ว** (2026-11-03): ตัวส่ง FCM + APNs + WNS และ relay ที่ gateway (`/push/relay`) — ยังไม่ได้ทดสอบกับบริการจริง · เดิม: ตัวส่ง FCM + APNs เสร็จ; WNS และ relay ที่ gateway เหลือ |
 | G-PUSH-3 | `/api/notifications` ใช้ cursor เป็นเวลาและได้เฉพาะยังไม่อ่าน | P2 | S | **แก้แล้ว** |
 | G-WS-1 | ไม่มี `reqId` กลางสำหรับจับคู่คำขอ/คำตอบ | P2 | M | **เหลือ** |
 | G-WS-2 | `error` ไม่บอกว่าเป็นของคำขอไหน; unknown type ได้ `E-INTERNAL` | P2 | S | **แก้แล้ว** (`requestType`, `E-PROTOCOL`) |

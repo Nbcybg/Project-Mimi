@@ -57,7 +57,6 @@ public abstract record ServerFrame
     public sealed record Notification(string Kind, string Title, string Body, long? ChatId, long? Id) : ServerFrame;
     /// <summary>An event of background work outside any chat (it may ask for permission).</summary>
     public sealed record Background(AgentEvent Event) : ServerFrame;
-    public sealed record Mimiamp(MimiampCommand Command) : ServerFrame;
     public sealed record Error(string Message, string? Code, long? ChatId, string? ClientId, string? RequestType) : ServerFrame;
     public sealed record SecurityAlert(string At) : ServerFrame;
     public sealed record PcStatus(bool Online, string? Name) : ServerFrame;
@@ -220,7 +219,6 @@ public static class FrameParser
         "permission-resolved" => new ServerFrame.PermissionResolved(Str(json, "requestId") ?? ""),
         "notification" => ParseNotification(Get(json, "notification")),
         "event" => Get(json, "event").ValueKind == JsonValueKind.Object ? new ServerFrame.Background(ParseEvent(Get(json, "event"))) : new ServerFrame.Unknown(type),
-        "mimiamp" => new ServerFrame.Mimiamp(Required(Decode<MimiampCommand>(json, "command"), "command")),
         "error" => new ServerFrame.Error(Str(json, "message") ?? "", Str(json, "code"), Long(json, "chatId"), Str(json, "clientId"), Str(json, "requestType")),
         "security-alert" => new ServerFrame.SecurityAlert(Str(json, "at") ?? ""),
         "pc-status" => new ServerFrame.PcStatus(Bool(json, "online"), Str(json, "name")),

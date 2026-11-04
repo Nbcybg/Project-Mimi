@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <!-- Everything of the Windows app that needs no WinUI: protocol, HTTP + WebSocket clients, the chat
-       reducer, Mimiamp's queue and EQ maths, the updater checks and the view models. Tested on plain .NET. -->
+       reducer, the updater checks and the view models. Tested on plain .NET. -->
   <PropertyGroup>
     <TargetFramework>net10.0-windows</TargetFramework>
     <RootNamespace>Mimi.Core</RootNamespace>

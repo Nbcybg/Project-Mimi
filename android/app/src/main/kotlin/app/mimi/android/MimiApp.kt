@@ -14,8 +14,6 @@ import app.mimi.core.data.di.AppScope
 import app.mimi.core.data.net.MimiSocket
 import app.mimi.core.data.repo.ChatRepository
 import app.mimi.core.data.repo.PushRepository
-import app.mimi.feature.mimiamp.MimiampCommands
-import app.mimi.feature.mimiamp.PlayerConnection
 import coil.ImageLoader
 import coil.ImageLoaderFactory
 import dagger.hilt.android.HiltAndroidApp
@@ -35,8 +33,6 @@ class MimiApp : Application(), Configuration.Provider, ImageLoaderFactory {
     @Inject lateinit var socket: MimiSocket
     @Inject lateinit var chats: ChatRepository
     @Inject lateinit var push: PushRepository
-    @Inject lateinit var mimiamp: MimiampCommands
-    @Inject lateinit var player: PlayerConnection
     @Inject lateinit var widget: WidgetSync
     @Inject @field:AppScope lateinit var scope: CoroutineScope
 
@@ -51,7 +47,6 @@ class MimiApp : Application(), Configuration.Provider, ImageLoaderFactory {
     override fun onCreate() {
         super.onCreate()
         Notifier.createChannels(this)
-        mimiamp.start(scope)
         if (sessions.session.value.token != null) signedIn()
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
             override fun onStart(owner: LifecycleOwner) {
@@ -61,7 +56,7 @@ class MimiApp : Application(), Configuration.Provider, ImageLoaderFactory {
 
             override fun onStop(owner: LifecycleOwner) {
                 // Off screen: tell the core (so it notifies), then let the socket go after a minute;
-                // notifications come by push or the poll, and Mimiamp keeps playing by itself.
+                // notifications come by push or the poll.
                 chats.presence(null, false)
                 parking = scope.launch {
                     delay(60_000)
@@ -92,6 +87,5 @@ class MimiApp : Application(), Configuration.Provider, ImageLoaderFactory {
     fun signedOut() {
         NotificationWorker.cancel(this)
         widget.clear()
-        scope.launch { runCatching { player.stop() } }
     }
 }

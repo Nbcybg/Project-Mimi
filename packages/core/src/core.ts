@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { embedMany, generateText } from 'ai';
-import type { AgentEvent, CalendarChangeView, ConnectorRuntime, HistoryMessage, MimiampCommand, Notification, WorkflowRunResult } from '@mimi/shared';
+import type { AgentEvent, CalendarChangeView, ConnectorRuntime, HistoryMessage, Notification, WorkflowRunResult } from '@mimi/shared';
 import { type AgentDefinition, AgentCatalog } from './agents/loader.ts';
 import type { AppSettings } from './app/app-settings.ts';
 import { SecretStore } from './app/secrets.ts';
@@ -78,7 +78,6 @@ import {
   type SkillRunner,
 } from './skills/skills.ts';
 import { makePcRunner, type PcLink, RoutingExecutor } from './tools/executor.ts';
-import { MimiampService } from './mimiamp/service.ts';
 import { createToolRegistry } from './tools/index.ts';
 import { createExportTools } from './tools/export-tools.ts';
 import { createBrowserSecretTools } from './tools/browser-secret-tools.ts';
@@ -91,7 +90,7 @@ import { resumeWorkflow, type ResumeOutcome, type RunOptions, runWorkflow as run
 import { KnowledgeStore } from './knowledge/store.ts';
 import { UserProfileStore } from './profile/user-profile.ts';
 import { NotificationCenter } from './notify/notifications.ts';
-import { NativePushSender } from './notify/native-push.ts';
+import { corePushTransport, type PushInfo } from './notify/push-relay.ts';
 import { loadOrCreateVapid, type VapidKeys } from './notify/web-push.ts';
 import { OVERSEER_NAME } from './overseer/overseer.ts';
 import { createOverseerTools } from './overseer/tools.ts';
@@ -147,8 +146,6 @@ export interface CoreListeners {
   oauthChanged?: () => void;
   /** Calendar subscription or delta state changed (broadcast to open screens). */
   calendarChanged?: () => void;
-  /** An agent asked the Mimiamp player to do something; returns how many apps were told. */
-  mimiampCommand?: (command: MimiampCommand) => number;
 }
 
 export interface CoreOptions {
@@ -187,8 +184,6 @@ export interface Core {
   backgrounds: BackgroundStore;
   /** The situation gallery of each agent. */
   gallery: GalleryStore;
-  /** Mimiamp songs, YouTube links and playlists. */
-  mimiamp: MimiampService;
   attachments: AttachmentStore;
   /** The skill hub as it is on disk right now. */
   skills(): Skill[];
@@ -226,6 +221,8 @@ export interface Core {
   spentToday(): number;
   /** Stored notifications and the browsers they are pushed to. */
   notifications: NotificationCenter;
+  /** Which native push services work from here (own keys or the gateway's relay) and the WNS remote id. */
+  pushInfo(): Promise<PushInfo>;
   /** Stores a notification in the inbox, pushes it and hands it to the live clients. */
   notify(notification: Notification): void;
   /** Watches Gmail / Outlook / IMAP / POP3 for new mail and raises a notification per message. */
@@ -454,7 +451,6 @@ export async function createCore(
   });
   const googleFor = (account?: string) => oauth.google(account);
   const microsoftFor = (account?: string) => oauth.microsoft(account);
-  const mimiamp = new MimiampService({ dataDir: config.dataDir, google: googleFor() });
   const triggers = new TriggerStore(db, () => config.timezone);
   // The database schedules; the files under `triggers/` mirror it so a synced folder
   // carries reminders and webhooks to another machine.
@@ -597,11 +593,6 @@ export async function createCore(
     gallery,
     knowledge,
     profile,
-    // Music runs in the open web clients; this core only passes the request on.
-    mimiamp: (command) => listeners.mimiampCommand?.(command) ?? 0,
-    mimiampLibrary: () => mimiamp.tracks(),
-    mimiampPlaylists: mimiamp.playlists,
-    mimiampYoutube: { add: (url) => mimiamp.addYoutube(url) },
     media: {
       attachments,
       models,
@@ -683,13 +674,14 @@ export async function createCore(
   const workflowNodeTimeoutMs = envNumber('MIMI_WORKFLOW_NODE_TIMEOUT_MS', 0) || undefined;
   const workflowRunTimeoutMs = envNumber('MIMI_WORKFLOW_RUN_TIMEOUT_MS', 0) || undefined;
   let vapid: VapidKeys | undefined;
+  const pushTransport = corePushTransport(config.nativePush, config.token);
   const notifications = new NotificationCenter(db, {
     vapid: () => (vapid ??= loadOrCreateVapid(config.pushKeysPath)),
     subject: config.pushContact,
     preferences: () => options.app?.preferences ?? {},
     timezone: () => config.timezone,
     log: (message) => console.error(message),
-    native: config.nativePush && (config.nativePush.fcm || config.nativePush.apns) ? new NativePushSender(config.nativePush) : undefined,
+    native: pushTransport,
   });
   /** Every notification is kept (inbox) and pushed, then handed to whoever shows it live. */
   const notify = (notification: Notification) => {
@@ -1044,7 +1036,6 @@ export async function createCore(
               'list_triggers',
               'cancel_trigger',
               'update_trigger',
-              'mimiamp',
             ]
               .map((name) => toolPool.get(name))
               .filter((tool): tool is NonNullable<typeof tool> => tool !== undefined)
@@ -1889,7 +1880,6 @@ export async function createCore(
     wardrobe,
     backgrounds,
     gallery,
-    mimiamp,
     attachments,
     skills: currentSkills,
     tools: toolPool,
@@ -1906,6 +1896,7 @@ export async function createCore(
     addKnowledge,
     profile,
     notifications,
+    pushInfo: () => pushTransport?.info() ?? Promise.resolve({ platforms: [] }),
     notify,
     spentToday,
     fileSnapshots,

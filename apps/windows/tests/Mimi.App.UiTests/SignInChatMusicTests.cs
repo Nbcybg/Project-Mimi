@@ -21,7 +21,7 @@ public sealed class CoreFactAttribute : FactAttribute
 }
 
 /// <summary>
-/// Sign in → chat (streamed answer) → Mimiamp, on the real app with its own empty data folder
+/// Sign in → chat (streamed answer) → pins, search, inbox → sign out, on the real app with its own empty data folder
 /// (MIMI_WINDOWS_HOME), so nothing of a real install on this computer is touched.
 /// </summary>
 public sealed partial class SignInChatMusicTests : IDisposable
@@ -270,7 +270,8 @@ public sealed partial class SignInChatMusicTests : IDisposable
         {
             if (element.Patterns.Toggle.Pattern.ToggleState.Value != ToggleState.On) element.Patterns.Toggle.Pattern.Toggle();
         }
-        else element.Patterns.Invoke.Pattern.Invoke();
+        else if (element.Patterns.Invoke.IsSupported) element.Patterns.Invoke.Pattern.Invoke();
+        else element.Click();
     }
 
     /// <summary>A menu item of the window's popups, invoked.</summary>
@@ -316,7 +317,12 @@ public sealed partial class SignInChatMusicTests : IDisposable
             var agent = Retry(() => window.Popup?.FindFirstDescendant(cf => cf.ByControlType(ControlType.ListItem))
                 ?? app!.GetAllTopLevelWindows(automation).SelectMany(top => top.FindAllDescendants(cf => cf.ByControlType(ControlType.ListItem))).FirstOrDefault(), "agent in the new-chat list");
             Thread.Sleep(700); // the flyout animates in; a click before that only closes it
-            agent.Click();
+            for (var tries = 0; tries < 4 && window.FindFirstDescendant(cf => cf.ByAutomationId("Composer")) is null; tries++)
+            {
+                window.SetForeground();
+                agent.Click();
+                for (var wait = 0; wait < 20 && window.FindFirstDescendant(cf => cf.ByAutomationId("Composer")) is null; wait++) Thread.Sleep(150);
+            }
         }
 
         // The chat: send, see the answer stream in from the core's model.
@@ -339,40 +345,35 @@ public sealed partial class SignInChatMusicTests : IDisposable
         Retry(() => window.FindFirstDescendant(cf => cf.ByAutomationId("ReplyBar")) is null ? window : null, "the reply bar gone");
         Shot(window, "pinned");
 
+        // The character screen has its own glass back button; search lives on the chat list.
+        ById(window, "BackButton").AsButton().Invoke();
+        ById(window, "ChatList");
         ById(window, "SearchButton").AsButton().Invoke();
         Type(ById(window, "SearchField"), stamp);
         var hit = Retry(() => ById(window, "SearchResults").FindFirstDescendant(cf => cf.ByControlType(ControlType.ListItem)), "a search hit", 30);
         Shot(window, "search");
-        hit.Click();
-        Retry(() => TextContaining(window, $"ทดสอบจากแอป Windows {stamp}"), "the chat of the hit", 30);
+        // The first click may only bring the window forward: click again until the chat opens.
+        for (var tries = 0; tries < 4 && window.FindFirstDescendant(cf => cf.ByAutomationId("Composer")) is null; tries++)
+        {
+            window.SetForeground();
+            hit.Click();
+            for (var wait = 0; wait < 20 && window.FindFirstDescendant(cf => cf.ByAutomationId("Composer")) is null; wait++) Thread.Sleep(150);
+        }
+        ById(window, "Composer", 30);
 
         // Unpin: the bar goes, so a next run starts without pins.
         MessageMenu(window, "📌 เลิกปักหมุด");
         Retry(() => window.FindFirstDescendant(cf => cf.ByAutomationId("PinBar")) is null ? window : null, "the pin bar gone", 30);
+
+        // The character screen has only its glass buttons; the chat list is the way to the rest.
+        ById(window, "BackButton").AsButton().Invoke();
+        ById(window, "ChatList");
 
         // The notification inbox opens from the bell.
         ById(window, "InboxButton").AsButton().Invoke();
         ById(window, "InboxList");
         ById(window, "ChatsButton").AsButton().Invoke();
         ById(window, "ChatList");
-
-        // Mimiamp: the library loads, a song plays.
-        ById(window, "MusicButton").AsButton().Invoke();
-        var tracks = ById(window, "Tracks", 30);
-        var first = Retry(() => tracks.FindFirstDescendant(cf => cf.ByControlType(ControlType.ListItem)), "a song", 30);
-        var title = first.FindFirstDescendant(cf => cf.ByControlType(ControlType.Text))?.Properties.Name.ValueOrDefault ?? "";
-        first.Click();
-        Retry(() => ById(window, "NowTitle").Properties.Name.ValueOrDefault == title ? window : null, $"now playing {title}", 30);
-        // The song really plays: the clock moves past 0:01 (streamed with Range + the token, decoded, out of WASAPI).
-        Retry(() =>
-        {
-            var problem = window.FindFirstDescendant(cf => cf.ByAutomationId("MusicError"))?.Properties.Name.ValueOrDefault;
-            if (!string.IsNullOrEmpty(problem)) throw new InvalidOperationException($"Mimiamp: {problem}");
-            var clock = ById(window, "Clock").Properties.Name.ValueOrDefault ?? "";
-            return clock.StartsWith("0:00", StringComparison.Ordinal) ? null : clock;
-        }, "the song's clock moving", 30);
-        Shot(window, "music");
-        ByName(window, "เล่น/หยุด").AsButton().Invoke();
 
         // Settings and sign-out bring the connect page back, and the token is gone from disk.
         ById(window, "SettingsButton").AsButton().Invoke();
@@ -393,6 +394,8 @@ public sealed partial class SignInChatMusicTests : IDisposable
         app?.Dispose();
         automation.Dispose();
         Thread.Sleep(500);
+        // MIMI_UI_TEST_KEEP=1 leaves the test home (its start-error.txt, DPAPI file) for a look.
+        if (Environment.GetEnvironmentVariable("MIMI_UI_TEST_KEEP") == "1") return;
         try
         {
             Directory.Delete(home, recursive: true);

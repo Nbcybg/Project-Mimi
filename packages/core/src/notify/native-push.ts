@@ -5,8 +5,9 @@ import type { Notification, NativePushPlatform } from '@mimi/shared';
 
 /**
  * Push to the native apps without a library: Firebase Cloud Messaging (HTTP v1, a service
- * account signs a JWT that is traded for an access token) and Apple Push (HTTP/2, a .p8 key
- * signs a JWT itself). The keys belong to whoever publishes the apps, so they come from the
+ * account signs a JWT that is traded for an access token), Apple Push (HTTP/2, a .p8 key
+ * signs a JWT itself) and the Windows Push Notification Service (an Entra ID app's client
+ * secret is traded for a token; the app's channel URI is the address). The keys belong to whoever publishes the apps, so they come from the
  * environment, never from the app.
  *
  * By default a push carries no message text: Google and Apple can read what they deliver,
@@ -32,14 +33,25 @@ export interface ApnsCredentials {
   topic?: string;
 }
 
+/** The Entra ID (Azure AD) app the Windows app's push channel was made for (its id is the app's remote id). */
+export interface WnsCredentials {
+  tenantId: string;
+  clientId: string;
+  clientSecret: string;
+}
+
 export interface NativePushConfig {
   fcm?: FcmCredentials;
   apns?: ApnsCredentials;
+  wns?: WnsCredentials;
+  /** The accounts gateway that holds the keys and pushes for this core (MIMI_PUSH_RELAY_URL; Q3). */
+  relayUrl?: string;
   content: 'minimal' | 'full';
   /** Test seams: where FCM and APNs are reached. */
   fcmBaseUrl?: string;
   apnsHost?: string;
   apnsSandboxHost?: string;
+  wnsTokenUrl?: string;
 }
 
 /** What one push says. `unread` sets the app icon's badge. */
@@ -67,6 +79,19 @@ const APNS_HOST = 'https://api.push.apple.com';
 const APNS_SANDBOX_HOST = 'https://api.sandbox.push.apple.com';
 /** Apple wants a provider token reused for up to an hour and refreshed at least that often. */
 const APNS_JWT_MS = 50 * 60_000;
+
+/**
+ * A WNS channel URI the Windows app got from PushNotificationManager. Only Microsoft's hosts:
+ * the core sends its WNS token there, so an address an app made up must never be accepted.
+ */
+export function wnsChannelOk(uri: string): boolean {
+  try {
+    const url = new URL(uri);
+    return url.protocol === 'https:' && !url.username && !url.password && !url.port && /(^|\.)notify\.windows\.com$/i.test(url.hostname);
+  } catch {
+    return false;
+  }
+}
 
 /** What a push without its text says, per kind. */
 const MINIMAL_BODY: Record<Notification['kind'], string> = {
@@ -118,6 +143,20 @@ export function nativePushConfig(env: NodeJS.ProcessEnv = process.env): NativePu
   } catch (error) {
     console.warn(`MIMI_APNS_KEY ignored: ${(error as Error).message}`);
   }
+  const tenantId = env.MIMI_WNS_TENANT_ID?.trim();
+  const clientId = env.MIMI_WNS_CLIENT_ID?.trim();
+  const clientSecret = env.MIMI_WNS_CLIENT_SECRET?.trim();
+  if (tenantId && clientId && clientSecret) config.wns = { tenantId, clientId, clientSecret };
+  const relay = env.MIMI_PUSH_RELAY_URL?.trim().replace(/\/+$/, '');
+  if (relay) {
+    try {
+      const url = new URL(relay);
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('not http(s)');
+      config.relayUrl = relay;
+    } catch (error) {
+      console.warn(`MIMI_PUSH_RELAY_URL ignored: ${(error as Error).message}`);
+    }
+  }
   return config;
 }
 
@@ -128,6 +167,7 @@ export class NativePushSender {
   private fcmToken: { value: string; until: number } | undefined;
   private fcmKey: KeyObject | undefined;
   private apnsJwt: { value: string; at: number } | undefined;
+  private wnsToken: { value: string; until: number } | undefined;
 
   constructor(config: NativePushConfig, deps: { fetch?: typeof fetch; now?: () => number } = {}) {
     this.config = config;
@@ -137,12 +177,19 @@ export class NativePushSender {
 
   /** True when this core holds the credentials to push to that platform. */
   available(platform: NativePushPlatform): boolean {
-    return platform === 'fcm' ? Boolean(this.config.fcm) : Boolean(this.config.apns);
+    return Boolean(this.config[platform]);
+  }
+
+  /** The Entra ID app a Windows app must make its channel for, when this sender can push to Windows. */
+  get wnsRemoteId(): string | undefined {
+    return this.config.wns?.clientId;
   }
 
   async send(target: NativePushTarget, message: NativePushMessage, urgency: 'normal' | 'high'): Promise<NativePushResult> {
     if (!this.available(target.platform)) return { ok: false, gone: false, status: 0, reason: `no ${target.platform} credentials on this core` };
-    return target.platform === 'fcm' ? this.sendFcm(target.token, message, urgency) : this.sendApns(target, message, urgency);
+    if (target.platform === 'fcm') return this.sendFcm(target.token, message, urgency);
+    if (target.platform === 'wns') return this.sendWns(target.token, message);
+    return this.sendApns(target, message, urgency);
   }
 
   private text(message: NativePushMessage): { title: string; body: string } {
@@ -198,6 +245,56 @@ export class NativePushSender {
     if (response.status === 401) this.fcmToken = undefined;
     const gone = response.status === 404 || /UNREGISTERED|not a valid FCM registration token/i.test(reply);
     return { ok: false, gone, status: response.status, reason: reply.slice(0, 200) || `HTTP ${response.status}` };
+  }
+
+  // ---------- WNS ----------
+
+  private async wnsAccessToken(): Promise<string> {
+    const wns = this.config.wns!;
+    if (this.wnsToken && this.wnsToken.until > this.now()) return this.wnsToken.value;
+    const url = this.config.wnsTokenUrl ?? `https://login.microsoftonline.com/${encodeURIComponent(wns.tenantId)}/oauth2/v2.0/token`;
+    const response = await this.fetchImpl(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'client_credentials',
+        client_id: wns.clientId,
+        client_secret: wns.clientSecret,
+        scope: 'https://wns.windows.com/.default',
+      }).toString(),
+    });
+    const answer = (await response.json().catch(() => ({}))) as { access_token?: string; expires_in?: number };
+    if (!response.ok || !answer.access_token) throw new Error(`WNS sign-in failed: HTTP ${response.status}`);
+    this.wnsToken = { value: answer.access_token, until: this.now() + Math.max(60, (answer.expires_in ?? 3600) - 60) * 1000 };
+    return answer.access_token;
+  }
+
+  /**
+   * A raw notification: the Windows app (woken by Windows App SDK if it is not running) reads
+   * the id, fetches the text from `/api/notifications` and shows the toast itself.
+   */
+  private async sendWns(channel: string, message: NativePushMessage): Promise<NativePushResult> {
+    if (!wnsChannelOk(channel)) return { ok: false, gone: true, status: 0, reason: 'not a WNS channel URI' };
+    const access = await this.wnsAccessToken();
+    const text = this.text(message);
+    const response = await this.fetchImpl(channel, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${access}`,
+        'content-type': 'application/octet-stream',
+        'x-wns-type': 'wns/raw',
+        // Kept for a day while the computer is off, then dropped (the app catches up on start anyway).
+        'x-wns-cache-policy': 'cache',
+        'x-wns-ttl': '86400',
+      },
+      body: JSON.stringify({ id: message.id, kind: message.kind, chatId: message.chatId, unread: message.unread, ...text, content: this.config.content }),
+    });
+    if (response.ok) return { ok: true };
+    const status = response.headers.get('x-wns-error-description') ?? response.headers.get('x-wns-status') ?? '';
+    if (response.status === 401) this.wnsToken = undefined;
+    // 404: no such channel; 410: the channel expired (they live 30 days; the app makes a new one each start).
+    const gone = response.status === 404 || response.status === 410;
+    return { ok: false, gone, status: response.status, reason: status.slice(0, 200) || `HTTP ${response.status}` };
   }
 
   // ---------- APNs ----------

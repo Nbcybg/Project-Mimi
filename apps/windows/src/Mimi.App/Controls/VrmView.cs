@@ -9,7 +9,8 @@ namespace Mimi.App.Controls;
 /// <summary>
 /// The 3D character (VRM) on the chat stage: three.js + three-vrm in a WebView2 (Assets/web/vrm.html), since
 /// WinUI has no glTF/VRM renderer. The model is fetched with the token by the app and handed to the page from
-/// a local folder, so the page never sees the token or talks to the server.
+/// a local folder, so the page never sees the token or talks to the server. The agent's Mixamo motions (.fbx)
+/// come the same way: the idle motion plays while the character stands, others when asked (<see cref="Play"/>).
 /// </summary>
 internal sealed partial class VrmView : Grid
 {
@@ -23,6 +24,8 @@ internal sealed partial class VrmView : Grid
     private string wanted = "";
     private string? mood;
     private JsonObject? view;
+    private JsonObject? motions;
+    private string motionsKey = "";
 
     public VrmView(Func<MimiApi> api, string folder)
     {
@@ -66,6 +69,14 @@ internal sealed partial class VrmView : Grid
                     State = "failed";
                     StateChanged?.Invoke();
                     break;
+                case "motions":
+                    MotionsLoaded?.Invoke(
+                        (message["loaded"] as JsonArray)?.Select(entry => entry?.GetValue<string>() ?? "").ToList() ?? [],
+                        (message["failed"] as JsonArray)?.OfType<JsonObject>().Select(entry => (entry["name"]?.GetValue<string>() ?? "", entry["message"]?.GetValue<string>() ?? "")).ToList() ?? []);
+                    break;
+                case "playing":
+                    Playing?.Invoke(message["name"]?.GetValue<string>());
+                    break;
             }
         };
         web.Source = new Uri($"https://{AppHost}/vrm.html");
@@ -81,12 +92,62 @@ internal sealed partial class VrmView : Grid
         if (wanted.Length > 0) Post(new JsonObject { ["type"] = "load", ["url"] = $"https://{ModelHost}/{wanted}" });
         if (mood is not null) Post(new JsonObject { ["type"] = "mood", ["key"] = mood });
         if (view is not null) Post(new JsonObject { ["type"] = "view", ["view"] = view.DeepClone() });
+        if (motions is not null) Post((JsonObject)motions.DeepClone());
     }
+
+    /// <summary>Motions that could be played (names), and those that could not with why (an FBX that is not a Mixamo rig…).</summary>
+    public event Action<IReadOnlyList<string>, IReadOnlyList<(string Name, string Message)>>? MotionsLoaded;
+
+    /// <summary>The motion now playing (null: the breathing pose).</summary>
+    public event Action<string?>? Playing;
+
+    private static string Hashed(string path, string extension) =>
+        $"{Convert.ToHexString(System.Security.Cryptography.SHA1.HashData(System.Text.Encoding.UTF8.GetBytes(path)))[..16]}{extension}";
+
+    /// <summary>
+    /// The agent's motions (name, server path with its ?v= stamp) and which one plays while it stands (null: the
+    /// breathing pose). Files are fetched once; the same list again does nothing.
+    /// </summary>
+    public async void Motions(IReadOnlyList<(string Name, string Path)> list, string? idle)
+    {
+        var key = string.Join("|", list.Select(entry => $"{entry.Name}={entry.Path}")) + $"#{idle}";
+        if (key == motionsKey) return;
+        motionsKey = key;
+        try
+        {
+            await Start();
+            var entries = new JsonArray();
+            foreach (var (name, path) in list)
+            {
+                var file = Hashed(path, ".fbx");
+                var local = Path.Combine(folder, file);
+                try
+                {
+                    if (!File.Exists(local)) await File.WriteAllBytesAsync(local, await api().Bytes(path));
+                }
+                catch (Exception error) when (error is HttpRequestException or IOException or InvalidOperationException or TaskCanceledException)
+                {
+                    continue; // the page reports the motion as missing when it is asked for
+                }
+                entries.Add(new JsonObject { ["name"] = name, ["url"] = $"https://{ModelHost}/{file}" });
+            }
+            if (key != motionsKey) return;
+            motions = new JsonObject { ["type"] = "motions", ["list"] = entries, ["idle"] = idle };
+            Post((JsonObject)motions.DeepClone());
+        }
+        catch (Exception)
+        {
+            // no WebView2 runtime: the motions stay off, as the model does
+        }
+    }
+
+    /// <summary>Plays a motion (looped or once, then back to the idle motion); null stops it.</summary>
+    public void Play(string? name, bool loop = true) => Post(new JsonObject { ["type"] = "play", ["name"] = name, ["loop"] = loop });
 
     /// <summary>Shows the model at this server path (with its ?v= stamp).</summary>
     public async void Show(string path)
     {
-        var name = $"{Convert.ToHexString(System.Security.Cryptography.SHA1.HashData(System.Text.Encoding.UTF8.GetBytes(path)))[..16]}.vrm";
+        var name = Hashed(path, ".vrm");
         if (name == wanted && State is "ready" or "loading") return;
         wanted = name;
         State = "loading";
@@ -110,6 +171,8 @@ internal sealed partial class VrmView : Grid
     public void Hide()
     {
         wanted = "";
+        motionsKey = "";
+        motions = null;
         State = "none";
         Visibility = Visibility.Collapsed;
         Post(new JsonObject { ["type"] = "clear" });

@@ -11,6 +11,8 @@ namespace Mimi.App.Controls;
 /// <summary>
 /// An edit form built from a JSON object and its <see cref="FieldSpec"/>s (or, without specs, from the
 /// object's own fields). Edits go straight into the object; fields the form does not show stay as they were.
+/// Objects and lists get their own small forms instead of JSON: name → value rows, a card per entry, who sees it,
+/// and fields worked out from the item (a connector's credentials once the connector is chosen).
 /// </summary>
 public sealed class JsonForm : StackPanel
 {
@@ -20,6 +22,7 @@ public sealed class JsonForm : StackPanel
     private readonly List<string> problems = [];
 
     private readonly List<(FrameworkElement Element, FieldSpec Field)> conditional = [];
+    private readonly List<(StackPanel Box, FieldSpec Field, string[] Shape)> dynamics = [];
 
     public JsonForm(JsonObject item, IReadOnlyList<FieldSpec>? fields, Lookups lookups)
     {
@@ -34,6 +37,32 @@ public sealed class JsonForm : StackPanel
     private void Refresh()
     {
         foreach (var (element, field) in conditional) element.Visibility = field.ShowWhen!(item) ? Visibility.Visible : Visibility.Collapsed;
+        for (var i = 0; i < dynamics.Count; i++)
+        {
+            var (box, field, shape) = dynamics[i];
+            var fields = field.Expand!(item, lookups);
+            var now = fields.Select(entry => $"{entry.Path}:{entry.Kind}:{entry.Label}").ToArray();
+            if (now.SequenceEqual(shape)) continue;
+            dynamics[i] = (box, field, now);
+            Fill(box, field, fields);
+        }
+    }
+
+    /// <summary>The fields of a <see cref="FieldKind.Dynamic"/> field as the item is now; values of fields that went away are dropped.</summary>
+    private void Fill(StackPanel box, FieldSpec field, IReadOnlyList<FieldSpec> fields)
+    {
+        box.Children.Clear();
+        box.Children.Add(new TextBlock { Text = field.Label, FontSize = 13, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, Foreground = Brush("MimiInk2Brush") });
+        if (field.Hint is { Length: > 0 } hint) box.Children.Add(Caption(hint));
+        var keep = fields.Select(entry => entry.Path).ToHashSet();
+        if (field.Path.Length > 0 && Get(field.Path) is JsonObject values)
+        {
+            foreach (var key in values.Select(entry => entry.Key).ToList())
+            {
+                if (!keep.Contains($"{field.Path}.{key}") && !keep.Contains(field.Path)) values.Remove(key);
+            }
+        }
+        foreach (var entry in fields) box.Children.Add(Build(entry));
     }
 
     /// <summary>Fields whose JSON does not parse; saving waits until there are none.</summary>
@@ -91,7 +120,11 @@ public sealed class JsonForm : StackPanel
         }
         if (value is null) parent.Remove(parts[^1]);
         else parent[parts[^1]] = value;
+        Edited?.Invoke();
     }
+
+    /// <summary>A value of the item changed (the editor marks its draft unsaved).</summary>
+    public event Action? Edited;
 
     // ---------- controls ----------
 
@@ -101,6 +134,14 @@ public sealed class JsonForm : StackPanel
 
     private FrameworkElement Build(FieldSpec field)
     {
+        if (field.Kind == FieldKind.Dynamic && field.Expand is not null)
+        {
+            var box = new StackPanel { Spacing = 10 };
+            var fields = field.Expand(item, lookups);
+            dynamics.Add((box, field, fields.Select(entry => $"{entry.Path}:{entry.Kind}:{entry.Label}").ToArray()));
+            Fill(box, field, fields);
+            return box;
+        }
         var built = BuildField(field);
         if (field.ShowWhen is not null) conditional.Add((built, field));
         return built;
@@ -140,6 +181,9 @@ public sealed class JsonForm : StackPanel
             FieldKind.Json => Json(field),
             FieldKind.Secret => Secret(field),
             FieldKind.ReadOnly => ReadOnly(field),
+            FieldKind.KeyValue => KeyValue(field),
+            FieldKind.Rows => Rows(field),
+            FieldKind.Audience => Audience(field),
             _ => field.OptionsFrom is not null || field.Options is not null ? Choice(field) : Text(field, multiline: false),
         });
         if (field.Hint is { Length: > 0 } hint) box.Children.Add(Caption(hint));
@@ -148,15 +192,20 @@ public sealed class JsonForm : StackPanel
 
     private FrameworkElement Text(FieldSpec field, bool multiline)
     {
-        var box = new TextBox { Text = Show(Get(field.Path)), IsSpellCheckEnabled = false, AcceptsReturn = multiline, TextWrapping = multiline ? TextWrapping.Wrap : TextWrapping.NoWrap };
+        // AcceptsReturn must be on before Text: a TextBox that cannot take returns keeps only the first line.
+        var box = new TextBox { IsSpellCheckEnabled = false, AcceptsReturn = multiline, TextWrapping = multiline ? TextWrapping.Wrap : TextWrapping.NoWrap, PlaceholderText = field.Placeholder ?? "" };
+        box.Text = Show(Get(field.Path));
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(box, field.Label);
         if (multiline)
         {
             box.MinHeight = 90;
-            box.MaxHeight = 320;
+            // A long system prompt scrolls inside its own box, so the form keeps its size and the
+            // scrollbar stays within the field (the web form's textarea never grows the page).
+            box.MaxHeight = field.Path == "systemPrompt" ? 420 : 520;
             ScrollViewer.SetVerticalScrollBarVisibility(box, ScrollBarVisibility.Auto);
+            ScrollViewer.SetHorizontalScrollBarVisibility(box, ScrollBarVisibility.Disabled);
         }
-        box.TextChanged += (_, _) => Set(field.Path, JsonValue.Create(box.Text));
+        box.TextChanged += (_, _) => Set(field.Path, field.OmitEmpty && box.Text.Trim().Length == 0 ? null : JsonValue.Create(box.Text));
         return box;
     }
 
@@ -225,7 +274,8 @@ public sealed class JsonForm : StackPanel
     private FrameworkElement List(FieldSpec field)
     {
         var lines = Get(field.Path) is JsonArray array ? array.Select(Show).ToList() : [];
-        var box = new TextBox { Text = string.Join("\r", lines), AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MinHeight = 60, MaxHeight = 220, IsSpellCheckEnabled = false };
+        var box = new TextBox { AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MinHeight = 60, MaxHeight = 220, IsSpellCheckEnabled = false };
+        box.Text = string.Join("\r", lines);
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(box, field.Label);
         ScrollViewer.SetVerticalScrollBarVisibility(box, ScrollBarVisibility.Auto);
         void Store()
@@ -268,7 +318,6 @@ public sealed class JsonForm : StackPanel
         var current = Get(field.Path);
         var box = new TextBox
         {
-            Text = current is null ? "" : current.ToJsonString(Pretty),
             AcceptsReturn = true,
             TextWrapping = TextWrapping.Wrap,
             FontFamily = new FontFamily("Cascadia Mono, Consolas"),
@@ -277,6 +326,7 @@ public sealed class JsonForm : StackPanel
             MaxHeight = 360,
             IsSpellCheckEnabled = false,
         };
+        box.Text = current is null ? "" : current.ToJsonString(Pretty);
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(box, field.Label);
         ScrollViewer.SetVerticalScrollBarVisibility(box, ScrollBarVisibility.Auto);
         var problem = Caption("");
@@ -308,10 +358,211 @@ public sealed class JsonForm : StackPanel
 
     private FrameworkElement Secret(FieldSpec field)
     {
-        var box = new PasswordBox { PlaceholderText = "••••••" };
+        var box = new PasswordBox { PlaceholderText = field.Placeholder ?? "••••••" };
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(box, field.Label);
         box.PasswordChanged += (_, _) => Set(field.Path, box.Password.Length == 0 ? null : JsonValue.Create(box.Password));
         return box;
+    }
+
+    // ---------- small forms instead of JSON ----------
+
+    private static Button Small(string text, string name, Action act)
+    {
+        var button = new Button { Content = text, Padding = new Thickness(8, 3, 8, 4), FontSize = 12 };
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(button, name);
+        button.Click += (_, _) => act();
+        return button;
+    }
+
+    /// <summary>A value as typed: JSON when it reads as JSON (a number, true/false, a list, an object, "quoted text"), else the text itself.</summary>
+    public static JsonNode? Typed(string text)
+    {
+        var trimmed = text.Trim();
+        if (trimmed.Length > 0 && (char.IsDigit(trimmed[0]) || trimmed[0] is '-' or '[' or '{' or '"' || trimmed is "true" or "false" or "null"))
+        {
+            try
+            {
+                return JsonNode.Parse(trimmed);
+            }
+            catch (JsonException)
+            {
+                // not JSON: kept as text
+            }
+        }
+        return JsonValue.Create(text);
+    }
+
+    /// <summary>An object of name → value as rows (name, value, ✕) and "+ เพิ่ม"; the order of the rows is kept.</summary>
+    private FrameworkElement KeyValue(FieldSpec field)
+    {
+        var rows = new StackPanel { Spacing = 4 };
+        var entries = (Get(field.Path) as JsonObject)?.Select(entry => (Key: entry.Key, Value: Show(entry.Value))).ToList() ?? [];
+        void Store()
+        {
+            var json = new JsonObject();
+            foreach (var (key, value) in entries)
+            {
+                if (key.Trim().Length > 0) json[key.Trim()] = Typed(value);
+            }
+            Set(field.Path, json);
+        }
+        void Paint()
+        {
+            rows.Children.Clear();
+            for (var i = 0; i < entries.Count; i++)
+            {
+                var index = i;
+                var grid = new Grid { ColumnSpacing = 4 };
+                grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(2, GridUnitType.Star) });
+                grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(3, GridUnitType.Star) });
+                grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                var name = new TextBox { Text = entries[i].Key, PlaceholderText = "ชื่อ", IsSpellCheckEnabled = false, FontFamily = new FontFamily("Cascadia Mono, Consolas"), FontSize = 12 };
+                Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(name, $"{field.Label} แถว {index + 1} ชื่อ");
+                var value = new TextBox { Text = entries[i].Value, PlaceholderText = "ค่า", IsSpellCheckEnabled = false, FontSize = 12 };
+                Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(value, $"{field.Label} แถว {index + 1} ค่า");
+                name.TextChanged += (_, _) =>
+                {
+                    entries[index] = (name.Text, entries[index].Value);
+                    Store();
+                };
+                value.TextChanged += (_, _) =>
+                {
+                    entries[index] = (entries[index].Key, value.Text);
+                    Store();
+                };
+                var remove = Small("✕", $"ลบแถว {index + 1} ของ {field.Label}", () =>
+                {
+                    entries.RemoveAt(index);
+                    Store();
+                    Paint();
+                });
+                Grid.SetColumn(value, 1);
+                Grid.SetColumn(remove, 2);
+                grid.Children.Add(name);
+                grid.Children.Add(value);
+                grid.Children.Add(remove);
+                rows.Children.Add(grid);
+            }
+            rows.Children.Add(Small("+ เพิ่ม", $"เพิ่มแถวใน {field.Label}", () =>
+            {
+                entries.Add(("", ""));
+                Paint();
+            }));
+            if (entries.Count == 0) rows.Children.Insert(0, Caption("ยังไม่มี — กด \"+ เพิ่ม\""));
+        }
+        Paint();
+        var panel = new StackPanel { Spacing = 2 };
+        panel.Children.Add(rows);
+        panel.Children.Add(Caption("ตัวเลข true/false หรือ JSON ใส่ได้ตรง ๆ · ข้อความใส่ได้เลย (\"123\" = ข้อความ 123)"));
+        return panel;
+    }
+
+    /// <summary>A list of objects: a card per entry with the entry's own fields, ✕ to remove, "+ เพิ่ม" for a new one.</summary>
+    private FrameworkElement Rows(FieldSpec field)
+    {
+        var stack = new StackPanel { Spacing = 8 };
+        JsonArray List()
+        {
+            if (Get(field.Path) is JsonArray list) return list;
+            list = [];
+            Set(field.Path, list);
+            return list;
+        }
+        void Paint()
+        {
+            stack.Children.Clear();
+            var list = List();
+            for (var i = 0; i < list.Count; i++)
+            {
+                if (list[i] is not JsonObject entry)
+                {
+                    entry = [];
+                    list[i] = entry;
+                }
+                var index = i;
+                var head = new Grid();
+                head.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                head.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                head.Children.Add(new TextBlock { Text = entry.Str("label") is { Length: > 0 } title ? title : $"#{index + 1}", FontSize = 12.5, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, Foreground = Brush("MimiAccentTextBrush"), VerticalAlignment = VerticalAlignment.Center });
+                var remove = Small("✕", $"ลบ {field.Label} #{index + 1}", () =>
+                {
+                    List().RemoveAt(index);
+                    Paint();
+                });
+                Grid.SetColumn(remove, 1);
+                head.Children.Add(remove);
+                var card = new StackPanel { Spacing = 8 };
+                card.Children.Add(head);
+                card.Children.Add(new JsonForm(entry, field.Children ?? [], lookups));
+                stack.Children.Add(new Border
+                {
+                    Child = card,
+                    BorderBrush = Brush("MimiLineBrush"),
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(10),
+                    Padding = new Thickness(12, 8, 12, 10),
+                    Background = Brush("MimiRaisedBrush"),
+                });
+            }
+            if (list.Count == 0) stack.Children.Add(Caption("ยังไม่มี — กด \"+ เพิ่ม\""));
+            stack.Children.Add(Small("+ เพิ่ม", $"เพิ่ม {field.Label}", () =>
+            {
+                var list = List();
+                list.Add(field.NewRow?.Invoke(list) ?? new JsonObject());
+                Paint();
+            }));
+        }
+        Paint();
+        return stack;
+    }
+
+    /// <summary>Who sees it: every agent (<c>"*"</c>) or only the agents ticked (a list; empty = nobody).</summary>
+    private FrameworkElement Audience(FieldSpec field)
+    {
+        var panel = new StackPanel { Spacing = 4 };
+        var everyone = new RadioButton { Content = "agent ทุกตัวเห็น", GroupName = $"aud{GetHashCode()}{field.Path}" };
+        var some = new RadioButton { Content = "เฉพาะ agent ที่เลือก", GroupName = everyone.GroupName };
+        var picks = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10, Margin = new Thickness(26, 0, 0, 0) };
+        void Paint()
+        {
+            var current = Get(field.Path);
+            var all = current is null || current is JsonValue star && star.TryGetValue<string>(out var text) && text == "*";
+            everyone.IsChecked = all;
+            some.IsChecked = !all;
+            picks.Children.Clear();
+            picks.Visibility = all ? Visibility.Collapsed : Visibility.Visible;
+            if (all) return;
+            var chosen = (current as JsonArray)?.Select(Show).ToHashSet() ?? [];
+            foreach (var (value, label) in lookups.Get("agents"))
+            {
+                var box = new CheckBox { Content = label, IsChecked = chosen.Contains(value), MinWidth = 0 };
+                box.Click += (_, _) =>
+                {
+                    if (box.IsChecked == true) chosen.Add(value);
+                    else chosen.Remove(value);
+                    Set(field.Path, new JsonArray(chosen.Select(name => (JsonNode?)JsonValue.Create(name)).ToArray()));
+                };
+                picks.Children.Add(box);
+            }
+            if (picks.Children.Count == 0) picks.Children.Add(Caption("ยังไม่มี agent"));
+        }
+        everyone.Checked += (_, _) =>
+        {
+            if (Get(field.Path) is JsonValue) return;
+            Set(field.Path, JsonValue.Create("*"));
+            Paint();
+        };
+        some.Checked += (_, _) =>
+        {
+            if (Get(field.Path) is JsonArray) return;
+            Set(field.Path, new JsonArray());
+            Paint();
+        };
+        Paint();
+        panel.Children.Add(everyone);
+        panel.Children.Add(some);
+        panel.Children.Add(new ScrollViewer { Content = picks, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Disabled, HorizontalScrollMode = ScrollMode.Enabled });
+        return panel;
     }
 
     private FrameworkElement ReadOnly(FieldSpec field)

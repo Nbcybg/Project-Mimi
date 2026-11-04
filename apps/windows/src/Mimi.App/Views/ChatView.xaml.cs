@@ -63,6 +63,7 @@ public sealed partial class ChatView : UserControl
         ViewModel = viewModel;
         this.window = window;
         InitializeComponent();
+        SetUpComposer();
         viewModel.Grew += () => DispatcherQueue.TryEnqueue(ScrollDown);
         // The web's emoji panel (feature-chat.js EMOJIS).
         EmojiGrid.ItemsSource = new[]
@@ -82,9 +83,36 @@ public sealed partial class ChatView : UserControl
 
     public ChatViewModel ViewModel { get; }
 
+    private static bool solo;
+    private static bool showPrompt;
+    private static double textSize = 14;
+
     public static HorizontalAlignment Side(bool user) => user ? HorizontalAlignment.Right : HorizontalAlignment.Left;
-    public static Brush Bubble(bool user) => (Brush)Application.Current.Resources[user ? "MimiUserBrush" : "MimiPanelBrush"];
-    public static Brush BubbleLine(bool user) => (Brush)Application.Current.Resources[user ? "MimiUserLineBrush" : "MimiLineBrush"];
+    public static double ChatTextSize() => textSize;
+    /// <summary>The send button exists only when there is something to send (web .box.empty #send).</summary>
+    public static Visibility SendVisibility(bool canSend, bool busy) => canSend && !busy ? Visibility.Visible : Visibility.Collapsed;
+    /// <summary>On the character screen the microphone gives way to send once there is text.</summary>
+    public static Visibility MicVisibility(bool canSend, bool busy) => !solo || (!canSend && !busy) ? Visibility.Visible : Visibility.Collapsed;
+    public static Visibility PromptVisibility() => showPrompt ? Visibility.Visible : Visibility.Collapsed;
+    public static Visibility ToolsVisibility(bool hasTools) => hasTools && showPrompt ? Visibility.Visible : Visibility.Collapsed;
+    public static Visibility HelperVisibility(string helper) => showPrompt && !string.IsNullOrEmpty(helper) ? Visibility.Visible : Visibility.Collapsed;
+    /// <summary>The bubble colours, changed in place while the character screen is on (web .solo .tx / .user).</summary>
+    public static Brush Bubble(bool user) => (Brush)Application.Current.Resources[user ? "MimiChatUserBrush" : "MimiChatTxBrush"];
+    public static Brush BubbleLine(bool user) => (Brush)Application.Current.Resources[user ? "MimiChatUserLineBrush" : "MimiChatTxLineBrush"];
+    public static Brush InkFor(bool user) => (Brush)Application.Current.Resources[user ? "MimiChatUserInkBrush" : "MimiChatInkBrush"];
+    // The same brushes in templates whose row has no side property: a literal argument in x:Bind
+    // inside a DataTemplate does not compile, so these are separate no-argument functions.
+    public static Brush UserBubble() => (Brush)Application.Current.Resources["MimiChatUserBrush"];
+    public static Brush UserBubbleLine() => (Brush)Application.Current.Resources["MimiChatUserLineBrush"];
+    public static Brush AgentBubble() => (Brush)Application.Current.Resources["MimiChatTxBrush"];
+    public static Brush AgentBubbleLine() => (Brush)Application.Current.Resources["MimiChatTxLineBrush"];
+    public static Brush UserInk() => (Brush)Application.Current.Resources["MimiChatUserInkBrush"];
+    public static Brush UserTime() => (Brush)Application.Current.Resources["MimiChatUserTimeBrush"];
+    public static Brush TimeFor(bool user) => (Brush)Application.Current.Resources[user ? "MimiChatUserTimeBrush" : "MimiChatTimeBrush"];
+    /// <summary>In the character screen the agent's name and face are not over the picture (web .solo .gmsg .nm).</summary>
+    public static Visibility NameRow(bool user) => user || solo ? Visibility.Collapsed : Visibility.Visible;
+    /// <summary>The same for the streaming row, whose x:Bind cannot take a literal argument.</summary>
+    public static Visibility AgentNameRow() => NameRow(false);
     public static Brush NoteBrush(bool bad) => (Brush)Application.Current.Resources[bad ? "MimiBadBrush" : "MimiMutedBrush"];
     public static Visibility Not(bool value) => value ? Visibility.Collapsed : Visibility.Visible;
     /// <summary>Several pins: the list; one pin: unpin it.</summary>
@@ -95,10 +123,16 @@ public sealed partial class ChatView : UserControl
     private void ScrollDown()
     {
         if (ViewModel.Items.Count > 0) Messages.ScrollIntoView(ViewModel.Items[^1], ScrollIntoViewAlignment.Leading);
+        QueueBubbleFade();
     }
 
     private void OnComposerKey(object sender, KeyRoutedEventArgs e)
     {
+        if (ComposerKey(e))
+        {
+            e.Handled = true;
+            return;
+        }
         if (e.Key != VirtualKey.Enter) return;
         var shift = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
         if (shift) return;
@@ -234,6 +268,14 @@ public sealed partial class ChatView : UserControl
 
     private void OnMessageMore(object sender, RoutedEventArgs e) => MessageMenu(Tagged<MessageItem>(sender)).ShowAt((FrameworkElement)sender);
 
+    /// <summary>A tap/click on the bubble opens the same actions as the ⋯ button (web's touch .sel bar).</summary>
+    private void OnMessageTapped(object sender, TappedRoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { Tag: MessageItem message }) return;
+        if (e.OriginalSource is Microsoft.UI.Xaml.Documents.Hyperlink) return;
+        MessageMenu(message).ShowAt((FrameworkElement)sender);
+    }
+
     private MenuFlyout MessageMenu(MessageItem message)
     {
         var menu = new MenuFlyout();
@@ -365,19 +407,7 @@ public sealed partial class ChatView : UserControl
         WinRT.Interop.InitializeWithWindow.Initialize(picker, window());
         picker.FileTypeFilter.Add("*");
         var files = await picker.PickMultipleFilesAsync();
-        foreach (var file in files) await Upload(file);
-    }
-
-    private async Task Upload(StorageFile file)
-    {
-        var properties = await file.GetBasicPropertiesAsync();
-        if (properties.Size > 25 * 1024 * 1024)
-        {
-            ViewModel.Error = $"{file.Name} ใหญ่เกิน 25 MB";
-            return;
-        }
-        await using var stream = await file.OpenStreamForReadAsync();
-        await ViewModel.Attach(stream, file.Name, string.IsNullOrEmpty(file.ContentType) ? "application/octet-stream" : file.ContentType);
+        await UploadAll(files);
     }
 
     private void OnDragOver(object sender, DragEventArgs e)
@@ -388,10 +418,7 @@ public sealed partial class ChatView : UserControl
     private async void OnDrop(object sender, DragEventArgs e)
     {
         if (!e.DataView.Contains(StandardDataFormats.StorageItems)) return;
-        foreach (var item in await e.DataView.GetStorageItemsAsync())
-        {
-            if (item is StorageFile file) await Upload(file);
-        }
+        await UploadAll((await e.DataView.GetStorageItemsAsync()).OfType<StorageFile>().ToList());
     }
 
     private async void OnMic(object sender, RoutedEventArgs e)

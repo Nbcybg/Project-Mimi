@@ -45,6 +45,9 @@ public sealed class MimiSession : IDisposable
     /// <summary>A screen setting shared by the user's devices (welcome.ui, `ui` frames), or null.</summary>
     public string? UiValue(string key) => shared.TryGetValue(key, out var value) ? value : null;
 
+    /// <summary>Every shared screen setting as last heard (node presets are read from these).</summary>
+    public IReadOnlyDictionary<string, string> UiValues => shared;
+
     /// <summary>Changes a shared screen setting (null removes it); the other devices hear of it.</summary>
     public void SetUi(string key, string? value)
     {

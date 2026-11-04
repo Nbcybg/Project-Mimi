@@ -69,14 +69,16 @@ Phase 0 อยู่ใน [native-phase0-prompt.md](native-phase0-prompt.md) �
 สร้างโปรเจกต์ที่ `apps/macos/` (Xcode project/Swift Package) โดย:
 - สถาปัตยกรรม: SwiftUI + Observation, URLSession + `URLSessionWebSocketTask`, Swift Concurrency, Keychain สำหรับ token, SwiftData/SQLite สำหรับ cache
 - แยก **MimiKit** (Swift Package: โมเดล, API client, WebSocket, auth, repository) ให้ iOS (Phase 4) ใช้ร่วมกัน ห้ามใส่โค้ด UI เฉพาะ macOS ใน MimiKit
-- ขอบเขต MVP: ล็อกอิน, แชต streaming, Mimiamp ครบ (AVAudioEngine + EQ 10 band ด้วย `AVAudioUnitEQ`, Now Playing/ปุ่มมีเดีย), menu bar item (แทน tray), หน้าต่างลอยขนาดเดียวกับแอปเดิม, การแจ้งเตือน (APNs + local), เปิดตอนเข้าสู่ระบบ (`SMAppService`), ล็อกอัตโนมัติ/ออกจากระบบเหมือน `remote.cjs`
-- PC agent (`packages/pc-agent`, เรียกเครื่องมือไฟล์/เชลล์/เบราว์เซอร์ในเครื่อง): ยังคงเป็นโปรเซสแยก — ให้แอป native เริ่ม/หยุดมันและแสดงสถานะ ไม่ต้องเขียนใหม่ในเฟสนี้ ระบุใน `docs/native/` ว่าเป็นงานต่อไป
-- Workspace (เบราว์เซอร์/เทอร์มินัล/ไฟล์ในหน้าต่าง) เป็นฟีเจอร์เฟส 6 ไม่ต้องทำตอนนี้
+- ขอบเขต MVP: ล็อกอิน, แชต streaming, menu bar item (แทน tray), หน้าต่างลอยขนาดเดียวกับแอปเดิม, การแจ้งเตือน (APNs + local), เปิดตอนเข้าสู่ระบบ (`SMAppService`), ล็อกอัตโนมัติ/ออกจากระบบเหมือน `remote.cjs`
+- PC agent (`packages/pc-agent`, เรียกเครื่องมือไฟล์/เชลล์/เบราว์เซอร์ในเครื่อง): **รวมเข้าแอป** (Q7) — ใส่ node + pc-agent ในชุดแอปแล้วแอปเริ่ม/หยุด/แสดงสถานะ/consent เอง แบบแอป Windows (`PcAgentHost`)
+- **ไม่มี Mimiamp** (Q5: เอาออกทั้งหมดแล้วใน api 2) · VRM 3D ทำเป็นลำดับท้ายสุด (Q6) · ต้องครบเท่าแอป Windows ก่อนปล่อย (Q10) — เทียบกับ `apps/windows/README.md`
+- โหมด "เซิร์ฟเวอร์ในเครื่องนี้": เปิด core ด้วย `packages/core/src/app/native-host.ts` ตัวเดียวกับแอป Windows (`LocalCore`)
+- Workspace (เบราว์เซอร์/เทอร์มินัล/ไฟล์ในหน้าต่าง) ทำหลัง MVP แต่ต้องมีก่อนปล่อย (แอป Windows มีแล้ว)
 - App Sandbox + Hardened Runtime + entitlements เท่าที่จำเป็น, ลายเซ็น/notarization ใช้สคริปต์ที่ผู้ใช้ตั้งค่าเอง ห้ามสร้างหรือแตะใบรับรองจริง
 - ตัวอัปเดต: ใช้ Sparkle หรือเทียบ GitHub release ตามที่ `updater.cjs` ทำอยู่ (เลือกและบอกเหตุผล)
 - test: XCTest/Swift Testing ของ MimiKit และ UI test พื้นฐาน
 
-เสร็จเมื่อ: `xcodebuild` ผ่านทั้ง arm64 และ x86_64, ล็อกอิน → แชต → เล่น Mimiamp ได้กับ core ในเครื่อง, ไม่มี `WKWebView`/Electron ใน UI หลัก, รายงานสิ่งที่ยังไม่ทำ
+เสร็จเมื่อ: `xcodebuild` ผ่านทั้ง arm64 และ x86_64, ล็อกอิน → แชต → PC agent ทำงานได้กับ core ในเครื่อง, ไม่มี `WKWebView`/Electron ใน UI หลัก, รายงานสิ่งที่ยังไม่ทำ
 
 ---
 
@@ -88,14 +90,14 @@ Phase 0 อยู่ใน [native-phase0-prompt.md](native-phase0-prompt.md) �
 อ่าน `docs/native/*` และโค้ด MimiKit ที่มีอยู่ก่อน ถ้ายังไม่มี MimiKit ให้หยุดและรายงาน
 
 สร้าง `apps/ios/` โดย:
-- ขอบเขต MVP: ล็อกอิน, แชต streaming, Mimiamp (background audio, Control Center/Lock Screen, EQ), APNs push (ใช้ endpoint จาก Phase 1), Widget (WidgetKit) แทน widget แชตของ Android, Share Extension ส่งข้อความ/ไฟล์เข้าแชต, ไมค์/กล้อง/ไฟล์ตามสิทธิ์ของ iOS
+- ขอบเขต MVP: ล็อกอิน, แชต streaming (ไม่มี Mimiamp — Q5), APNs push (ใช้ endpoint จาก Phase 1), Widget (WidgetKit) แทน widget แชตของ Android, Share Extension ส่งข้อความ/ไฟล์เข้าแชต, ไมค์/กล้อง/ไฟล์ตามสิทธิ์ของ iOS
 - Adaptive layout สำหรับ iPhone/iPad, Dynamic Type, VoiceOver, ธีมมืด
 - Background: `BGAppRefreshTask` สำหรับ sync เบา ๆ ข้อจำกัดของ iOS (ไม่มี PC agent, ไม่มีเชลล์) ต้องเขียนไว้ในเอกสารและซ่อนฟีเจอร์ที่ใช้ไม่ได้
 - ย้ายโค้ดที่เป็นของ macOS ออกจาก MimiKit ถ้าพบ แล้วบันทึกการเปลี่ยนแปลง
 - ลายเซ็น/provisioning ผู้ใช้ตั้งค่าเอง ห้ามสร้างหรือแตะใบรับรอง TestFlight/App Store ขั้นตอนอัปโหลดให้เขียนเป็นเอกสารเท่านั้น
 - test: unit test ของ view model + UI test บน simulator กับ core ในเครื่อง (`localhost`)
 
-เสร็จเมื่อ: build ผ่านบน iOS Simulator, ล็อกอิน → แชต → เล่นเพลงพื้นหลังได้, ไม่มี `WKWebView` ใน UI หลัก, รายงานสิ่งที่ยังไม่ทำ
+เสร็จเมื่อ: build ผ่านบน iOS Simulator, ล็อกอิน → แชต → แจ้งเตือนได้, ไม่มี `WKWebView` ใน UI หลัก, รายงานสิ่งที่ยังไม่ทำ
 
 ---
 
@@ -107,12 +109,12 @@ Phase 0 อยู่ใน [native-phase0-prompt.md](native-phase0-prompt.md) �
 อ่าน `docs/native/*`, `packages/desktop/` (tray, updater, auto-start, `patch-exe.mjs`, `build-win.mjs`) และ `packages/pc-agent` ก่อน
 
 สร้าง `apps/windows/` โดย:
-- ขอบเขต MVP: ล็อกอิน, แชต streaming, Mimiamp ครบ (WASAPI/NAudio หรือ MediaPlayer + EQ 10 band, SMTC/ปุ่มมีเดีย), tray icon + หน้าต่างลอย, Toast notification (ใช้ WNS หรือ polling ตามที่ Phase 0 ตัดสินใจ), เปิดตอนเข้าสู่ระบบ, ล็อกอัตโนมัติ/ออกจากระบบ, token ใน Windows Credential Locker/DPAPI
+- ขอบเขต MVP: ล็อกอิน, แชต streaming, ~~Mimiamp~~ (ทำแล้วแต่เอาออกใน api 2 — Q5), tray icon + หน้าต่างลอย, Toast notification (ใช้ WNS หรือ polling ตามที่ Phase 0 ตัดสินใจ), เปิดตอนเข้าสู่ระบบ, ล็อกอัตโนมัติ/ออกจากระบบ, token ใน Windows Credential Locker/DPAPI
 - PC agent คงเป็นโปรเซส Node แยก: แอปเริ่ม/หยุด/แสดงสถานะ (เหมือน Phase 3)
 - แพ็กเกจ MSIX หรือ installer + ตัวอัปเดต (เลือกและให้เหตุผล) ชื่อ/ไอคอน/เวอร์ชันของ exe ต้องเป็น Mimi (แทนที่ `patch-exe.mjs`) ห้ามสร้างหรือแตะใบรับรองจริง
 - test: unit test ของ ViewModel/ API client และ UI automation พื้นฐาน
 
-เสร็จเมื่อ: build ผ่านบน Windows x64 (และ arm64 ถ้าทำได้), ล็อกอิน → แชต → เล่น Mimiamp ได้, ไม่มี WebView2 ใน UI หลัก, รายงานสิ่งที่ยังไม่ทำและสิ่งที่ยังไม่ได้ทดสอบบนเครื่องจริง
+เสร็จเมื่อ: build ผ่านบน Windows x64 (และ arm64 ถ้าทำได้), ล็อกอิน → แชต ได้, ไม่มี WebView2 ใน UI หลัก, รายงานสิ่งที่ยังไม่ทำและสิ่งที่ยังไม่ได้ทดสอบบนเครื่องจริง
 
 ---
 

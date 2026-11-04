@@ -259,6 +259,28 @@ export class AccountStore {
     }));
   }
 
+  /**
+   * The account whose core sent this token (a core asking the gateway to push for it: the push
+   * relay). Null for anything else, a disabled account included.
+   */
+  coreOwner(token: unknown): string | null {
+    if (typeof token !== 'string' || token.length < 20 || token.length > 400) return null;
+    const wanted = createHash('sha256').update(token).digest();
+    const rows = this.db.prepare('SELECT * FROM users WHERE disabled_at IS NULL').all() as UserRow[];
+    let owner: string | null = null;
+    for (const row of rows) {
+      let actual: Buffer;
+      try {
+        actual = createHash('sha256').update(this.open(row.core_token)).digest();
+      } catch {
+        continue;
+      }
+      // Every row is compared, so the time taken does not tell which one matched.
+      if (timingSafeEqual(actual, wanted) && owner === null) owner = row.username;
+    }
+    return owner;
+  }
+
   /** A new password also signs out every device. */
   async setPassword(rawUsername: string, password: string): Promise<void> {
     const row = this.mustRow(rawUsername);

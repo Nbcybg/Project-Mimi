@@ -18,10 +18,30 @@ public sealed class MessageText : ContentControl
     public static readonly DependencyProperty TextProperty =
         DependencyProperty.Register(nameof(Text), typeof(string), typeof(MessageText), new PropertyMetadata("", (control, _) => ((MessageText)control).Build()));
 
+    public static readonly DependencyProperty TextBrushProperty =
+        DependencyProperty.Register(nameof(TextBrush), typeof(Brush), typeof(MessageText), new PropertyMetadata(null, (control, _) => ((MessageText)control).Build()));
+
+    public static readonly DependencyProperty TextSizeProperty =
+        DependencyProperty.Register(nameof(TextSize), typeof(double), typeof(MessageText), new PropertyMetadata(14.0, (control, _) => ((MessageText)control).Build()));
+
     public string Text
     {
         get => (string)GetValue(TextProperty);
         set => SetValue(TextProperty, value);
+    }
+
+    /// <summary>The colour of the words (the user's bubble is light on the character screen).</summary>
+    public Brush? TextBrush
+    {
+        get => (Brush?)GetValue(TextBrushProperty);
+        set => SetValue(TextBrushProperty, value);
+    }
+
+    /// <summary>The chat's text size (0/1/2 in the chat setting), applied to every block.</summary>
+    public double TextSize
+    {
+        get => (double)GetValue(TextSizeProperty);
+        set => SetValue(TextSizeProperty, value);
     }
 
     public MessageText()
@@ -31,6 +51,8 @@ public sealed class MessageText : ContentControl
     }
 
     private static Brush Brush(string key) => (Brush)Application.Current.Resources[key];
+
+    private Brush Ink => TextBrush ?? Brush("MimiInkBrush");
 
     private void Build()
     {
@@ -52,15 +74,15 @@ public sealed class MessageText : ContentControl
                         {
                             Text = code.Text,
                             FontFamily = new FontFamily("Cascadia Mono, Consolas"),
-                            FontSize = 12.5,
+                            FontSize = Math.Max(9, TextSize - 1.5),
                             IsTextSelectionEnabled = true,
-                            Foreground = Brush("MimiInkBrush"),
+                            Foreground = Ink,
                         },
                     },
                 });
                 continue;
             }
-            var text = new RichTextBlock { TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true, Foreground = Brush("MimiInkBrush") };
+            var text = new RichTextBlock { TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true, Foreground = Ink, FontSize = TextSize };
             var paragraph = new Paragraph();
             foreach (var span in ((MBlock.Paragraph)block).Spans)
             {

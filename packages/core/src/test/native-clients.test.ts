@@ -129,7 +129,7 @@ test('errors name the message they answer; unknown types get E-PROTOCOL', async 
   assert.equal(failed.requestType, 'chat-open');
 });
 
-test('MIMI_SERVE_WEB=0: no pages or scripts, but the API, music, backdrops and icons stay', async (t) => {
+test('MIMI_SERVE_WEB=0: no pages or scripts, but the API, backdrops and icons stay', async (t) => {
   const app = await boot(t, { serveWeb: false });
   const page = await fetch(`${app.base}/`);
   assert.equal(page.status, 404);
@@ -137,10 +137,9 @@ test('MIMI_SERVE_WEB=0: no pages or scripts, but the API, music, backdrops and i
   for (const gone of ['/app.js', '/sw.js', '/vendor/three.module.js', '/sounds/chat_1.mp3']) {
     assert.equal((await fetch(`${app.base}${gone}`)).status, 404, gone);
   }
-  for (const kept of ['/health', '/icon.png', '/mimiamp/tracks.json', '/backgrounds/floral.webp']) {
+  for (const kept of ['/health', '/icon.png', '/backgrounds/floral.webp']) {
     assert.equal((await fetch(`${app.base}${kept}`)).status, 200, kept);
   }
-  assert.equal((await app.api('/api/mimiamp/state')).status, 200);
   await (await app.connect()).ask(null, 'welcome');
 
   // The default still serves the web client.
@@ -250,38 +249,18 @@ test('notifications: afterId lists read and unread; answers from a notification 
   assert.equal((await app.api('/api/approvals/abc', { ...json, body: '{}' })).status, 400);
 });
 
-test('songs upload to the music folder on the volume and can be removed', async (t) => {
-  const music = fs.mkdtempSync(path.join(os.tmpdir(), 'mimi-music-'));
-  const before = process.env.MIMI_MUSIC_DIR;
-  process.env.MIMI_MUSIC_DIR = music;
-  t.after(() => {
-    if (before === undefined) delete process.env.MIMI_MUSIC_DIR;
-    else process.env.MIMI_MUSIC_DIR = before;
-    fs.rmSync(music, { recursive: true, force: true });
-  });
+test('api 2: Mimiamp is gone (no songs, playlists or YouTube audio)', async (t) => {
   const app = await boot(t);
-  const client = await app.connect();
-  await client.ask(null, 'welcome');
-  const song = Buffer.alloc(4096, 7);
-  const made = await app.api('/api/mimiamp/files?name=My%20Song.mp3', { method: 'POST', headers: { 'content-type': 'audio/mpeg' }, body: song });
-  const body = (await made.json()) as { track: { id: string; url: string } };
-  assert.deepEqual([made.status, body.track.id, body.track.url], [200, 'file:My Song.mp3', '/mimiamp/My%20Song.mp3']);
-  assert.deepEqual(fs.readFileSync(path.join(music, 'My Song.mp3')), song);
-  await client.ask(null, 'mimiamp', (reply) => reply.command.action === 'refresh');
-  const ranged = await fetch(`${app.base}/mimiamp/My%20Song.mp3`, { headers: { range: 'bytes=0-9' } });
-  assert.deepEqual([ranged.status, ranged.headers.get('content-range')], [206, 'bytes 0-9/4096']);
-
-  for (const bad of ['../x.mp3', 'notes.txt', '.hidden.mp3']) {
-    assert.equal((await app.api(`/api/mimiamp/files?name=${encodeURIComponent(bad)}`, { method: 'POST', body: 'x' })).status, 400, bad);
+  for (const gone of ['/mimiamp/tracks.json', '/mimiamp/song.mp3', '/mimiamp/youtube/dQw4w9WgXcQ.audio', '/feature-mimiamp.js']) {
+    assert.equal((await fetch(`${app.base}${gone}`)).status, 404, gone);
   }
-  assert.equal(fs.readdirSync(music).length, 1, 'nothing else was written');
-  assert.equal((await app.api('/api/mimiamp/files?name=x.mp3', { method: 'POST', body: 'x' }, null)).status, 401);
-  assert.equal((await app.api('/api/mimiamp/files/My%20Song.mp3', { method: 'DELETE' })).status, 200);
-  assert.equal(fs.existsSync(path.join(music, 'My Song.mp3')), false);
-  assert.equal((await app.api('/api/mimiamp/files/My%20Song.mp3', { method: 'DELETE' })).status, 404);
+  for (const gone of ['/api/mimiamp/state', '/api/mimiamp/playlists', '/api/mimiamp/youtube/search?q=x']) {
+    assert.equal((await app.api(gone)).status, 404, gone);
+  }
+  assert.equal((await app.api('/api/mimiamp/files?name=x.mp3', { method: 'POST', body: 'x' })).status, 404);
 });
 
-test('gateway: /mimiamp/* with a session reaches that person\'s core; without one it stays public', async (t) => {
+test('gateway: /health says the api; /mimiamp/* is gone with or without a session', async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mimi-gw-native-'));
   const accounts = new AccountStore(path.join(dir, 'accounts.db'), 'gateway-secret-for-tests-0123456789abcdef', { passwordCost: 1024 });
   const made = await accounts.create('alice', 'alice-password-1', 'http://127.0.0.1:1');
@@ -301,14 +280,8 @@ test('gateway: /mimiamp/* with a session reaches that person\'s core; without on
   assert.deepEqual([health.api, health.minClientApi, health.accounts], [API_VERSION, MIN_CLIENT_API, true]);
 
   const login = (await (await fetch(`${base}/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: 'alice', password: 'alice-password-1' }) })).json()) as { token: string };
-  const tracks = await fetch(`${base}/mimiamp/tracks.json`, { headers: { authorization: `Bearer ${login.token}` } });
-  assert.equal(tracks.status, 200);
-  const { tracks: list } = (await tracks.json()) as { tracks: Array<{ url: string }> };
-  assert.ok(list.length > 0);
-  const song = await fetch(`${base}${list[0]!.url}`, { headers: { authorization: `Bearer ${login.token}`, range: 'bytes=0-15' } });
-  assert.deepEqual([song.status, song.headers.get('content-range')?.startsWith('bytes 0-15/')], [206, true], 'Range passes through the gateway');
-  assert.equal((await fetch(`${base}/mimiamp/tracks.json`, { headers: { authorization: 'Bearer wrong-token-0123456789-abcdef' } })).status, 401);
-  assert.equal((await fetch(`${base}/mimiamp/tracks.json`)).status, 200, 'the old web client\'s <audio src> still works');
+  assert.equal((await fetch(`${base}/mimiamp/tracks.json`, { headers: { authorization: `Bearer ${login.token}` } })).status, 404);
+  assert.equal((await fetch(`${base}/mimiamp/tracks.json`)).status, 404);
 });
 
 // ---------- the FCM / APNs senders against stand-in services ----------

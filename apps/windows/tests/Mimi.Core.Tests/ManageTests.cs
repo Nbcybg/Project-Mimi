@@ -171,6 +171,48 @@ public class ManageTests
     }
 
     [Fact]
+    public async Task Presets_and_connections_get_the_fields_the_server_describes()
+    {
+        var (session, socket) = await Connect();
+        var lookups = new Lookups(session);
+        socket.Push("""
+            {"type":"tools","tools":[{"name":"slack_post","risk":"network","settings":[
+               {"key":"channel","label":"Channel","type":"string","required":true},
+               {"key":"token","label":"Token","type":"secret"},
+               {"key":"mode","label":"Mode","type":"select","options":[{"value":"a","label":"A"}]},
+               {"key":"account","label":"Account","type":"account","service":"google"}]},
+              {"name":"plain","risk":"read"}],
+             "presets":[],"custom":[],"secretKeys":{},
+             "connectors":[{"key":"notion","label":"Notion","auth":{"kind":"oauth2","scopes":["read"],"fields":[{"key":"clientSecret","label":"Client secret","type":"secret"},{"key":"clientId","label":"Client ID","type":"string"}]}},
+                           {"key":"open","label":"Open","auth":{"kind":"none","fields":[]}}],
+             "connections":[{"id":"c1","connector":"notion","name":"Work","default":true,"connected":true}]}
+            """);
+        await Until(() => lookups.Items("tools").Count == 2);
+        var preset = ServerFields.PresetSettings(J.O(("tool", JsonValue.Create("slack_post"))), lookups);
+        Assert.Equal(["settings.channel", "settings.token", "settings.mode", "settings.account"], preset.Select(field => field.Path));
+        Assert.Equal("Channel *", preset[0].Label);
+        // A preset's secret is a {{secret.NAME}} reference: typed as text, not hidden.
+        Assert.Equal(FieldKind.Text, preset[1].Kind);
+        Assert.Equal([("a", "A")], preset[2].Options!);
+        Assert.Equal("accounts:google", preset[3].OptionsFrom);
+        Assert.Equal(FieldKind.KeyValue, ServerFields.PresetSettings(J.O(("tool", JsonValue.Create("plain"))), lookups).Single().Kind);
+
+        var connection = ServerFields.ConnectionFields(J.O(("connector", JsonValue.Create("notion"))), lookups);
+        Assert.Equal(["fields.clientSecret", "fields.clientId", "oauth"], connection.Select(field => field.Path));
+        Assert.Equal(FieldKind.Secret, connection[0].Kind);
+        Assert.True(connection[1].OmitEmpty);
+        Assert.Equal(FieldKind.Group, connection[2].Kind);
+        Assert.Equal(FieldKind.ReadOnly, ServerFields.ConnectionFields(J.O(("connector", JsonValue.Create("open"))), lookups).Single().Kind);
+        Assert.Equal(["", "c1"], lookups.Get("connections:notion").Select(entry => entry.Value));
+        Assert.Contains("★", lookups.Get("connections:notion")[1].Label);
+
+        var fields = new JsonArray(new JsonObject { ["key"] = "field_1" });
+        Assert.Equal("field_2", ServerFields.NewProfileField(fields).Str("key"));
+        Assert.Equal("*", ServerFields.NewProfileField([]).Str("visibleTo"));
+        session.End();
+    }
+
+    [Fact]
     public async Task Task_cards_follow_the_task_events_and_send_their_controls()
     {
         var (session, socket) = await Connect();

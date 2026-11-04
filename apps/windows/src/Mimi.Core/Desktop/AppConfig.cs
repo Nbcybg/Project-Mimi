@@ -26,6 +26,13 @@ public sealed class WindowConfig
 
 public sealed record WindowBounds(int X, int Y, int Width, int Height);
 
+/// <summary>How the situation picture of an agent is shown: <see cref="Id"/> is the gallery picture it was set for.</summary>
+public sealed class SceneMode
+{
+    public string Id { get; set; } = "";
+    public string Mode { get; set; } = "open";
+}
+
 /// <summary>
 /// How one chat looks on this computer (the web's "Chat setting → หน้าตา", <c>mimi.chat.&lt;id&gt;.*</c>): null = as the app.
 /// </summary>
@@ -41,12 +48,14 @@ public sealed class ChatLook
     public int? Bubbles { get; set; }
     /// <summary>The chat's own background: {type: none|solid|gradient|preset|upload, color, from, to, angle, preset, upload}.</summary>
     public JsonObject? Background { get; set; }
+    /// <summary>Time spans that change the background (BackgroundRules); null when there are none.</summary>
+    public JsonArray? BackgroundRules { get; set; }
     /// <summary>Where the character stands: size and slide (percent of the stage).</summary>
     public double Zoom { get; set; } = 1;
     public double X { get; set; }
     public double Y { get; set; }
 
-    public bool IsEmpty => Theme is null && TextSize is null && Character is null && Bubbles is null && Background is null && Zoom == 1 && X == 0 && Y == 0;
+    public bool IsEmpty => Theme is null && TextSize is null && Character is null && Bubbles is null && Background is null && BackgroundRules is not { Count: > 0 } && Zoom == 1 && X == 0 && Y == 0;
 }
 
 /// <summary>
@@ -64,26 +73,23 @@ public sealed class AppConfig
     public WindowConfig Window { get; set; } = new();
     /// <summary>Seen notification id: the next start shows only newer ones (push-and-background.md 1.2).</summary>
     public long LastNotificationId { get; set; }
-    /// <summary>Mimiamp: EQ on, ten gains, volume 0–100, shuffle, repeat.</summary>
-    public bool EqEnabled { get; set; }
-    public float[] EqGains { get; set; } = new float[10];
-    public int Volume { get; set; } = 80;
-    public bool Shuffle { get; set; }
-    public string Repeat { get; set; } = "off";
-    /// <summary>Mimiamp: left/right balance, -1..1.</summary>
-    public float Pan { get; set; }
-    /// <summary>Mimiamp: the spectrum under the clock.</summary>
-    public bool Visualizer { get; set; } = true;
-    /// <summary>Mimiamp: songs from this computer (full paths), played without the server.</summary>
-    public List<string> LocalTracks { get; set; } = [];
     /// <summary>"dark" or "light"; the account's choice (ui-set mimi.theme) wins once it is known.</summary>
     public string Theme { get; set; } = "dark";
     /// <summary>Text size of chats without their own: 0 small, 1 normal, 2 large.</summary>
     public int TextSize { get; set; } = 1;
     /// <summary>The character on the stage of direct chats, unless a chat says otherwise.</summary>
     public bool Character { get; set; } = true;
+    /// <summary>Show tool calls, helper lines and prompt details in the chat (the web's mimi.showPrompt).</summary>
+    public bool ShowPrompt { get; set; }
     /// <summary>Per chat id: its own look.</summary>
     public Dictionary<string, ChatLook> Looks { get; set; } = [];
+    /// <summary>
+    /// Per agent: the situation picture the person last dealt with and how ("open", "min", "closed"), so a
+    /// minimised one stays minimised until the agent shows another (feature-gallery.js, localStorage mimi.cg).
+    /// </summary>
+    public Dictionary<string, SceneMode> Scenes { get; set; } = [];
+    /// <summary>The app runs the core on this computer itself and starts it with the app (LocalCore).</summary>
+    public bool LocalServer { get; set; }
     /// <summary>The Workspace window's folder.</summary>
     public string WorkspaceRoot { get; set; } = "";
 
@@ -151,15 +157,6 @@ public sealed class AppConfig
         if (saved["windows"] is JsonObject mine)
         {
             config.LastNotificationId = Math.Max(0, Long(mine["lastNotificationId"]));
-            config.EqEnabled = Bool(mine["eqEnabled"]);
-            var gains = mine["eqGains"] as JsonArray;
-            config.EqGains = Enumerable.Range(0, 10).Select(i => gains is not null && i < gains.Count ? Math.Clamp(Float(gains[i]), -12, 12) : 0).ToArray();
-            config.Volume = mine["volume"] is null ? 80 : Math.Clamp(Int(mine["volume"]), 0, 100);
-            config.Shuffle = Bool(mine["shuffle"]);
-            config.Repeat = mine["repeat"]?.GetValue<string>() is "all" or "one" ? mine["repeat"]!.GetValue<string>() : "off";
-            config.Pan = Math.Clamp(Float(mine["pan"]), -1, 1);
-            config.Visualizer = mine["visualizer"] is null || Bool(mine["visualizer"]);
-            config.LocalTracks = Strings(mine["localTracks"]).Where(File.Exists).Take(2000).ToList();
             config.Theme = mine["theme"]?.GetValue<string>() == "light" ? "light" : "dark";
             config.TextSize = mine["textSize"] is null ? 1 : Math.Clamp(Int(mine["textSize"]), 0, 2);
             config.Character = mine["character"] is null || Bool(mine["character"]);
@@ -193,14 +190,6 @@ public sealed class AppConfig
         json["windows"] = new JsonObject
         {
             ["lastNotificationId"] = LastNotificationId,
-            ["eqEnabled"] = EqEnabled,
-            ["eqGains"] = new JsonArray(EqGains.Select(gain => (JsonNode)gain).ToArray()),
-            ["volume"] = Volume,
-            ["shuffle"] = Shuffle,
-            ["repeat"] = Repeat,
-            ["pan"] = Pan,
-            ["visualizer"] = Visualizer,
-            ["localTracks"] = new JsonArray(LocalTracks.Select(path => (JsonNode)path).ToArray()),
             ["theme"] = Theme,
             ["textSize"] = TextSize,
             ["character"] = Character,
@@ -230,7 +219,6 @@ public sealed class AppConfig
 
     private static int Int(JsonNode? node) => node is JsonValue value && value.TryGetValue<double>(out var number) ? (int)number : 0;
     private static long Long(JsonNode? node) => node is JsonValue value && value.TryGetValue<double>(out var number) ? (long)number : 0;
-    private static float Float(JsonNode? node) => node is JsonValue value && value.TryGetValue<double>(out var number) ? (float)number : 0;
     private static bool Bool(JsonNode? node) => node is JsonValue value && value.TryGetValue<bool>(out var flag) && flag;
 
     private static IEnumerable<string> Strings(JsonNode? node) =>

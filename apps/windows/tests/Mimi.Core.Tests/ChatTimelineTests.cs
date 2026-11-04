@@ -109,6 +109,8 @@ public class ChatTimelineTests
         Assert.IsType<ServerFrame.Unknown>(FrameParser.Parse("not json"));
         Assert.Equal("future-thing", Assert.IsType<ServerFrame.Unknown>(FrameParser.Parse("""{"type":"future-thing","x":1}""")).Type);
         Assert.IsType<ServerFrame.Unknown>(FrameParser.Parse("""{"type":"chat-message","chatId":1}"""));
+        // A server older than api 2 still sends Mimiamp commands; this app has no player and skips them.
+        Assert.IsType<ServerFrame.Unknown>(FrameParser.Parse("""{"type":"mimiamp","command":{"action":"play","query":"x"}}"""));
         var welcome = Assert.IsType<ServerFrame.Welcome>(FrameParser.Parse("""{"type":"welcome","agents":[{"name":"mimi","displayName":"มิมิ"}],"defaultAgent":"mimi","busyChats":[3],"pendingPermissions":[],"ui":{},"api":1,"minClientApi":1,"version":"0.8.1"}"""));
         Assert.Equal(1, welcome.Api);
         Assert.Equal([3L], welcome.BusyChats);

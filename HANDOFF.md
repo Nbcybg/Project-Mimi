@@ -1,4 +1,108 @@
-# Mimi handoff — 2026-11-03 (เครื่อง Windows → ทำต่อบน Mac)
+# Mimi handoff — 2026-11-03 (เครื่อง Windows → ทำต่อบน Mac; ล่าสุดรอบที่ 7 บน Mac)
+
+## คำตอบ Q1–Q12 (2026-11-03) และสิ่งที่เปลี่ยน — ตารางเต็มใน `docs/native/README.md`
+
+- Q1 ลำดับ **Android → Windows → Mac → iOS** (iOS อาจไว้ท้ายสุด) — ตรงกับที่ทำมา: ถัดไปคือ Mac
+- Q2 รองรับโหมด core คนเดียว · Q12 ใช้ `app.mimi.android` + keystore เดิม
+- Q3 push ผ่าน **relay ที่ gateway** → งานเซิร์ฟเวอร์ G-PUSH-2 (กุญแจ FCM/APNs/WNS อยู่ที่ gateway, core ส่งต่อ) ปลดล็อก WNS ของ Windows
+- Q4 ส่งแค่ id แล้วแอปดึงเนื้อหาเอง — ค่าเริ่มต้นปัจจุบัน (`MIMI_NATIVE_PUSH_CONTENT` = `minimal`) ตรงอยู่แล้ว
+- Q5 **เอา Mimiamp ออกทั้งหมด** (ยืนยันแล้ว): แอป native ทุกตัว (Android `feature:mimiamp`, Windows `MimiampView`/`Mimi.Core/Mimiamp`), เว็บ (`feature-mimiamp.js`, `web/mimiamp/`),
+  เซิร์ฟเวอร์ (`/mimiamp/*`, `/api/mimiamp/*`, YouTube audio, เครื่องมือ `mimiamp` ของ agent, `packages/shared/src/mimiamp.ts`), เพลง demo 285 MB ใน `mimiamp/` ของ repo, Dockerfile/docs
+  — ใช้เครื่องมือคุมเครื่องเปิดแอปเพลงแทน · **ลบแล้วในรอบที่ 6** (client API 2) ยกเว้นส่วนของ Android ที่ไม่มีในเครื่องนี้ (ดูรอบที่ 6)
+- Q6 VRM ทำหลังฟีเจอร์อื่นครบหมด (จุดขาย) → แอป Mac/iOS ทำ VRM เป็นลำดับท้าย
+- Q7 **รวม PC agent เข้าแอปเดสก์ท็อป** → แอป Mac ต้องมี PC agent ในตัว (Windows ตอนนี้ใส่ node + pc-agent ในชุดติดตั้งและแอปคุมเอง)
+- Q8 **เก็บ WinUI 3** (ยืนยันแล้ว) — แต่ละแพลตฟอร์มเป็น native ของตัวเอง: แอป Mac/iOS = SwiftUI แชร์โค้ดผ่าน Swift package
+- Q9 แจกผ่านเว็บของเรา + GitHub release ไม่ลง store → Mac: ยังควร notarize (ต้องมี Apple Developer ID ไม่งั้น Gatekeeper เตือน) ·
+  ⚠️ **iOS นอก App Store แทบแจกให้คนทั่วไปไม่ได้** (TestFlight ก็ผ่าน App Store Connect) — ต้องคุยก่อนเริ่ม Phase 4
+- Q10 **ต้องครบใน native ก่อนปล่อย** (ไม่พึ่งหน้าเว็บ) → Android ตอนนี้มีแค่ MVP (ไม่มี Hub/Agent/ตั้งค่า/workflow) ต้องทำเพิ่มจนครบเท่า Windows
+- Q11 **รองรับเซิร์ฟเวอร์ทุกเวอร์ชัน** → แอปต้องทนเซิร์ฟเวอร์เก่าที่ไม่มี `api` ใน `/health` และ frame ใหม่ ๆ (ทำงานแบบลดฟีเจอร์ ไม่ปฏิเสธ)
+
+## งาน 2026-11-03 รอบที่ 7 (อ่านก่อน) — บน Mac Intel: ที่แอป Windows ยังขาด (WNS) แล้วเริ่ม Phase 3 (แอป Mac)
+
+คำสั่งของเจ้าของโปรเจกต์: "งั้นแก้ สิ่งที่ app ขาดก่อน จบแล้วไป p3"
+
+- **WNS + relay ที่ gateway (ทำแล้ว)** — CHANGELOG ใต้ "Windows app … round 6":
+  - เซิร์ฟเวอร์: `notify/native-push.ts` ตัวส่ง WNS (raw push, token ของ Entra ID app `MIMI_WNS_TENANT_ID/_CLIENT_ID/_CLIENT_SECRET`,
+    channel ต้องเป็น `https://*.notify.windows.com` เท่านั้น), platform `wns`, `GET /api/push/info`, **relay** `notify/push-relay.ts` +
+    `GET/POST /push/relay` ของ gateway (core ตั้ง `MIMI_PUSH_RELAY_URL` แล้วยืนยันตัวด้วย core token ของตัวเอง; `AccountStore.coreOwner`) —
+    เป็นการเพิ่มล้วน (ไม่ต้องขึ้น API) · เทสต์ `push-wns-relay.test.ts` 2/2 · ไม่ต้องมี migration (คอลัมน์ platform ไม่มี CHECK)
+  - แอป Windows: `Services/WindowsPush.cs` (Windows App SDK `PushNotificationManager`), `App.RegisterPush` / `NotificationsFromPush`,
+    เปิดจาก push = เข้าถาด, `MimiApi.PushInfo/RegisterWns/UnregisterPush` · compile ผ่าน mac-typecheck, unit test 79/83 (4 ตัวเดิมของ Windows)
+  - ⚠️ ยังไม่ได้ทดสอบกับ WNS จริง: ต้องลงทะเบียน Entra ID app + ทดสอบบน Windows · build แบบ self-contained อาจต้องมี Singleton package
+    ของ Windows App Runtime ในเครื่อง ไม่งั้น `IsSupported()` = false แล้วใช้ socket แบบเดิม
+  - **Windows widget ทำไม่ได้**: ต้องมี package identity (MSIX / sparse package ที่ลงนามด้วยใบรับรอง) — แจก zip/setup.exe ที่ไม่ลงนาม (Q9)
+- **Phase 3 แอป Mac เริ่มแล้ว** — `apps/macos/` (อ่าน `apps/macos/README.md`): SwiftUI + **SwiftPM, build ด้วย Command Line Tools ได้ ไม่ต้องติดตั้ง Xcode**
+  (ตรวจแล้ว: SwiftUI, MenuBarExtra, Swift Testing ใช้ได้กับ CLT) · `Support/build-app.sh` ทำ `build/Mimi.app` (ไอคอน, ad hoc)
+  - MimiKit (ใช้ร่วมกับ iOS) / MimiDesktop (PC agent ในตัว, core ในเครื่อง, keychain, config.json เดียวกับ Electron) / Mimi (UI)
+  - ทำแล้ว: ล็อกอิน (token / gateway + 2FA / เซิร์ฟเวอร์ในเครื่องนี้), รายการแชต + แชตกลุ่มใหม่, แชต streaming ครบชุดหลัก, การ์ดขออนุญาต/อนุมัติ/งาน, ไฟล์, หมุด,
+    รีแอ็กชัน, `@ชื่อ`, menu bar, แจ้งเตือน, ออกจากระบบอัตโนมัติ, PC agent + consent, เบราว์เซอร์ของ Mimi, ตั้งค่า
+  - ผลตรวจ: `swift test` **28/28** รวม 2 ตัวกับ **core จริง + LLM จำลอง** (ล็อกอิน → socket → สร้างแชต → ส่ง → stream → เก็บ) และ **PC agent จริงต่อ core ได้**
+  - ⚠️ ยังไม่ได้ดู UI ด้วยตา (ขอสิทธิ์ computer use คุมแอปแล้วไม่ได้รับ) — ให้เจ้าของเปิด `open -n --env MIMI_MACOS_HOME=/tmp/mimi-mac-test apps/macos/build/Mimi.app` ดู
+  - **ยังขาดเพื่อให้เท่าแอป Windows** (รายการเต็มใน `apps/macos/README.md` "ยังไม่มี"): หน้าจัดการ (Agent/Hub/Workflow/Overseer/ตั้งค่า Mimi),
+    ตัวช่วยตั้งค่า, ค้นหา, กล่องแจ้งเตือน, session, เสียง, เวทีตัวละคร, Workspace, ตัวอัปเดต, เปิดตอนเข้าสู่ระบบ, APNs, VRM (ท้ายสุด)
+- 🐞 **พบบั๊กของ core (ยังไม่แก้)**: ไฟล์ agent ที่ frontmatter ผิด (เช่นคีย์ `displayName` แทน `display_name`) ทำให้ **core ทั้งตัวล่ม**
+  ตอนมีคนต่อ WebSocket (`AgentCatalog.list()` โยน error ใน handler ของ `hello`, `server.ts` ~บรรทัด 2392) — ควรข้ามไฟล์นั้นแล้วแจ้งเตือนแทน
+- `npm test` บนเครื่องนี้: รันรวมแล้ว `server.test.ts` ค้าง (CPU 0%) และ 2 ตัวหมดเวลา 60 วินาทีตอนเครื่องหนัก (developer, gateway admin CLI) —
+  **รันเดี่ยวผ่านหมด** (gateway 19/19, server 16/16, developer 1/1) เหมือนที่บันทึกไว้รอบ 5
+- ไม่มี git ที่นี่ — ไม่มีอะไรถูก commit/push
+
+## งาน 2026-11-03 รอบที่ 6 (อ่านก่อน) — บน Mac Intel: เอา Mimiamp ออก (Q5) + เทียบแอป Windows กับ Electron อีกรอบ
+
+คำสั่งของเจ้าของโปรเจกต์: "อ่านเอกสาร handoff แล้วลงมือทำเลย แล้วเทียบกับ งาน electron เก่าว่ายังขาดอะไรบ้าง"
+
+- **สำเนาก่อนแก้**: `_old/2026-11-03-before-mimiamp-removal/` (ทั้งโปรเจกต์ยกเว้น node_modules/bin/obj + เพลง demo 285 MB ย้ายไปไว้ที่ `mimiamp-root/`) — ลบได้เมื่อ commit แล้ว
+- **เอา Mimiamp ออก (ทำแล้ว)** — รายละเอียด CHANGELOG หัวข้อ "Mimiamp removed (client API 2)":
+  - เซิร์ฟเวอร์: ลบ `packages/core/src/mimiamp/`, `tools/mimiamp-tools.ts`, route `/mimiamp/*` + `/api/mimiamp/*` (core และ gateway), frame `mimiamp`,
+    `MIMI_MUSIC_DIR`, dependency `@distube/ytdl-core` (`npm uninstall` แล้ว lock อัปเดตแล้ว); `packages/shared/src/mimiamp.ts` → `views.ts` (เหลือชนิด widget/notifications)
+    · **`API_VERSION` = 2**, `MIN_CLIENT_API` = 1 · overseer prompt บอกให้ใช้เครื่องมือ PC เปิดแอปเพลง · เทสต์ `mimiamp.test.ts` ลบ, `native-clients.test.ts` เช็กว่าเป็น 404
+  - เว็บ: ลบ `feature-mimiamp.js`, `web/mimiamp/`, ปุ่ม nav, CSS ~550 บรรทัด
+  - Windows: ลบ `MimiampView`, `Audio/{AudioPlayer,MediaKeys}.cs`, `Mimi.Core/Mimiamp/`, `MimiampViewModel`, mini player, ปุ่ม/เมนูถาด, ค่าเพลงใน AppConfig, API/โมเดล/frame
+  - Android: ลบ `feature/mimiamp` + route/ปุ่ม/permission `MODIFY_AUDIO_SETTINGS` + โมเดล/frame · ⚠️ **`android/core/data/` ไม่มีในโฟลเดอร์นี้** (ดูข้อถัดไป)
+    จึงยังไม่ได้ลบ `MimiampRepository` และ endpoint เพลงใน `MimiApi` ของ core:data — **Android build ไม่ผ่านจนกว่าจะลบส่วนนั้น** บนเครื่องที่มีโค้ดครบ
+    (`libs.versions.toml` ยังมี media3 เผื่อ core:data ใช้ — ลบได้ถ้าไม่มีใครใช้)
+  - repo: ลบ `mimiamp/` (285 MB), Dockerfile/.dockerignore/.env.example/README/docs ทั้งหมดที่พูดถึง
+- ⚠️ **พบ**: `.gitignore` มี `data/` ซึ่งกัน `android/core/data/` (โมดูลโค้ดของ Android) ออกจาก git ด้วย — โฟลเดอร์นี้ (น่าจะมาจาก zip ของ GitHub) จึงไม่มีโมดูลนั้น
+  แปลว่า **บน GitHub อาจไม่มี `android/core/data` เลย** · แก้ `.gitignore` แล้ว (`!android/core/data/`) — ต้องเอาโฟลเดอร์จริงจากเครื่อง Windows (`P:\Project_Code\...\android\core\data`) มา commit
+- **เทียบกับ Electron (ทำแล้ว)**: เทียบทุก frame ที่เว็บส่ง/รับ + ทุก `/api/*` ที่เว็บเรียก กับโค้ด C# (เหลือแค่ Web Push ที่ native ไม่ใช้) แล้วไล่ `packages/desktop/` + กล่องพิมพ์ —
+  ที่ขาดแล้วทำในรอบนี้ (ตาราง "รอบที่ 6" ใน `apps/windows/README.md`):
+  1. อัปโหลดฉากหลังของแชตจากเครื่อง 2. ตั้งเวลาสลับฉากหลัง 3. "เปิดเบราว์เซอร์ของ Mimi" (ถาด + ตั้งค่า) 4. `@ชื่อ` ในแชตกลุ่ม 5. Esc หยุดคำตอบ
+  6. Ctrl+V รูป/ไฟล์ 7. ตรวจรูป + คำบรรยายก่อนส่ง (รวม "ส่งเข้าแชต" ของ Workspace) · แก้บั๊ก: ฉากหลัง "ไม่มี" ไปใช้ฉากของ agent
+  - ไฟล์ใหม่: `Mimi.Core/{Chat/Mentions.cs, Desktop/BackgroundRules.cs, Desktop/AgentBrowser.cs}`, `Mimi.App/Views/ChatView.{Composer,Background,Pictures}.cs`,
+    `tests/Mimi.Core.Tests/ElectronParityTests.cs`
+  - **ยังขาด (ตามจริง)**: WNS (รอ G-PUSH-2/Q3), Windows widget (#19, ต้อง package identity) · ตรวจรูปทำแบบเรียบกว่าเว็บ (ไม่มีโหมด viewer/คำบรรยายร่วม)
+    · เบราว์เซอร์ของ Mimi บน Windows เป็น Edge/Chrome ไม่ใช่ Chromium ของ Electron (ไม่มีแถบที่อยู่ของตัวเอง)
+- **ผลตรวจบน Mac**: `npm run typecheck` ผ่าน · `npm test` **754 ผ่าน / 0 ตก / 7 ข้าม** (761) · แอป Windows compile ผ่านด้วย mac-typecheck
+  (แก้ `check.sh` ให้ลบ stub เก่าก่อน — เดิม stub ของหน้าที่ลบไปแล้วยังถูก compile; ตรวจแล้วว่าจับ error จริง) · unit test Windows **78/82** (4 ตัวที่ตกคือ path `C:\`/DPAPI/สคริปต์ swap ของ Windows เหมือนเดิม)
+  · Android `:core:model:test :core:ui:test` ผ่าน (`--offline`, SDK ที่ `~/Library/Android/sdk`, สร้าง `android/local.properties` แล้ว)
+- ⚠️ **ยังไม่ได้รันบน Windows**: รอบ 5 + รอบ 6 ทั้งหมดต้อง build + UI test (2 ตัวที่แก้: เอาขั้นเพลงออก) + ลองมือ: อัปโหลดฉากหลัง, ช่วงเวลา, เปิดเบราว์เซอร์ของ Mimi
+  แล้วให้ agent ใช้ต่อ, @ชื่อ, วางรูป, หน้าตรวจรูป · XAML ที่แก้: `MainWindow.xaml` (ลบปุ่มเพลง + mini player), `SettingsView.xaml` (ปุ่มเบราว์เซอร์) — mac-typecheck ไม่ตรวจ XAML
+- ไม่มี git ที่นี่ — ไม่มีอะไรถูก commit/push
+
+## งาน 2026-11-03 รอบที่ 5 — บน Mac Intel: ฟีเจอร์ที่ยังขาดของแอป Windows ให้ครบเท่า Electron — บน Mac Intel: ฟีเจอร์ที่ยังขาดของแอป Windows ให้ครบเท่า Electron
+
+คำสั่งของเจ้าของโปรเจกต์: "เอาให้ feature ครบ ตาม electron เก่า … feature ต้องครบก่อน แล้วค่อยเริ่ม phase เครื่อง mac"
+
+- เครื่องนี้: macOS 15.7 Intel (x86_64), Node 26.5, .NET 10 SDK ติดตั้งที่ `~/.dotnet` (dotnet-install.sh, ไม่ใช้ sudo),
+  Swift 6.1 จาก Command Line Tools — **ยังไม่มี Xcode** (ต้องติดตั้งจาก App Store ก่อน Phase 3 ถ้าจะทำแอป Mac แบบ .app/Xcode project)
+- โฟลเดอร์นี้**ไม่ใช่ git repo** (ไม่มี `.git`) — ไม่มีอะไรถูก commit; ถ้าจะ push ต้องคัดลอกทับ clone ของ `Nbcybg/Project-Mimi` แล้วตรวจ `git status`
+- **ทำแล้ว** (รายละเอียด: ตาราง "รอบที่ 5" ใน `apps/windows/README.md`, CHANGELOG หัวข้อ "what the Electron app still had over it"):
+  workflow editor (preview expression, คำแนะนำ path + "{ } เลือกข้อมูล", โน้ตบนผัง, node connector + ตัวเลือกจากบริการ, ย้อน/ทำซ้ำ, คัดลอก/วาง,
+  จัดเรียงอัตโนมัติ, node preset, vars เป็นแถว) · VRM ท่า Mixamo + ท่ายืนเฉย + หน้าตัวละคร 3D · ภาพสถานการณ์ทับแชต (#25) · หน้าจัดการแกลเลอรี (#44) ·
+  ฟอร์มย่อยของ preset เครื่องมือ / connection / โปรไฟล์ · Workspace "ส่งเข้าแชต" · **โหมดเซิร์ฟเวอร์ในเครื่องนี้** (แอปเปิด/ปิด core เอง)
+- ไฟล์ใหม่: `apps/windows/src/Mimi.Core/{Hub/WorkflowAssist.cs, Desktop/LocalCore.cs}`, `Mimi.App/{Controls/SceneOverlay.cs, Views/ManagePage.Character.cs,
+  Views/ManagePage.Gallery.cs}`, `tests/Mimi.Core.Tests/{WorkflowAssistTests,LocalCoreTests}.cs`, `tests/tools/mac-typecheck/*`,
+  `packages/core/src/app/native-host.ts` + `packages/core/src/test/native-host.test.ts`, `scripts/pack-core.mjs` (เรียกจาก `build-win-native.mjs`)
+- เซิร์ฟเวอร์: เพิ่มแค่ `native-host.ts` (ตัวเปิด core แบบไม่มีหน้าต่าง) — ไม่ได้เปลี่ยน frame/JSON จึงไม่ต้องขึ้น `API_VERSION`, DB schema ยังเป็น 24
+- ผลตรวจบน Mac: แอป Windows **compile ผ่าน** ด้วย `apps/windows/tests/tools/mac-typecheck/check.sh` (C# ทุกไฟล์จริง, XAML ไม่ถูกตรวจ — รอบนี้ไม่ได้แก้ .xaml),
+  unit test **82/87** (5 ตัวที่ตกเป็นของเดิมที่ผูก path `C:\` / DPAPI ของ Windows — ตกเหมือนกันก่อนแก้), `native-host.test.ts` ผ่าน,
+  typecheck ผ่าน · `npm test` รวมบน Mac Intel นี้: 754/770 (7 skipped) — ที่ตกเป็นเทสต์จับเวลาเมื่อรันพร้อมกันทั้งชุด
+  (`connector-performance`, `developer`, `pc-stdin` ×2, `sandbox` ×3) และรอบหนึ่ง `server.test.ts` ค้าง (CPU 0% 30 นาที ต้องหยุดเอง) —
+  **ทุกไฟล์นี้ผ่านครบเมื่อรันเดี่ยว** (server 16/16, sandbox 5/5, connector-performance 5/5, pc-stdin 2/2, developer 1/1); เครื่องนี้ช้ากว่าเครื่องเดิม
+- ⚠️ **ยังไม่ได้รันบน Windows เลย**: ทุกอย่างของรอบนี้ต้อง build + UI test บน Windows (`dotnet build …`, UI test 3/3 เดิม) และลองด้วยมือ:
+  ผังโน้ต/ย้อน, node connector กับบริการจริง, VRM + .fbx จริง, ภาพสถานการณ์, แกลเลอรีเพิ่มหลายรูป, ปุ่มเซิร์ฟเวอร์ในเครื่องนี้ (ชุดติดตั้งใหม่ +~240 MB เพราะมี `core/`)
+- ยังไม่มี (ต้องรอ/ทำไม่ได้ตอนนี้): WNS (รอ Q3), Windows widget (ต้อง package identity)
+- **ถัดไป: Phase 3 (แอป Mac, SwiftUI)** ตาม `docs/native-phases-prompts.md` — ต้องตอบก่อน: ติดตั้ง Xcode ไหม (หรือ build ด้วย SwiftPM จาก CLT เท่าที่ทำได้),
+  Q1–Q12 ใน `docs/native/README.md` (โดยเฉพาะ Q7 PC agent ในแอป Mac) · โหมดเซิร์ฟเวอร์ในเครื่องนี้ใช้ `native-host.ts` ตัวเดียวกันได้บน Mac
 
 ## ทำต่อบน Mac (อ่านก่อน)
 
@@ -460,7 +564,9 @@ $env:MIMI_UI_TEST_CORE="http://localhost:8787"; $env:MIMI_UI_TEST_TOKEN="<token>
 $env:DOTNET="P:\tools\dotnet\dotnet.exe"; $env:MAKENSIS="<makensis.exe>"; node scripts/build-win-native.mjs
 ```
 
-ผลล่าสุด (2026-11-03, Windows): typecheck ผ่าน, `npm test` 768/768, Android unit test 21/21, Windows unit test 75/75 + UI test 3/3 (รอบที่ 4)
+ผลล่าสุด (2026-11-03 รอบ 5, Mac Intel): typecheck ผ่าน, `npm test` 754/770 (ตกเฉพาะเทสต์จับเวลาตอนรันทั้งชุด — ผ่านเมื่อรันเดี่ยว), Windows unit test 82/87 บน Mac (5 ตัวต้องใช้ Windows), แอป Windows compile ผ่านด้วย mac-typecheck
+
+ผลก่อนหน้า (2026-11-03, Windows): typecheck ผ่าน, `npm test` 768/768, Android unit test 21/21, Windows unit test 75/75 + UI test 3/3 (รอบที่ 4)
 
 ผลก่อนหน้า (2026-11-02, เครื่องเดิม): typecheck ผ่าน, `npm test` 759/768 (2 fail เรื่องเวลาเพราะเครื่องโหลด ดู "สถานะ"), Android unit test 21/21
 
@@ -479,6 +585,15 @@ $env:DOTNET="P:\tools\dotnet\dotnet.exe"; $env:MAKENSIS="<makensis.exe>"; node s
 
 ## จุดเริ่มของ session ถัดไป
 
+0000. (2026-11-03 หลังรอบ 7) แอป Windows เหลือแค่ widget (ทำไม่ได้ถ้าไม่ลงนาม) + ทดสอบบน Windows · Phase 3 แอป Mac เริ่มแล้ว →
+    ทำแอป Mac ต่อตามรายการ "ยังไม่มี" ใน `apps/macos/README.md` (เริ่มที่ค้นหา/กล่องแจ้งเตือน/session แล้วหน้าจัดการ) · แก้บั๊ก core ล่มเพราะไฟล์ agent ผิด
+000. (2026-11-03 หลังรอบ 6) Mimiamp ลบแล้ว (api 2) และแอป Windows เทียบ Electron อีกรอบแล้ว (เหลือ WNS/widget) →
+    (1) เอา `android/core/data/` จากเครื่อง Windows มาใส่ แล้วลบ `MimiampRepository` + endpoint เพลงในนั้น ให้ Android build ผ่าน
+    (2) บนเครื่อง Windows: build + UI test + ลองมือรอบ 5–6 (3) **Phase 3 แอป Mac (SwiftUI)** — prompt ใน `docs/native-phases-prompts.md` อัปเดตตาม Q1–Q12 แล้ว
+00. (2026-11-03 หลังรอบ 5, บน Mac Intel) ฟีเจอร์ของแอป Windows เท่า Electron แล้ว (เหลือ WNS/widget) · Q1–Q12 ตอบแล้ว (หัวข้อ "คำตอบ Q1–Q12" ด้านบน)
+    → (ก) ~~เอา Mimiamp ออกทั้งหมด (Q5)~~ ทำแล้วรอบ 6 → (ข) **Phase 3 แอป Mac (SwiftUI)** มี PC agent ในตัว (Q7), ไม่มี Mimiamp, VRM ทำท้ายสุด (Q6), ต้องครบก่อนปล่อย (Q10)
+    · ตัดสินใจก่อนว่าติดตั้ง Xcode (App Store, เจ้าของทำเอง) หรือเริ่มด้วย SwiftPM + Command Line Tools
+    · ใช้ `native-host.ts` สำหรับโหมดเซิร์ฟเวอร์ในเครื่องนี้ · ค้างฝั่ง Windows (ต้องมีเครื่อง Windows): build + UI test + ทดสอบมือของรอบ 5 ทั้งหมด
 0. (2026-11-03) รับผลทดสอบ APK บนมือถือจริงจากเจ้าของโปรเจกต์ แล้วแก้ตามนั้น; Phase 5 ที่เหลือ: WNS, ทดสอบมือ (ถาด, toast, SMTC, ไมค์,
    PC agent, ติดตั้งทับ Electron), arm64, ตัดสินใจเรื่อง release.yml (แจก Electron หรือแอป native) — รายการเต็มใน `apps/windows/README.md`
 1. อ่าน `HANDOFF.md` นี้ แล้ว `docs/native/README.md`

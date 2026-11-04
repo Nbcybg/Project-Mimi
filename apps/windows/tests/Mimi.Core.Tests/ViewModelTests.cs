@@ -1,7 +1,6 @@
 using System.Net;
 using System.Text;
 using System.Threading.Channels;
-using Mimi.Core.Mimiamp;
 using Mimi.Core.Net;
 using Mimi.Core.Protocol;
 using Mimi.Core.ViewModels;
@@ -373,98 +372,5 @@ public class ConnectViewModelTests
         await connect.Check();
         Assert.Equal(ConnectStep.Server, connect.Step);
         Assert.Contains("อัปเดต", connect.Error);
-    }
-}
-
-/// <summary>A player without sound for the Mimiamp view model.</summary>
-public sealed class SilentPlayer : IAudioPlayer
-{
-    public float Pan { get; set; }
-    public Spectrum Spectrum { get; } = new();
-    public List<string> Played { get; } = [];
-    public Equalizer Equalizer { get; } = new();
-    public float Volume { get; set; }
-    public bool Playing { get; private set; }
-    public TimeSpan Position { get; set; }
-    public TimeSpan Duration => TimeSpan.FromSeconds(100);
-    public event Action? Ended;
-    public event Action? StateChanged;
-
-    public Task Play(Uri url, CancellationToken cancel = default)
-    {
-        Played.Add(url.AbsoluteUri);
-        Playing = true;
-        StateChanged?.Invoke();
-        return Task.CompletedTask;
-    }
-
-    public void Pause() => Playing = false;
-    public void Resume() => Playing = true;
-    public void Stop() => Playing = false;
-    public void Seek(TimeSpan position) => Position = position;
-    public void End() => Ended?.Invoke();
-    public void Dispose() { }
-}
-
-public class MimiampViewModelTests
-{
-    private const string State = """{"tracks":[{"id":"file:Sunset Train.wav","source":"file","file":"Sunset Train.wav","title":"Sunset Train","artist":"Suno","duration":182,"url":"/mimiamp/Sunset%20Train.wav"},{"id":"file:Rain.mp3","source":"file","file":"Rain.mp3","title":"Rain","url":"/mimiamp/Rain.mp3"},{"id":"youtube:abcdefghijk","source":"youtube","videoId":"abcdefghijk","title":"คลิป","url":"/mimiamp/youtube/abcdefghijk.audio"}],"playlists":[{"id":"p1","name":"ฟังตอนทำงาน","items":[{"id":"i1","source":"file","title":"Rain","trackId":"file:Rain.mp3"}]}],"youtube":{"ready":true,"google":false}}""";
-
-    [Fact]
-    public async Task Agent_commands_play_the_named_song_youtube_after_prepare_and_playlists()
-    {
-        var prepared = 0;
-        using var server = new LocalServer
-        {
-            Handle = async context =>
-            {
-                var path = context.Request.Url!.AbsolutePath;
-                Assert.Equal("Bearer tok", context.Request.Headers["Authorization"]);
-                if (path == "/api/mimiamp/state") await context.Response.OutputStream.WriteAsync(Encoding.UTF8.GetBytes(State));
-                else if (path.EndsWith("/prepare"))
-                {
-                    prepared++;
-                    await context.Response.OutputStream.WriteAsync(Encoding.UTF8.GetBytes("""{"videoId":"abcdefghijk","url":"/mimiamp/youtube/abcdefghijk.audio","mime":"audio/webm"}"""));
-                }
-                else context.Response.StatusCode = 404;
-            },
-        };
-        var session = new MimiSession(new HttpClient(), new InlineDispatcher(), "1.0", () => new FakeSocket());
-        session.Begin(server.Url, "tok", "", gateway: false, coreApi: 1);
-        var player = new SilentPlayer();
-        var saves = 0;
-        var config = new Desktop.AppConfig { Volume = 40 };
-        var music = new MimiampViewModel(session, player, new InlineDispatcher(), config, () => saves++);
-        Assert.Equal(0.4f, player.Volume);
-        await music.Refresh();
-        Assert.Equal(3, music.Tracks.Count);
-        Assert.Single(music.Playlists);
-
-        await music.Apply(new MimiampCommand("play", Query: "sunset train"));
-        Assert.EndsWith("/mimiamp/Sunset%20Train.wav", player.Played.Last());
-        Assert.Equal("Sunset Train", music.NowTitle);
-        Assert.True(music.Playing);
-
-        await music.Apply(new MimiampCommand("play", Query: "คลิป"));
-        Assert.Equal(1, prepared);
-        Assert.EndsWith("/mimiamp/youtube/abcdefghijk.audio", player.Played.Last());
-
-        await music.Apply(new MimiampCommand("volume", Level: 75));
-        Assert.Equal(0.75f, player.Volume);
-        Assert.Equal(75, config.Volume);
-
-        await music.Apply(new MimiampCommand("playlist-play", Query: "ฟังตอนทำงาน"));
-        Assert.EndsWith("/mimiamp/Rain.mp3", player.Played.Last());
-        Assert.Equal("ฟังตอนทำงาน", music.ListTitle);
-
-        await music.Apply(new MimiampCommand("pause"));
-        Assert.False(music.Playing);
-
-        music.ApplyPreset("Rock");
-        Assert.True(music.EqEnabled);
-        Assert.Equal(5.4f, music.Gains[0]);
-        Assert.Equal(5.4f, config.EqGains[0]);
-        Assert.True(saves > 0);
-        session.End();
     }
 }

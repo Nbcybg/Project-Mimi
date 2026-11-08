@@ -15,6 +15,14 @@ const AGENT_NAME = /^[a-z][a-z0-9_-]*$/;
 /** Every agent is a folder of its own: the definition sits in `agent.md`. */
 export const AGENT_FILE = 'agent.md';
 
+/**
+ * Tools that no longer exist. Agent files written before they were removed still list them;
+ * they are dropped when the file is read (and so on the next save) instead of making the
+ * agent fail with "Unknown tool" or refuse to be saved. Mimiamp was removed with client API 2.
+ */
+export const RETIRED_TOOLS: ReadonlySet<string> = new Set(['mimiamp']);
+export const withoutRetiredTools = (tools: readonly string[]): string[] => tools.filter((name) => !RETIRED_TOOLS.has(name));
+
 const FrontmatterSchema = z.strictObject({
   name: agentName,
   /** The name shown in chats; the file name stays the id. */
@@ -105,7 +113,7 @@ export function parseAgentFile(source: string, origin = 'agent file'): AgentDefi
     description,
     ...(intro ? { intro } : {}),
     models,
-    tools,
+    tools: withoutRetiredTools(tools),
     ...(lazy_tools ? { lazyTools: true } : {}),
     ...(Object.keys(permissions).length > 0 ? { permissions } : {}),
     skills,

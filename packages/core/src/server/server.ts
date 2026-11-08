@@ -26,7 +26,7 @@ import type {
 } from '@mimi/shared';
 import { API_VERSION, CLOSE_CLIENT_TOO_OLD, MIN_CLIENT_API, NODE_TYPES, type PermissionScope } from '@mimi/shared';
 import { WebSocket, WebSocketServer } from 'ws';
-import { deleteAgent, saveAgent } from '../agents/loader.ts';
+import { deleteAgent, saveAgent, withoutRetiredTools } from '../agents/loader.ts';
 import { classifyError } from '../errors.ts';
 import { ensureOverseer, OVERSEER_NAME, overseerView as toOverseerView } from '../overseer/overseer.ts';
 import { readSkillBody } from '../skills/skills.ts';
@@ -334,7 +334,7 @@ export async function startServer(
       if (value) models[key] = value;
     }
     checkModels(models);
-    const tools = (view.tools ?? []).map(String);
+    const tools = withoutRetiredTools((view.tools ?? []).map(String));
     core.tools.select(tools); // unknown tools, or untrusted-content + shell together
     const skills = [...new Set((view.skills ?? []).map(String))];
     const hub = core.skills().map((skill) => skill.name);

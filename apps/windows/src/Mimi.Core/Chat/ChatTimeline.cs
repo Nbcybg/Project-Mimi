@@ -4,7 +4,7 @@ using Mimi.Core.Protocol;
 
 namespace Mimi.Core.Chat;
 
-public sealed record PendingMessage(string ClientId, string Text, IReadOnlyList<string> AttachmentNames, string? Failed = null);
+public sealed record PendingMessage(string ClientId, string Text, IReadOnlyList<string> AttachmentNames, string? Failed = null, IReadOnlyList<string>? AttachmentKinds = null);
 
 public sealed record Note(string Text, bool Bad);
 

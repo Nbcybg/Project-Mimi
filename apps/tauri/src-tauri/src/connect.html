@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Mimi</title>
+<style>
+  :root { color-scheme: dark; --bg: #171215; --panel: #221b20; --line: #3b2f37; --text: #f1e9ee; --muted: #b3a4ad; --accent: #e08aa7; --bad: #ff8a8a; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 16px; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, "Noto Sans Thai", sans-serif; }
+  form { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 22px; width: min(440px, 100%); display: flex; flex-direction: column; gap: 10px; }
+  p { margin: 0; color: var(--muted); font-size: 13px; }
+  input { width: 100%; padding: 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--text); font: inherit; }
+  button { padding: 12px; border: 0; border-radius: 10px; background: var(--accent); color: #1a1205; font: inherit; font-weight: 600; }
+  button:disabled { opacity: .6; }
+  #error { color: var(--bad); min-height: 1.5em; }
+  code { color: var(--text); }
+</style>
+</head>
+<body>
+<form id="form">
+  <strong>เชื่อมต่อเซิร์ฟเวอร์ Mimi</strong>
+  <p>ใส่ที่อยู่ของ core ที่จะใช้ แล้วใส่รหัสผ่านในหน้าถัดไป</p>
+  <p>เซิร์ฟเวอร์บนคลาวด์: <code>https://mimi.example.com</code><br>เซิร์ฟเวอร์ในเครือข่ายบ้าน (มือถือกับเครื่อง core ต้องอยู่ Wi‑Fi เดียวกัน): <code>http://192.168.1.10:8787</code></p>
+  <input id="url" type="url" inputmode="url" autocomplete="url" autocapitalize="none" spellcheck="false" placeholder="https://" value="__CORE__" required>
+  <p id="error"></p>
+  <button id="go" type="submit">เชื่อมต่อ</button>
+</form>
+<script>
+  'use strict';
+  var form = document.getElementById('form');
+  var input = document.getElementById('url');
+  var error = document.getElementById('error');
+  var go = document.getElementById('go');
+  form.addEventListener('submit', function (event) {
+    event.preventDefault();
+    error.textContent = '';
+    go.disabled = true;
+    go.textContent = 'กำลังบันทึก…';
+    fetch('/set?core=' + encodeURIComponent(input.value))
+      .then(function (response) { return response.json(); })
+      .then(function (result) {
+        if (result.ok) { location.href = result.ui; return; }
+        error.textContent = result.error || 'เชื่อมต่อไม่ได้';
+        go.disabled = false;
+        go.textContent = 'เชื่อมต่อ';
+      })
+      .catch(function () {
+        error.textContent = 'บันทึกไม่ได้ ลองใหม่อีกครั้ง';
+        go.disabled = false;
+        go.textContent = 'เชื่อมต่อ';
+      });
+  });
+</script>
+</body>
+</html>

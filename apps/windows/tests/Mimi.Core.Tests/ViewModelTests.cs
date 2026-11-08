@@ -276,6 +276,49 @@ public class ChatViewModelTests
         await Until(() => opened == 7);
         session.End();
     }
+
+    [Fact]
+    public void The_pending_line_says_what_the_core_is_doing_with_the_message()
+    {
+        // app.js setPendingStatus: sending, then answering, and while busy the audio is
+        // transcribed and the pictures are looked at.
+        Assert.Equal("กำลังส่ง…", ChatViewModel.PendingStatusOf(busy: false, transcribing: false, viewing: false, null, null));
+        Assert.Equal("กำลังตอบ…", ChatViewModel.PendingStatusOf(busy: true, transcribing: false, viewing: false, null, null));
+        Assert.Equal("กำลังตอบ…", ChatViewModel.PendingStatusOf(busy: true, transcribing: false, viewing: false, ["file"], null));
+        Assert.Equal("กำลังถอดเสียง…", ChatViewModel.PendingStatusOf(busy: true, transcribing: true, viewing: false, ["audio"], null));
+        Assert.Equal("AI กำลังดูรูป…", ChatViewModel.PendingStatusOf(busy: true, transcribing: false, viewing: true, ["image"], null));
+        Assert.Equal("AI กำลังดูรูป…", ChatViewModel.PendingStatusOf(busy: true, transcribing: true, viewing: true, ["image"], null));
+        Assert.Equal("ส่งไม่ได้", ChatViewModel.PendingStatusOf(busy: false, transcribing: false, viewing: false, null, "ส่งไม่ได้"));
+    }
+
+    [Fact]
+    public async Task The_character_level_shows_really_only_the_two_newest_message_blocks()
+    {
+        var (session, socket) = await Online();
+        var chat = new ChatViewModel(session);
+        chat.Open(1);
+        socket.Push("""
+{"type":"chat-history","chat":{"id":1,"kind":"direct","agents":["mimi"]},"session":{"id":1,"chatId":1},"sessions":[],"messages":[
+            {"id":1,"role":"user","text":"หนึ่ง","createdAt":"x"},
+            {"id":2,"role":"assistant","agent":"mimi","text":"ตอบหนึ่ง","createdAt":"x"},
+            {"id":3,"role":"user","text":"สอง","createdAt":"x"},
+            {"id":4,"role":"assistant","agent":"mimi","text":"ตอบสอง","createdAt":"x"},
+            {"id":5,"role":"user","text":"สาม","createdAt":"x"},
+            {"id":6,"role":"assistant","agent":"mimi","text":"ตอบสาม","createdAt":"x"}],"hasMore":false}
+""");
+        await Until(() => chat.Timeline.Loaded);
+        Assert.Equal(new long[] { 1L, 2L, 3L, 4L, 5L, 6L }, chat.Items.OfType<MessageItem>().Select(item => item.Id));
+
+        chat.BubbleLevel = 1;
+        Assert.Equal(new long[] { 5L, 6L }, chat.Items.OfType<MessageItem>().Select(item => item.Id));
+
+        chat.BubbleLevel = 2;
+        Assert.Equal(6, chat.Items.Count);
+
+        chat.BubbleLevel = 0;
+        Assert.Empty(chat.Items);
+        session.End();
+    }
 }
 
 public class ConnectViewModelTests

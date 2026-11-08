@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Mimi.Core;
 using Mimi.Core.Desktop;
 using Mimi.Core.Hub;
@@ -59,10 +60,17 @@ internal sealed class StageData
                 agents.Clear();
                 foreach (var agent in json.A("agents")) agents[agent.S("name")] = agent.Clone();
                 break;
-            case "agent-status":
-                // One agent's status changed (outfit, location, situation): ask for the list again.
-                session.Send(Core.Protocol.ClientFrames.Simple("agents-list"));
-                return;
+            case "status":
+                // One agent's status changed (the core broadcasts it right after every status_set):
+                // fold it into the cached agent so the chat and the open panel follow at once.
+                {
+                    var name = json.S("agent");
+                    if (name.Length == 0 || !agents.TryGetValue(name, out var known)) return;
+                    var merged = (JsonObject)JsonNode.Parse(known.GetRawText())!;
+                    merged["status"] = JsonNode.Parse(json.At("status").GetRawText());
+                    agents[name] = JsonSerializer.SerializeToElement(merged);
+                    break;
+                }
             case "wardrobe":
                 outfits = json.A("outfits").Select(item => item.Clone()).ToList();
                 break;

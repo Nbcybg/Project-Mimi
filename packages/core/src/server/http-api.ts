@@ -9,7 +9,7 @@ import type { WardrobeStore } from '../wardrobe/wardrobe-store.ts';
 import type { BackgroundStore } from '../backgrounds/background-store.ts';
 import type { GalleryStore } from '../gallery/gallery-store.ts';
 import type { NativePushRegistration, PermissionScope, PushDeviceView } from '@mimi/shared';
-import { serveFileRange } from './web-files.ts';
+import { serveFileRange } from './public-assets.ts';
 
 /** What the webhook endpoint answers: a `respond` node may shape all of it. */
 export interface WebhookReply {

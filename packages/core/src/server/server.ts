@@ -40,7 +40,8 @@ import { webhookEventId, webhookIdempotencyKey } from '../workflows/idempotency.
 import { contextFor, resolveString } from '../workflows/expressions.ts';
 import { validateWorkflowNode, validateWorkflowView, type WorkflowValidationContext } from '../workflows/validate.ts';
 import { AuthLimiter, clientAddress } from './auth-limiter.ts';
-import { APP_VERSION, serveWebFile } from './web-files.ts';
+import { allowedOrigins, applyCors, originAllowed } from './cors.ts';
+import { APP_VERSION, servePublicAssets } from './public-assets.ts';
 import { createBackup, listBackups } from '../backup/backup.ts';
 import { AppSettings, MODEL_KEYS } from '../app/app-settings.ts';
 import { presetSecretKey } from '../app/secrets.ts';
@@ -95,7 +96,7 @@ export interface MimiServer {
   close(): Promise<void>;
 }
 
-export { APP_VERSION, serveWebFile };
+export { APP_VERSION, servePublicAssets };
 
 const HELLO_TIMEOUT_MS = 10_000;
 const HEARTBEAT_MS = 30_000;
@@ -2299,12 +2300,15 @@ export async function startServer(
   backupTimer.unref();
   const firstBackup = setTimeout(() => void autoBackup(), 60_000);
   firstBackup.unref();
+  const corsOrigins = config.allowedOrigins ?? allowedOrigins();
   const server = http.createServer(async (request, response) => {
     const url = new URL(request.url ?? '/', 'http://localhost');
     // Every answer says which client API this core speaks, so an app can tell before it parses anything.
     response.setHeader('x-mimi-api', String(API_VERSION));
-    if (request.method === 'GET' && serveWebFile(url.pathname, response, { web: config.serveWeb !== false })) {
-      // the web client
+    if (applyCors(request, response, corsOrigins)) {
+      // a preflight from an app's page (the UI is bundled in the app, not served from here)
+    } else if (request.method === 'GET' && servePublicAssets(url.pathname, response)) {
+      // backdrops and the icon
     } else if (await serveCalendarPush(core.calendarSync, request, response)) {
       // a calendar provider notification or the Graph validation handshake
     } else if (await handleHttpApi(httpApi, request, response)) {
@@ -2334,10 +2338,11 @@ export async function startServer(
     server,
     path: '/ws',
     maxPayload: 4 * 1024 * 1024,
-    // Browsers send an Origin header and allow cross-site WebSocket connections, so only
-    // pages served by this server may connect. Non-browser clients send no Origin.
+    // Browsers send an Origin header and allow cross-site WebSocket connections, so only the
+    // app shells (and MIMI_ALLOWED_ORIGINS) may connect. Non-browser clients send no Origin.
     verifyClient: ({ origin, req }: { origin?: string; req: http.IncomingMessage }) => {
       if (!origin) return true;
+      if (originAllowed(origin, corsOrigins)) return true;
       try {
         return new URL(origin).host === req.headers.host;
       } catch {

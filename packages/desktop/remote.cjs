@@ -36,6 +36,8 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const lib = require('./remote-lib.cjs');
 const updater = require('./updater.cjs');
+const ui = require('./ui-protocol.cjs');
+ui.registerScheme();
 
 // Started by the PC agent as the agents' built-in browser: one Chromium window of its own
 // with a persistent profile, controlled over the DevTools protocol (browser-shell.cjs).
@@ -445,20 +447,16 @@ function startBounds() {
   return { ...DEFAULT_SIZE, height, x: area.x + area.width - DEFAULT_SIZE.width - MARGIN, y: area.y + area.height - height - MARGIN };
 }
 
-const isServerUrl = (url) => {
-  try {
-    return Boolean(config.server) && new URL(url).origin === config.server;
-  } catch {
-    return false;
-  }
-};
+// The UI is part of this app (app://mimi, ui-protocol.cjs); the server only answers the API.
+// Only that page may use the shell's calls below and the microphone.
+const isServerUrl = (url) => ui.isUiUrl(url);
 const isConnectPage = (url) => typeof url === 'string' && url.split(/[?#]/)[0] === pathToFileURL(CONNECT_PAGE).href;
 
 function loadApp() {
   if (!win || win.isDestroyed()) return;
   if (!config.server) win.loadFile(CONNECT_PAGE);
   // The token rides in the fragment, which never reaches the server; the page keeps it in memory.
-  else win.loadURL(current ? `${config.server}/#token=${encodeURIComponent(current.token)}` : `${config.server}/`);
+  else win.loadURL(ui.url({ core: config.server, token: current?.token }));
 }
 
 function createWindow() {
@@ -508,7 +506,7 @@ function createWindow() {
   const { webContents } = win;
   webContents.setVisualZoomLevelLimits(1, 1);
   webContents.setWindowOpenHandler(({ url }) => {
-    if (/^https?:/i.test(url) && !isServerUrl(url)) shell.openExternal(url);
+    if (/^https?:/i.test(url)) shell.openExternal(url);
     return { action: 'deny' };
   });
   webContents.on('will-navigate', (event, url) => {
@@ -756,6 +754,7 @@ app.on('before-quit', (event) => {
 
 app.whenReady().then(() => {
   const web = session.fromPartition(PARTITION);
+  ui.serve(web, () => config.server);
   const allowed = new Set(['media', 'notifications', 'clipboard-sanitized-write']);
   web.setPermissionRequestHandler((contents, permission, callback) => callback(allowed.has(permission) && isServerUrl(contents.getURL())));
   web.setPermissionCheckHandler((contents, permission) => allowed.has(permission) && isServerUrl(contents?.getURL() ?? ''));

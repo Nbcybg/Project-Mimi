@@ -10,16 +10,13 @@ import { localAppDir, moveUserDataToDocuments } from './user-home.ts';
 
 // The desktop app: starts the core on this machine and shows it in a native window (Electron,
 // packages/desktop) that lives in the tray: closing the window hides it, the tray icon brings
-// it back. Without Electron installed the client opens in the default browser instead.
+// it back. Without Electron installed there is no window (the server serves no page).
 
-function openInDefaultBrowser(url: string): void {
-  const [command, args] =
-    process.platform === 'win32'
-      ? ['cmd', ['/c', 'start', '', url]]
-      : process.platform === 'darwin'
-        ? ['open', [url]]
-        : ['xdg-open', [url]];
-  spawn(command as string, args as string[], { stdio: 'ignore', detached: true }).unref();
+function openInDefaultBrowser(_url: string): void {
+  // The core serves no page any more: the UI is part of the app window (packages/desktop,
+  // ui-protocol.cjs). With no Electron there is nothing to show, so say so instead of
+  // opening a browser on a plain-text 404.
+  console.error('Mimi: the window needs Electron (npm install). The server itself shows no page: use a Mimi app and connect it to this address.');
 }
 
 async function isMimiRunning(port: number): Promise<boolean> {

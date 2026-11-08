@@ -106,6 +106,18 @@ public sealed partial class ChatView : UserControl
     public static Visibility PromptVisibility() => showPrompt ? Visibility.Visible : Visibility.Collapsed;
     public static Visibility ToolsVisibility(bool hasTools) => hasTools && showPrompt ? Visibility.Visible : Visibility.Collapsed;
     public static Visibility HelperVisibility(string helper) => showPrompt && !string.IsNullOrEmpty(helper) ? Visibility.Visible : Visibility.Collapsed;
+    /// <summary>
+    /// The streaming bubble hides while its only content is hidden tool rows ("แสดง prompt" off):
+    /// the web's tool rows are not part of the text bubble, so nothing is left behind there.
+    /// </summary>
+    public static Visibility LiveBubbleVisibility(IReadOnlyList<object> parts, bool thinking) =>
+        showPrompt || thinking || parts.Any(part => part is not ToolRow) ? Visibility.Visible : Visibility.Collapsed;
+    /// <summary>
+    /// A stored agent message whose only content is tool lines disappears whole when "แสดง prompt" is off
+    /// (no empty bubble, no name, no time — the web leaves nothing visible behind either).
+    /// </summary>
+    public static Visibility MessageBlockVisibility(bool isUser, bool hasText, bool hasFiles, bool hasApproval, bool hasQuote, bool hasForwarded) =>
+        isUser || showPrompt || hasText || hasFiles || hasApproval || hasQuote || hasForwarded ? Visibility.Visible : Visibility.Collapsed;
     /// <summary>The bubble colours, changed in place while the character screen is on (web .solo .tx / .user).</summary>
     public static Brush Bubble(bool user) => (Brush)Application.Current.Resources[user ? "MimiChatUserBrush" : "MimiChatTxBrush"];
     public static Brush BubbleLine(bool user) => (Brush)Application.Current.Resources[user ? "MimiChatUserLineBrush" : "MimiChatTxLineBrush"];

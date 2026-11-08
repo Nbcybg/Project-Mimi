@@ -233,7 +233,7 @@ Mimiamp ถูกเอาออกทั้งหมดตั้งแต่ cl
 
 | ตัวแปร | ค่า | ใช้ทำอะไร |
 |---|---|---|
-| `MIMI_SERVE_WEB` | `0` = ปิด (ค่าเริ่มต้นเปิด) | ไม่เสิร์ฟหน้าเว็บ/สคริปต์ (เหลือเฉพาะ API, `/ws`, `/health`, ฉาก `/backgrounds/*`, ไอคอน) — ใช้เมื่อทุกคนใช้แอป native แล้ว ตั้งได้ทั้ง core และ gateway |
+| `MIMI_ALLOWED_ORIGINS` | รายการ origin คั่นด้วย `,` เช่น `https://ui.example.com` | เซิร์ฟเวอร์ **ไม่เสิร์ฟหน้าเว็บ/สคริปต์เลย** (มีแค่ API, `/ws`, `/health`, ฉาก `/backgrounds/*`, ไอคอน) — UI อยู่ในตัวแอป (`app://mimi`, `tauri://localhost`, `http(s)://tauri.localhost` อนุญาตให้เสมอ) ใช้ตัวแปรนี้เพิ่ม origin อื่นที่ต้องเรียก API ได้ ตั้งได้ทั้ง core และ gateway |
 | `MIMI_FCM_SERVICE_ACCOUNT` | JSON ของ service account (ทั้งก้อน) หรือ path ของไฟล์ | ส่ง push ไปแอป Android ผ่าน FCM HTTP v1 (`MIMI_FCM_PROJECT_ID` ใช้แทน `project_id` ในไฟล์ได้) |
 | `MIMI_APNS_KEY` / `MIMI_APNS_KEY_ID` / `MIMI_APNS_TEAM_ID` / `MIMI_APNS_TOPIC` | PEM ของไฟล์ `.p8` (หรือ path), Key ID, Team ID, bundle id | ส่ง push ไปแอป iOS/Mac ผ่าน APNs |
 | `MIMI_WNS_TENANT_ID` / `MIMI_WNS_CLIENT_ID` / `MIMI_WNS_CLIENT_SECRET` | Entra ID (Azure AD) app ที่ลงทะเบียนกับ WNS: tenant, client (= remote id ของแอป Windows), secret | ส่ง push ไปแอป Windows (raw push; แอปดึงข้อความเอง) |

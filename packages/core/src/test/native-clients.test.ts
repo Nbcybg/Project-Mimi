@@ -7,6 +7,7 @@ import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { type TestContext, test } from 'node:test';
+import { WebSocket as WsClient } from 'ws';
 import { API_VERSION, CLOSE_CLIENT_TOO_OLD, MIN_CLIENT_API, type ClientMessage, type ServerMessage } from '@mimi/shared';
 import { openDb } from '../db/db.ts';
 import { AccountStore } from '../gateway/accounts.ts';
@@ -29,11 +30,11 @@ const CATALOG = new ModelCatalog({
 const FCM_TOKEN = 'fcm-registration-token-abcdefghijklmnopqrstuvwxyz:APA91b';
 const APNS_TOKEN = 'a'.repeat(64);
 
-async function boot(t: TestContext, options: { serveWeb?: boolean; replies?: string[]; env?: NodeJS.ProcessEnv } = {}) {
+async function boot(t: TestContext, options: { replies?: string[]; env?: NodeJS.ProcessEnv } = {}) {
   const mimi = scriptedModel((options.replies ?? ['รับทราบค่ะ']).map((text) => textStep(text)));
   const parts = testCoreParts({ settings: { model: 'lab/flash', provider: { lab: {} } }, env: options.env });
   const server = await startServer(
-    { ...parts.config, token: TOKEN, host: '127.0.0.1', port: 0, serveWeb: options.serveWeb },
+    { ...parts.config, token: TOKEN, host: '127.0.0.1', port: 0 },
     { settings: parts.settings, catalog: CATALOG, models: fakeModels({ chat: mimi, small: replyingModel([{ text: 'nothing' }]), byModel: { mimi } }) },
   );
   const base = `http://127.0.0.1:${server.port}`;
@@ -129,22 +130,64 @@ test('errors name the message they answer; unknown types get E-PROTOCOL', async 
   assert.equal(failed.requestType, 'chat-open');
 });
 
-test('MIMI_SERVE_WEB=0: no pages or scripts, but the API, backdrops and icons stay', async (t) => {
-  const app = await boot(t, { serveWeb: false });
-  const page = await fetch(`${app.base}/`);
-  assert.equal(page.status, 404);
-  assert.match(await page.text(), /MIMI_SERVE_WEB=0/);
-  for (const gone of ['/app.js', '/sw.js', '/vendor/three.module.js', '/sounds/chat_1.mp3']) {
+test('the server never serves a page or script; backdrops, icon and /health stay', async (t) => {
+  const app = await boot(t);
+  const root = await fetch(`${app.base}/`);
+  assert.equal(root.status, 404);
+  assert.match(await root.text(), /API only/);
+  for (const gone of ['/index.html', '/app.js', '/app.css', '/sw.js', '/manifest.webmanifest', '/offline.html', '/vendor/three.module.js', '/sounds/chat_1.mp3']) {
     assert.equal((await fetch(`${app.base}${gone}`)).status, 404, gone);
   }
   for (const kept of ['/health', '/icon.png', '/backgrounds/floral.webp']) {
     assert.equal((await fetch(`${app.base}${kept}`)).status, 200, kept);
   }
+  for (const name of ['floral', 'mint', 'blush', 'sky', 'grid', 'starlight', 'dawn', 'ember', 'crimson', 'waves', 'confetti']) {
+    const response = await fetch(`${app.base}/backgrounds/${name}.webp?v=1`);
+    assert.equal(response.status, 200, name);
+    assert.equal(response.headers.get('content-type'), 'image/webp', name);
+    const data = Buffer.from(await response.arrayBuffer());
+    assert.equal(data.subarray(0, 4).toString(), 'RIFF', name);
+    assert.equal(data.subarray(8, 12).toString(), 'WEBP', name);
+  }
+  assert.equal((await fetch(`${app.base}/backgrounds/nope.webp`)).status, 404);
+  assert.equal((await fetch(`${app.base}/backgrounds/..%2Fpackage.json`)).status, 404);
   await (await app.connect()).ask(null, 'welcome');
+});
 
-  // The default still serves the web client.
-  const web = await boot(t);
-  assert.equal((await fetch(`${web.base}/`)).status, 200);
+test('a UI bundled in an app may call the API: CORS for the app origins only', async (t) => {
+  const app = await boot(t, { env: { MIMI_ALLOWED_ORIGINS: 'https://ui.example.com/' } });
+  for (const origin of ['app://mimi', 'tauri://localhost', 'http://tauri.localhost', 'https://ui.example.com']) {
+    const preflight = await fetch(`${app.base}/api/widget`, {
+      method: 'OPTIONS',
+      headers: { origin, 'access-control-request-method': 'GET', 'access-control-request-headers': 'authorization' },
+    });
+    assert.equal(preflight.status, 204, origin);
+    assert.equal(preflight.headers.get('access-control-allow-origin'), origin);
+    assert.match(preflight.headers.get('access-control-allow-headers') ?? '', /authorization/);
+    const answer = await app.api('/api/widget', { headers: { origin } });
+    assert.equal(answer.status, 200, origin);
+    assert.equal(answer.headers.get('access-control-allow-origin'), origin);
+    assert.match(answer.headers.get('access-control-expose-headers') ?? '', /x-mimi-api/);
+    assert.equal((await fetch(`${app.base}/health`, { headers: { origin } })).headers.get('access-control-allow-origin'), origin);
+  }
+  // Any other page: the preflight is refused and the answer carries no permission to read it.
+  const other = 'https://evil.example';
+  assert.equal((await fetch(`${app.base}/api/widget`, { method: 'OPTIONS', headers: { origin: other, 'access-control-request-method': 'GET' } })).status, 403);
+  assert.equal((await app.api('/api/widget', { headers: { origin: other } })).headers.get('access-control-allow-origin'), null);
+  // No Origin (native apps, scripts): untouched.
+  assert.equal((await app.api('/api/widget')).headers.get('access-control-allow-origin'), null);
+});
+
+test('the WebSocket accepts the app origins and refuses other pages', async (t) => {
+  const app = await boot(t);
+  const open = (origin: string) =>
+    new Promise<boolean>((resolve) => {
+      const socket = new WsClient(`ws://127.0.0.1:${new URL(app.base).port}/ws`, { headers: { origin } });
+      socket.on('open', () => (socket.close(), resolve(true)));
+      socket.on('error', () => resolve(false));
+    });
+  assert.equal(await open('app://mimi'), true);
+  assert.equal(await open('https://evil.example'), false);
 });
 
 test('chat files answer Range requests and keep their safety headers', async (t) => {

@@ -238,7 +238,7 @@ test('HTTP: a session reaches only its own core; the core token never leaves the
   for (const person of Object.values(booted.people)) assert.ok(!body.includes(person.coreToken));
 
   assert.deepEqual(await (await fetch(`${booted.http}/health`)).json(), { ok: true, version: JSON.parse(fs.readFileSync('package.json', 'utf8')).version, api: API_VERSION, minClientApi: MIN_CLIENT_API, accounts: true });
-  assert.equal((await fetch(`${booted.http}/`)).status, 200);
+  assert.equal((await fetch(`${booted.http}/`)).status, 404, 'the gateway serves no page');
   assert.equal((await fetch(`${booted.http}/app/show`, { method: 'POST' })).status, 404);
 });
 
@@ -450,13 +450,24 @@ test('sign-in takes JSON only; password checks are capped so a flood gets 503, n
   assert.equal((await login(booted, 'alice')).status, 200, 'normal sign-in works afterwards');
 });
 
-test('the gateway\'s pages may not be framed and run only their own scripts', async (t) => {
+test('the gateway serves no page or script; apps bundle the UI and reach it by CORS from their own origins', async (t) => {
   const booted = await boot(t);
-  const page = await fetch(`${booted.http}/`);
-  assert.equal(page.headers.get('x-frame-options'), 'DENY');
-  assert.match(page.headers.get('content-security-policy')!, /frame-ancestors 'none'/);
-  assert.match(page.headers.get('content-security-policy')!, /script-src 'self' 'sha256-[\w+/=]+'/);
-  assert.equal(page.headers.get('referrer-policy'), 'no-referrer');
+  const root = await fetch(`${booted.http}/`);
+  assert.equal(root.status, 404);
+  assert.match(await root.text(), /API only/);
+  for (const gone of ['/index.html', '/app.js', '/sw.js', '/vendor/three.module.js']) {
+    assert.equal((await fetch(`${booted.http}${gone}`)).status, 404, gone);
+  }
+  // The sign-in call comes from the app's own page: allowed for its origin, refused for any other.
+  const preflight = await fetch(`${booted.http}/auth/login`, {
+    method: 'OPTIONS',
+    headers: { origin: 'app://mimi', 'access-control-request-method': 'POST', 'access-control-request-headers': 'content-type' },
+  });
+  assert.equal(preflight.status, 204);
+  assert.equal(preflight.headers.get('access-control-allow-origin'), 'app://mimi');
+  assert.equal((await fetch(`${booted.http}/health`, { headers: { origin: 'app://mimi' } })).headers.get('access-control-allow-origin'), 'app://mimi');
+  const other = await fetch(`${booted.http}/auth/login`, { method: 'OPTIONS', headers: { origin: 'https://evil.example', 'access-control-request-method': 'POST' } });
+  assert.equal(other.status, 403);
 });
 
 test('two-step sign-in: set up with the password and a first code, then every sign-in needs a fresh code', async (t) => {

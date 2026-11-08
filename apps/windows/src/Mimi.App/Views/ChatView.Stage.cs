@@ -11,6 +11,7 @@ using Mimi.Core.Desktop;
 using Mimi.Core.Hub;
 using Mimi.Core.Protocol;
 using Mimi.Core.ViewModels;
+using Color = Windows.UI.Color;
 
 namespace Mimi.App.Views;
 
@@ -26,8 +27,11 @@ public sealed partial class ChatView
     private SceneOverlay? scene;
     private string? mood;
     private Action<bool>? railPeek;
+    private Action? railRepaint;
     private ScrollViewer? messagesScroll;
     private bool bubbleFadeQueued;
+    private Border? stageFade;
+    private readonly Dictionary<string, TextBox> statusBoxes = [];
 
     private static readonly (string Key, string Label)[] StatusKeys = [("location", "ที่อยู่"), ("outfit", "ชุด"), ("current_task", "กำลังทำ"), ("mood", "อารมณ์")];
 
@@ -37,6 +41,18 @@ public sealed partial class ChatView
         stage = data;
         stageView = new StageView(owner.Images, () => owner.Session.Api, cache);
         StageHost.Children.Add(stageView);
+        // The web's .solo .stage .fade: a gradient over the lower 62% of the stage, so the chat
+        // does not fight the character's face — transparent at its top, 60% of the stage colour at the bottom.
+        stageFade = new Border
+        {
+            VerticalAlignment = VerticalAlignment.Bottom,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            Background = FadeBrush(),
+            IsHitTestVisible = false,
+            Visibility = Visibility.Collapsed,
+        };
+        StageHost.Children.Add(stageFade);
+        StageHost.SizeChanged += (_, _) => stageFade.Height = StageHost.ActualHeight * 0.62;
         // The situation picture lies over the messages (feature-gallery.js #cg), in the same row as the stage.
         scene = new SceneOverlay(owner.Images, owner.Config, () => owner.SaveConfig(later: true));
         if (StageHost.Parent is Grid layout)
@@ -60,6 +76,7 @@ public sealed partial class ChatView
             if (e.PropertyName == nameof(ChatViewModel.ContextLabel)) Meter();
         };
         Theme.Changed += PaintChatBrushes;
+        Theme.Changed += () => { if (stageFade is not null) stageFade.Background = FadeBrush(); };
     }
 
     private ChatLook Look => app is not null && ViewModel.ChatId != 0 ? app.Config.Look(ViewModel.ChatId) : new ChatLook();
@@ -89,11 +106,11 @@ public sealed partial class ChatView
         Messages.FontSize = pixels;
         CharacterButton.IsChecked = CharacterOn;
         CharacterButton.Visibility = DirectAgent() is null ? Visibility.Collapsed : Visibility.Visible;
-        // How much of the chat shows over the character: none, the newest two (the bottom of the stage), all.
+        // How much of the chat shows over the character: none, the newest two, all. The view model
+        // really filters the rows (the web's data-bubbles) — never a crop of the list.
         var level = CharacterOn && DirectAgent() is not null ? look.Bubbles ?? 2 : 2;
-        Messages.Visibility = level == 0 ? Visibility.Collapsed : Visibility.Visible;
-        Messages.VerticalAlignment = level == 1 ? VerticalAlignment.Bottom : VerticalAlignment.Stretch;
-        Messages.MaxHeight = level == 1 ? 260 : double.PositiveInfinity;
+        ViewModel.BubbleLevel = level;
+        Messages.Visibility = Visibility.Visible;
         // A direct chat with its character is the web's .solo screen: the stage is the page.
         ApplySolo(DirectAgent() is not null && CharacterOn);
         PaintChatBrushes();
@@ -164,6 +181,11 @@ public sealed partial class ChatView
             button.Padding = on ? new Thickness(0) : new Thickness(9, 7, 9, 7);
         }
         if (stageView is not null) stageView.Solo = on;
+        if (stageFade is not null)
+        {
+            stageFade.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
+            if (on) stageFade.Height = StageHost.ActualHeight * 0.62;
+        }
         // The web's .solo .log.fade-top fades the bubbles themselves, not a black panel over them.
         QueueBubbleFade();
         PaintChatBrushes();
@@ -247,10 +269,15 @@ public sealed partial class ChatView
                 element.Opacity = 1;
                 continue;
             }
-            var height = (element as FrameworkElement)?.ActualHeight ?? 0;
-            // mask-image: transparent 0-18% of the log's height, opaque from 46%, linear in between.
-            var shown = Messages.ActualHeight;
-            element.Opacity = shown <= 0 ? 1 : Math.Clamp(((top + height / 2) / shown - 0.18) / (0.46 - 0.18), 0, 1);
+        var height = (element as FrameworkElement)?.ActualHeight ?? 0;
+        // mask-image: transparent 0-18% of the log's height, opaque from 46%, linear in between.
+        var shown = Messages.ActualHeight;
+        var progress = shown <= 0 ? 0 : (top + height / 2) / shown;
+        var opacity = Math.Clamp((progress - 0.18) / (0.46 - 0.18), 0, 1);
+        // The bottom edge too: rows slide under the floating glass composer, so they dissolve
+        // as they reach it instead of being cut off at the screen's edge.
+        opacity = Math.Min(opacity, Math.Clamp((1.08 - progress) / 0.11, 0, 1));
+        element.Opacity = shown <= 0 ? 1 : opacity;
         }
     }
 
@@ -270,6 +297,21 @@ public sealed partial class ChatView
     private static void Set(string key, string color)
     {
         if (Application.Current.Resources[key] is SolidColorBrush brush) brush.Color = Theme.ColorOf(color);
+    }
+
+    /// <summary>The web's .solo .stage .fade: transparent at the top, 22% halfway, 60% of the stage colour at the bottom.</summary>
+    private static LinearGradientBrush FadeBrush()
+    {
+        var color = ((SolidColorBrush)Theme.Brush("SoloFade")).Color;
+        var brush = new LinearGradientBrush
+        {
+            StartPoint = new Windows.Foundation.Point(0.5, 0),
+            EndPoint = new Windows.Foundation.Point(0.5, 1),
+        };
+        brush.GradientStops.Add(new GradientStop { Color = Color.FromArgb(0, color.R, color.G, color.B), Offset = 0 });
+        brush.GradientStops.Add(new GradientStop { Color = Color.FromArgb((byte)(color.A * 0.22), color.R, color.G, color.B), Offset = 0.5 });
+        brush.GradientStops.Add(new GradientStop { Color = Color.FromArgb((byte)(color.A * 0.6), color.R, color.G, color.B), Offset = 1 });
+        return brush;
     }
 
     private void Meter()
@@ -332,7 +374,8 @@ public sealed partial class ChatView
         var flyout = new Flyout { Placement = FlyoutPlacementMode.BottomEdgeAlignedRight };
         void Paint()
         {
-            var panel = new StackPanel { Spacing = 14, Width = 330 };
+            // The panel fits the window: two tiles of 140px plus their spacing never overflow the frame.
+            var panel = new StackPanel { Spacing = 14, Width = Math.Min(330, Math.Max(272, ActualWidth - 24)) };
             panel.Children.Add(Ui.Seg<string>([("status", "สถานะ / Session"), ("look", "หน้าตา"), ("info", "ข้อมูล / ตั้งค่า")], tab, next =>
             {
                 tab = next;
@@ -344,6 +387,7 @@ public sealed partial class ChatView
             body.Content = panel;
         }
         Paint();
+        railRepaint = Paint;
         // A shell of our own: the flyout presenter's default background is opaque, and the web fades the
         // panel to 16% while a size/position slider is held so the character can be seen.
         var scroll = Ui.Scroll(body, 560);
@@ -357,11 +401,18 @@ public sealed partial class ChatView
         flyout.Content = shell;
         railPeek = peek => shell.Opacity = peek ? 0.16 : 1;
         // A new uploaded background arrives after the panel is open: redraw its thumbnails.
-        void StageChanged() => DispatcherQueue.TryEnqueue(Paint);
+        // An agent's status can change any moment too: the status tab refreshes its boxes in
+        // place (a full repaint would drop the box the person is editing right now).
+        void StageChanged() => DispatcherQueue.TryEnqueue(() =>
+        {
+            if (tab == "status" && statusBoxes.Count > 0) SyncStatusBoxes();
+            else Paint();
+        });
         if (stage is not null) stage.Changed += StageChanged;
         flyout.Closed += (_, _) =>
         {
             railPeek = null;
+            railRepaint = null;
             if (stage is not null) stage.Changed -= StageChanged;
         };
         // The header's button, or the glass one on the character screen.
@@ -426,6 +477,7 @@ public sealed partial class ChatView
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         var rowIndex = 0;
+        statusBoxes.Clear();
         foreach (var (key, label) in StatusKeys)
         {
             grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -438,11 +490,18 @@ public sealed partial class ChatView
             Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(box, label);
             box.LostFocus += (_, _) =>
             {
-                if (box.Text != value) app!.Session.Send(ClientFrames.Json("status-set", new JsonObject { ["agent"] = name, ["key"] = key, ["value"] = box.Text.Trim() }));
+                if (box.Text != value)
+                {
+                    app!.Session.Send(ClientFrames.Json("status-set", new JsonObject { ["agent"] = name, ["key"] = key, ["value"] = box.Text.Trim() }));
+                    // The answer comes back as a broadcast: repaint so every part (boxes, the
+                    // situation button) shows the fresh state once this box is not focused.
+                    DispatcherQueue.TryEnqueue(() => railRepaint?.Invoke());
+                }
             };
             Grid.SetRow(box, rowIndex);
             Grid.SetColumn(box, 1);
             grid.Children.Add(box);
+            statusBoxes[key] = box;
             rowIndex++;
         }
         panel.Children.Add(grid);
@@ -454,40 +513,72 @@ public sealed partial class ChatView
         }
     }
 
-    /// <summary>The web's info tab: who the chat is with, the prompt switch, CSV and delete.</summary>
+    /// <summary>The agent's status changed while the panel is open: refresh the boxes in place,
+    /// leaving the one being edited alone (app.js renders the rail again on every 'status' frame).</summary>
+    private void SyncStatusBoxes()
+    {
+        if (DirectAgent() is not { } name || stage?.Agent(name) is not { } agent) return;
+        foreach (var (key, box) in statusBoxes)
+        {
+            if (box.FocusState != FocusState.Unfocused) continue;
+            box.Text = agent.S($"status.{key}");
+        }
+    }
+
+    /// <summary>The web's info tab: who the chat is with, the prompt switch, CSV and delete — all centred.</summary>
     private void InfoPanel(StackPanel panel)
     {
         var chat = ViewModel.Chat;
         if (chat is null) return;
-        panel.Children.Add(Ui.Title(app!.Session.ChatTitle(chat)));
-        panel.Children.Add(Ui.Hint(chat.Kind == "direct" ? "แชตตัวต่อตัว" : $"แชตกลุ่ม · สมาชิก {string.Join(", ", (chat.Agents ?? []).Select(app.Session.AgentName))}"));
+        var title = Ui.Title(app!.Session.ChatTitle(chat));
+        title.TextAlignment = TextAlignment.Center;
+        title.HorizontalAlignment = HorizontalAlignment.Stretch;
+        panel.Children.Add(title);
+        var kind = Ui.Hint(chat.Kind == "direct" ? "แชตตัวต่อตัว" : $"แชตกลุ่ม · สมาชิก {string.Join(", ", (chat.Agents ?? []).Select(app.Session.AgentName))}");
+        kind.TextAlignment = TextAlignment.Center;
+        kind.HorizontalAlignment = HorizontalAlignment.Stretch;
+        panel.Children.Add(kind);
         if (DirectAgent() is { } name && stage?.Agent(name) is { } agent)
         {
-            var card = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
-            card.Children.Add(new Avatar { Path = AvatarPath(name, agent), Initial = app.Session.AgentName(name) is { Length: > 0 } shown ? shown[..1].ToUpperInvariant() : "?", Size = 56 });
-            var info = new StackPanel { Spacing = 2, VerticalAlignment = VerticalAlignment.Center };
-            info.Children.Add(new TextBlock { Text = app.Session.AgentName(name), FontSize = 15, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, Foreground = Theme.Brush("Ink") });
-            if (agent.S("description").Length > 0) info.Children.Add(Ui.Hint(agent.S("description")));
-            card.Children.Add(info);
+            // The web's who-card: the face, the name and the description centred, the edit button under them.
+            var card = new StackPanel { Spacing = 6, HorizontalAlignment = HorizontalAlignment.Center };
+            var avatar = new Avatar { Path = AvatarPath(name, agent), Initial = app.Session.AgentName(name) is { Length: > 0 } shown ? shown[..1].ToUpperInvariant() : "?", Size = 56, HorizontalAlignment = HorizontalAlignment.Center };
+            var shownName = new TextBlock { Text = app.Session.AgentName(name), FontSize = 15, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, Foreground = Theme.Brush("Ink"), TextAlignment = TextAlignment.Center, TextWrapping = TextWrapping.Wrap };
+            card.Children.Add(avatar);
+            card.Children.Add(shownName);
+            if (agent.S("description").Length > 0)
+            {
+                card.Children.Add(new TextBlock { Text = agent.S("description"), FontSize = 12.5, Foreground = Theme.Brush("Muted"), TextAlignment = TextAlignment.Center, TextWrapping = TextWrapping.Wrap });
+            }
+            var edit = Ui.Button("แก้ไข agent", () => App.Instance?.ShowManage(Page.Agents), "ghost", "rail-edit-agent");
+            edit.HorizontalAlignment = HorizontalAlignment.Center;
+            card.Children.Add(edit);
             panel.Children.Add(card);
-            panel.Children.Add(Ui.Button("แก้ไข agent", () => App.Instance?.ShowManage(Page.Agents), "ghost", "rail-edit-agent"));
         }
         else if (chat.Kind == "group")
         {
-            panel.Children.Add(Ui.Section("สมาชิก"));
+            var members = Ui.Section("สมาชิก");
+            members.TextAlignment = TextAlignment.Center;
+            members.HorizontalAlignment = HorizontalAlignment.Stretch;
+            panel.Children.Add(members);
             foreach (var member in chat.AgentNames)
             {
                 var info = stage?.Agent(member) is { } entry ? entry : default;
-                var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+                var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Center };
                 row.Children.Add(new Avatar { Path = info.ValueKind == JsonValueKind.Object ? AvatarPath(member, info) : null, Initial = app.Session.AgentName(member) is { Length: > 0 } shown ? shown[..1].ToUpperInvariant() : "?", Size = 28 });
                 row.Children.Add(new TextBlock { Text = app.Session.AgentName(member), FontSize = 13, VerticalAlignment = VerticalAlignment.Center, Foreground = Theme.Brush("Ink2") });
                 panel.Children.Add(row);
             }
-            panel.Children.Add(Ui.Button("แก้ไขกลุ่ม", () => _ = EditChat(), "ghost"));
+            var editGroup = Ui.Button("แก้ไขกลุ่ม", () => _ = EditChat(), "ghost");
+            editGroup.HorizontalAlignment = HorizontalAlignment.Center;
+            panel.Children.Add(editGroup);
         }
 
-        panel.Children.Add(Ui.Section("การแสดงผล"));
-        var prompt = new ToggleSwitch { Header = "แสดง prompt / เครื่องมือ", IsOn = app.Config.ShowPrompt, OnContent = "เปิด", OffContent = "ปิด" };
+        var display = Ui.Section("การแสดงผล");
+        display.TextAlignment = TextAlignment.Center;
+        display.HorizontalAlignment = HorizontalAlignment.Stretch;
+        panel.Children.Add(display);
+        var prompt = new ToggleSwitch { Header = "แสดง prompt / เครื่องมือ", IsOn = app.Config.ShowPrompt, OnContent = "เปิด", OffContent = "ปิด", HorizontalAlignment = HorizontalAlignment.Center };
         prompt.Toggled += (_, _) =>
         {
             app.Config.ShowPrompt = prompt.IsOn;
@@ -496,9 +587,16 @@ public sealed partial class ChatView
             RefreshRows();
         };
         panel.Children.Add(prompt);
-        panel.Children.Add(Ui.Hint("ปิดเพื่อซ่อนบรรทัดเครื่องมือและ helper ในแชต"));
-        panel.Children.Add(Ui.Button("ดาวน์โหลดแชตเป็น CSV", () => _ = App.Instance?.Download($"/api/export/chat/{ViewModel.ChatId}.csv", $"mimi-chat-{ViewModel.ChatId}.csv"), "ghost"));
-        panel.Children.Add(Ui.Button("ลบแชต", () => _ = DeleteChat(), "ghost"));
+        var promptHint = Ui.Hint("ปิดเพื่อซ่อนบรรทัดเครื่องมือและ helper ในแชต");
+        promptHint.TextAlignment = TextAlignment.Center;
+        promptHint.HorizontalAlignment = HorizontalAlignment.Stretch;
+        panel.Children.Add(promptHint);
+        var csv = Ui.Button("ดาวน์โหลดแชตเป็น CSV", () => _ = App.Instance?.Download($"/api/export/chat/{ViewModel.ChatId}.csv", $"mimi-chat-{ViewModel.ChatId}.csv"), "ghost");
+        csv.HorizontalAlignment = HorizontalAlignment.Center;
+        panel.Children.Add(csv);
+        var delete = Ui.Button("ลบแชต", () => _ = DeleteChat(), "ghost");
+        delete.HorizontalAlignment = HorizontalAlignment.Center;
+        panel.Children.Add(delete);
     }
 
     private string? AvatarPath(string name, JsonElement agent) =>
@@ -614,6 +712,7 @@ public sealed partial class ChatView
         panel.Children.Add(Ui.Hint("เลือกพื้นหลังของแชตนี้ — รูปที่อัปโหลดและสีจะแสดงด้านหลังตัวละคร"));
         panel.Children.Add(BackgroundPreview(look.Background, current));
         var kinds = new List<(string, string)> { ("default", "ตามแอป"), ("none", "ไม่ใช้"), ("solid", "สีเดียว"), ("gradient", "ไล่สี"), ("preset", "รูปในแอป"), ("upload", "อัปโหลด") };
+        // Six labels never fit one row of the panel: three per row keeps every choice readable.
         panel.Children.Add(Ui.Seg<string>(kinds, current, kind =>
         {
             if (kind == "default")
@@ -630,7 +729,7 @@ public sealed partial class ChatView
                 }
             }
             changed();
-        }, "chat-bg"));
+        }, "chat-bg", columns: 3));
         var background = look.Background;
         if (background is null) return;
         BackgroundKind(panel, current, background, changed);
@@ -754,7 +853,7 @@ public sealed partial class ChatView
         var grid = new WrapPanel { HorizontalSpacing = 8, VerticalSpacing = 8 };
         foreach (var (id, label) in StageData.Presets)
         {
-            var image = new Image { Width = 140, Height = 78, Stretch = Stretch.UniformToFill };
+            var image = new Image { Width = 128, Height = 72, Stretch = Stretch.UniformToFill };
             if (File.Exists(StageData.PresetFile(id))) image.Source = new BitmapImage(new Uri(StageData.PresetFile(id)));
             var tile = new Button
             {
@@ -767,7 +866,7 @@ public sealed partial class ChatView
                 HorizontalContentAlignment = HorizontalAlignment.Stretch,
             };
             var body = new StackPanel { Spacing = 4 };
-            body.Children.Add(new Border { Width = 140, Height = 78, CornerRadius = new CornerRadius(8), Child = image });
+            body.Children.Add(new Border { Width = 128, Height = 72, CornerRadius = new CornerRadius(8), Child = image });
             body.Children.Add(new TextBlock { Text = label, FontSize = 11, HorizontalAlignment = HorizontalAlignment.Center, Foreground = Theme.Brush("Ink2") });
             tile.Content = body;
             tile.Click += (_, _) =>
@@ -791,7 +890,7 @@ public sealed partial class ChatView
             foreach (var scene in scenes)
             {
                 var id = scene.S("id");
-                var image = new Image { Width = 140, Height = 78, Stretch = Stretch.UniformToFill };
+                var image = new Image { Width = 128, Height = 72, Stretch = Stretch.UniformToFill };
                 _ = LoadBackgroundImage(image, $"/api/background-image/{Uri.EscapeDataString(id)}?v={Uri.EscapeDataString(scene.S("image"))}");
                 var tile = new Button
                 {
@@ -804,7 +903,7 @@ public sealed partial class ChatView
                     HorizontalContentAlignment = HorizontalAlignment.Stretch,
                 };
                 var body = new StackPanel { Spacing = 4 };
-                body.Children.Add(new Border { Width = 140, Height = 78, CornerRadius = new CornerRadius(8), Child = image });
+                body.Children.Add(new Border { Width = 128, Height = 72, CornerRadius = new CornerRadius(8), Child = image });
                 body.Children.Add(new TextBlock
                 {
                     Text = scene.S("name") is { Length: > 0 } shown ? shown : id,
@@ -812,7 +911,7 @@ public sealed partial class ChatView
                     HorizontalAlignment = HorizontalAlignment.Center,
                     Foreground = Theme.Brush("Ink2"),
                     TextTrimming = TextTrimming.CharacterEllipsis,
-                    MaxWidth = 140,
+                    MaxWidth = 128,
                 });
                 tile.Content = body;
                 tile.Click += (_, _) =>
@@ -847,6 +946,8 @@ public sealed partial class ChatView
             IsHexInputVisible = true,
         };
         picker.ColorChanged += (_, args) => set($"#{args.NewColor.R:x2}{args.NewColor.G:x2}{args.NewColor.B:x2}");
-        return Ui.Field(label, picker);
+        // The ring picker is bigger than the panel: shrink it to fit instead of overflowing the frame.
+        var box = new Viewbox { Child = picker, StretchDirection = StretchDirection.DownOnly, MaxWidth = 300, MaxHeight = 320, HorizontalAlignment = HorizontalAlignment.Left };
+        return Ui.Field(label, box);
     }
 }

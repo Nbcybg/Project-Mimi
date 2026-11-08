@@ -146,6 +146,10 @@ public sealed partial class ChatView
             saved();
         };
         var remove = Ui.Button("✕", removed, "ghost", tip: "ลบช่วงเวลานี้");
-        return Ui.Row(6, Clock("from"), new TextBlock { Text = "–", VerticalAlignment = VerticalAlignment.Center }, Clock("to"), choice, remove);
+        // The clocks and the ✕ on one row, the choice full-width under them: the panel is 330px,
+        // and one row of all of it overflows the edge and clips the combo (the web wraps the same way).
+        var times = Ui.Row(6, Clock("from"), new TextBlock { Text = "–", VerticalAlignment = VerticalAlignment.Center }, Clock("to"), remove);
+        choice.HorizontalAlignment = HorizontalAlignment.Stretch;
+        return new StackPanel { Spacing = 6, Children = { times, choice } };
     }
 }

@@ -9,3 +9,5 @@ design
 .env
 *.lnk
 **/*.test.ts
+packages/ui
+packages/desktop

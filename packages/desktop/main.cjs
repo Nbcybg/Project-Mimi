@@ -30,6 +30,9 @@ if (process.argv.includes('--mimi-browser')) {
 
 const CORE = process.env.MIMI_CORE_URL;
 const TOKEN = process.env.MIMI_TOKEN || '';
+// The UI is part of this app (app://mimi, ui-protocol.cjs); the core only answers the API.
+const ui = require('./ui-protocol.cjs');
+ui.registerScheme();
 const STATE_FILE = path.join(process.env.MIMI_STATE_DIR || app.getPath('userData'), 'window-state.json');
 const ICON = process.env.MIMI_ICON && fs.existsSync(process.env.MIMI_ICON) ? nativeImage.createFromPath(process.env.MIMI_ICON) : undefined;
 const DEFAULT_SIZE = { width: 410, height: 820 }; // mobile mode: what the app is designed for
@@ -71,7 +74,7 @@ const setLoginItem = (open) => {
   app.setLoginItemSettings({ openAtLogin: Boolean(open), ...loginOptions() });
   return loginItemState();
 };
-const trustedSender = (event) => Boolean(CORE) && String(event.senderFrame?.url || '').startsWith(CORE);
+const trustedSender = (event) => ui.isUiUrl(event.senderFrame?.url);
 ipcMain.handle('mimi:open-at-login', (event) => (trustedSender(event) ? loginItemState() : { supported: false, openAtLogin: false }));
 ipcMain.handle('mimi:set-open-at-login', (event, open) => (trustedSender(event) ? setLoginItem(open === true) : { supported: false, openAtLogin: false }));
 
@@ -133,7 +136,7 @@ function createWindow() {
   });
   win.removeMenu();
   if (state.maximized) win.maximize();
-  win.loadURL(`${CORE}/#token=${TOKEN}`);
+  win.loadURL(ui.url({ core: CORE, token: TOKEN }));
   win.once('ready-to-show', () => win.show());
 
   // Closing hides: nothing of the chat is lost, the tray icon brings it back.
@@ -157,11 +160,11 @@ function createWindow() {
   const { webContents } = win;
   webContents.setVisualZoomLevelLimits(1, 1); // no pinch zoom: it is an app, not a page
   webContents.setWindowOpenHandler(({ url }) => {
-    if (/^https?:/i.test(url) && !url.startsWith(CORE)) shell.openExternal(url);
+    if (/^https?:/i.test(url)) shell.openExternal(url);
     return { action: 'deny' };
   });
   webContents.on('will-navigate', (event, url) => {
-    if (url.startsWith(CORE)) return;
+    if (ui.isUiUrl(url)) return;
     event.preventDefault();
     if (/^https?:/i.test(url)) shell.openExternal(url);
   });
@@ -279,10 +282,11 @@ app.on('before-quit', () => {
 });
 
 app.whenReady().then(() => {
+  ui.serve(session.defaultSession, () => CORE);
   // The microphone and the camera are for the chat; nothing else is asked for.
   const allowed = new Set(['media', 'notifications', 'clipboard-sanitized-write']);
-  session.defaultSession.setPermissionRequestHandler((contents, permission, callback) => callback(allowed.has(permission) && contents.getURL().startsWith(CORE)));
-  session.defaultSession.setPermissionCheckHandler((contents, permission) => allowed.has(permission) && (contents?.getURL() ?? CORE).startsWith(CORE));
+  session.defaultSession.setPermissionRequestHandler((contents, permission, callback) => callback(allowed.has(permission) && ui.isUiUrl(contents.getURL())));
+  session.defaultSession.setPermissionCheckHandler((contents, permission) => allowed.has(permission) && ui.isUiUrl(contents?.getURL() ?? ''));
   createTray();
   createWindow();
   listen();

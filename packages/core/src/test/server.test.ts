@@ -147,12 +147,13 @@ test('a connection must present the token before anything else', async () => {
   await booted.stop();
 });
 
-test('http: serves the web client and a health check; other origins cannot open the socket', async () => {
+test('http: serves no page, only a health check; other origins cannot open the socket', async () => {
   const booted = await boot();
+  // The UI lives in the apps; the server answers the API only.
   const page = await fetch(`${booted.http}/`);
-  assert.equal(page.status, 200);
-  assert.match(page.headers.get('content-type')!, /text\/html/);
-  assert.match(await page.text(), /<title>Mimi<\/title>/);
+  assert.equal(page.status, 404);
+  assert.doesNotMatch(page.headers.get('content-type') ?? '', /text\/html/);
+  assert.equal((await fetch(`${booted.http}/app.js`)).status, 404);
   // Public: says it is up and nothing about who uses it or whether the PC is online.
   assert.deepEqual(await (await fetch(`${booted.http}/health`)).json(), { ok: true, version: APP_VERSION, api: API_VERSION, minClientApi: MIN_CLIENT_API });
   assert.equal((await fetch(`${booted.http}/etc/passwd`)).status, 404);

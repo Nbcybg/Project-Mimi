@@ -32,6 +32,8 @@ public sealed record MessageItem(
 {
     public bool HasText => Text.Length > 0;
     public bool HasTools => Tools.Length > 0;
+    public bool HasFiles => Files.Count > 0;
+    public bool HasApproval => Approval is not null;
     public bool WaitsForApproval => Approval is { Status: "pending" };
     public bool HasQuote => Quote is not null;
     public bool HasForwarded => Forwarded is not null;
@@ -55,9 +57,9 @@ public sealed record TaskItem(string Key, string Id, string Goal, string StatusL
 /// <summary>The message the next one answers, shown above the composer.</summary>
 public sealed record ReplyTarget(long Id, string Who, string Text);
 
-public sealed record PendingItem(string Key, string Text, string Files, string? Failed) : ChatItem(Key)
+public sealed record PendingItem(string Key, string Text, string Files, string Status, bool Failed) : ChatItem(Key)
 {
-    public bool HasFailed => Failed is not null;
+    public bool HasFailed => Failed;
 }
 
 /// <summary>A tool row in a streaming answer: name, what it was given, and ✓ / ✗ when done.</summary>
@@ -376,7 +378,7 @@ public sealed partial class ChatViewModel : ObservableObject
         }
         foreach (var pending in timeline.PendingList)
         {
-            rows.Add(new PendingItem($"p:{pending.ClientId}", pending.Text, string.Join(", ", pending.AttachmentNames), pending.Failed));
+            rows.Add(new PendingItem($"p:{pending.ClientId}", pending.Text, string.Join(", ", pending.AttachmentNames), PendingStatus(pending), pending.Failed is not null));
         }
         var bubbles = timeline.EarlierList.Concat(timeline.Live is null ? [] : [timeline.Live]).ToList();
         for (var i = 0; i < bubbles.Count; i++)
@@ -403,11 +405,53 @@ public sealed partial class ChatViewModel : ObservableObject
             OnPropertyChanged(nameof(ContextLabel));
             OnPropertyChanged(nameof(SessionChoices));
         }
+        // "แชตบนตัวละคร": 0 = only questions, 1 = really only the two newest message blocks
+        // (the web filters the rows — never a crop of the list), 2 = everything.
+        if (bubbleLevel < 2)
+        {
+            var cards = rows.Where(row => row is PermissionItem).ToList();
+            if (bubbleLevel == 0) rows = cards;
+            else
+            {
+                var messages = rows.Where(row => row is MessageItem or PendingItem or LiveItem).ToList();
+                rows = [.. cards, .. messages.Skip(Math.Max(0, messages.Count - 2))];
+            }
+        }
         Apply(rows);
         if (jumpTo is { } target && timeline.Loaded) Jump(target);
     }
 
     private string Who(ChatMessageView message) => message.Role == "user" ? "คุณ" : session.AgentName(message.Agent);
+
+    /// <summary>The whole turn ended: the stored answer replaces the streaming one, and the pending row goes.</summary>
+    private string PendingStatus(PendingMessage pending) =>
+        PendingStatusOf(timeline.Busy, timeline.Transcribing, timeline.Viewing, pending.AttachmentKinds, pending.Failed);
+
+    /// <summary>How much of the chat shows over the character (the web's data-bubbles): 0 = only questions,
+    /// 1 = the two newest message blocks, 2 = everything. The rows are really filtered, not cropped.</summary>
+    private int bubbleLevel = 2;
+
+    public int BubbleLevel
+    {
+        get => bubbleLevel;
+        set
+        {
+            if (bubbleLevel == value) return;
+            bubbleLevel = value;
+            Render(timeline);
+        }
+    }
+
+    /// <summary>The same rule without the timeline, so a test can hold it to every case.</summary>
+    internal static string PendingStatusOf(bool busy, bool transcribing, bool viewing, IReadOnlyList<string>? kinds, string? failed)
+    {
+        if (failed is not null) return failed;
+        if (!busy) return "กำลังส่ง…";
+        var list = kinds ?? [];
+        if (transcribing && list.Contains("audio")) return "กำลังถอดเสียง…";
+        if (viewing && list.Contains("image")) return "AI กำลังดูรูป…";
+        return "กำลังตอบ…";
+    }
 
     private static readonly Dictionary<string, string> TaskStatus = new()
     {
@@ -630,7 +674,7 @@ public sealed partial class ChatViewModel : ObservableObject
             Load(ChatId, null, null);
         }
         var before = timeline;
-        timeline = timeline.AddPending(new PendingMessage(clientId, text, files.Select(file => file.Name).ToList()));
+        timeline = timeline.AddPending(new PendingMessage(clientId, text, files.Select(file => file.Name).ToList(), null, files.Select(file => file.Kind).ToList()));
         session.Send(ClientFrames.ChatSend(ChatId, text, files.Select(file => file.Id).ToList(), clientId, Replying?.Id));
         Draft = "";
         Replying = null;

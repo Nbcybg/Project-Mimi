@@ -49,9 +49,12 @@ log(`Electron ${path.basename(electron)} copied`);
 
 // 2. The app: the desktop shell, and the PC agent with what it imports. Tests stay behind.
 fs.mkdirSync(APP, { recursive: true });
-for (const file of ['remote.cjs', 'remote-lib.cjs', 'updater.cjs', 'preload.cjs', 'connect.html', 'browser-shell.cjs', 'browser-prompt-preload.cjs', 'browser-prompt.html', 'workspace.cjs', 'workspace-preload.cjs', 'workspace.html', 'workspace.css', 'workspace.js', 'workspace-annotate.js']) {
+for (const file of ['remote.cjs', 'remote-lib.cjs', 'ui-protocol.cjs', 'updater.cjs', 'preload.cjs', 'connect.html', 'browser-shell.cjs', 'browser-prompt-preload.cjs', 'browser-prompt.html', 'workspace.cjs', 'workspace-preload.cjs', 'workspace.html', 'workspace.css', 'workspace.js', 'workspace-annotate.js']) {
   fs.copyFileSync(path.join(ROOT, 'packages', 'desktop', file), path.join(APP, file));
 }
+// The UI is part of the app (app://mimi, ui-protocol.cjs): a server never sends a page.
+execFileSync(process.execPath, [path.join(ROOT, 'scripts', 'sync-ui.mjs')], { stdio: 'inherit' });
+fs.cpSync(path.join(ROOT, 'packages', 'ui'), path.join(APP, 'ui'), { recursive: true });
 // updateRepo: where the app looks for newer releases (updater.cjs).
 fs.writeFileSync(
   path.join(APP, 'package.json'),

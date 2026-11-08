@@ -333,6 +333,10 @@ public sealed partial class SignInChatMusicTests : IDisposable
         Retry(() => TextContaining(window, $"ทดสอบจากแอป Windows {stamp}"), "my message");
         // The answer comes word by word; its last words mean the turn is through.
         Retry(() => window.FindAllDescendants(cf => cf.ByControlType(ControlType.Text)).FirstOrDefault(element => element.Properties.Name.ValueOrDefault is { } text && text.Contains(stamp, StringComparison.Ordinal) && text.Contains("streaming", StringComparison.Ordinal)), "the whole answer", 60);
+        // The stored message replaces the streaming one when the turn ends; only then does the
+        // answer have its message menu (pin / reply) — pinning before that pins the user's own message.
+        Retry(() => window.FindAllDescendants(cf => cf.ByControlType(ControlType.Text)).Any(element => element.Properties.Name.ValueOrDefault is { } text && text.Contains(stamp, StringComparison.Ordinal) && text.Contains("streaming", StringComparison.Ordinal))
+            && window.FindAllDescendants(cf => cf.ByControlType(ControlType.Text)).All(element => !(element.Properties.Name.ValueOrDefault ?? "").Contains("กำลังตอบ", StringComparison.Ordinal)) ? window : null, "the answer stored", 30);
         Shot(window, "chat");
         Assert.Null(TextContaining(window, "ผิดพลาด"));
 

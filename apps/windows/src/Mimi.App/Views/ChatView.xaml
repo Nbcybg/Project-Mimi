@@ -32,7 +32,7 @@
         <local:PartSelector x:Key="PartSelector" Text="{StaticResource TextPartTemplate}" Tool="{StaticResource ToolPartTemplate}" File="{StaticResource FileTemplate}" />
         <!-- A message stored on the server. -->
         <DataTemplate x:Key="MessageTemplate" x:DataType="vm:MessageItem">
-            <Grid Margin="0,6" MaxWidth="840">
+            <Grid Margin="0,6" MaxWidth="840" Visibility="{x:Bind local:ChatView.MessageBlockVisibility(IsUser, HasText, HasFiles, HasApproval, HasQuote, HasForwarded)}">
                 <Grid HorizontalAlignment="{x:Bind local:ChatView.Side(IsUser)}" MaxWidth="680">
                 <StackPanel Spacing="3" HorizontalAlignment="{x:Bind local:ChatView.Side(IsUser)}">
                     <Border Background="{x:Bind local:ChatView.Bubble(IsUser)}" BorderBrush="{x:Bind local:ChatView.BubbleLine(IsUser)}" BorderThickness="1"
@@ -90,8 +90,8 @@
                     <StackPanel Spacing="4">
                         <controls:MessageText Text="{x:Bind Text}" TextSize="{x:Bind local:ChatView.ChatTextSize()}" TextBrush="{x:Bind local:ChatView.UserInk()}" />
                         <TextBlock Text="{x:Bind Files}" Style="{StaticResource MimiCaption}" />
-                        <TextBlock Text="กำลังส่ง…" FontSize="11" Foreground="{x:Bind local:ChatView.UserTime()}" Visibility="{x:Bind local:ChatView.Not(HasFailed)}" />
-                        <TextBlock Text="{x:Bind Failed}" FontSize="12" Foreground="{StaticResource MimiBadBrush}" TextWrapping="Wrap" Visibility="{x:Bind HasFailed}" />
+                        <TextBlock Text="{x:Bind Status}" FontSize="11" Foreground="{x:Bind local:ChatView.UserTime()}" Visibility="{x:Bind local:ChatView.Not(HasFailed)}" />
+                        <TextBlock Text="{x:Bind Status}" FontSize="12" Foreground="{StaticResource MimiBadBrush}" TextWrapping="Wrap" Visibility="{x:Bind HasFailed}" />
                     </StackPanel>
                 </Border>
                 </Grid>
@@ -100,7 +100,7 @@
 
         <!-- The answer streaming in now. -->
         <DataTemplate x:Key="LiveTemplate" x:DataType="vm:LiveItem">
-            <Grid Margin="0,6" MaxWidth="840">
+            <Grid Margin="0,6" MaxWidth="840" Visibility="{x:Bind local:ChatView.LiveBubbleVisibility(Parts, Thinking)}">
                 <Grid HorizontalAlignment="Left" MaxWidth="680">
                 <Border Background="{x:Bind local:ChatView.AgentBubble()}" BorderBrush="{x:Bind local:ChatView.AgentBubbleLine()}" BorderThickness="1" CornerRadius="{x:Bind local:ChatView.AgentRadius()}" Padding="{x:Bind local:ChatView.AgentPadding()}">
                     <StackPanel Spacing="6">
@@ -239,7 +239,16 @@
 
         <StackPanel x:Name="BottomDock" Grid.Row="2" Grid.RowSpan="2" MaxWidth="840" VerticalAlignment="Stretch" Spacing="0">
         <StackPanel Padding="12,0" Spacing="4">
-            <TextBlock Text="{x:Bind ViewModel.Status, Mode=OneWay}" Style="{StaticResource MimiCaption}" Visibility="{x:Bind ViewModel.HasStatus, Mode=OneWay}" />
+            <!-- The web's typing chip (.typing-chip.bottom): a rounded glass card above the message box with
+                 an accent dot — "กำลังตอบ…", "กำลังถอดเสียง…", "กำลังดูรูป…", a handoff, a sub-agent. -->
+            <Border CornerRadius="10" Padding="12,7" Background="{StaticResource MimiGlassBrush}" BorderBrush="{StaticResource MimiGlassButtonLineBrush}"
+                    BorderThickness="1" HorizontalAlignment="Center" AutomationProperties.AutomationId="StatusChip" Visibility="{x:Bind ViewModel.HasStatus, Mode=OneWay}">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Ellipse Width="6" Height="6" Fill="{StaticResource MimiAccentBrush}" VerticalAlignment="Center" />
+                    <TextBlock Text="{x:Bind ViewModel.Status, Mode=OneWay}" FontSize="12.5" Foreground="{StaticResource MimiGlassInkBrush}"
+                               VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxWidth="520" />
+                </StackPanel>
+            </Border>
             <TextBlock AutomationProperties.AutomationId="ChatError" Text="{x:Bind ViewModel.Error, Mode=OneWay}" Foreground="{StaticResource MimiBadBrush}" FontSize="12" TextWrapping="Wrap" />
             <TextBlock AutomationProperties.AutomationId="ChatInfo" Text="{x:Bind ViewModel.Info, Mode=OneWay}" Style="{StaticResource MimiCaption}" Visibility="{x:Bind ViewModel.HasInfo, Mode=OneWay}" />
             <!-- The message the next one answers (feature-chat.js reply bar). -->

@@ -84,14 +84,16 @@ internal static class Ui
 
     /// <summary>
     /// The web's segmented control (.seg): one of several, the chosen one lit. <paramref name="pick"/> gets the value.
+    /// <paramref name="columns"/> over 0 lays the choices out in rows of that many columns (labels stay readable).
     /// </summary>
-    public static Border Seg<T>(IReadOnlyList<(T Value, string Label)> options, T current, Action<T> pick, string? id = null)
+    public static Border Seg<T>(IReadOnlyList<(T Value, string Label)> options, T current, Action<T> pick, string? id = null, int columns = 0)
     {
-        var grid = new Grid { ColumnSpacing = 3 };
+        var grid = new Grid { ColumnSpacing = 3, RowSpacing = 3 };
+        var perRow = columns > 0 ? columns : options.Count;
+        for (var c = 0; c < perRow; c++) grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         var buttons = new List<ToggleButton>();
         for (var i = 0; i < options.Count; i++)
         {
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             var (value, label) = options[i];
             var button = new ToggleButton
             {
@@ -111,7 +113,8 @@ internal static class Ui
                 pick(value);
             };
             buttons.Add(button);
-            Grid.SetColumn(button, i);
+            Grid.SetRow(button, i / perRow);
+            Grid.SetColumn(button, i % perRow);
             grid.Children.Add(button);
         }
         return new Border

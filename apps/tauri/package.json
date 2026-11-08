@@ -1,0 +1,18 @@
+{
+  "name": "mimi-tauri-spike",
+  "private": true,
+  "version": "0.0.1",
+  "description": "Spike: Tauri 2 shell that shows packages/ui (desktop + Android). Not part of the npm workspaces.",
+  "scripts": {
+    "sync-ui": "node ../../scripts/sync-ui.mjs",
+    "tauri": "tauri",
+    "dev": "npm run sync-ui && tauri dev",
+    "build": "tauri build",
+    "android:init": "tauri android init",
+    "android:dev": "npm run sync-ui && tauri android dev",
+    "android:build": "tauri android build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.12.4"
+  }
+}

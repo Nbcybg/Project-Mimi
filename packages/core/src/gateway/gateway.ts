@@ -5,20 +5,21 @@ import { type RawData, WebSocket, WebSocketServer } from 'ws';
 import { API_VERSION, MIN_CLIENT_API } from '@mimi/shared';
 import { AuthLimiter, clientAddress } from '../server/auth-limiter.ts';
 import { serveAssetLinks } from '../server/assetlinks.ts';
-import { APP_VERSION, serveWebFile } from '../server/web-files.ts';
+import { allowedOrigins, applyCors, originAllowed } from '../server/cors.ts';
+import { APP_VERSION, servePublicAssets } from '../server/public-assets.ts';
 import { NativePushSender, nativePushConfig } from '../notify/native-push.ts';
 import type { NativePushTransport } from '../notify/notifications.ts';
 import type { RelayRequest } from '../notify/push-relay.ts';
 import type { AccountStore, SessionTarget } from './accounts.ts';
 
 /**
- * The accounts gateway: the only public entry when several people use Mimi. It serves the
- * web client, signs people in, and passes each signed-in connection on to that person's
+ * The accounts gateway: the only public entry when several people use Mimi. It answers the
+ * API only (the UI is bundled in each app), signs people in, and passes each signed-in connection on to that person's
  * own core (a separate service, reached over the private network with a token only the
  * gateway knows). It never reads or stores anyone's chats, files or settings.
  *
  * Routes:
- *   GET  /, scripts, /vendor/*, /icon.png   the web client (no sign-in)
+ *   GET  /backgrounds/*, /icon.png          public art for the apps (no sign-in; no page or script is ever served)
  *   GET  /health                            { ok, version, api, minClientApi, accounts: true }
  *   POST /auth/login                        { username, password, code? } -> { token, expiresAt, username, webhookBase }
  *                                           (401 { twoFactor: true } when the account needs an authenticator code)
@@ -46,8 +47,8 @@ export interface GatewayOptions {
   clientIpHeader?: string;
   /** How often open sockets are checked against revoked or expired sessions. */
   sweepMs?: number;
-  /** Serve the built-in web client; false = MIMI_SERVE_WEB=0 (native apps only). */
-  serveWeb?: boolean;
+  /** See CoreConfig.allowedOrigins. */
+  allowedOrigins?: string[];
   /** What pushes for the cores (the relay); default: the keys in this gateway's environment. */
   push?: NativePushTransport & { wnsRemoteId?: string };
   log?: (line: string) => void;
@@ -247,11 +248,13 @@ export async function startGateway(options: GatewayOptions): Promise<Gateway> {
     request.pipe(upstream);
   };
 
+  const corsOrigins = options.allowedOrigins ?? allowedOrigins();
   const handle = async (request: http.IncomingMessage, response: http.ServerResponse) => {
     const url = new URL(request.url ?? '/', 'http://localhost');
     const method = request.method ?? 'GET';
     response.setHeader('x-mimi-api', String(API_VERSION));
-    if (method === 'GET' && serveWebFile(url.pathname, response, { web: options.serveWeb !== false })) return;
+    if (applyCors(request, response, corsOrigins)) return;
+    if (method === 'GET' && servePublicAssets(url.pathname, response)) return;
     if (serveAssetLinks(method, url.pathname, response)) return;
     if (url.pathname === '/push/relay' && (method === 'GET' || method === 'POST')) {
       await relay(request, response);
@@ -446,9 +449,10 @@ export async function startGateway(options: GatewayOptions): Promise<Gateway> {
     server,
     path: '/ws',
     maxPayload: MAX_FRAME,
-    // As on a core: browsers may only connect from pages this gateway served.
+    // As on a core: browsers may only connect from the app shells (and MIMI_ALLOWED_ORIGINS).
     verifyClient: ({ origin, req }: { origin?: string; req: http.IncomingMessage }) => {
       if (!origin) return true;
+      if (originAllowed(origin, corsOrigins)) return true;
       try {
         return new URL(origin).host === req.headers.host;
       } catch {

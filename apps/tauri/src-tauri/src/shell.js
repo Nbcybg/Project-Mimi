@@ -104,7 +104,30 @@
     var offlineSince = 0;
     var lastCheck = 0;
     var message = '';
+    var sentCore = '';
+    var sentToken = '';
+    function tellAndroid() {
+      // Android shell: the background connection needs the core and the token (the UI only
+      // reports a token at sign-in, not for one remembered from an earlier run).
+      var bridge = window.MimiAndroid;
+      if (!bridge) return;
+      try {
+        var core = localStorage.getItem('mimi-core') || '';
+        if (core && core !== sentCore && bridge.setCore) {
+          bridge.setCore(core);
+          sentCore = core;
+        }
+        var token = localStorage.getItem('mimi-token') || '';
+        if (token && token !== sentToken && bridge.signedIn) {
+          bridge.signedIn(token);
+          sentToken = token;
+        }
+      } catch (e) {
+        /* storage unavailable */
+      }
+    }
     function refresh() {
+      tellAndroid();
       var conn = document.getElementById('conn');
       var settings = document.getElementById('view-settings');
       var offline = !conn || conn.textContent !== 'online';
@@ -123,9 +146,11 @@
           });
         }
       }
-      text.textContent = offline ? message || 'กำลังเชื่อมต่อ…' : '';
-      text.style.display = offline ? 'block' : 'none';
-      box.style.display = offline || inSettings ? 'flex' : 'none';
+      // A reconnect of a second or two is normal; say something only once it has lasted.
+      var lasting = offline && offlineSince && now - offlineSince > 4000;
+      text.textContent = lasting ? message || 'กำลังเชื่อมต่อ…' : '';
+      text.style.display = lasting ? 'block' : 'none';
+      box.style.display = lasting || inSettings ? 'flex' : 'none';
     }
     setInterval(refresh, 700);
     refresh();

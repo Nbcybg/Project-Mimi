@@ -5865,9 +5865,13 @@
   // for a long time otherwise (the server's own ping never comes back through a frozen tab).
   function startPing() {
     if (pingTimer) return;
+    // The socket is judged dead only after it missed more than two rounds. (It used to be 18 s,
+    // shorter than the 25 s round: an idle socket was dropped and reconnected at every round.)
+    const PING_EVERY_MS = 25000;
+    const STALE_MS = 2 * PING_EVERY_MS + 5000;
     pingTimer = setInterval(() => {
       if (!socket || socket.readyState !== WebSocket.OPEN) return;
-      if (Date.now() - lastPong > 18000 && Date.now() - lastTraffic > 18000) {
+      if (Date.now() - lastPong > STALE_MS && Date.now() - lastTraffic > STALE_MS) {
         // Nothing heard in a while: drop the socket and reconnect instead of guessing.
         try {
           socket.close();
@@ -5878,7 +5882,7 @@
         return;
       }
       socket.send(JSON.stringify({ type: 'ping' }));
-    }, 25000);
+    }, PING_EVERY_MS);
   }
   startPing();
   function setGateMode(accounts) {

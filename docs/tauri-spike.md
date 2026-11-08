@@ -106,6 +106,22 @@ src-tauri/target/release/mimi-tauri.exe
 
 ### APK ที่เซ็นแล้ว (ติดตั้งเองบนมือถือได้)
 
+**รอบที่ 4 (ผู้ใช้ทดลองบนมือถือ: header ของ Android ทับ UI, ปุ่ม back ไม่กลับ, ไม่มีแจ้งเตือนเมื่อข้อความจบ)** — แก้ใน `gen/android/.../MainActivity.kt` ตามสัญญาที่ `packages/ui` มีกับ shell Android อยู่แล้ว (ไม่แก้ UI):
+- Insets: Android 15+ บังคับ edge-to-edge; UI จองที่เฉพาะที่ใช้ `env(safe-area-inset-*)` ส่วนหัวแชตเลยอยู่ใต้ status bar. shell เติม padding ตามขนาด status/navigation bar, รอยบาก และคีย์บอร์ด (พื้นหลังแถบ = #171215 สีธีมมืดของ UI)
+- ปุ่ม Back: เรียก `window.__mimiBack()` ของ UI (ปิด popup บนสุด / จากแชตกลับรายการ); ถ้าไม่เหลืออะไรให้ย่อแอปไป background. หน้าเชื่อมต่อใช้ `location.replace` ไม่ทิ้งประวัติให้ Back วนกลับมา
+- แจ้งเตือน: ทำ `window.MimiAndroid.notify(...)` เป็นแจ้งเตือนระบบ (ช่อง "ข้อความและการแจ้งเตือน", ข้อความเดิมของแชตเดียวกันแทนที่กันไม่ซ้อน), ขอสิทธิ์ POST_NOTIFICATIONS (Android 13+) ตอนส่งข้อความ. เรียก `__mimiWake` ตอนกลับเข้าแอป
+- ข้อจำกัดที่ยังไม่แก้: แจ้งเตือนเกิดได้เฉพาะตอนแอปยังมีการเชื่อมต่อ WebSocket อยู่ — แอปที่ถูกพักเบื้องหลังนานหรือถูกระบบปิดจะไม่ได้รับ (แอป Kotlin เดิมใช้ FCM + WorkManager; Tauri ยังไม่มีส่วนนี้) และแตะแจ้งเตือนแล้วเปิดแอปเฉยๆ ยังไม่พาไปแชตนั้น (UI ไม่มี hook ให้เปิดแชตจากภายนอก)
+- build ผ่าน (compile Kotlin สำเร็จ, APK เซ็นแล้ว, มี POST_NOTIFICATIONS) แต่ **ยังไม่ได้ทดสอบบนมือถือ** (ไม่มี adb device)
+
+**รอบที่ 5 (ผู้ใช้ทดสอบรอบ 4 แล้วโอเค; เน้น Android: แจ้งเตือนเบื้องหลัง + ไมค์/กล้อง/ไฟล์แนบ)** — ผู้ใช้ตัดสินใจว่าแอป Kotlin เดิมไม่ต้องอัปเดตต่อ (ไม่จำเป็นต้องใช้) ถ้า Tauri ใช้แทนได้
+- ไมค์/กล้อง/ไฟล์แนบ: runtime ของ Tauri (wry) จัดการ `getUserMedia`, file chooser และ `capture` ให้อยู่แล้ว แต่ manifest ไม่มีสิทธิ์ ระบบจึงปฏิเสธ — เพิ่ม `RECORD_AUDIO`, `MODIFY_AUDIO_SETTINGS`, `CAMERA` (uses-feature required=false) ระบบจะถามตอนใช้ครั้งแรก
+- แจ้งเตือนเบื้องหลัง: `WebView.onPause()` หยุด JavaScript ของหน้าตอนแอปไปเบื้องหลัง จึงทำฝั่ง native: `NotifyService` (foreground service ชนิด specialUse มีแจ้งเตือนเงียบ ๆ ค้างอยู่) ต่อ WebSocket `/ws` ไป core ด้วย OkHttp ด้วย token เดียวกับที่ล็อกอิน (UI รายงานผ่าน `MimiAndroid.signedIn`; shell.js รายงานให้เองสำหรับ token ที่จำไว้จากรอบก่อน) และยิงแจ้งเตือนระบบเมื่อได้ frame `notification` ขณะแอปไม่อยู่หน้าจอ (ตอนอยู่หน้าจอให้หน้าเว็บยิงเอง id เดียวกันจึงไม่ซ้อน). หยุดเมื่อออกจากระบบหรือ core ปฏิเสธ token (close 4003)
+- ตั้ง `allowBackup=false` เพื่อไม่ให้ token ใน SharedPreferences ถูกสำรองขึ้นคลาวด์ของ Google; token เก็บใน SharedPreferences ส่วนตัวของแอปแบบไม่เข้ารหัส (spike)
+- ข้อจำกัด: ไม่รอดการรีบูตหรือเมื่อระบบฆ่าแอป (แอป Kotlin เดิมใช้ FCM + WorkManager polling), แตะแจ้งเตือนเปิดแอปแต่ยังไม่พาไปแชตนั้น, Android 15 จำกัดเวลา foreground service บางชนิด (specialUse ไม่จำกัดเวลาเหมือน dataSync แต่ผู้ผลิตบางรายฆ่าแอปเบื้องหลังเอง)
+- build ผ่านและเซ็นแล้ว แต่ **ยังไม่ได้ทดสอบบนมือถือ** และ **ยังไม่ได้วัดตัวเลข RAM/FPS/เวลาเปิด** (ยังไม่มี adb device)
+
+**รอบที่ 6 (ผู้ใช้เห็น "กำลังเชื่อมต่อ" ขึ้นซ้ำ ๆ)** — เป็นข้อบกพร่องใน `packages/ui/app.js` (ไม่เกี่ยวกับ shell): ตัวตรวจ heartbeat ส่ง ping ทุก 25 วินาที แต่ตัดการเชื่อมต่อถ้าไม่ได้ยินอะไรเกิน 18 วินาที (สั้นกว่ารอบ ping) การเชื่อมต่อที่ว่างอยู่จึงถูกปิดแล้วต่อใหม่ **ทุกรอบ ~25 วินาที** วัดบน desktop: offline ที่ 18.4 / 43.5 / 68.4 วินาที (รอบละ ~1 วินาที); log HTTP ของ Railway ตรงกัน (WebSocket ของมือถืออายุ 5–33 วินาทีซ้ำ ๆ). แก้ (เปลี่ยนน้อยที่สุด): ถือว่าเสียก็ต่อเมื่อพลาดเกินสองรอบ (`STALE_MS = 55000`) — หลังแก้ idle 130 วินาทีไม่หลุดเลย. ที่ shell เพิ่ม: กล่อง "กำลังเชื่อมต่อ…" ขึ้นเมื่อ offline นานเกิน 4 วินาที ไม่โผล่ทุกครั้งที่ reconnect สั้น ๆ. Electron และเว็บใช้ UI ตัวเดียวกันจึงเคยโดนเหมือนกัน (ยังไม่ได้ push การแก้นี้)
+
 ไฟล์: `apps/tauri/out/mimi-tauri-spike-arm64.apk` (9.3 MB, arm64, minSdk 24, package `app.mimi.tauri`, เซ็น v2/v3 ด้วย keystore ทิ้งได้ที่ `P:Androidspike-debug.keystore` นอกโปรเจกต์ — ไม่ใช่กุญแจ release)
 ติดตั้ง: คัดลอกไปมือถือแล้วเปิด (อนุญาต "ติดตั้งจากแหล่งที่ไม่รู้จัก") หรือ `adb install -r mimi-tauri-spike-arm64.apk`
 

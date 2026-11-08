@@ -21,7 +21,8 @@ export function originAllowed(origin: string | undefined, allowed: readonly stri
   return Boolean(origin) && allowed.includes(origin!);
 }
 
-const ALLOW_HEADERS = 'authorization, content-type, range, x-mimi-secret';
+/** Every custom request header a client sends (the page's uploads carry x-mimi-caption; a test checks the server's own list). */
+export const ALLOW_HEADERS = 'authorization, content-type, range, x-mimi-secret, x-mimi-caption';
 const EXPOSE_HEADERS = 'x-mimi-api, content-range, accept-ranges, content-length, content-disposition';
 
 /**

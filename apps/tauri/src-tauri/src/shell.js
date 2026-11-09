@@ -28,6 +28,10 @@
     setOpenAtLogin: function (open) {
       return command('set_open_at_login', { open: open === true });
     },
+    // Settings → บัญชีและเซิร์ฟเวอร์ → เปลี่ยนเซิร์ฟเวอร์: back to the connect page.
+    changeServer: function () {
+      location.href = CONNECT + '?change=1';
+    },
   });
   // Desktop: the web Notification API is refused in this window, so the UI's notifications
   // (new message, reminder, approval) go to a native toast instead. Same shape as the web API,
@@ -205,9 +209,7 @@
       tellAndroid();
       tellDesktop();
       var conn = document.getElementById('conn');
-      var settings = document.getElementById('view-settings');
       var offline = !conn || conn.textContent !== 'online';
-      var inSettings = settings && !settings.hidden;
       var now = Date.now();
       if (!offline) {
         offlineSince = 0;
@@ -226,7 +228,8 @@
       var lasting = offline && offlineSince && now - offlineSince > 4000;
       text.textContent = lasting ? message || 'กำลังเชื่อมต่อ…' : '';
       text.style.display = lasting ? 'block' : 'none';
-      box.style.display = lasting || inSettings ? 'flex' : 'none';
+      // Only while the connection is failing: choosing a server and signing out live in Settings now.
+      box.style.display = lasting ? 'flex' : 'none';
     }
     setInterval(refresh, 700);
     refresh();

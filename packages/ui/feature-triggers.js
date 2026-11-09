@@ -206,6 +206,7 @@
     if (hook && hook.openEditor) hook.openEditor(workflow.agent, workflow);
     else {
       M().ui.agent = workflow.agent;
+      M().ui.agentScreen = 'edit';
       M().setView('agents');
     }
   }

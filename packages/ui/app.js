@@ -351,7 +351,7 @@
     highlight: null,
     booted: false,
   };
-  const ui = { agent: null, agentDirty: false, hubTab: 'models', railTab: 'status', settingsTab: 'profile', preset: null, presetDirty: false, skill: null, skillDirty: false, toolDirty: false, providerDirty: false, triggerDirty: false, workflowDirty: false, memory: null, overseerDirty: false };
+  const ui = { agent: null, agentDirty: false, hubTab: 'models', railTab: 'status', settingsPage: null, agentScreen: 'list', agentSection: 'general', agentSeq: 0, quietSave: null, flushAgentSave: null, preset: null, presetDirty: false, skill: null, skillDirty: false, toolDirty: false, providerDirty: false, triggerDirty: false, workflowDirty: false, memory: null, overseerDirty: false };
 
   let socket = null;
   let retryMs = 1000;
@@ -3464,6 +3464,9 @@
   }
   for (const item of $('nav').children) {
     item.onclick = () => {
+      // Opening a page from the menu always starts at its list.
+      if (item.dataset.view === 'agents') ui.agentScreen = 'list';
+      if (item.dataset.view === 'settings') ui.settingsPage = null;
       setView(item.dataset.view);
       if (item.dataset.view !== 'chat' || state.chat) $('app').classList.remove('show-side');
       if (item.dataset.view === 'hub') {
@@ -3488,7 +3491,7 @@
     const head = el('div');
     const row = el('div');
     row.style.cssText = 'display:flex;gap:8px;align-items:center';
-    const back = button('back', '‹', () => $('app').classList.add('show-side'), 'กลับ');
+    const back = button('back', '‹', () => goBack() || $('app').classList.add('show-side'), 'กลับ');
     back.setAttribute('aria-label', 'กลับ');
     row.append(back, el('h2', '', title));
     head.append(row, el('p', 'lead', lead));
@@ -3630,11 +3633,17 @@
   const saved = () => toast('บันทึกแล้ว ✓');
 
   // ---------- agents page ----------
+  /** A phone-width screen: the agent page is a list of cards, a card opens that agent's editor (Back returns). */
+  const agentsNarrow = () => window.matchMedia('(max-width: 820px)').matches;
+
   function renderAgents() {
     const page = $('view-agents');
     const agent = agentOf(ui.agent) || null;
+    const narrow = agentsNarrow();
+    // Typed edits are saved a moment after the last key (see save below); leaving flushes them.
+    ui.flushAgentSave = null;
     // Stays in view while the long form scrolls (a strip across the top on a phone).
-    const list = el('div', 'panel agentpick');
+    const list = el('div', narrow ? 'panel agentpick agentcards' : 'panel agentpick');
     list.append(el('h3', '', 'Agent ทั้งหมด'));
     const visible = state.agents.filter((entry) => entry.name !== 'overseer');
     const items = el('div', 'list');
@@ -3642,7 +3651,12 @@
       const row = button(`item${entry.name === ui.agent ? ' on' : ''}`, null, () => {
         ui.agent = entry.name;
         ui.agentDirty = false;
+        if (narrow) {
+          ui.agentScreen = 'edit';
+          ui.agentSection = 'general';
+        }
         renderAgents();
+        if (narrow) page.scrollTop = 0;
       });
       const info = el('div');
       info.style.minWidth = '0';
@@ -3655,15 +3669,38 @@
     const create = button('btn', '+ สร้าง agent ใหม่', () => {
       ui.agent = null;
       ui.agentDirty = false;
+      if (narrow) {
+        ui.agentScreen = 'edit';
+        ui.agentSection = 'general';
+      }
       renderAgents();
+      if (narrow) page.scrollTop = 0;
     });
     create.style.marginTop = '10px';
     list.append(create);
 
     const form = el('div', 'panel form');
-    form.oninput = () => {
-      ui.agentDirty = true;
+    // Saved by itself 1.5 s after the last edit (an existing agent under its own name; a new agent or a
+    // rename is saved with the button). The form is not rebuilt by that save, so typing is never interrupted.
+    let autoTimer = null;
+    const autoSave = () => {
+      clearTimeout(autoTimer);
+      autoTimer = null;
+      if (!agent || name.value.trim() !== agent.name || !systemPrompt.value.trim()) return;
+      ui.quietSave = { name: agent.name, seq: ui.agentSeq };
+      save(true);
     };
+    ui.flushAgentSave = () => {
+      if (autoTimer) autoSave();
+    };
+    const touched = () => {
+      ui.agentDirty = true;
+      ui.agentSeq += 1;
+      clearTimeout(autoTimer);
+      autoTimer = setTimeout(autoSave, 1500);
+    };
+    form.oninput = touched;
+    form.onchange = touched;
     form.append(el('h3', '', agent ? `แก้ไข ${agent.name}` : 'Agent ใหม่'));
     const name = textInput(agent ? agent.name : '', 'เช่น mimi (a-z 0-9 - _)');
     const displayName = textInput(agent ? agent.displayName : '', 'ชื่อที่แสดงในแชต เช่น มีมี่');
@@ -3834,29 +3871,11 @@
     budgets.append(labelled('จำนวนรอบสูงสุด', rounds), labelled('token สูงสุด', tokens));
     form.append(budgets);
 
-    const foot = el('div', 'foot');
-    foot.append(el('span', 'msg'));
-    if (agent) {
-      foot.append(
-        button('btn ghost', 'เปิดแชต', () => {
-          const chat = state.chats.find((entry) => entry.kind === 'direct' && entry.agents[0] === agent.name);
-          if (chat) openChat(chat.id);
-          else startChat({ type: 'chat-create', kind: 'direct', agents: [agent.name] });
-        }),
-        button('btn danger', 'ลบ', () => {
-          if (confirm(`ลบ agent "${agent.name}" ?\nแชตตัวต่อตัว สถานะ และรูปของ agent นี้จะถูกลบด้วย`)) {
-            send({ type: 'agent-delete', name: agent.name });
-            ui.agent = null;
-            ui.agentDirty = false;
-          }
-        }),
-      );
-    }
-    foot.append(
-      button('btn pri', 'บันทึก', () => {
+    // One save for the button and for the automatic save after typing stops.
+    const save = (quiet = false) => {
         const chosen = {};
         for (const select of models.querySelectorAll('select')) if (select.value) chosen[select.dataset.capability] = select.value;
-        flash('กำลังบันทึก…');
+        if (!quiet) flash('กำลังบันทึก…');
         const charHook = window.MimiHooks && window.MimiHooks.character;
         const character = (charHook && charHook.form && charHook.form()) || {};
         if (toolGrid) toolGrid.persist();
@@ -3883,13 +3902,105 @@
             ...character,
           },
         });
-      }),
+    };
+
+    const foot = el('div', 'foot');
+    foot.append(el('span', 'msg', agent ? 'บันทึกให้เองเมื่อแก้' : ''));
+    if (agent) {
+      foot.append(
+        button('btn ghost', 'เปิดแชต', () => {
+          const chat = state.chats.find((entry) => entry.kind === 'direct' && entry.agents[0] === agent.name);
+          if (chat) openChat(chat.id);
+          else startChat({ type: 'chat-create', kind: 'direct', agents: [agent.name] });
+        }),
+        button('btn danger', 'ลบ', () => {
+          if (confirm(`ลบ agent "${agent.name}" ?\nแชตตัวต่อตัว สถานะ และรูปของ agent นี้จะถูกลบด้วย`)) {
+            send({ type: 'agent-delete', name: agent.name });
+            ui.agent = null;
+            ui.agentDirty = false;
+            ui.agentScreen = 'list';
+          }
+        }),
+      );
+    }
+    foot.append(
+      button('btn pri', 'บันทึก', () => save(false)),
     );
     form.append(foot);
 
+    if (narrow) {
+      // One thing at a time: the list of agent cards, or the editor of the one that was tapped.
+      if (ui.agentScreen === 'edit') {
+        const sections = sectionize(form, foot);
+        const bar = el('div', 'agentbar');
+        bar.append(agentEditHead(agent), sections.nav);
+        sections.show(ui.agentSection);
+        page.replaceChildren(bar, form);
+      } else {
+        page.replaceChildren(pageHead('Agent', 'แตะการ์ดของ agent เพื่อตั้งค่า'), list);
+      }
+      return;
+    }
     const split = el('div', 'split');
     split.append(list, form);
     page.replaceChildren(pageHead('Agent', 'แต่ละตัวมีบุคลิก โมเดล skill และเครื่องมือของตัวเอง คุยตัวต่อตัวหรือจับเข้ากลุ่มก็ได้'), split);
+  }
+
+  const AGENT_SECTIONS = [
+    ['general', 'ทั่วไป'],
+    ['media', 'รูปและตัวละคร'],
+    ['models', 'โมเดล'],
+    ['tools', 'เครื่องมือ'],
+    ['rules', 'สิทธิ์และงบ'],
+    ['flows', 'Workflow'],
+  ];
+  const agentSectionOf = (text) =>
+    /^(รูปของ agent|รูปตามอีโมจิ|คลังภาพ|ตัวละคร)/.test(text)
+      ? 'media'
+      : /^โมเดล/.test(text)
+        ? 'models'
+        : /^(Skill|Node tool)/.test(text)
+          ? 'tools'
+          : /^(Agent permissions|ส่งงานต่อ|งบ)/.test(text)
+            ? 'rules'
+            : /^Workflow/.test(text)
+              ? 'flows'
+              : 'general';
+  /** Groups the long agent form by its headings into pages the person flips between (nothing is rebuilt). */
+  function sectionize(form, foot) {
+    const wrap = new Map(AGENT_SECTIONS.map(([key]) => [key, el('div', 'agent-sec')]));
+    let current = 'general';
+    for (const child of [...form.children]) {
+      if (child === foot) continue;
+      if (child.tagName === 'H4') current = agentSectionOf(child.textContent);
+      wrap.get(current).append(child);
+    }
+    for (const node of wrap.values()) form.insertBefore(node, foot);
+    const nav = el('div', 'tabs agent-secnav');
+    const show = (key) => {
+      ui.agentSection = key;
+      for (const [name, node] of wrap) node.hidden = name !== key;
+      for (const tab of nav.children) tab.classList.toggle('on', tab.dataset.key === key);
+    };
+    for (const [key, label] of AGENT_SECTIONS) {
+      const tab = button('', label, () => show(key));
+      tab.dataset.key = key;
+      nav.append(tab);
+    }
+    return { nav, show };
+  }
+  /** Who is being edited: stays at the top of the editor while it scrolls. */
+  function agentEditHead(agent) {
+    const head = el('div', 'agenthead');
+    const title = el('div', 'agenthead-t');
+    title.append(
+      el('b', '', agent ? nameOf(agent.name) : 'Agent ใหม่'),
+      el('small', '', agent ? `${agent.name} · ${agent.models.model || 'โมเดลเริ่มต้น'}` : 'ใส่ชื่อกับ system prompt แล้วกดบันทึก'),
+    );
+    const back = button('back', '‹', () => goBack(), 'กลับไปรายการ agent');
+    back.setAttribute('aria-label', 'กลับ');
+    head.append(back, agent ? avatar(agent.name) : el('span'), title);
+    return head;
   }
 
   // ---------- hub page ----------
@@ -4505,11 +4616,17 @@
     return panel;
   }
 
-  const SETTINGS_TABS = [
-    ['profile', 'โปรไฟล์ของฉัน', 'ข้อมูลของคุณ งบประมาณ การแจ้งเตือน และการสำรองข้อมูล'],
-    ['appearance', 'หน้าตา', 'ธีมสว่าง/มืดของทั้งแอป'],
+  // The settings are a list of pages (one card each); a card opens its page, Back returns to the list.
+  const SETTINGS_PAGES = [
+    ['account', 'บัญชีและเซิร์ฟเวอร์', 'ออกจากระบบ รหัสผ่าน เซิร์ฟเวอร์ที่ใช้ และเริ่มพร้อมเครื่อง'],
+    ['profile', 'โปรไฟล์ของฉัน', 'ข้อมูลของคุณที่ agent ทุกตัวใช้ร่วมกัน'],
+    ['prefs', 'งบประมาณและการแจ้งเตือน', 'วงเงินใช้จ่าย และเรื่องที่ให้ Mimi แจ้งเตือน'],
+    ['appearance', 'หน้าตาและภาษา', 'ธีมสว่าง/มืด และภาษาของแอป'],
     ['memory', 'ความจำ', 'สิ่งที่ Mimi จำเกี่ยวกับคุณ — ใช้ร่วมกันทุก agent'],
-    ['app', 'แอปและระบบ', 'ผู้ให้บริการโมเดล โมเดลเริ่มต้น พื้นที่เก็บข้อมูล session อัตโนมัติ และโฟลเดอร์'],
+    ['providers', 'ผู้ให้บริการโมเดล', 'เชื่อมต่อ Claude, ChatGPT, API key และจัดการรายชื่อโมเดล'],
+    ['defaults', 'โมเดลเริ่มต้นและระบบ', 'โมเดลเริ่มต้น session อัตโนมัติ เขตเวลา และโฟลเดอร์ที่อนุญาต'],
+    ['system', 'พื้นที่เก็บข้อมูลและการเชื่อมต่อ', 'ที่เก็บข้อมูล ทันเนล เบราว์เซอร์ และ Workspace'],
+    ['backup', 'สำรอง / กู้คืนข้อมูล', 'สำเนาข้อมูลของ Mimi ไว้กู้คืนภายหลัง'],
   ];
 
   function themePanel() {
@@ -4731,43 +4848,103 @@
     return panel;
   }
 
+  function settingsHead(title, lead) {
+    const head = el('div');
+    const row = el('div');
+    row.style.cssText = 'display:flex;gap:8px;align-items:center';
+    const back = button('back', '‹', () => goBack(), 'กลับ');
+    back.setAttribute('aria-label', 'กลับ');
+    row.append(back, el('h2', '', title));
+    head.append(row, el('p', 'lead', lead));
+    return head;
+  }
+
+  /** Android only: the switch for notifications while the app is in the background (they need a standing notification). */
+  function backgroundPanel() {
+    const bridge = window.MimiAndroid;
+    if (!bridge || typeof bridge.getBackgroundNotify !== 'function') return null;
+    const panel = el('div', 'panel form');
+    panel.append(
+      el('h3', '', 'แจ้งเตือนตอนปิดหน้าจอ'),
+      el('p', 'hint', 'ให้แจ้งเตือนมาได้แม้ไม่ได้เปิดแอปอยู่ — Android บังคับให้มีการแจ้งเตือนถาวร "เชื่อมต่ออยู่ เพื่อรอการแจ้งเตือน" ในแถบแจ้งเตือนตลอดเวลาที่เปิดส่วนนี้ · ปิดแล้วจะไม่มีข้อความนั้น แต่แจ้งเตือนจะมาเฉพาะตอนเปิดแอปอยู่'),
+    );
+    const label = el('label', 'check');
+    const input = el('input');
+    input.type = 'checkbox';
+    input.checked = Boolean(bridge.getBackgroundNotify());
+    input.onchange = () => {
+      bridge.setBackgroundNotify(input.checked);
+      status.textContent = input.checked ? 'เปิดอยู่' : 'ปิดอยู่';
+    };
+    const status = el('span', 'faint', input.checked ? 'เปิดอยู่' : 'ปิดอยู่');
+    label.append(input, el('span', '', 'รับแจ้งเตือนเมื่อไม่ได้เปิดแอป'));
+    panel.append(label, status);
+    return panel;
+  }
+
+  /** The server this app talks to, and the way to change it (app shells only: a browser page has one server). */
+  function serverPanel() {
+    const shell = window.MimiShell;
+    if (!shell || typeof shell.changeServer !== 'function') return null;
+    const panel = el('div', 'panel form');
+    panel.append(
+      el('h3', '', 'เซิร์ฟเวอร์'),
+      el('p', 'hint', 'ที่อยู่ของ Mimi ที่แอปนี้ใช้อยู่ — เปลี่ยนได้ถ้าย้ายเซิร์ฟเวอร์ หรืออยากต่อเครื่องอื่น (ต้องเข้าสู่ระบบใหม่)'),
+      el('div', 'mono', coreBase || location.origin),
+    );
+    const row = el('div', 'btns');
+    row.style.marginTop = '8px';
+    row.append(button('btn', 'เปลี่ยนเซิร์ฟเวอร์…', () => shell.changeServer()));
+    panel.append(row);
+    return panel;
+  }
+
   function renderSettings() {
     const page = $('view-settings');
     const view = state.settings;
     if (!view) return page.replaceChildren(pageHead('ตั้งค่า', 'กำลังโหลด…'));
-    const head = pageHead('ตั้งค่า', `แบ่งเป็น ${SETTINGS_TABS.length} หน้า ตั้งค่าไว้ครั้งเดียวใช้ได้ทุกที่${state.version ? ` · Mimi v${state.version}` : ''}`);
-    const creditsButton = button('btn ghost', 'Credits', creditsDialog, 'ดูเครดิตของ Mimi และทีมงาน');
-    creditsButton.style.marginLeft = 'auto';
-    const setupButton = button('btn ghost', 'ตัวช่วยตั้งค่า', () => window.MimiHooks?.setup?.open?.(), 'เปิดตัวช่วยตั้งค่าเริ่มต้นอีกครั้ง');
-    head.firstElementChild.append(creditsButton, setupButton);
-    const nodes = [head];
-    if (!view.ready) {
-      nodes.push(
-        el(
-          'p',
-          'warnbox',
-          !view.providers.some((provider) => provider.connected)
-            ? 'ยังคุยไม่ได้: เชื่อมต่อผู้ให้บริการโมเดลก่อน (ชื่อ + URL + API key) — อยู่ที่หน้า "แอปและระบบ"'
-            : view.agents === 0
-              ? 'เชื่อมต่อผู้ให้บริการแล้ว ขั้นต่อไป: ไปที่แท็บ "Agent" เพื่อสร้าง agent ตัวแรก'
-              : 'ยังคุยไม่ได้: โมเดลคุยของ agent เป็นของผู้ให้บริการที่ยังไม่ได้เชื่อมต่อ แก้ที่แท็บ "Agent" หรือเลือกโมเดลเริ่มต้นด้านล่าง',
-        ),
-      );
-    }
-    const tabs = el('div', 'tabs');
-    for (const [key, label, hint] of SETTINGS_TABS) {
-      tabs.append(
-        button(ui.settingsTab === key ? 'on' : '', label, () => {
-          ui.settingsTab = key;
-          renderSettings();
-        }, hint),
-      );
-    }
-    nodes.push(tabs);
-
+    const section = SETTINGS_PAGES.some(([key]) => key === ui.settingsPage) ? ui.settingsPage : null;
+    const nodes = [];
     const stack = el('div', 'stackv');
+    const profileHook = window.MimiHooks && window.MimiHooks.profile;
 
-    if (ui.settingsTab === 'profile') {
+    if (section === null) {
+      const head = settingsHead('ตั้งค่า', `เลือกหัวข้อที่จะตั้งค่า · แก้แล้วบันทึกให้เอง${state.version ? ` · Mimi v${state.version}` : ''}`);
+      const creditsButton = button('btn ghost', 'Credits', creditsDialog, 'ดูเครดิตของ Mimi และทีมงาน');
+      creditsButton.style.marginLeft = 'auto';
+      const setupButton = button('btn ghost', 'ตัวช่วยตั้งค่า', () => window.MimiHooks?.setup?.open?.(), 'เปิดตัวช่วยตั้งค่าเริ่มต้นอีกครั้ง');
+      head.firstElementChild.append(creditsButton, setupButton);
+      nodes.push(head);
+      if (!view.ready) {
+        nodes.push(
+          el(
+            'p',
+            'warnbox',
+            !view.providers.some((provider) => provider.connected)
+              ? 'ยังคุยไม่ได้: เชื่อมต่อผู้ให้บริการโมเดลก่อน (ชื่อ + URL + API key) — อยู่ที่หัวข้อ "ผู้ให้บริการโมเดล"'
+              : view.agents === 0
+                ? 'เชื่อมต่อผู้ให้บริการแล้ว ขั้นต่อไป: ไปที่แท็บ "Agent" เพื่อสร้าง agent ตัวแรก'
+                : 'ยังคุยไม่ได้: โมเดลคุยของ agent เป็นของผู้ให้บริการที่ยังไม่ได้เชื่อมต่อ แก้ที่แท็บ "Agent" หรือเลือกโมเดลเริ่มต้นในหัวข้อ "โมเดลเริ่มต้นและระบบ"',
+          ),
+        );
+      }
+      const cards = el('div', 'setcards');
+      for (const [key, label, hint] of SETTINGS_PAGES) {
+        const card = button('setcard', null, () => {
+          ui.settingsPage = key;
+          renderSettings();
+          page.scrollTop = 0;
+        });
+        const text = el('div');
+        text.append(el('b', '', label), el('small', '', hint));
+        card.append(text, el('span', 'chev', '›'));
+        cards.append(card);
+      }
+      stack.append(cards);
+    } else {
+      const [, label, hint] = SETTINGS_PAGES.find(([key]) => key === section);
+      nodes.push(settingsHead(label, hint));
+    if (section === 'account') {
       const account = el('div', 'panel form');
       account.append(
         el('h3', '', 'บัญชี'),
@@ -4778,7 +4955,32 @@
       );
       stack.append(account);
       if (accountsMode) stack.append(twoFactorPanel(), passwordPanel());
+      const server = serverPanel();
+      if (server) stack.append(server);
+      const background = backgroundPanel();
+      if (background) stack.append(background);
 
+      const startup = startupPanel();
+      if (startup) stack.append(startup);
+    } else if (section === 'profile') {
+      // The user's own profile, shared per agent (feature-profile.js).
+      const profile = el('div', 'panel form');
+      profile.append(el('h3', '', 'โปรไฟล์ของฉัน'));
+      if (profileHook) profileHook.render(profile);
+      stack.append(profile);
+
+    } else if (section === 'prefs') {
+      const prefs = el('div', 'panel form');
+      prefs.append(el('h3', '', 'งบประมาณ & การแจ้งเตือน'));
+      if (profileHook) profileHook.renderPreferences(prefs);
+      stack.append(prefs);
+
+    } else if (section === 'backup') {
+      const backup = el('div', 'panel form');
+      backup.append(el('h3', '', 'สำรอง / กู้คืนข้อมูล'));
+      if (profileHook) profileHook.renderBackups(backup);
+      stack.append(backup);
+    } else if (section === 'appearance') {
       // This changes the app's own text, not the language the agents answer in: they read
       // the conversation and their system prompt for that.
       const language = el('div', 'panel form');
@@ -4793,29 +4995,10 @@
       language.append(languageRow);
       stack.append(language);
 
-      // The user's own profile, shared per agent (feature-profile.js).
-      const profile = el('div', 'panel form');
-      profile.append(el('h3', '', 'โปรไฟล์ของฉัน'));
-      const profileHook = window.MimiHooks && window.MimiHooks.profile;
-      if (profileHook) profileHook.render(profile);
-      stack.append(profile);
-
-      const prefs = el('div', 'panel form');
-      prefs.append(el('h3', '', 'งบประมาณ & การแจ้งเตือน'));
-      if (profileHook) profileHook.renderPreferences(prefs);
-      stack.append(prefs);
-
-      const backup = el('div', 'panel form');
-      backup.append(el('h3', '', 'สำรอง / กู้คืนข้อมูล'));
-      if (profileHook) profileHook.renderBackups(backup);
-      stack.append(backup);
-    } else if (ui.settingsTab === 'appearance') {
       stack.append(themePanel());
-    } else if (ui.settingsTab === 'memory') {
+    } else if (section === 'memory') {
       stack.append(memoryPanel());
-    } else {
-      const startup = startupPanel();
-      if (startup) stack.append(startup);
+    } else if (section === 'providers') {
       // Providers: add, edit, remove and manage the model list (feature-providers.js).
       const providers = el('div', 'panel form');
       providers.append(el('h3', '', 'ผู้ให้บริการโมเดล'));
@@ -4824,11 +5007,13 @@
       else providers.append(el('p', 'hint', 'โหลดหน้าจอผู้ให้บริการไม่สำเร็จ — รีเฟรชหน้าใหม่'));
       stack.append(providers);
 
+    } else if (section === 'system') {
       stack.append(storagePanel());
       stack.append(tunnelPanel());
       stack.append(browserPanel());
       stack.append(workspacePanel());
 
+    } else if (section === 'defaults') {
       const general = el('div', 'panel form');
       general.append(el('h3', '', 'โมเดลเริ่มต้น'), el('p', 'hint', view.models.length ? 'core เป็นตัวตอบเสมอ · รูปที่ core ดูได้จะถูกส่งให้ core ด้วย · vision / transcript ใช้แปลงไฟล์เป็นข้อความเก็บในประวัติ · แต่ละช่องแสดงเฉพาะโมเดลที่ทำได้' : 'เชื่อมต่อผู้ให้บริการก่อน แล้วรายชื่อโมเดลจะขึ้นให้เลือก'));
       const defaults = el('div', 'grid2');
@@ -4951,6 +5136,7 @@
       general.addEventListener('change', autoSave);
       general.append(foot);
       stack.append(general);
+    }
     }
 
     nodes.push(stack);
@@ -5203,6 +5389,29 @@
     }
   }
 
+  /**
+   * The server repeats lists it already sent (every reconnect asks for all of them again). A page
+   * that is rebuilt from an identical list loses where the person had scrolled to and anything they
+   * were typing, so an identical push changes nothing on screen.
+   */
+  const lastPush = new Map();
+  function repeated(slot, value) {
+    const text = JSON.stringify(value);
+    if (lastPush.get(slot) === text) return true;
+    lastPush.set(slot, text);
+    return false;
+  }
+  /** Rebuilds the open page in place and puts it back where it was scrolled to. */
+  function rerender(render) {
+    const page = $(`view-${state.view}`);
+    // Someone is typing in this page: rebuilding it now would take the cursor away. The data is in
+    // `state` already, and the page shows it the next time it is opened.
+    const typing = document.activeElement;
+    if (page && typing && page.contains(typing) && typing.matches('input:not([type=checkbox]):not([type=radio]):not([type=button]), textarea, [contenteditable="true"]')) return;
+    const top = page ? page.scrollTop : 0;
+    render();
+    if (page && top) page.scrollTop = top;
+  }
   function onMessage(message) {
     switch (message.type) {
       case 'welcome':
@@ -5467,28 +5676,30 @@
       case 'provider-auth-url':
         window.MimiHooks?.providers?.onMessage(message);
         break;
-      case 'settings':
+      case 'settings': {
+        const same = repeated('settings', message.settings);
         state.settings = message.settings;
         if (window.MimiHooks && window.MimiHooks.providers) window.MimiHooks.providers.onMessage(message);
         if (window.MimiHooks?.overseer) window.MimiHooks.overseer.onMessage?.(message);
         window.MimiHooks?.setup?.refresh?.();
-        if (state.view === 'overseer' && ((!ui.providerDirty && !ui.overseerDirty) || message.saved)) {
+        if (state.view === 'overseer' && !same && ((!ui.providerDirty && !ui.overseerDirty) || message.saved)) {
           window.MimiHooks?.overseer?.render?.();
           if (message.saved) saved();
         }
-        if (state.view === 'settings' && (!ui.providerDirty || message.saved)) {
-          renderSettings();
+        if (state.view === 'settings' && (!ui.providerDirty || message.saved) && (!same || message.saved)) {
+          rerender(renderSettings);
           if (message.saved) saved();
         }
         settleHubPending('preset', (pending) => message.settings.presets.some((entry) => entry.name === pending.name && entry.model === pending.model));
         // Hub editors are popups, so the list behind them can always follow the server.
-        if (state.view === 'hub' && ((!ui.toolDirty && !ui.triggerDirty && !ui.workflowDirty) || message.saved)) {
-          renderHub();
+        if (state.view === 'hub' && ((!ui.toolDirty && !ui.triggerDirty && !ui.workflowDirty) || message.saved) && (!same || message.saved)) {
+          rerender(renderHub);
           if (message.saved) saved();
         }
-        if (state.view === 'agents' && !ui.agentDirty) renderAgents();
+        if (state.view === 'agents' && !same && !ui.agentDirty) rerender(renderAgents);
         bootstrap();
         break;
+      }
       case 'overseer':
         state.overseer = message.overseer;
         state.gotOverseer = true;
@@ -5500,34 +5711,42 @@
         if (state.view === 'overseer') window.MimiHooks?.overseer?.render?.();
         bootstrap();
         break;
-      case 'agents':
+      case 'agents': {
+        const same = repeated('agents', [message.agents, message.tools, message.defaultAgent]);
         state.agents = message.agents;
         state.tools = message.tools;
         state.defaultAgent = message.defaultAgent;
         state.gotAgents = true;
         window.MimiHooks?.setup?.refresh?.();
+        const quiet = message.saved && ui.quietSave && ui.quietSave.name === message.saved ? ui.quietSave : null;
         if (message.saved) {
           ui.agent = message.saved;
-          ui.agentDirty = false;
+          if (!quiet || quiet.seq === ui.agentSeq) ui.agentDirty = false;
         }
+        if (quiet) ui.quietSave = null;
         if (ui.agent && !agentOf(ui.agent)) ui.agent = null;
         renderChatList();
         renderHeader();
         renderRail();
-        if (state.view === 'agents' && (!ui.agentDirty || message.saved)) {
-          renderAgents();
+        if (state.view === 'agents' && (!ui.agentDirty || message.saved) && (!same || message.saved)) {
+          // An automatic save must not rebuild the form under the person's fingers.
+          if (!quiet) rerender(renderAgents);
           if (message.saved) saved();
         }
-        if (state.view === 'hub' && !ui.skillDirty && !ui.presetDirty && !ui.toolDirty && !ui.triggerDirty && !ui.workflowDirty) renderHub();
+        if (state.view === 'hub' && !same && !ui.skillDirty && !ui.presetDirty && !ui.toolDirty && !ui.triggerDirty && !ui.workflowDirty) rerender(renderHub);
         bootstrap();
         break;
-      case 'skills':
+      }
+      case 'skills': {
+        const same = repeated('skills', message.skills);
         state.skills = message.skills;
         settleHubPending('skill', (pending) => message.saved === pending.name);
-        if (state.view === 'hub') renderHub();
-        if (state.view === 'agents' && !ui.agentDirty) renderAgents();
+        if (state.view === 'hub' && !same) rerender(renderHub);
+        if (state.view === 'agents' && !same && !ui.agentDirty) rerender(renderAgents);
         break;
-      case 'tools':
+      }
+      case 'tools': {
+        const same = repeated('tools', [message.tools, message.presets, message.custom, message.secretKeys, message.mcp, message.connectors, message.connections]);
         state.tools = message.tools;
         state.toolPresets = message.presets || [];
         state.toolCustom = message.custom || [];
@@ -5536,9 +5755,10 @@
         if (message.connectors) state.connectors = message.connectors;
         if (message.connections) state.connections = message.connections;
         if (window.MimiHooks && window.MimiHooks.tools) window.MimiHooks.tools.onMessage(message);
-        if (state.view === 'hub' && ui.hubTab === 'nodes') renderHub();
-        if (state.view === 'agents' && !ui.agentDirty) renderAgents();
+        if (state.view === 'hub' && ui.hubTab === 'nodes' && !same) rerender(renderHub);
+        if (state.view === 'agents' && !same && !ui.agentDirty) rerender(renderAgents);
         break;
+      }
       case 'connector-connections':
         state.connections = message.connections || [];
         state.connectors = message.connectors || state.connectors;
@@ -5572,16 +5792,18 @@
         }
         break;
       }
-      case 'workflows':
+      case 'workflows': {
+        const same = repeated('workflows', [message.workflows, message.pool, message.nodeTypes, message.customNodes]);
         state.workflows = message.workflows || [];
         state.workflowPool = message.pool || [];
         state.nodeTypes = message.nodeTypes || [];
         state.customNodes = message.customNodes || [];
         if (window.MimiHooks && window.MimiHooks.agentWorkflows) window.MimiHooks.agentWorkflows.onMessage(message);
-        if (state.view === 'agents' && !ui.agentDirty) renderAgents();
+        if (state.view === 'agents' && !same && !ui.agentDirty) rerender(renderAgents);
         window.MimiHooks?.triggers?.onPool?.(message);
-        if (state.view === 'hub' && ui.hubTab === 'nodes') renderHub();
+        if (state.view === 'hub' && ui.hubTab === 'nodes' && !same) rerender(renderHub);
         break;
+      }
       case 'workflow-result': {
         const result = message.result;
         const steps = (result.steps || []).map((step) => `${step.title}: ${step.output.slice(0, 200)}`).join('\n');
@@ -5612,11 +5834,13 @@
         if (window.MimiHooks && window.MimiHooks.triggers) window.MimiHooks.triggers.onMessage(message);
         if (state.view === 'hub' && ui.hubTab === 'triggers') renderHub();
         break;
-      case 'memory':
+      case 'memory': {
+        const same = repeated('memory', message.entries);
         state.memory = message.entries;
         if (ui.memory && !state.memory.some((entry) => entry.path === ui.memory)) ui.memory = null;
-        if (state.view === 'settings') renderSettings();
+        if (state.view === 'settings' && !same) rerender(renderSettings);
         break;
+      }
       case 'google-auth-url':
       case 'microsoft-auth-url': {
         const service = message.type === 'google-auth-url' ? 'google' : 'microsoft';
@@ -5706,6 +5930,7 @@
   };
 
   let reconnectTimer = null;
+  let wakeProbe = null;
   let pingTimer = null;
   let lastTraffic = 0;
   let lastPong = 0;
@@ -5802,15 +6027,34 @@
   function wake() {
     if (!token()) return;
     if (socket && socket.readyState === WebSocket.OPEN) {
-      // A stale connection answers nothing: drop it so `connect` runs again immediately.
+      // Ask before judging: window focus also comes back when the notification shade closes or a
+      // permission box goes away, and a healthy socket that was only quiet must not be dropped
+      // (that shows "connecting" and reloads the screen). A socket that stays silent after the
+      // question is stale: drop it so `connect` runs again.
       if (Date.now() - lastTraffic > 12000) {
+        const asked = Date.now();
         try {
-          socket.close();
+          socket.send(JSON.stringify({ type: 'ping' }));
         } catch {
-          // already closing
+          retryMs = 1000;
+          try {
+            socket.close();
+          } catch {
+            // already closing
+          }
+          return;
         }
-        retryMs = 1000;
-        return;
+        clearTimeout(wakeProbe);
+        wakeProbe = setTimeout(() => {
+          if (lastTraffic < asked && socket && socket.readyState === WebSocket.OPEN) {
+            retryMs = 1000;
+            try {
+              socket.close();
+            } catch {
+              // already closing
+            }
+          }
+        }, 4000);
       }
       reportPresence(true);
       if (Date.now() - lastTraffic > 5000 && state.chat) {
@@ -5824,6 +6068,13 @@
   }
   // The Android app calls this when the activity comes back to the front.
   window.__mimiWake = wake;
+  // The Android app reports how far the keyboard overlaps the page (CSS px): only the message box lifts,
+  // the character and the backdrop stay where they are (see "the keyboard overlaps" in app.css).
+  window.__mimiKeyboard = (px) => {
+    const value = Math.max(0, Math.round(Number(px) || 0));
+    document.documentElement.style.setProperty('--kb', `${value}px`);
+    if (value > 0 && document.activeElement === input) requestAnimationFrame(() => scrollDown());
+  };
 
   /**
    * The Android back button: closes the topmost thing (picture, popup, menu, side panel) or
@@ -5854,6 +6105,26 @@
     }
     if (railFloats() && state.railOpen && !$('rail').hidden) {
       setRail(false);
+      return true;
+    }
+    // Pages go back one step at a time: a section or an editor to its list, the list to the chat.
+    if (state.view === 'settings' && ui.settingsPage) {
+      ui.settingsPage = null;
+      renderSettings();
+      $('view-settings').scrollTop = 0;
+      return true;
+    }
+    if (state.view === 'agents' && ui.agentScreen === 'edit' && agentsNarrow()) {
+      if (ui.flushAgentSave) ui.flushAgentSave();
+      ui.agentScreen = 'list';
+      ui.agentDirty = false;
+      renderAgents();
+      $('view-agents').scrollTop = 0;
+      return true;
+    }
+    if (state.view !== 'chat' && agentsNarrow()) {
+      setView('chat');
+      $('app').classList.toggle('show-side', !state.chat);
       return true;
     }
     // Narrow screens show one pane at a time: a chat or a page goes back to the list.

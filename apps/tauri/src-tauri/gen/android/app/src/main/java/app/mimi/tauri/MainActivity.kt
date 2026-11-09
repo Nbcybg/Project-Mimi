@@ -21,6 +21,7 @@ import androidx.core.view.WindowInsetsCompat
  *   - window.__mimiWake()        called when the app comes back to the front
  *   - window.MimiAndroid.notify  a system notification (the UI hands every notice over, also while
  *                                the page is on screen; the same title + chat replaces itself)
+ *   - window.__mimiKeyboard(px)  how far the keyboard overlaps the page (the web view is not resized)
  *   - window.MimiAndroid.signedIn(token)   sign-in / sign-out: starts / stops NotifyService, which
  *                                keeps the notifications coming while the app is in the background
  * It also keeps the page out from under the status bar and navigation bar (edge-to-edge is
@@ -44,7 +45,11 @@ class MainActivity : TauriActivity() {
     ViewCompat.setOnApplyWindowInsetsListener(content) { view, insets ->
       val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
       val keyboard = insets.getInsets(WindowInsetsCompat.Type.ime())
-      view.setPadding(bars.left, bars.top, bars.right, maxOf(bars.bottom, keyboard.bottom))
+      // The keyboard does not shrink the page: the character and the backdrop must stay where they are.
+      // The page is told how far the keyboard overlaps it (CSS px) and lifts only its message box.
+      view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+      val overlapPx = maxOf(0, keyboard.bottom - bars.bottom)
+      web?.evaluateJavascript("(function(){try{window.__mimiKeyboard&&window.__mimiKeyboard(" + overlapPx / resources.displayMetrics.density + ")}catch(e){}})()", null)
       WindowInsetsCompat.CONSUMED
     }
     val controller = WindowCompat.getInsetsController(window, content)
@@ -94,8 +99,22 @@ class MainActivity : TauriActivity() {
         NotifyService.stop(this@MainActivity)
       } else {
         prefs.edit().putString("token", token).apply()
-        NotifyService.start(this@MainActivity)
+        if (prefs.getBoolean("background", true)) NotifyService.start(this@MainActivity)
       }
+    }
+
+    /**
+     * Notifications while the app is in the background need a service with a permanent notification
+     * ("เชื่อมต่ออยู่ เพื่อรอการแจ้งเตือน") — Android requires it. This is the switch for it (default on).
+     */
+    @JavascriptInterface
+    fun getBackgroundNotify(): Boolean = ShellPrefs.of(this@MainActivity).getBoolean("background", true)
+
+    @JavascriptInterface
+    fun setBackgroundNotify(on: Boolean) {
+      val prefs = ShellPrefs.of(this@MainActivity)
+      prefs.edit().putBoolean("background", on).apply()
+      if (on && !prefs.getString("token", null).isNullOrBlank()) NotifyService.start(this@MainActivity) else NotifyService.stop(this@MainActivity)
     }
 
     @JavascriptInterface

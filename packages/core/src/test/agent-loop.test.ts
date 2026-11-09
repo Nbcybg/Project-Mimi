@@ -300,3 +300,49 @@ test('an empty answer gets one more go; a second empty one ends the run', async 
   const quiet = await collect(runAgent(makeHarness(silent).deps, { agent: makeAgent(), userText: 'hi' }));
   assert.deepEqual([eventsOf(quiet, 'run-finish')[0]!.rounds, silent.doStreamCalls.length], [2, 2]);
 });
+
+test('a model that goes silent mid-answer is cut with E-TIMEOUT instead of holding the turn', async () => {
+  const before = process.env.MIMI_MODEL_STALL_SECONDS;
+  process.env.MIMI_MODEL_STALL_SECONDS = '0.3';
+  try {
+    const model = new MockLanguageModelV4({
+      doStream: async () => ({
+        // Starts to answer, then never sends another part and never closes.
+        stream: new ReadableStream({
+          start(controller) {
+            controller.enqueue({ type: 'stream-start', warnings: [] });
+            controller.enqueue({ type: 'text-start', id: '1' });
+            controller.enqueue({ type: 'text-delta', id: '1', delta: 'ครับ' });
+          },
+        }),
+      }),
+    });
+    const harness = makeHarness(model);
+    const started = Date.now();
+    const events = await collect(runAgent(harness.deps, { agent: makeAgent(), userText: 'hi' }));
+    const finish = eventsOf(events, 'run-finish')[0]!;
+    assert.equal(finish.reason, 'error');
+    assert.equal(finish.errorCode, 'E-TIMEOUT');
+    assert.ok(Date.now() - started < 5000);
+    assert.equal(runRow(harness.db).status, 'error');
+  } finally {
+    if (before === undefined) delete process.env.MIMI_MODEL_STALL_SECONDS;
+    else process.env.MIMI_MODEL_STALL_SECONDS = before;
+  }
+});
+
+test('stop still ends a run as aborted, not as a timeout', async () => {
+  const model = new MockLanguageModelV4({
+    doStream: async () => ({
+      stream: new ReadableStream({
+        start(controller) {
+          controller.enqueue({ type: 'stream-start', warnings: [] });
+        },
+      }),
+    }),
+  });
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), 150);
+  const events = await collect(runAgent(makeHarness(model).deps, { agent: makeAgent(), userText: 'hi', signal: controller.signal }));
+  assert.equal(eventsOf(events, 'run-finish')[0]!.reason, 'aborted');
+});

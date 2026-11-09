@@ -112,6 +112,11 @@ export interface AgentLoopDeps {
 }
 
 /** How many of a session's newest images a vision-capable chat model gets as pictures. */
+/** A model call that streams nothing for this long is cut (0 = never). MIMI_MODEL_STALL_SECONDS sets it. */
+function stallMs(): number {
+  const seconds = Number(process.env.MIMI_MODEL_STALL_SECONDS ?? 120);
+  return Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : 120_000;
+}
 const MAX_PROMPT_IMAGES = 6;
 /** How many of a session's newest PDFs a document-capable chat model gets as documents. */
 const MAX_PROMPT_PDFS = 3;
@@ -468,6 +473,27 @@ export async function* runAgent(deps: AgentLoopDeps, input: RunInput): AsyncGene
       text = '';
       const callStartedAt = Date.now();
       const prompt = withCacheBreakpoints(modelInfo.npm, system, messages);
+      // A provider that accepts the request and then goes silent would hold the turn (and, in a
+      // group, every agent queued behind it) until someone presses stop: cut the call instead.
+      const roundAbort = new AbortController();
+      const forwardAbort = () => roundAbort.abort();
+      signal?.addEventListener('abort', forwardAbort, { once: true });
+      const STALL_MS = stallMs();
+      let stalled = false;
+      let stallTimer: ReturnType<typeof setTimeout> | undefined;
+      const watchStall = () => {
+        if (STALL_MS <= 0) return;
+        clearTimeout(stallTimer);
+        stallTimer = setTimeout(() => {
+          stalled = true;
+          roundAbort.abort();
+        }, STALL_MS);
+      };
+      const stopWatching = () => {
+        clearTimeout(stallTimer);
+        signal?.removeEventListener('abort', forwardAbort);
+      };
+      watchStall();
       const result = streamText({
         model,
         instructions: prompt.system,
@@ -476,7 +502,7 @@ export async function* runAgent(deps: AgentLoopDeps, input: RunInput): AsyncGene
         tools: bridged ? undefined : toSdkTools(tools),
         providerOptions,
         ...modelRef.params,
-        abortSignal: signal,
+        abortSignal: roundAbort.signal,
         // Errors arrive as stream parts and are handled below; skip the default console dump.
         onError: () => {},
       });
@@ -512,27 +538,36 @@ export async function* runAgent(deps: AgentLoopDeps, input: RunInput): AsyncGene
           return this.settled ? '' : this.release();
         },
       };
-      for await (const item of withSideEvents(result.stream, sideEvents)) {
-        if ('event' in item) {
-          yield item.event;
-          continue;
+      try {
+        for await (const item of withSideEvents(result.stream, sideEvents)) {
+          watchStall();
+          if ('event' in item) {
+            yield item.event;
+            continue;
+          }
+          const part = item.part;
+          if (part.type === 'text-delta') {
+            text += part.text;
+            const visible = stream.push(part.text);
+            if (visible) yield { type: 'text-delta', text: visible };
+          } else if (part.type === 'tool-call') {
+            if (part.providerExecuted) continue; // the CLI already ran it through the bridge
+            calls.push({ id: part.toolCallId, name: part.toolName, input: part.input });
+          } else if (part.type === 'finish-step') {
+            usage = part.usage;
+          } else if (part.type === 'abort') {
+            aborted = true;
+          } else if (part.type === 'error') {
+            throw part.error;
+          }
         }
-        const part = item.part;
-        if (part.type === 'text-delta') {
-          text += part.text;
-          const visible = stream.push(part.text);
-          if (visible) yield { type: 'text-delta', text: visible };
-        } else if (part.type === 'tool-call') {
-          if (part.providerExecuted) continue; // the CLI already ran it through the bridge
-          calls.push({ id: part.toolCallId, name: part.toolName, input: part.input });
-        } else if (part.type === 'finish-step') {
-          usage = part.usage;
-        } else if (part.type === 'abort') {
-          aborted = true;
-        } else if (part.type === 'error') {
-          throw part.error;
-        }
+      } catch (caught) {
+        if (stalled) throw new Error(`E-TIMEOUT: the model sent nothing for ${Math.round(STALL_MS / 1000)} s, so the call was cut`);
+        throw caught;
+      } finally {
+        stopWatching();
       }
+      if (stalled) throw new Error(`E-TIMEOUT: the model sent nothing for ${Math.round(STALL_MS / 1000)} s, so the call was cut`);
       const rest = stream.flush();
       if (rest) yield { type: 'text-delta', text: rest };
       if (aborted) {

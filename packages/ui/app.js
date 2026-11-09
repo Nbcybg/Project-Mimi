@@ -2746,9 +2746,23 @@
       caption.placeholder = review.separate ? 'คำบรรยายของรูปนี้…' : review.entries.length > 1 ? 'เพิ่มคำบรรยายให้ทุกรูป…' : 'เพิ่มคำบรรยาย…';
     };
     sync();
+    // Resizing on every key forced a full layout (height:auto, then a read) while a camera-size
+    // picture is on screen, which is what made typing stutter on a phone. Now one resize per
+    // frame, and only when the line count can have changed: growing is read first (cheap), the
+    // full reset is for when text was removed.
+    let fitQueued = false;
+    let lastLength = caption.value.length;
     const fit = () => {
-      caption.style.height = 'auto';
-      caption.style.height = `${Math.min(110, caption.scrollHeight)}px`;
+      if (fitQueued) return;
+      fitQueued = true;
+      requestAnimationFrame(() => {
+        fitQueued = false;
+        const shrank = caption.value.length < lastLength;
+        lastLength = caption.value.length;
+        if (!shrank && caption.scrollHeight <= caption.clientHeight) return;
+        if (shrank) caption.style.height = 'auto';
+        caption.style.height = `${Math.min(110, caption.scrollHeight)}px`;
+      });
     };
     caption.oninput = () => {
       const current = review.entries[review.index];

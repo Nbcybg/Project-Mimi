@@ -1058,8 +1058,10 @@ export async function createCore(
             repo: tasks,
             chatIdForThread: (thread) => chats.sessionByThread(thread)?.chatId,
           });
-      // Long work gets a visible checklist and an approvable plan without editing the agent.
-      const workTools = ['plan_set', 'plan_read', 'todo_write', 'todo_read']
+      // Long work gets a visible checklist and an approvable plan without editing the agent. skill_create comes
+      // the same way: every agent may write a skill (the user approves each save), not only the Overseer, and an
+      // agent that was never given the tool would otherwise try use_skill("skill_create") and fail.
+      const workTools = ['plan_set', 'plan_read', 'todo_write', 'todo_read', 'skill_create']
         .filter((name) => !agent.tools.includes(name))
         .map((name) => toolPool.get(name))
         .filter((tool): tool is NonNullable<typeof tool> => tool !== undefined);

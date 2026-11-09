@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import type { ToolContext, ToolDefinition } from '@mimi/shared';
+import { skillFileName } from '../skills/author-tools.ts';
 import { loadSkills, saveSkill } from '../skills/skills.ts';
 import { makeTestCore } from './core-helpers.ts';
 
@@ -67,13 +68,58 @@ test('skill_create: refuses to overwrite by accident, never touches built-in or 
     await assert.rejects(run({ name: 'hub-job', description: 'x', body: 'x', replace: true }), /own model or tools/);
     assert.match(fs.readFileSync(path.join(config.skillsDir, 'hub-job.md'), 'utf8'), /HUB/);
 
-    // The name is a file name: nothing outside lowercase letters, digits and "-" gets in.
-    for (const bad of ['../evil', 'Evil', 'a_b', '1abc', '']) {
-      assert.throws(() => tool.inputSchema.parse({ name: bad, description: 'x', body: 'x' }), `name "${bad}" is refused`);
-    }
+    // The name is a file name: only lowercase letters, digits and "-" reach the disk, and what a model writes in the
+    // user's language is cleaned up instead of refused (a refusal it cannot fix looks like "the tool does not work").
+    assert.equal(skillFileName('../evil'), 'evil');
+    assert.equal(skillFileName('Meal Plan_2'), 'meal-plan-2');
+    assert.equal(skillFileName('1abc'), 'abc');
+    const thai = skillFileName('ใบเตือนยา');
+    assert.match(thai, /^skill-[0-9a-f]{6}$/, 'a title with no usable letters gets a stable name');
+    assert.equal(skillFileName('ใบเตือนยา'), thai);
+    assert.match(String(await run({ name: 'ใบเตือนยา', description: 'ช่วยตั้งเตือนกินยา', body: 'ถามเวลาแล้วตั้งเตือน' })), new RegExp(`Saved skill "${thai}"`));
+    const kept = loadSkills(config.skillsDir).find((skill) => skill.name === thai);
+    assert.match(kept?.description ?? '', /ใบเตือนยา/, 'the Thai title stays in the description');
+    assert.throws(() => tool.inputSchema.parse({ name: '', description: 'x', body: 'x' }), 'an empty name is refused');
     assert.throws(() => tool.inputSchema.parse({ name: 'big', description: 'x', body: 'x'.repeat(20_001) }), 'an oversized body is refused');
-
+    // Booleans sent as text still count.
+    assert.ok(tool.inputSchema.parse({ name: 'x', description: 'x', body: 'x', replace: 'true', use: 'false' }));
+    await run({ name: 'meal-plan', description: 'Plan meals v3', body: 'THIRD VERSION', replace: 'true', use: 'false' });
+    assert.match(fs.readFileSync(path.join(config.skillsDir, 'meal-plan.md'), 'utf8'), /THIRD VERSION/);
   } finally {
     await testCore.cleanup();
   }
+});
+
+test('skill_create through a real agent turn: offered to an agent that never listed it, asks for approval, and the file appears', async () => {
+  const { runAgent } = await import('../loop/agent-loop.ts');
+  const { scriptedModel, textStep, toolStep, collect, eventsOf } = await import('./helpers.ts');
+  const model = scriptedModel([
+    toolStep('skill_create', { name: 'packing-list', description: 'Make a packing list for a trip', body: '1. Ask where and how long.\n2. List clothes, documents, chargers.' }),
+    textStep('บันทึก skill แล้วค่ะ'),
+  ]);
+  const testCore = await makeTestCore({ models: { mimi: model } });
+  try {
+    const { core, config } = testCore;
+    const base = core.agents.get('mimi');
+    assert.ok(!base.tools.includes('skill_create'), 'the agent file does not list it');
+    const events = await collect(runAgent(core.deps, { agent: base, userText: 'ทำเป็น skill เก็บไว้หน่อย' }));
+    const offered = ((model.doStreamCalls[0] as { tools?: Array<{ name: string }> }).tools ?? []).map((entry) => entry.name);
+    assert.ok(offered.includes('skill_create'), 'every agent is offered skill_create');
+    const call = eventsOf(events, 'tool-call').find((event) => event.call.name === 'skill_create');
+    assert.ok(call, 'the model was offered skill_create and called it');
+    assert.ok(eventsOf(events, 'permission-request').length > 0, 'a write tool asks the user first');
+    const result = eventsOf(events, 'tool-result').find((event) => event.result.name === 'skill_create');
+    assert.ok(result, 'the call ended with a result');
+    assert.equal(result.result.ok, true, `skill_create failed: ${JSON.stringify(result.result)}`);
+    assert.ok(fs.existsSync(path.join(config.skillsDir, 'packing-list.md')), 'the skill file is on disk');
+  } finally {
+    await testCore.cleanup();
+  }
+});
+
+test('use_skill / load_skill with a tool name say it is a tool (the mistake an agent made with skill_create)', async () => {
+  const { createSkillTool } = await import('../skills/skills.ts');
+  const tool = createSkillTool([{ name: 'mimiamp-player', description: 'x', tools: [], file: '(none)', body: 'x' }]);
+  await assert.rejects(tool.execute({ name: 'skill_create' }, context('mimi')), /No skill "skill_create". Available: mimiamp-player..*looks like a tool, not a skill/s);
+  await assert.rejects(tool.execute({ name: 'nope' }, context('mimi')), (error: Error) => !/looks like a tool/.test(error.message));
 });

@@ -163,7 +163,11 @@ export function loadPersona(personaPath: string): string {
 function findSkill(skills: Skill[], name: string): Skill {
   const skill = skills.find((candidate) => candidate.name === name.trim());
   if (!skill) {
-    throw new Error(`No skill "${name}". Available: ${skills.map((candidate) => candidate.name).join(', ') || 'none'}`);
+    // A skill name never has an underscore: that is a tool (skill_create, read_file...), which is called directly.
+    const hint = name.includes('_')
+      ? ` "${name.trim()}" looks like a tool, not a skill: call it as a tool directly (use_skill and load_skill only open skills).`
+      : '';
+    throw new Error(`No skill "${name}". Available: ${skills.map((candidate) => candidate.name).join(', ') || 'none'}.${hint}`);
   }
   return skill;
 }

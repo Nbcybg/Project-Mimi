@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { embedMany, generateText } from 'ai';
 import type { AgentEvent, CalendarChangeView, ConnectorRuntime, HistoryMessage, Notification, WorkflowRunResult } from '@mimi/shared';
-import { type AgentDefinition, AgentCatalog } from './agents/loader.ts';
+import { type AgentDefinition, AgentCatalog, saveAgent } from './agents/loader.ts';
 import type { AppSettings } from './app/app-settings.ts';
 import { SecretStore } from './app/secrets.ts';
 import {
@@ -614,6 +614,17 @@ export async function createCore(
     googleFor,
     microsoftFor,
     skills: currentSkills,
+    skillAuthor: {
+      skills: currentSkills,
+      skillsDir: config.skillsDir,
+      attach: (agent, skill) => {
+        const current = agents.get(agent);
+        if (current.skills.includes(skill)) return;
+        saveAgent(config.agentsDir, { ...current, skills: [...current.skills, skill] });
+        listeners.agentsChanged?.(agent);
+      },
+      changed: () => listeners.skillsChanged?.(),
+    },
     chats,
     status,
     memos,

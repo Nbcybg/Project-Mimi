@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Any agent can write a skill (`skill_create`)
+
+Until now only the Overseer could create skill files (`skill_save`). A new tool, `skill_create`, lets any agent that
+lists it write `skills/<name>.md` itself - for a procedure the user wants kept, or one the agent worked out.
+Kept narrow on purpose, because a skill is instructions another run follows as its own: plain instructions only
+(no model or tools of its own; those are set in the skill hub), a built-in or hub-configured skill is never
+overwritten, replacing an agent-written skill needs `replace: true`, and it is a `write` tool, so the user is asked
+before every save. The new skill is added to the writing agent's own skill list (`use: false` skips that) and the skill
+hub refreshes. Tests: `packages/core/src/test/skill-author.test.ts`.
+
 ### Mimiamp removed (client API 2)
 
 The project owner decided to drop the built-in music player everywhere (answer to Q5 in

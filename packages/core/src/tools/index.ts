@@ -24,6 +24,7 @@ import type { MailWatch } from '../notify/mail-watch.ts';
 import { createMailTools } from '../mail/tools.ts';
 import { createTriggerTools } from '../scheduler/trigger-tools.ts';
 import type { TriggerStore } from '../scheduler/triggers.ts';
+import { createSkillAuthorTools, type SkillAuthorDeps } from '../skills/author-tools.ts';
 import { createSkillTool, type Skill } from '../skills/skills.ts';
 import { createDocumentTools } from './document-tools.ts';
 import { createMailAttachmentTools } from './mail-attachments.ts';
@@ -50,6 +51,8 @@ export interface ToolServices {
   key?: (name: string) => string | undefined;
   /** A function is asked on every call, so skills added in the app are found without a restart. */
   skills: Skill[] | (() => Skill[]);
+  /** Lets any agent write a skill file (skill_create); without it the tool is not offered. */
+  skillAuthor?: SkillAuthorDeps;
   chats: ChatStore;
   status: StatusStore;
   memos: MemoStore;
@@ -93,6 +96,7 @@ export function createToolRegistry(services: ToolServices): ToolRegistry {
     ...(services.notifyUser ? createNotifyTools(services.notifyUser) : []),
     ...createWebTools({ key: services.key ?? ((name) => process.env[name]) }),
     createSkillTool(services.skills),
+    ...(services.skillAuthor ? createSkillAuthorTools(services.skillAuthor) : []),
     ...(services.knowledge ? createKnowledgeTools(services.knowledge) : []),
     ...(services.profile ? createProfileTools(services.profile, () => services.agents.names()) : []),
   );

@@ -3,8 +3,67 @@
 // sign-in when the person has just chosen a server, and, while the UI cannot connect, shows
 // why (the UI itself stays silent) with a way to sign in again or to change the server.
 (function () {
-  window.MimiShell = Object.freeze({ platform: 'tauri' });
   var CONNECT = '__CONNECT__';
+  // The few calls the UI makes to its shell (the same names as the Electron shell's preload).
+  // They reach Rust commands that exist on the desktop build only; elsewhere (Android, the
+  // connect page) the answer is "not supported", which hides the switch in the settings.
+  var NOT_SUPPORTED = { supported: false, openAtLogin: false };
+  function command(name, args) {
+    var internals = window.__TAURI_INTERNALS__;
+    if (!internals || !internals.invoke || location.href.indexOf(CONNECT) === 0) return Promise.resolve(NOT_SUPPORTED);
+    return internals.invoke(name, args).then(
+      function (value) {
+        return value;
+      },
+      function () {
+        return NOT_SUPPORTED;
+      },
+    );
+  }
+  window.MimiShell = Object.freeze({
+    platform: 'tauri',
+    openAtLogin: function () {
+      return command('open_at_login');
+    },
+    setOpenAtLogin: function (open) {
+      return command('set_open_at_login', { open: open === true });
+    },
+  });
+  // Desktop: the web Notification API is refused in this window, so the UI's notifications
+  // (new message, reminder, approval) go to a native toast instead. Same shape as the web API,
+  // so packages/ui needs no change. Android has its own path (MimiAndroid.notify).
+  if (location.href.indexOf(CONNECT) !== 0 && window.__TAURI_INTERNALS__ && !/Android/i.test(navigator.userAgent)) {
+    var Toast = function (title, options) {
+      this.onclick = null;
+      window.__TAURI_INTERNALS__
+        .invoke('notify', { title: String(title), body: String((options && options.body) || '') })
+        .catch(function () {});
+    };
+    Toast.prototype.close = function () {};
+    Toast.permission = 'granted';
+    Toast.requestPermission = function () {
+      return Promise.resolve('granted');
+    };
+    try {
+      Object.defineProperty(window, 'Notification', { value: Toast, configurable: true, writable: true });
+    } catch (e) {
+      /* keep the web one */
+    }
+  }
+  // Desktop: only text gets a context menu (cut / copy / paste), like the Electron window; the
+  // rest of the app is not a web page (no Back / Reload / Save as / Print on right click).
+  if (!/Android/i.test(navigator.userAgent)) {
+    document.addEventListener(
+      'contextmenu',
+      function (event) {
+        var target = event.target;
+        var editable = target && (target.isContentEditable || (target.closest && target.closest('input, textarea, [contenteditable=""], [contenteditable="true"]')));
+        var selected = window.getSelection && String(window.getSelection()).length > 0;
+        if (!editable && !selected) event.preventDefault();
+      },
+      true,
+    );
+  }
   if (location.href.indexOf(CONNECT) === 0) return;
 
   // The connect page sends "#fresh=1" after the person chose a server: a password remembered for
@@ -126,8 +185,25 @@
         /* storage unavailable */
       }
     }
+    var desktopSession = null;
+    function tellDesktop() {
+      // Desktop shell: the PC agent runs for the signed-in session (pcagent.rs); signing out
+      // (no token) stops it. Only when the page has said something new.
+      if (window.MimiAndroid || /Android/i.test(navigator.userAgent)) return;
+      try {
+        var core = localStorage.getItem('mimi-core') || '';
+        var token = localStorage.getItem('mimi-token') || '';
+        var key = core + '\n' + token;
+        if (key === desktopSession) return;
+        desktopSession = key;
+        command('pc_session', { core: core, token: token });
+      } catch (e) {
+        /* storage unavailable */
+      }
+    }
     function refresh() {
       tellAndroid();
+      tellDesktop();
       var conn = document.getElementById('conn');
       var settings = document.getElementById('view-settings');
       var offline = !conn || conn.textContent !== 'online';

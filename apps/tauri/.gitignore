@@ -7,3 +7,4 @@ src-tauri/gen/android/local.properties
 src-tauri/gen/android/app/src/main/jniLibs/
 src-tauri/gen/schemas/
 out/
+src-tauri/agent-staging/

@@ -16,6 +16,11 @@ use std::borrow::Cow;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
+#[cfg(desktop)]
+mod desktop;
+#[cfg(desktop)]
+mod pcagent;
+
 use tauri::http::{header, HeaderValue, Response};
 use tauri::{Manager, Url, WebviewUrl, WebviewWindowBuilder};
 
@@ -172,7 +177,18 @@ pub fn run() {
     let for_protocol = core.clone();
     let for_csp = core.clone();
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // Desktop: a second start shows the running window; "start with the computer"; commands the
+    // UI's settings call through window.MimiShell (see shell.js).
+    #[cfg(desktop)]
+    let builder = builder
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| desktop::show(app, None)))
+        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_dialog::init())
+        .invoke_handler(tauri::generate_handler![desktop::open_at_login, desktop::set_open_at_login, desktop::notify, pcagent::pc_session]);
+
+    builder
         // The connect page: GET / shows the form, GET /set?core=... checks and keeps the address.
         .register_uri_scheme_protocol(CONNECT_SCHEME, move |ctx, request| {
             let uri = request.uri();
@@ -249,9 +265,28 @@ pub fn run() {
                         response.headers_mut().insert(header::CONTENT_SECURITY_POLICY, header_value);
                     }
                 });
+            // Desktop: hidden until it is placed (desktop::setup shows it); links that leave the
+            // app open in the system browser.
             #[cfg(desktop)]
-            let builder = builder.inner_size(430.0, 860.0).min_inner_size(360.0, 560.0);
-            builder.build()?;
+            let builder = builder
+                .inner_size(430.0, 860.0)
+                .min_inner_size(360.0, 560.0)
+                .visible(false)
+                .on_navigation(desktop::allow_navigation)
+                .on_new_window(|url, _features| {
+                    desktop::open_outside(&url);
+                    tauri::webview::NewWindowResponse::Deny
+                });
+            #[cfg(desktop)]
+            {
+                app.manage(desktop::Shared::load(app.path().app_data_dir()?));
+                app.manage(pcagent::PcAgent::load(app.path().app_data_dir()?, app.path().home_dir()?));
+            }
+            let window = builder.build()?;
+            #[cfg(desktop)]
+            desktop::setup(app.handle(), &window)?;
+            #[cfg(not(desktop))]
+            let _ = window;
             Ok(())
         })
         .run(tauri::generate_context!())

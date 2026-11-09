@@ -152,7 +152,47 @@ src-tauri/target/release/mimi-tauri.exe
 - **Android: การรันและการวัดทุกอย่างบนอุปกรณ์** (ดูหัวข้อ Android) — ไม่มีมือถือ ไม่มีตัวเลขเวลา/RAM/FPS
 - VRM จริง (ต้องมีไฟล์ `.vrm`) และการวัด FPS ด้วย VRM
 - installer (NSIS) และ Electron แบบ packaged
-- ฟีเจอร์ระดับเปลือก (ถาด, auto-start, notification, updater, IPC)
+- ฟีเจอร์ระดับเปลือกที่ยังไม่ได้พอร์ต: updater, หน้าต่างเบราว์เซอร์ในตัว, หน้าต่าง Workspace (ดูตารางข้างล่าง)
+
+## ย้าย Electron → Tauri: สถานะฟีเจอร์เปลือก (desktop)
+
+โค้ดอยู่ใน `src-tauri/src/desktop.rs` (เฉพาะ desktop, Android ไม่ถูกแตะ) และ `shell.js`
+
+| ฟีเจอร์ของ `packages/desktop/main.cjs` | สถานะ | ตรวจแล้วอย่างไร |
+|---|---|---|
+| กดปิดหน้าต่าง = ซ่อน (แอปอยู่ต่อ) | ทำแล้ว | ส่ง WM_CLOSE → process ยังอยู่ หน้าต่างไม่แสดง |
+| ถาดระบบ + เมนู (เปิดแชต/Agent/Hub/ตั้งค่า/ซ่อนเมื่อคลิกที่อื่น/อยู่บนสุด/ออก) + คลิกซ้ายสลับแสดง/ซ่อน | ทำแล้ว (ยังไม่ได้ลองกดเมนูด้วยมือ) | พบหน้าต่าง `tray_icon_app` ของแอป; ยังไม่ได้เห็นไอคอนและยังไม่ได้กดแต่ละเมนู |
+| เปิดซ้ำ = แสดงหน้าต่างเดิม | ทำแล้ว | เปิดตัวที่สอง → ตัวที่สองออก ตัวแรกยังแสดงหน้าต่าง |
+| จำขนาด/ตำแหน่ง/สวิตช์ในเมนูถาด | ทำแล้ว | `window-state.json` ถูกเขียน; ครั้งแรกวางมุมขวาล่างของ work area |
+| เริ่มพร้อมเครื่อง (`MimiShell.openAtLogin/setOpenAtLogin`) | ทำแล้ว | สวิตช์ในตั้งค่า "แอปและระบบ" เปิด/ปิดได้ เขียน/ลบ registry Run (ทดสอบแล้วคืนค่าเดิม) |
+| ลิงก์ภายนอกเปิดในเบราว์เซอร์ระบบ | ทำแล้ว | `window.open` ถูกปฏิเสธและลิงก์ไม่พาหน้าต่างแอปออกจากแอป; ยังไม่ได้ยืนยันด้วยตาว่าเบราว์เซอร์เด้งขึ้นมา |
+| แจ้งเตือนเดสก์ท็อป | ทำแล้ว (ไม่มีการกดแล้วเปิดแชต) | Web Notification ถูกปฏิเสธใน WebView จึงครอบด้วย toast ของระบบ; เห็น toast จริงในภาพหน้าจอ |
+| เมนูคลิกขวาเฉพาะข้อความ (ตัด/คัดลอก/วาง) | ทำแล้ว | ส่ง event จำลอง: พื้นที่ทั่วไปถูกกัน, ช่องพิมพ์และข้อความที่เลือกแสดงเมนู (ยังไม่ได้กดคลิกขวาด้วยมือ) |
+| ปิด pinch zoom | ยังไม่ได้ทำ | — |
+| **PC agent** (`remote.cjs` รัน `packages/pc-agent` ~8.5k บรรทัด TypeScript ผ่าน Node ใน Electron: เครื่องมือไฟล์/shell/เบราว์เซอร์/คอมพิวเตอร์ของ agent บน cloud) | ทำแล้วบางส่วน (`src/pcagent.rs`) — ทางที่เลือก: **Node เป็น sidecar** | ตรวจแล้ว: เปิดใช้ → agent เชื่อม core ทดสอบได้ (`pcOnline:true`), ออกจากระบบ → หยุด, เข้าสู่ระบบอีกครั้ง → เริ่มใหม่, ฆ่าแอปกะทันหัน → agent ไม่ค้าง. **ยังไม่ได้ตรวจ**: กล่องขออนุญาตตอน agent จะแก้ไฟล์/รันคำสั่ง, เมนูถาด (เปิด/ปิด, shell, เลือกโฟลเดอร์), การเริ่มใหม่เมื่อ agent ตายเอง. **แนบไปกับตัวติดตั้งแล้ว** (`npm run installer` ใน `apps/tauri`: `scripts/stage-agent.mjs` + `src-tauri/tauri.installer.conf.json`, ใช้ตัวช่วยเดียวกับ build ของ Electron/native) — ดูหัวข้อ "ตัวติดตั้ง" ข้างล่าง |
+| ความต่างจาก Electron ใน PC agent | ตั้งใจ | Electron เปิดไว้ตั้งแต่เริ่ม (ค่าเริ่มต้น on) — Tauri เริ่ม **ปิด** จนกว่าจะเปิดในเมนูถาดและกดยืนยัน; session มาจาก localStorage ของ UI (ไม่ใช้ keychain ของระบบเหมือน `remote.cjs`) |
+| เบราว์เซอร์ในตัว (`browser-shell.cjs`) | ยังไม่ได้ทำ | PC agent สั่งผ่าน DevTools (`Target.createTarget/closeTarget`, `Browser.setDownloadBehavior`) — ต้องทดลองว่า WebView2 รองรับก่อน และต้องมี PC agent ก่อนถึงจะถูกเรียกใช้ |
+| หน้าต่าง Workspace (+ terminal ผ่าน node-pty) | ยังไม่ได้ทำ | ต้องใช้ pty (Rust: `portable-pty`) และ UI ของ workspace เดิม |
+| ตัวอัปเดต (`updater.cjs`) | ยังไม่ได้ทำ | — |
+| เชื่อม core ในเครื่อง (launcher) / `process.send` IPC | ยังไม่ได้ทำ | ตอนนี้ Tauri ต่อ core ผ่านหน้าเชื่อมต่อหรือ `MIMI_CORE_URL` |
+
+หมายเหตุ: ชื่อแอปใน toast ตอนรัน debug เป็น "Windows PowerShell" (ยังไม่ได้ติดตั้งเป็นแอปจริง) และ build ครั้งแรกล้มเพราะดิสก์ P: เต็ม (ต้องลบแคช `target/debug/incremental`)
+
+## ตัวติดตั้ง Windows (NSIS) พร้อม Node + PC agent
+
+`cd apps/tauri && npm run installer` → `<target>/release/bundle/nsis/Mimi Tauri Spike_0.0.1_x64-setup.exe` (ถ้า P: ไม่พอให้ตั้ง `CARGO_TARGET_DIR` ไปไดรฟ์อื่น; ตัวที่ build ไว้คัดลอกมาที่ `apps/tauri/out/`)
+
+| วัดแล้ว | ค่า |
+|---|---|
+| ขนาดตัวติดตั้ง | 28.75 MiB (SHA-256 183CBD10…8290F) |
+| ติดตั้งแล้วบนดิสก์ | ~125 MB (node.exe 88 MB + โค้ด agent + `mimi-tauri.exe` 7.4 MB) |
+| เทียบ Electron | ไดเรกทอรี dist ~369 MB (วัดก่อนหน้า) — Tauri + Node ราว 1/3 แต่ **ไม่ใช่ 6.4 MB** ที่วัดตอน spike เพราะต้องพก Node |
+
+ตรวจแล้ว: ติดตั้งแบบเงียบ (`/S /D=...`) → โครง `agent/{node,pc-agent,shared,node_modules}` อยู่ข้าง exe; รันตัวที่ติดตั้ง **โดยซ่อน Node ของเครื่องออกจาก PATH** → agent เปิดจาก `agent
+ode
+ode.exe` + `agentpc-agentsrcmain.ts` และเชื่อม core ทดสอบได้ (`pcOnline:true`); ฆ่าแอป → agent ไม่ค้าง; ถอนการติดตั้งแล้วไม่เหลือรายการใน registry (Uninstall/Run)
+
+ยังไม่ได้ตรวจ: Node x64 ของ build เครื่องนี้ใช้กับเครื่อง arm64 ไม่ได้; ตัวติดตั้งยังไม่เซ็นรหัส (SmartScreen จะเตือน); ไม่มีตัวอัปเดตอัตโนมัติ; ชื่อ/ไอคอนเป็นของ spike (`Mimi Tauri Spike`)
 
 ## ข้อเสนอ (เฉพาะส่วนที่มีหลักฐาน)
 

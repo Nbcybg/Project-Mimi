@@ -104,6 +104,11 @@ export const SettingsSchema = z.strictObject({
       max_trace_ms: z.number().int().positive().default(900_000),
       /** How long a delegating agent waits for the reply before giving up. */
       reply_timeout_ms: z.number().int().positive().default(300_000),
+      /**
+       * Delegated work happens like a real chat: the sender's message appears in the receiver's
+       * own chat and the receiver answers there. Off = a hidden thread per message.
+       */
+      in_chat: z.boolean().default(true),
     })
     .prefault({}),
   session: z

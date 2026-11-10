@@ -97,6 +97,31 @@ function renderMessage(message: AgentMessage): string {
   return lines.join('\n');
 }
 
+/** What the router needs from the chat layer to make delegated work visible as a normal chat. */
+export interface MeshChatHooks {
+  /** The thread of an agent's one-to-one chat (its current session), opened if needed. */
+  directThread(agent: string): { thread: string; chatId: number } | undefined;
+  /** Rows were added to a chat outside a user turn: open clients reload it. */
+  changed(chatId: number): void;
+}
+
+/** What the sender says in the receiver's chat: the task, as a person would write it. */
+function renderBubble(message: AgentMessage): string {
+  const lines = [message.task];
+  if (message.context) lines.push('', `Context: ${message.context}`);
+  if (message.expectedResult) lines.push('', `Expected result: ${message.expectedResult}`);
+  return lines.join('\n');
+}
+
+/** The part of a delegated message only the receiving model sees (stored with its run, never shown as a bubble). */
+function renderNote(message: AgentMessage): string {
+  return [
+    `<agent_message id="${message.id}" from="${message.from}" mode="${message.mode}">`,
+    `The latest "[${message.from}]" message above is from another agent, not from the user. Do the task, then call reply(message_id=${message.id}, result=...); a plain final answer is also sent back to ${message.from}.`,
+    '</agent_message>',
+  ].join('\n');
+}
+
 /**
  * Routes messages between agents. Any agent may message any agent on its `can_message`
  * list, in any direction; every message wakes the receiver for exactly one loop run
@@ -111,6 +136,9 @@ export class MeshRouter implements MeshToolProvider {
   private runner: AgentRunner | null = null;
   private readonly budgets = new Map<string, TraceBudget>();
   private readonly explicitReplies = new Map<number, string>();
+  private chatHooks: MeshChatHooks | null = null;
+  /** Threads with a run in flight that belongs to the mesh (or waits on it), with how many. */
+  private readonly busyThreads = new Map<string, number>();
 
   constructor(deps: { db: Db; agents: AgentCatalog; messages: MessagesRepo; settings: Settings['mesh'] }) {
     this.db = deps.db;
@@ -122,6 +150,21 @@ export class MeshRouter implements MeshToolProvider {
   /** The router starts agent runs, and agent runs call the router; this closes the loop. */
   attach(runner: AgentRunner): void {
     this.runner = runner;
+  }
+
+  /** Lets delegated work show up in the receiver's own chat; without it every message gets a hidden thread. */
+  attachChats(hooks: MeshChatHooks): void {
+    this.chatHooks = hooks;
+  }
+
+  /** Marks a thread as in use until the returned function is called. */
+  private hold(thread: string): () => void {
+    this.busyThreads.set(thread, (this.busyThreads.get(thread) ?? 0) + 1);
+    return () => {
+      const left = (this.busyThreads.get(thread) ?? 1) - 1;
+      if (left > 0) this.busyThreads.set(thread, left);
+      else this.busyThreads.delete(thread);
+    };
   }
 
   /** The shared budget of a trace; created on first use. */
@@ -309,10 +352,17 @@ export class MeshRouter implements MeshToolProvider {
       context.requestHandoff!({ messageId: id, to: target.name });
       return `Handed off to ${target.name} (message #${id}). They answer the user now. End your turn without adding anything.`;
     }
-    return this.runDelegate(this.getMessage(id)!, target, context, {
-      ...(input.max_rounds ? { maxRounds: input.max_rounds } : {}),
-      ...(input.max_tokens ? { maxTokens: input.max_tokens } : {}),
-    });
+    // The sender's run waits here, so its thread must not be written into meanwhile
+    // (a reply from the receiver back to the sender would split its tool call from its result).
+    const release = this.hold(context.thread);
+    try {
+      return await this.runDelegate(this.getMessage(id)!, target, context, {
+        ...(input.max_rounds ? { maxRounds: input.max_rounds } : {}),
+        ...(input.max_tokens ? { maxTokens: input.max_tokens } : {}),
+      });
+    } finally {
+      release();
+    }
   }
 
   /** Wakes the receiver for one loop run and waits for its reply, up to the reply timeout. */
@@ -325,6 +375,25 @@ export class MeshRouter implements MeshToolProvider {
     if (!this.runner) throw new Error('Mesh router is not attached to a runner');
     const runner = this.runner;
     this.setStatus(message.id, 'running');
+
+    // Like a person messaging a colleague: the task lands in the receiver's own chat as the
+    // sender's bubble, and the receiver answers there. If that chat is in use right now (the
+    // sender's own thread, another delegation), the exchange gets a hidden thread instead.
+    const chat = this.settings.in_chat ? this.chatHooks?.directThread(target.name) : undefined;
+    const inChat = chat !== undefined && !this.busyThreads.has(chat.thread) ? chat : undefined;
+    let releaseChat: (() => void) | undefined;
+    if (inChat) {
+      releaseChat = this.hold(inChat.thread);
+      this.messages.append({
+        thread: inChat.thread,
+        traceId: message.traceId,
+        agent: message.from,
+        role: 'assistant',
+        content: renderBubble(message),
+        text: renderBubble(message),
+      });
+      this.chatHooks!.changed(inChat.chatId);
+    }
 
     const controller = new AbortController();
     const onAbort = () => controller.abort();
@@ -340,8 +409,9 @@ export class MeshRouter implements MeshToolProvider {
             maxTokens: Math.min(target.budgets.maxTokens, limits.maxTokens ?? target.budgets.maxTokens),
           },
         },
-        userText: renderMessage(message),
-        thread: `mesh:${message.id}`,
+        ...(inChat
+          ? { thread: inChat.thread, group: true, context: renderNote(message) }
+          : { userText: renderMessage(message), thread: `mesh:${message.id}` }),
         traceId: message.traceId,
         mesh: { messageId: message.id, from: message.from, mode: 'delegate', hop: message.hopCount },
         budget: this.budgetFor(message.traceId),
@@ -353,6 +423,14 @@ export class MeshRouter implements MeshToolProvider {
       return 'done' as const;
     })();
     run.catch(() => {}); // a run that outlives its timeout must not crash the process
+    if (inChat) {
+      // The chat stays in use until the run really ends, even if the sender stopped waiting.
+      const ended = () => {
+        releaseChat?.();
+        this.chatHooks?.changed(inChat.chatId);
+      };
+      run.then(ended, ended);
+    }
 
     let timer: NodeJS.Timeout | undefined;
     const timeout = new Promise<'timeout'>((resolve) => {
@@ -371,7 +449,20 @@ export class MeshRouter implements MeshToolProvider {
 
     const explicit = this.explicitReplies.get(message.id);
     this.explicitReplies.delete(message.id);
-    if (explicit !== undefined) return `Reply from ${target.name} (message #${message.id}):\n${explicit}`;
+    if (explicit !== undefined) {
+      // An answer given only through reply() would leave the receiver's chat without a bubble.
+      if (inChat && !(finish as RunFinish | undefined)?.text.trim()) {
+        this.messages.append({
+          thread: inChat.thread,
+          traceId: message.traceId,
+          agent: target.name,
+          role: 'assistant',
+          content: explicit,
+          text: explicit,
+        });
+      }
+      return `Reply from ${target.name} (message #${message.id}):\n${explicit}`;
+    }
 
     if (outcome === 'timeout') {
       controller.abort();

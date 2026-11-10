@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Delegated work happens in the receiver's own chat
+
+When an agent hands work to another with `send_to` / `send_agents` (delegate), the exchange now looks like two
+people messaging: the sender's task appears as a bubble from the sender in the receiver's one-to-one chat, the
+receiver answers there as a bubble of its own, and the sender reports back to the user in its chat. Before, the
+receiver worked in a hidden `mesh:<id>` thread the user could not open. The receiver sees the sender's message as
+`[sender]: ...` plus a private note saying it is from an agent, not the user; the "new" mark and the chat list
+update as for any new message. If the receiver's chat is in use at that moment (the sender's own chat, another
+delegation to the same agent), that exchange keeps using a hidden thread so two runs never write into one
+conversation. Turn it off with `mesh.in_chat: false`. Handoff mode is unchanged.
+In a one-to-one chat shown with the character (solo look), the face and name were hidden for every speaker; an agent
+other than the chat's own now keeps its avatar and name (`.gmsg.guest`), so it is clear who says what.
+
 ### Any agent can write a skill (`skill_create`)
 
 Until now only the Overseer could create skill files (`skill_save`). A new tool, `skill_create`, lets any agent that

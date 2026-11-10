@@ -869,6 +869,10 @@ html[data-mode="mobile"] #input { font-size: max(16px, var(--chat-fs)); }
 .solo .gmsg { display: block; }
 .solo .gmsg > .av, .solo .gmsg .nm { display: none; }
 .solo .gmsg .body { margin-top: 0; gap: 6px; }
+/* Another agent speaking in this chat (delegated work): its face and name stay, so it is clear who says what. */
+.solo .gmsg.guest { display: grid; }
+.solo .gmsg.guest > .av { display: grid; width: 28px; height: 28px; font-size: 11px; }
+.solo .gmsg.guest .nm { display: flex; }
 .solo .mrow .time { color: var(--solo-time); }
 .solo .tx { background: var(--solo-tx-bg); border: 1px solid var(--solo-tx-line); border-radius: 16px; padding: 10px 14px; max-width: min(680px, 86%);
   box-shadow: 0 6px 20px rgba(0,0,0,.28); }

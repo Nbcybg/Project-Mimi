@@ -52,13 +52,50 @@ test('delegate: the receiver runs in its own thread and its answer comes back as
   assert.match(timPrompt, /Budget 5000 THB/);
   assert.match(timPrompt, /A two-day plan/);
   assert.doesNotMatch(timPrompt, /plan my weekend/);
-  assert.deepEqual(threadsOf(target, 'tim'), ['mesh:1']);
-  assert.deepEqual(threadsOf(target, 'mimi'), ['main']);
+
+  // ...and it happened in Tim's own chat, like a person messaging a colleague:
+  // Mimi's task is a bubble from Mimi, Tim's answer is a bubble from Tim.
+  const timChat = target.core.chats.directChat('tim');
+  const [session] = target.core.chats.sessions(timChat.id);
+  assert.deepEqual(threadsOf(target, 'tim'), [session!.thread]);
+  assert.deepEqual(threadsOf(target, 'mimi'), ['main', session!.thread].sort());
+  const bubbles = target.core.deps.messages.page(session!.thread, undefined, 50).map((row) => [row.agent, row.role, row.text]);
+  assert.deepEqual(bubbles, [
+    ['mimi', 'assistant', 'Plan a weekend in Chiang Mai\n\nContext: Budget 5000 THB\n\nExpected result: A two-day plan'],
+    ['tim', 'assistant', 'DAY 1: temples. DAY 2: mountains.'],
+  ]);
 
   // The user can watch the sub-agent work.
   const activity = eventsOf(events, 'agent-activity');
   assert.ok(activity.length > 0 && activity.every((event) => event.agent === 'tim' && event.messageId === 1));
   assert.equal(eventsOf(events, 'run-finish')[0]!.text, 'Tim planned it.');
+  await target.cleanup();
+});
+
+test('delegate in chat: a reply back into the sender\'s own busy chat falls back to a hidden thread', async () => {
+  const mimi = reactiveModel((prompt) => {
+    if (prompt.includes('from=\\"tim\\"')) return textStep('MIMI-HELPED-TIM');
+    if (prompt.includes('Reply from tim')) return textStep('all done');
+    return toolStep('send_to', { agent: 'tim', task: 'need your help' });
+  });
+  const tim = reactiveModel((prompt) =>
+    prompt.includes('Reply from mimi')
+      ? textStep('TIM-FINISHED')
+      : toolStep('send_to', { agent: 'mimi', task: 'one question back' }),
+  );
+  const target = await makeTestCore({ models: { mimi, tim } });
+  const mimiChat = target.core.chats.directChat('mimi');
+  const { session } = target.core.chats.currentSession(mimiChat.id, 60_000);
+
+  await collect(target.core.runTurn({ agent: target.core.agents.get('mimi'), userText: 'start', thread: session.thread }));
+
+  // Tim's side of it is a normal chat; Mimi's own chat was in use, so the question back stayed out of it.
+  const timThreads = threadsOf(target, 'tim');
+  assert.equal(timThreads.length, 1);
+  assert.ok(!timThreads[0]!.startsWith('mesh:'));
+  assert.deepEqual(threadsOf(target, 'mimi'), ['mesh:2', session.thread, timThreads[0]!].sort());
+  const mimiBubbles = target.core.deps.messages.page(session.thread, undefined, 50).map((row) => row.agent);
+  assert.ok(!mimiBubbles.includes('tim'), "tim wrote nothing into the sender's own chat");
   await target.cleanup();
 });
 
@@ -112,7 +149,7 @@ test('mesh, not tree: B messages A back, and A -> C -> B chains work', async () 
       ? textStep('TIM-FINISHED')
       : toolStep('send_to', { agent: 'mimi', task: 'one question back' }),
   );
-  const back = await makeTestCore({ models: { mimi, tim } });
+  const back = await makeTestCore({ models: { mimi, tim }, settings: { mesh: { in_chat: false } } });
   await turn(back, 'mimi', 'start');
   assert.deepEqual(
     rows(back).map((row) => [row.from_agent, row.to_agent, row.hop_count, row.reply_to, row.status, row.result]),

@@ -853,6 +853,9 @@
     const node = el('div', 'gmsg');
     node.dataset.agent = agent;
     node.style.setProperty('--c', colorOf(agent));
+    // In a one-to-one chat another agent can speak (it was delegated work): the face and name stay
+    // visible for it, even where the chat's own agent is shown without them (the solo look).
+    if (state.chat && state.chat.kind === 'direct' && state.chat.agents[0] !== agent) node.classList.add('guest');
     const right = el('div');
     right.style.minWidth = '0';
     const name = el('div', 'nm', nameOf(agent));

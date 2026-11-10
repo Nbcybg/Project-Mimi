@@ -14,8 +14,6 @@ delegation to the same agent), that exchange keeps using a hidden thread so two 
 conversation. Turn it off with `mesh.in_chat: false`. Handoff mode is unchanged.
 In a one-to-one chat shown with the character (solo look), the face and name were hidden for every speaker; an agent
 other than the chat's own now keeps its avatar and name (`.gmsg.guest`), so it is clear who says what.
-The Android app does the same (`AgentBubble` shows a round avatar and the name for a guest speaker, also while it
-streams); a unit test covers who counts as a guest. Not yet compiled or seen on a device.
 
 ### Any agent can write a skill (`skill_create`)
 

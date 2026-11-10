@@ -54,7 +54,7 @@ PC agent ───────────────────────�
 - **เข้าจากอินเทอร์เน็ต** — เปิด Cloudflare quick tunnel ใน Settings (URL เปลี่ยนทุกครั้ง) หรือตั้ง named tunnel ให้ URL คงที่และเริ่มเองตอนเปิด core (ต้องติดตั้ง `cloudflared` เอง)
 - **เดสก์ท็อปพร้อมอัปเดตตรวจสอบได้** — build ลงนาม Authenticode/Developer ID + notarize เมื่อตั้ง certificate; release มี `SHA256SUMS.txt`, updater ตรวจขนาด/SHA-256/publisher และ build ปิด Electron fuses ที่ไม่จำเป็นก่อนติดตั้ง
 - **เบราว์เซอร์ในแอป (เดสก์ท็อป)** — Chromium ที่มากับแอป เก็บคุกกี้แยกโปรไฟล์ agent สั่งเปิดหน้า คลิก พิมพ์ และอ่านเนื้อหาผ่านเครื่องมือ `browser_*` ได้จริง
-- **แจ้งเตือน** — in-app, Web Push, กระดิ่ง, อีเมลเฝ้าดู และ widget บน Android
+- **แจ้งเตือน** — in-app, Web Push, กระดิ่ง, อีเมลเฝ้าดู และแจ้งเตือนเบื้องหลังบน Android (ยังไม่มี widget)
 - **หลายผู้ใช้** — โหมด gateway + core แยกต่อคน (แยก container/volume ต่อผู้ใช้)
 - **สำรองข้อมูล** — backup อัตโนมัติวันละครั้ง เก็บ 7 ชุดล่าสุด และสำรอง/กู้คืนจากในแอป
 
@@ -73,7 +73,7 @@ PC agent ───────────────────────�
 - **Node.js 24 ขึ้นไป** (โปรเจกต์รัน TypeScript บน Node โดยตรง ไม่มีขั้น build)
 - npm
 - ถ้าเครื่องไม่มี prebuilt binary ของ `better-sqlite3` อาจต้องมี Python 3, `make` และ C++ compiler
-- สำหรับ Android: JDK 17 + Android SDK (ปกติ CI build ให้)
+- สำหรับ Android (Tauri + Rust): Rust, JDK 17, Android SDK + NDK — ดู [`docs/android.md`](docs/android.md)
 
 ```bash
 git clone https://github.com/Nbcybg/Project-Mimi.git
@@ -163,7 +163,7 @@ node --test --test-timeout=60000 packages/core/src/test/<file>.test.ts
 | `packages/shared` | Type และ protocol ที่ใช้ร่วมกันระหว่าง core, PC agent และ client |
 | `packages/pc-agent` | ตัวแทนบนเครื่องผู้ใช้ สำหรับ file/shell/browser tools |
 | `packages/desktop` | เปลือก Electron: หน้าต่างแชต, tray, notification, updater |
-| `android` | แอป Android (WebView + widget + foreground service) |
+| `apps/tauri` | **แอป Android** (Tauri 2 + Rust ครอบ `packages/ui`) และเปลือกเดสก์ท็อปทดลอง — ดู [`docs/android.md`](docs/android.md) |
 | `packages/core/src/server/web` | หน้าเว็บ/PWA — JavaScript ธรรมดา ไม่มี build step |
 | `docs` | คู่มือผู้ใช้ ผู้ดูแล ระบบ hosting ความปลอดภัย และ connector |
 | `design` | mockup และภาพหน้าจอ |
@@ -213,10 +213,10 @@ node --test --test-timeout=60000 packages/core/src/test/<file>.test.ts
 
 ## แอปมือถือและเดสก์ท็อป
 
-- **Android**: แอป WebView พร้อม widget และการแจ้งเตือน — build อัตโนมัติเมื่อ push tag `v*` ผ่าน GitHub Actions (`.github/workflows/release.yml`) ดู [`android/README.md`](android/README.md)
+- **Android**: **Tauri 2 + Rust** (`apps/tauri`) ครอบ UI เดียวกับเว็บ (`packages/ui`) — ยังไม่มี build อัตโนมัติ วิธี build ดู [`docs/android.md`](docs/android.md) · แอป Kotlin เดิมเลิกใช้และถอดออกแล้ว (สำรองที่ git tag `kotlin-android-final`)
 - **macOS**: `npm run build:mac` ได้ `dist/mac/Mimi.app` และ zip
 - **Windows**: `npm run build:win` ได้ zip และตัวติดตั้ง `.exe`
-- ทั้งเดสก์ท็อปและ Android เช็กอัปเดตจาก GitHub "latest release"
+- แอปเดสก์ท็อปเช็กอัปเดตจาก GitHub "latest release" (แอป Android ยังไม่มีตัวอัปเดตในแอป)
 
 ## ทดสอบ
 

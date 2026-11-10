@@ -1,5 +1,8 @@
 # Mimi handoff — 2026-11-03 (เครื่อง Windows → ทำต่อบน Mac; ล่าสุดรอบที่ 7 บน Mac)
 
+> **หมายเหตุ 2026-11-11:** แอป Android native (Kotlin, `android/`) ถูกถอดออกแล้ว Android = Tauri + Rust ดู [`docs/android.md`](docs/android.md)
+> ส่วนที่พูดถึง `android/` ด้านล่างเป็นประวัติ (โค้ดเดิมอยู่ที่ git tag `kotlin-android-final`)
+
 ## คำตอบ Q1–Q12 (2026-11-03) และสิ่งที่เปลี่ยน — ตารางเต็มใน `docs/native/README.md`
 
 - Q1 ลำดับ **Android → Windows → Mac → iOS** (iOS อาจไว้ท้ายสุด) — ตรงกับที่ทำมา: ถัดไปคือ Mac

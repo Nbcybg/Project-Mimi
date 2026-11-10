@@ -1,9 +1,5 @@
 node_modules/
 data/
-# ...but not the Android data module (source code, not a data folder)
-!android/core/data/
-# (the package folder app/mimi/core/data/ inside it is a "data/" too, so re-include everything below)
-!android/core/data/**
 workspace/
 user/
 dist/
@@ -30,13 +26,6 @@ backups/
 # macOS Finder metadata
 .DS_Store
 
-# Android build output and machine-local SDK path
-android/.gradle/
-android/build/
-android/app/build/
-android/**/build/
-android/.kotlin/
-android/local.properties
 *.p12
 *.keystore
 *.jks

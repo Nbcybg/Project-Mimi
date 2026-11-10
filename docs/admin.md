@@ -85,7 +85,7 @@ railway volume files download /backups/<ไฟล์ล่าสุด>-auto.tar
 1. `npm run typecheck && npm test` บนเครื่อง
 2. push → Railway build อิมเมจเดียวกันให้ทุก service (gateway และ core ใช้ Dockerfile เดียวกัน)
 3. service ที่มี volume จะดับสั้น ๆ ตอน redeploy — อัปเดตนอกเวลาที่มีคนใช้, gateway เป็นตัวสุดท้าย
-4. แอปเดสก์ท็อป (Windows/Mac) และ Android: push tag `v<เวอร์ชัน>` → `.github/workflows/release.yml` build แล้วออก GitHub release
+4. แอปเดสก์ท็อป (Windows/Mac): push tag `v<เวอร์ชัน>` → `.github/workflows/release.yml` build แล้วออก GitHub release
    พร้อม `SHA256SUMS.txt` · แอปเดสก์ท็อปที่ติดตั้งอยู่เช็กทุก 6 ชั่วโมงและถามก่อนอัปเดต (tag ที่มี `-rc` / `-beta` เป็น pre-release ที่แอปข้าม)
 
 ### การลงนามแอปเดสก์ท็อป (ไม่บังคับ แต่ควรมี)

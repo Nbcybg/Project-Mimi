@@ -94,7 +94,7 @@ apps/windows/
   tests/Mimi.App.UiTests/  UI Automation (FlaUI) ขับ Mimi.exe จริงกับ core ในเครื่อง
 ```
 
-ตรรกะของแชต (`ChatTimeline`) และ frame parser แปลงมาจากแอป Android (`android/core/model`) กติกาเดียวกันทุกข้อ
+ตรรกะของแชต (`ChatTimeline`) และ frame parser แปลงมาจากแอป Android (`android/core/model` ถอดออกแล้ว ดู git tag `kotlin-android-final`) กติกาเดียวกันทุกข้อ
 
 ## Build และทดสอบ
 

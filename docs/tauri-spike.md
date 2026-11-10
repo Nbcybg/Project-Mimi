@@ -1,5 +1,8 @@
 # Spike: Tauri 2 แทน Electron (Mimi)
 
+> **อัปเดต 2026-11-11:** แอป Tauri นี้คือ **แอป Android หลักของ Mimi** แล้ว (แอป Kotlin เดิมถอดออก) ดู [`android.md`](android.md)
+> ชื่อ "spike" เป็นชื่อเดิมของโปรเจกต์ที่ยังไม่ได้เปลี่ยน เนื้อหาด้านล่างเป็นบันทึกการทดลองและการวัดตามวันที่เขียน
+
 สถานะ: **Windows desktop ทำและวัดแล้ว · Android build APK ได้แล้ว แต่ยังไม่ได้รันและยังไม่ได้วัดอะไรบนเครื่อง (ไม่มีมือถือต่ออยู่)** (ดูหัวข้อ Android)
 โค้ดอยู่ที่ `apps/tauri/` — ไม่แตะ server, `packages/ui`, `packages/desktop` (Electron), `android/` (Kotlin), `apps/windows/` (C#)
 

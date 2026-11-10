@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Android is Tauri + Rust; the Kotlin app is removed
+
+The Android app is the Tauri 2 + Rust shell in `apps/tauri` around `packages/ui`. The native Kotlin + Compose app in
+`android/` is retired and removed from `main` (kept at git tag `kotlin-android-final`, commit `8a0f917`). New page
+`docs/android.md` says what the Android app is, where to change what, and how to build the APK on Windows. The release
+workflow no longer builds an Android APK (there is no Tauri job yet), `.gitignore` and the README / hosting / admin docs
+no longer point at `android/`; the Kotlin-only `scripts/android-icons.mjs` is removed too. Older documents that mention `android/` (`docs/native/`, prompts, `HANDOFF.md`) stay as history, with a note.
+
 ### Any agent can write a skill (`skill_create`)
 
 Until now only the Overseer could create skill files (`skill_save`). A new tool, `skill_create`, lets any agent that

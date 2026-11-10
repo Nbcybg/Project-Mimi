@@ -370,7 +370,7 @@ node packages/core/src/cli/accounts.ts backup /app/user/backups/accounts-<วั
 
 ## Release และอัปเดตอัตโนมัติ
 
-push tag เวอร์ชันแล้ว GitHub Actions (`.github/workflows/release.yml`) build แอป Windows, Mac และ Android แล้วสร้าง GitHub release ให้:
+push tag เวอร์ชันแล้ว GitHub Actions (`.github/workflows/release.yml`) build แอป Windows และ Mac แล้วสร้าง GitHub release ให้ (แอป Android ไม่ผ่านขั้นนี้ ดู [`android.md`](android.md)):
 
 ```
 git tag v0.6.0
@@ -380,7 +380,7 @@ git push origin v0.6.0
 - แอป Windows / Mac (`packages/desktop/updater.cjs`): ตรวจ release ล่าสุด 30 วินาทีหลังเปิดและทุก 6 ชั่วโมง ถ้าใหม่กว่า
   จะแจ้งเตือน และมีเมนู "⬆ อัปเดตเป็น …" ที่ไอคอน Mimi กดแล้วถามยืนยัน ดาวน์โหลด ปิดแอป แทนที่ไฟล์ และเปิดใหม่เอง (ยังล็อกอินอยู่)
   ไม่อัปเดตเองโดยไม่ถาม · ใช้เฉพาะแอปที่ build แล้ว (ไม่ใช่ `npm run desktop`) · repo มาจาก `repository` ใน `package.json`
-- แอป Android: หน้าเว็บที่แอปเปิดถาม GitHub แล้วขึ้นแถบให้ดาวน์โหลด APK ใหม่ (ดู `android/README.md`)
+- แอป Android (Tauri): ยังไม่มีตัวอัปเดตในแอป ติดตั้ง APK ใหม่ทับเอง (ดู [`android.md`](android.md))
 - เลขเวอร์ชันมาจาก `package.json` (เปลี่ยนก่อนติด tag)
 
 ## แอป Windows (ต่อเซิร์ฟเวอร์ ไม่เก็บข้อมูลในเครื่อง)
@@ -397,9 +397,9 @@ git push origin v0.6.0
 
 ## มือถือ Android
 
-**แอป (APK):** ดาวน์โหลด `Mimi-<version>-android.apk` จากหน้า Releases ของ repo บน GitHub แล้วติดตั้ง
-(Android จะถามให้อนุญาตติดตั้งแอปจากเบราว์เซอร์ครั้งแรก) แอปเปิดเซิร์ฟเวอร์ที่ตั้งไว้ตอน build ใน Chrome แบบเต็มจอ
-ใช้งานเหมือนข้อ 1–4 ด้านล่างโดยไม่ต้องกด "ติดตั้งแอป" · มีเวอร์ชันใหม่ แอปจะขึ้นแถบให้ดาวน์โหลด (รายละเอียด: `android/README.md`)
+**แอป (APK):** แอป Android คือ Tauri 2 + Rust (`apps/tauri`) ยังไม่มี APK ในหน้า Releases ต้อง build เองตาม [`android.md`](android.md)
+แล้วคัดลอกไปติดตั้งบนมือถือ (Android จะถามให้อนุญาตติดตั้งจากแหล่งที่ไม่รู้จักครั้งแรก) เปิดแอปครั้งแรกจะเจอหน้า "เชื่อมต่อเซิร์ฟเวอร์ Mimi"
+ใส่ที่อยู่ core หรือ gateway (`https://…` หรือ `http://192.168.x.x:8787` สำหรับ LAN) แล้วเข้าสู่ระบบ
 
 **หรือติดตั้งจากเว็บ (PWA):** ไม่ต้องมีไฟล์ APK: เว็บของ Mimi ติดตั้งเป็นแอปบน Android ได้เลย ต้องเปิดผ่าน **HTTPS** (Railway, Tailscale, Cloudflare Tunnel)
 

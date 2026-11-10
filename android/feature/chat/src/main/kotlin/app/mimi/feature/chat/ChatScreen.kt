@@ -17,6 +17,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.rememberModalBottomSheetState
 import app.mimi.core.data.ChatBackground
 import app.mimi.core.data.ChatLook
+import app.mimi.core.ui.Avatar
 import app.mimi.core.ui.LocalMessageFontSize
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
@@ -149,6 +150,9 @@ import kotlinx.coroutines.launch
 /** A direct chat uses the web's character-chat look (app.css .solo): round bubbles, glass buttons, the time under the bubble. */
 private val LocalSolo = compositionLocalOf { false }
 
+/** True for an agent other than the owner of a one-to-one chat (null owner = group chat: everyone shows a name already). */
+internal fun isGuest(ownAgent: String?, speaker: String): Boolean = ownAgent != null && speaker.isNotEmpty() && speaker != ownAgent
+
 /** What a long press on a message offers (feature-inventory #12). */
 private class MessageActions(
     val react: (ChatMessageView, String) -> Unit,
@@ -229,6 +233,8 @@ fun ChatRoute(onBack: () -> Unit, viewModel: ChatViewModel = hiltViewModel()) {
         }
     }
     val solo = timeline.chat?.kind == "direct"
+    /** The agent this one-to-one chat belongs to; anyone else speaking in it is a guest (delegated work). */
+    val ownAgent = timeline.chat?.takeIf { it.kind == "direct" }?.agents?.firstOrNull()
     val look = state.look
     var settings by remember { mutableStateOf(false) }
     // The character stands behind the chat only in a direct chat that has a picture (web .solo + figure).
@@ -315,10 +321,23 @@ fun ChatRoute(onBack: () -> Unit, viewModel: ChatViewModel = hiltViewModel()) {
                     }
                 }
                 items(shownMessages, key = { "m${it.id}" }) { message ->
-                    MessageBubble(message, state.agents[message.agent]?.shownName ?: message.agent, viewModel::fileUrl, open, viewModel::decideApproval, actions, state.agents)
+                    val guest = message.role != "user" && isGuest(ownAgent, message.agent)
+                    MessageBubble(
+                        message, state.agents[message.agent]?.shownName ?: message.agent, viewModel::fileUrl, open, viewModel::decideApproval, actions, state.agents,
+                        guest = guest, avatarUrl = if (guest) avatarPath(state.agents[message.agent])?.let(viewModel::url) else null,
+                    )
                 }
-                items(if (over) 0 else timeline.earlier.size, key = { "e$it" }) { LiveBubbleView(timeline.earlier[it], state.agents[timeline.earlier[it].agent]?.shownName, viewModel::fileUrl, open) }
-                timeline.live?.takeIf { !over }?.let { live -> item(key = "live") { LiveBubbleView(live, state.agents[live.agent]?.shownName, viewModel::fileUrl, open) } }
+                items(if (over) 0 else timeline.earlier.size, key = { "e$it" }) {
+                    val earlier = timeline.earlier[it]
+                    val guest = isGuest(ownAgent, earlier.agent)
+                    LiveBubbleView(earlier, state.agents[earlier.agent]?.shownName, viewModel::fileUrl, open, guest, if (guest) avatarPath(state.agents[earlier.agent])?.let(viewModel::url) else null)
+                }
+                timeline.live?.takeIf { !over }?.let { live ->
+                    item(key = "live") {
+                        val guest = isGuest(ownAgent, live.agent)
+                        LiveBubbleView(live, state.agents[live.agent]?.shownName, viewModel::fileUrl, open, guest, if (guest) avatarPath(state.agents[live.agent])?.let(viewModel::url) else null)
+                    }
+                }
                 items(timeline.tasks, key = { "t${it.id}" }) { card -> TaskCardView(card, viewModel::taskControl, viewModel::taskUndo) }
                 items(if (over) emptyList() else timeline.pending, key = { "p${it.clientId}" }) { pending ->
                     UserBubble {
@@ -440,12 +459,21 @@ private fun UserBubble(time: String? = null, content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun AgentBubble(name: String?, speech: SpeechStyle?, time: String? = null, content: @Composable () -> Unit) {
+private fun AgentBubble(
+    name: String?,
+    speech: SpeechStyle?,
+    time: String? = null,
+    /** Another agent speaking in a one-to-one chat (delegated work): its face and name stay even in the solo look. */
+    guest: Boolean = false,
+    avatarUrl: String? = null,
+    content: @Composable () -> Unit,
+) {
     val solo = LocalSolo.current
     val shape = if (solo) RoundedCornerShape(16.dp) else RoundedCornerShape(4.dp, 14.dp, 14.dp, 14.dp)
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        if (!solo) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+        if (!solo || guest) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (guest && !name.isNullOrBlank()) Avatar(name, avatarUrl, size = 26.dp)
                 if (!name.isNullOrBlank()) Text(name, color = MimiColors.accentText, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
                 speechLabel(speech)?.let { Text("  $it", color = MimiColors.faint, style = MaterialTheme.typography.labelSmall) }
             }
@@ -472,6 +500,8 @@ private fun MessageBubble(
     decide: (Long, Boolean) -> Unit,
     actions: MessageActions,
     agents: Map<String, AgentView>,
+    guest: Boolean = false,
+    avatarUrl: String? = null,
 ) {
     var menu by remember { mutableStateOf(false) }
     val time = (if (message.pinned) "📌 " else "") + shortTime(message.createdAt)
@@ -486,7 +516,7 @@ private fun MessageBubble(
                 }
             } else {
                 val text = parseSpeech(message.text).text
-                AgentBubble(agentName, message.speech, time = time) {
+                AgentBubble(agentName, message.speech, time = time, guest = guest, avatarUrl = avatarUrl) {
                     message.replyTo?.let { QuoteBlock(it, agents) }
                     message.tools.forEach { ToolLine(it.name, it.summary, ok = true) }
                     if (text.isNotEmpty()) MessageText(text, selectable = false)
@@ -627,8 +657,15 @@ private fun TaskCardView(card: TaskCard, control: (String, String) -> Unit, undo
 }
 
 @Composable
-private fun LiveBubbleView(live: LiveBubble, name: String?, fileUrl: (AttachmentView) -> String, open: (AttachmentView) -> Unit) {
-    AgentBubble(name ?: live.agent, live.speech) {
+private fun LiveBubbleView(
+    live: LiveBubble,
+    name: String?,
+    fileUrl: (AttachmentView) -> String,
+    open: (AttachmentView) -> Unit,
+    guest: Boolean = false,
+    avatarUrl: String? = null,
+) {
+    AgentBubble(name ?: live.agent, live.speech, guest = guest, avatarUrl = avatarUrl) {
         if (live.segments.isEmpty()) Text("…", color = MimiColors.muted)
         for (segment in live.segments) when (segment) {
             is LiveSegment.Text -> if (segment.shown.isNotEmpty()) MessageText(segment.shown)

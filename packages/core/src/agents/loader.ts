@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { z } from 'zod';
-import { REASONING_EFFORTS } from '@mimi/shared';
+import { REASONING_EFFORTS, type AgentPermissionMode } from '@mimi/shared';
 import type { ModelSelection } from '../providers/routing.ts';
 import { modelRefString } from '../providers/settings.ts';
 import { RESERVED_NAMES } from '../loop/prompt-vars.ts';
@@ -45,6 +45,8 @@ const FrontmatterSchema = z.strictObject({
   lazy_tools: z.boolean().default(false),
   /** Tool name -> allow / ask / deny, for this agent only. It beats the global policy. */
   permissions: z.record(z.string(), z.enum(['allow', 'ask', 'deny'])).default({}),
+  /** What the agent does with a tool that needs approval: ask (default), allow, deny, plan. */
+  permission_mode: z.enum(['ask', 'allow', 'deny', 'plan']).default('ask'),
   /** Skills from the skill hub this agent may use. */
   skills: z.array(z.string()).default([]),
   can_message: z.array(agentName).default([]),
@@ -72,6 +74,8 @@ export interface AgentDefinition {
   lazyTools?: boolean;
   /** Tool name (or preset name) -> allow / ask / deny for this agent. */
   permissions?: Record<string, 'allow' | 'ask' | 'deny'>;
+  /** ask (default) | allow (never ask) | deny (never do) | plan (say what you will do, then ask). */
+  permissionMode?: AgentPermissionMode;
   skills: string[];
   /** Agents this one is allowed to message. */
   canMessage: string[];
@@ -106,7 +110,7 @@ export function parseAgentFile(source: string, origin = 'agent file'): AgentDefi
 
   // `effort` stays accepted so old agent files keep loading; it is ignored now that effort
   // belongs to the model preset (one per model choice, independent for each capability).
-  const { name, display_name, description, intro, effort: _legacyEffort, tools, lazy_tools, permissions, skills, can_message, budgets, character, idle_motion, ...models } = parsed.data;
+  const { name, display_name, description, intro, effort: _legacyEffort, tools, lazy_tools, permissions, permission_mode, skills, can_message, budgets, character, idle_motion, ...models } = parsed.data;
   return {
     name,
     displayName: display_name,
@@ -116,6 +120,7 @@ export function parseAgentFile(source: string, origin = 'agent file'): AgentDefi
     tools: withoutRetiredTools(tools),
     ...(lazy_tools ? { lazyTools: true } : {}),
     ...(Object.keys(permissions).length > 0 ? { permissions } : {}),
+    ...(permission_mode !== 'ask' ? { permissionMode: permission_mode } : {}),
     skills,
     canMessage: can_message,
     ...(character !== 'sprite' ? { character } : {}),
@@ -193,6 +198,7 @@ export function serializeAgent(agent: AgentDefinition): string {
   frontmatter.tools = agent.tools;
   if (agent.lazyTools) frontmatter.lazy_tools = true;
   if (agent.permissions && Object.keys(agent.permissions).length > 0) frontmatter.permissions = agent.permissions;
+  if (agent.permissionMode && agent.permissionMode !== 'ask') frontmatter.permission_mode = agent.permissionMode;
   if (agent.skills.length > 0) frontmatter.skills = agent.skills;
   frontmatter.can_message = agent.canMessage;
   if (agent.character && agent.character !== 'sprite') frontmatter.character = agent.character;

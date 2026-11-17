@@ -166,17 +166,24 @@ public sealed partial class SignInChatMusicTests : IDisposable
                 MenuItem(window, item);
                 Retry(() => ById(window, "TitleText").Properties.Name.ValueOrDefault == page ? window : null, $"page {page}");
                 var view = window;
-                List<string> Tabs() => view.FindAllDescendants(cf => cf.ByControlType(ControlType.Button)).Where(button => (button.Properties.AutomationId.ValueOrDefault ?? "").StartsWith("tab-", StringComparison.Ordinal)).Select(button => button.Properties.AutomationId.Value).ToList();
+                // The Hub has tabs; Settings is a menu of cards (setcard-*), each opening a page with a way back.
+                List<string> Tabs() => view.FindAllDescendants(cf => cf.ByControlType(ControlType.Button)).Where(button => (button.Properties.AutomationId.ValueOrDefault ?? "") is var id && (id.StartsWith("tab-", StringComparison.Ordinal) || id.StartsWith("setcard-", StringComparison.Ordinal))).Select(button => button.Properties.AutomationId.Value).ToList();
                 var tabs = page is "Hub" or "ตั้งค่า" ? Retry(() => Tabs() is { Count: > 0 } found ? found : null, $"tabs of {page}") : Tabs();
                 foreach (var tab in tabs.DefaultIfEmpty(""))
                 {
                     if (tab.Length > 0) Press(ById(window, tab));
                     Thread.Sleep(700);
-                    // The look of the app is native only (no list on the server).
-                    if (tab != "tab-look") Retry(() => view.FindAllDescendants(cf => cf.ByControlType(ControlType.Button)).Any(button => (button.Properties.Name.ValueOrDefault ?? "").StartsWith("โหลด ", StringComparison.Ordinal)) ? view : null, $"lists of {page} {tab}");
+                    // The look of the app and the account card are native only (no list on the server).
+                    if (tab is not ("setcard-appearance" or "setcard-account")) Retry(() => view.FindAllDescendants(cf => cf.ByControlType(ControlType.Button)).Any(button => (button.Properties.Name.ValueOrDefault ?? "").StartsWith("โหลด ", StringComparison.Ordinal)) ? view : null, $"lists of {page} {tab}");
                     Shot(window, $"{page}-{(tab.Length > 0 ? tab : "main")}");
                     var problem = view.FindAllDescendants(cf => cf.ByControlType(ControlType.Text)).Select(text => text.Properties.Name.ValueOrDefault ?? "").FirstOrDefault(text => text.StartsWith("อ่านข้อมูลไม่ได้", StringComparison.Ordinal));
                     Assert.Null(problem);
+                    // Back from a page of Settings to its menu of cards.
+                    if (tab.StartsWith("setcard-", StringComparison.Ordinal))
+                    {
+                        ById(window, "BackButton").AsButton().Invoke();
+                        ById(window, "setcard-account");
+                    }
                 }
             }
 
@@ -381,6 +388,7 @@ public sealed partial class SignInChatMusicTests : IDisposable
 
         // Settings and sign-out bring the connect page back, and the token is gone from disk.
         ById(window, "SettingsButton").AsButton().Invoke();
+        Press(ById(window, "setcard-account"));
         ById(window, "SignOut").AsButton().Invoke();
         ById(window, "TokenBox", 30);
         Assert.False(File.Exists(Path.Combine(home, "Roaming", "Mimi", "session.dpapi")));

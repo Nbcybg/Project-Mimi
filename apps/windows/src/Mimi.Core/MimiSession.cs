@@ -1,3 +1,4 @@
+using Mimi.Core.Chat;
 using Mimi.Core.Net;
 using Mimi.Core.Protocol;
 
@@ -117,11 +118,16 @@ public sealed class MimiSession : IDisposable
     public IReadOnlySet<long> BusyChats => busy;
     public bool PcOnline { get; private set; }
 
+    /// <summary>Everything still waiting for the user, from every chat.</summary>
+    public AttentionBoard Attention { get; } = new();
+
     private readonly Dictionary<string, AgentView> agents = [];
     private readonly HashSet<long> busy = [];
 
     /// <summary>Every frame of the socket, on the UI thread, after the shared state above is updated.</summary>
     public event Action<ServerFrame>? Frame;
+    /// <summary>What waits for the user (permission questions of any chat, the PC agent's questions at its own screen) changed.</summary>
+    public event Action? AttentionChanged;
     public event Action<SocketState>? StateChanged;
     public event Action? ChatsChanged;
     public event Action? AgentsChanged;
@@ -183,6 +189,7 @@ public sealed class MimiSession : IDisposable
 
     private void OnFrame(ServerFrame frame)
     {
+        if (Attention.Apply(frame)) AttentionChanged?.Invoke();
         switch (frame)
         {
             case ServerFrame.Agents list:

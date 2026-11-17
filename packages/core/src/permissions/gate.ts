@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { type PermissionDecision, type PermissionRequest, type PermissionScope, type RiskLevel, isAlwaysAskTool, toolFamily } from '@mimi/shared';
+import { type AgentPermissionMode, type PermissionDecision, type PermissionRequest, type PermissionScope, type RiskLevel, isAlwaysAskTool, toolFamily } from '@mimi/shared';
 
 export type RiskPolicy = Record<RiskLevel, 'auto' | 'ask'>;
 
@@ -60,6 +60,8 @@ export interface ModeOptions {
   thread?: string;
   /** Whose forever grants apply. */
   agent?: string;
+  /** The agent's own default for tools that would need approval (see AgentPermissionMode). */
+  mode?: AgentPermissionMode;
 }
 
 export type PermissionAsk = Omit<PermissionRequest, 'id' | 'timeoutMs' | 'createdAt'>;
@@ -265,6 +267,23 @@ export class PermissionGate {
 
   /** How a call to `tool` is handled: run it, ask the user first, or refuse outright. */
   modeFor(tool: string, risk: RiskLevel, traceId?: string, options: ModeOptions = {}): 'auto' | 'ask' | 'deny' {
+    const explicit = options.overrides?.[tool];
+    const mode = options.mode;
+    if (mode === 'deny') {
+      // "Never do it": beats grants too. Only what the user set for this very tool, and read-only
+      // tools that already run on their own, stay as they were.
+      if (explicit === 'allow' && this.overrides[tool] !== 'deny') return isAlwaysAskTool(tool) ? 'ask' : 'auto';
+      if (explicit === 'ask' && this.overrides[tool] !== 'deny') return 'ask';
+      const base = this.baseModeFor(tool, risk, traceId, options);
+      return base === 'auto' && risk === 'read' ? 'auto' : 'deny';
+    }
+    const base = this.baseModeFor(tool, risk, traceId, options);
+    // "Do not ask": the agent's mode beats the global policy, but not a per-tool "ask" and not a tool that always asks.
+    if (mode === 'allow' && base === 'ask' && explicit !== 'ask' && !isAlwaysAskTool(tool)) return 'auto';
+    return base;
+  }
+
+  private baseModeFor(tool: string, risk: RiskLevel, traceId?: string, options: ModeOptions = {}): 'auto' | 'ask' | 'deny' {
     const override = options.overrides?.[tool];
     if (override === 'deny') return 'deny';
     const global = this.overrides[tool];

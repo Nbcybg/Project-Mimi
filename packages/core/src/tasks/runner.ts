@@ -1,5 +1,6 @@
 import type {
   AgentEvent,
+  AgentPermissionMode,
   PermissionDecision,
   TaskGateView,
   TaskReceiptView,
@@ -41,6 +42,7 @@ export interface TaskRunnerDeps {
   gate: PermissionGate;
   /** The task agent's own allow / ask / deny policy, read when a gate is reached. */
   agentPermissions?(agent: string): Record<string, 'allow' | 'ask' | 'deny'> | undefined;
+  agentPermissionMode?(agent: string): AgentPermissionMode | undefined;
   execute(tool: string, input: unknown, context: TaskExecutorContext): Promise<string>;
   /** The core supplies this; a recipe step may use it for work that needs a model. */
   runAgentStep?: (input: TaskAgentStepInput) => Promise<string>;
@@ -309,6 +311,7 @@ export class TaskRunner {
           thread: record.thread,
           agent: record.agent,
           overrides: this.deps.agentPermissions?.(record.agent) ?? {},
+          mode: this.deps.agentPermissionMode?.(record.agent),
         };
         const mode = this.deps.gate.modeFor(request.tool, request.risk, record.traceId, modeOptions);
         const gate: TaskGateView = { id: permission.id, status: mode === 'deny' ? 'denied' : 'pending', summary: permission.summary };

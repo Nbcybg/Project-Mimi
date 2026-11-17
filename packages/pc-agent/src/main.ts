@@ -14,6 +14,7 @@ import { closeBrowserSession } from './tools/browser.ts';
 //   MIMI_PC_SHELL=0 offer no tool that runs with the OS account's full rights (shell, power, MCP)
 //   MIMI_LOCAL_CONSENT=0  do not ask on this machine before non-read tools (not recommended)
 //   MIMI_CONSENT_STDIO=1  ask through the desktop app over stdin/stdout instead of an OS dialog
+//   MIMI_CONSENT_TIMEOUT_MS  how long a question waits at this screen before it counts as "no" (default 5 minutes)
 const url = process.env.MIMI_CORE_URL ?? `ws://127.0.0.1:${process.env.MIMI_PORT ?? 8787}/ws`;
 const allowedDirs = (process.env.ALLOWED_DIRS ?? '')
   .split(';')
@@ -43,12 +44,17 @@ for (const dir of allowedDirs) fs.mkdirSync(dir, { recursive: true });
 console.log(`PC agent - allowed folders: ${allowedDirs.join('; ')}${process.env.MIMI_PC_SHELL === '0' ? ' (no shell commands)' : ''}`);
 // MIMI_PC_SHELL=0: no commands with the OS account's full rights, only files in ALLOWED_DIRS and the browser.
 const shell = process.env.MIMI_PC_SHELL !== '0';
+const consentTimeoutMs = Number(process.env.MIMI_CONSENT_TIMEOUT_MS) > 0 ? Number(process.env.MIMI_CONSENT_TIMEOUT_MS) : undefined;
 const consent =
   process.env.MIMI_LOCAL_CONSENT === '0'
     ? false
     : stdinLines && process.env.MIMI_CONSENT_STDIO === '1'
-      ? new LocalConsent({ prompt: new StdioConsentPrompt(stdinLines, (line) => process.stdout.write(line)) })
-      : new LocalConsent();
+      ? new LocalConsent({
+          timeoutMs: consentTimeoutMs,
+          // Longer than the question itself: LocalConsent gives up first and tells the dialog to close.
+          prompt: new StdioConsentPrompt(stdinLines, (line) => process.stdout.write(line), (consentTimeoutMs ?? 5 * 60_000) + 60_000),
+        })
+      : new LocalConsent({ timeoutMs: consentTimeoutMs });
 const agent = new PcAgent({
   url,
   token,

@@ -4,7 +4,7 @@ using System.Text.Json;
 namespace Mimi.Core.Desktop;
 
 /// <summary>A question of the PC agent before it changes something on this computer (MIMI_CONSENT_STDIO).</summary>
-public sealed record ConsentRequest(string Id, string Tool, string Risk, string Summary);
+public sealed record ConsentRequest(string Id, string Tool, string Risk, string Summary, string Agent = "");
 
 /// <summary>
 /// The PC agent (packages/pc-agent) stays its own Node program: this app starts and stops it and shows
@@ -15,6 +15,8 @@ public sealed record ConsentRequest(string Id, string Tool, string Risk, string 
 public sealed class PcAgentHost(Func<PcAgentHost.Launch?> launch) : IDisposable
 {
     public const string ConsentPrefix = "@@mimi-consent@@";
+    /// <summary>The agent gave up on a question (nobody answered in time): the dialog must go and no answer is sent.</summary>
+    public const string CancelPrefix = "@@mimi-consent-cancel@@";
 
     /// <summary>What to run: node and the agent's main.ts, with the token and the environment.</summary>
     public sealed record Launch(string Node, string Entry, string Token, IReadOnlyDictionary<string, string> Environment);
@@ -31,6 +33,8 @@ public sealed class PcAgentHost(Func<PcAgentHost.Launch?> launch) : IDisposable
     public event Action<string>? StatusChanged;
     /// <summary>Answer with <see cref="Answer"/>; no answer is a "no" once the agent gives up.</summary>
     public event Action<ConsentRequest>? Consent;
+    /// <summary>The agent no longer waits for the answer to this question: close its dialog.</summary>
+    public event Action<string>? ConsentCancelled;
 
     /// <summary>The variables the agent runs with: only what a shell needs, plus where to connect (remote.cjs).</summary>
     public static Dictionary<string, string> AgentEnvironment(
@@ -75,11 +79,26 @@ public sealed class PcAgentHost(Func<PcAgentHost.Launch?> launch) : IDisposable
             var root = json.RootElement;
             if (!root.TryGetProperty("id", out var id) || id.ValueKind != JsonValueKind.String) return null;
             string Text(string key) => root.TryGetProperty(key, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString()! : "";
-            return new ConsentRequest(id.GetString()!, Text("tool"), Text("risk"), Text("summary"));
+            return new ConsentRequest(id.GetString()!, Text("tool"), Text("risk"), Text("summary"), Text("agent"));
         }
         catch (JsonException)
         {
             // a malformed line can only be a bug; no action is safer than a guess
+            return null;
+        }
+    }
+
+    /// <summary>The id of the question the agent took back, or null when the line is not a cancel.</summary>
+    public static string? ParseCancel(string line)
+    {
+        if (!line.StartsWith(CancelPrefix, StringComparison.Ordinal)) return null;
+        try
+        {
+            using var json = JsonDocument.Parse(line[CancelPrefix.Length..]);
+            return json.RootElement.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String ? id.GetString() : null;
+        }
+        catch (JsonException)
+        {
             return null;
         }
     }
@@ -137,6 +156,7 @@ public sealed class PcAgentHost(Func<PcAgentHost.Launch?> launch) : IDisposable
         {
             if (line.Data is null) return;
             if (ParseConsent(line.Data) is { } request) Consent?.Invoke(request);
+            else if (ParseCancel(line.Data) is { } cancelled) ConsentCancelled?.Invoke(cancelled);
             else if (StatusOf(line.Data) is { } status)
             {
                 if (status == "เชื่อมต่อแล้ว") retry = TimeSpan.FromSeconds(2);

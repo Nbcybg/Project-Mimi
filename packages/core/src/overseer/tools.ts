@@ -534,6 +534,7 @@ export function createOverseerTools(deps: OverseerToolDeps): ToolDefinition<any>
         tools,
         lazyTools: input.lazyTools ?? current?.lazyTools,
         permissions: { ...(current?.permissions ?? {}), ...(input.permissions ?? {}) },
+        ...(current?.permissionMode ? { permissionMode: current.permissionMode } : {}),
         skills,
         canMessage,
         character: current?.character,

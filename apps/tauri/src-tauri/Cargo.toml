@@ -1,6 +1,6 @@
 [package]
 name = "mimi-tauri"
-version = "0.0.1"
+version = "0.1.0"
 description = "Mimi UI shell (Tauri 2 spike)"
 edition = "2021"
 

@@ -9,7 +9,9 @@
      Shown by Controls/VrmView.cs in a WebView2; messages from the app arrive as JSON. -->
 <style>
   html, body { margin: 0; height: 100%; overflow: hidden; background: transparent; }
-  canvas { display: block; width: 100%; height: 100%; }
+  canvas { display: block; width: 100%; height: 100%; transition: opacity .26s ease; }
+  /* A change of outfit: fade out, swap the model, fade in (the web's canvas.swap). */
+  canvas.swap { opacity: 0; }
 </style>
 <script type="importmap">
 { "imports": {
@@ -28,15 +30,15 @@ import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
 
 const post = (message) => window.chrome?.webview?.postMessage(message);
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-renderer.setPixelRatio(window.devicePixelRatio || 1);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 document.body.append(renderer.domElement);
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(28, 1, 0.1, 50);
-scene.add(new THREE.AmbientLight(0xffffff, 1.6));
-const sun = new THREE.DirectionalLight(0xffffff, 1.4);
-sun.position.set(1, 2, 2);
-scene.add(sun);
+// The web's stage camera and lights (feature-vrm.js liveStart): the whole figure fits in a 24° view.
+const camera = new THREE.PerspectiveCamera(24, 1, 0.05, 30);
+const sun = new THREE.DirectionalLight(0xffffff, Math.PI * 0.9);
+sun.position.set(0.6, 1.6, 1.4).normalize();
+scene.add(sun, new THREE.AmbientLight(0xffffff, 0.75));
 
 let vrm = null;
 let mixer = null;
@@ -48,25 +50,31 @@ const clips = new Map();
 let idleName = null;
 let playing = null;
 let view = { yaw: 0, pitch: 0, zoom: 1, x: 0, y: 0 };
-let mood = null;
+let mood = 'neutral';
 let talkUntil = 0;
-let nextBlink = 2;
+let blinkTimer = 2;
+let blinkUntil = 0;
 let last = performance.now();
 let elapsed = 0;
+/** The model's size as measured once when it is loaded (a motion's raised arms must not move the camera). */
+let fit = null;
 
-// The emoji the web maps to VRM expressions (feature-vrm.js MOODS, the common ones).
-const MOODS = {
-  happy: ['1f60a', '1f604', '1f601', '1f603', '1f970', '1f60d', '1f619', '1f618', '263a', '1f642', '1f973', '2764', '1f496', '1f495', '1f917'],
-  relaxed: ['1f60c', '1f607', '1f609', '1f60b', '1f972', '1f634'],
-  surprised: ['1f62e', '1f632', '1f633', '1f631', '1f92f', '2757', '1f62f'],
-  sad: ['1f622', '1f62d', '1f97a', '1f61e', '1f614', '1f625', '1f613', '1f629'],
-  angry: ['1f620', '1f621', '1f624', '1f92c', '1f47f'],
-};
+// Emoji (code points in hex, as the stage keys them) -> expression preset: the web's EMOJI_MOOD (feature-vrm.js).
+const EMOJI_MOOD = {};
+for (const [preset, keys] of Object.entries({
+  happy: '1f60a 1f604 1f601 1f603 1f600 1f970 1f60d 263a 1f642 1f606 1f917 1f60b 1f61d 1f61c 2764 1f495 1f496 1f973 1f44b 1f60e 1f929 2728 1f389 1f338',
+  angry: '1f620 1f621 1f624 1f4a2 1f92c 1f47f 1f612 1f644',
+  sad: '1f622 1f62d 1f61e 1f614 1f97a 1f63f 1f625 1f613 1f494 1f61f 1f629',
+  relaxed: '1f60c 1f634 1f607 1f60f 1f375 1f64f 1f917',
+  surprised: '1f632 1f62e 1f631 1f92f 1f633 2757 203c 1f62f 1f640 2049',
+})) {
+  for (const key of keys.split(' ')) EMOJI_MOOD[key] = preset;
+}
+const MOOD_WEIGHT = { happy: 0.75, angry: 0.7, sad: 0.75, relaxed: 0.7, surprised: 0.65, neutral: 0 };
+/** The preset for an emoji key; the first code point alone counts too (a skin-tone or joined emoji). */
 function expressionOf(key) {
-  if (!key) return null;
-  const first = key.split('-')[0];
-  for (const [name, keys] of Object.entries(MOODS)) if (keys.includes(first)) return name;
-  return null;
+  if (!key) return 'neutral';
+  return EMOJI_MOOD[key] || EMOJI_MOOD[key.split('-')[0]] || 'neutral';
 }
 
 // ---------- Mixamo -> VRM retarget (feature-vrm.js, after the pixiv/three-vrm example) ----------
@@ -181,18 +189,98 @@ function resize() {
 }
 window.addEventListener('resize', resize);
 
-/** The camera on the upper body, moved by the chat's own placement (zoom, slide, turn). */
+/** The model's height, width and middle, measured in its standing pose (once per model). */
+function measure() {
+  if (!vrm) return;
+  const box = new THREE.Box3().setFromObject(vrm.scene);
+  fit = {
+    height: Math.max(box.max.y - box.min.y, 0.5),
+    width: Math.max(box.max.x - box.min.x, 0.4) * 1.1,
+    middle: box.min.y + Math.max(box.max.y - box.min.y, 0.5) * 0.5,
+  };
+}
+
+/**
+ * Whole figure in view, feet at the bottom of the stage (the web's liveFrame): the camera orbits the middle of the
+ * figure by the chat's turn / tilt / zoom, then camera and target slide together by the chat's x / y.
+ */
 function frame() {
   if (!vrm) return;
-  const head = vrm.humanoid?.getNormalizedBoneNode('head');
-  const target = new THREE.Vector3(0, 1.3, 0);
-  if (head) head.getWorldPosition(target);
-  const height = Math.max(target.y, 0.5);
-  const lookY = height * 0.82 + view.y * 0.01 * height;
-  const distance = (height * 1.45) / Math.max(0.1, view.zoom);
-  const yaw = (view.yaw || 0) * Math.PI / 180;
-  camera.position.set(Math.sin(yaw) * distance - view.x * 0.01 * height, lookY + (view.pitch || 0) * 0.01, Math.cos(yaw) * distance);
-  camera.lookAt(-view.x * 0.01 * height, lookY, 0);
+  if (!fit) measure();
+  const { height, width, middle } = fit;
+  const fov = THREE.MathUtils.degToRad(camera.fov);
+  let distance = (height * 1.06) / 2 / Math.tan(fov / 2);
+  // A narrow stage must also fit the arms' width.
+  distance = Math.max(distance, width / 2 / (Math.tan(fov / 2) * camera.aspect));
+  const radius = distance / Math.max(view.zoom, 0.1);
+  const turn = THREE.MathUtils.degToRad(view.yaw || 0);
+  const tilt = THREE.MathUtils.degToRad(view.pitch || 0);
+  const target = new THREE.Vector3(0, middle, 0);
+  camera.position.set(
+    Math.sin(turn) * Math.cos(tilt) * radius,
+    middle + Math.sin(tilt) * radius,
+    Math.cos(turn) * Math.cos(tilt) * radius,
+  );
+  camera.lookAt(target);
+  camera.updateMatrixWorld();
+  const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0);
+  const up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1);
+  const shift = right.multiplyScalar((-(view.x || 0) / 100) * height).add(up.multiplyScalar((-(view.y || 0) / 100) * height));
+  camera.position.add(shift);
+  target.add(shift);
+  camera.lookAt(target);
+}
+
+/**
+ * A relaxed standing pose with breathing (the web's liveIdle); the rest pose of a VRM is a T-pose.
+ * A VRM 0.x model sits under a scene turned 180° about Y (rotateVRM0), so its bones' x and z axes point the
+ * other way: the same rotations there raise the arms instead of lowering them. They are mirrored for it, as
+ * retarget() does for the Mixamo motions.
+ */
+function idlePose(t) {
+  const humanoid = vrm.humanoid;
+  const mirror = vrm.meta?.metaVersion === '0' ? -1 : 1;
+  const set = (name, x, y, z) => {
+    const node = humanoid.getNormalizedBoneNode(name);
+    if (node) node.rotation.set(x * mirror, y, z * mirror);
+  };
+  const breath = Math.sin(t * 1.7);
+  set('leftUpperArm', 0.05, 0, -1.22 - breath * 0.015);
+  set('rightUpperArm', 0.05, 0, 1.22 + breath * 0.015);
+  set('leftLowerArm', 0, -0.25, -0.12);
+  set('rightLowerArm', 0, 0.25, 0.12);
+  set('leftHand', 0, 0, -0.1);
+  set('rightHand', 0, 0, 0.1);
+  set('spine', breath * 0.012, 0, 0);
+  set('chest', breath * 0.018, 0, 0);
+  set('neck', 0, Math.sin(t * 0.45) * 0.04, 0);
+  set('head', Math.sin(t * 0.7) * 0.025, Math.sin(t * 0.37) * 0.07, Math.sin(t * 0.53) * 0.02);
+  set('hips', 0, Math.sin(t * 0.3) * 0.02, 0);
+}
+
+/** Blinks, the mood of the last emoji (eased in), and the mouth while talking (the web's liveFace). */
+function facePose(delta, t) {
+  const manager = vrm.expressionManager;
+  if (!manager) return;
+  blinkTimer -= delta;
+  if (blinkTimer <= 0) {
+    blinkTimer = 2.2 + Math.random() * 3.5;
+    blinkUntil = t + 0.13;
+  }
+  const blinking = t < blinkUntil;
+  const ease = Math.min(1, delta * 6);
+  for (const preset of ['happy', 'angry', 'sad', 'relaxed', 'surprised']) {
+    if (!manager.getExpression(preset)) continue;
+    const target = mood === preset ? MOOD_WEIGHT[preset] : 0;
+    const now = manager.getValue(preset) || 0;
+    manager.setValue(preset, now + (target - now) * ease);
+  }
+  // happy / relaxed close the eyes on their own; a blink on top would look odd.
+  manager.setValue('blink', blinking && mood !== 'happy' && mood !== 'relaxed' ? 1 : 0);
+  const talking = performance.now() < talkUntil;
+  const mouth = talking ? 0.15 + 0.55 * Math.abs(Math.sin(t * 15)) : 0;
+  const was = manager.getValue('aa') || 0;
+  if (manager.getExpression('aa')) manager.setValue('aa', was + (mouth - was) * Math.min(1, delta * 18));
 }
 
 async function load(url) {
@@ -207,8 +295,23 @@ async function load(url) {
     if (!next) throw new Error('not a VRM file');
     VRMUtils.removeUnnecessaryVertices(gltf.scene);
     VRMUtils.combineSkeletons?.(gltf.scene);
-    VRMUtils.rotateVRM0(next);
+    VRMUtils.combineMorphs?.(next);
+    if (next.meta?.metaVersion === '0') VRMUtils.rotateVRM0(next);
+    next.humanoid.resetNormalizedPose();
+    // A character scaled up or slid across the stage must not be culled by its rest-pose bounds.
+    next.scene.traverse((object) => { object.frustumCulled = false; });
+    // The eyes follow the viewer (the camera).
+    if (next.lookAt) next.lookAt.target = camera;
+    // A change of outfit: fade out, swap, fade in.
+    const canvas = renderer.domElement;
     if (vrm) {
+      canvas.classList.add('swap');
+      await new Promise((resolve) => setTimeout(resolve, 260));
+      if (url !== current) {
+        VRMUtils.deepDispose(next.scene);
+        canvas.classList.remove('swap');
+        return;
+      }
       scene.remove(vrm.scene);
       VRMUtils.deepDispose(vrm.scene);
     }
@@ -218,22 +321,18 @@ async function load(url) {
     mixer.addEventListener('finished', () => play(null, false));
     action = null;
     playing = null;
+    fit = null;
     clips.clear();
-    // Arms down from the T-pose.
-    const arm = (name, z) => { const bone = vrm.humanoid?.getNormalizedBoneNode(name); if (bone) bone.rotation.z = z; };
-    arm('leftUpperArm', -1.2);
-    arm('rightUpperArm', 1.2);
+    idlePose(0);
     vrm.update(0);
+    measure();
     resize();
+    canvas.classList.remove('swap');
     post({ type: 'ready' });
     loadMotions();
   } catch (error) {
     if (url === current) post({ type: 'failed', message: String(error && error.message || error) });
   }
-}
-
-function setExpression(name, value) {
-  try { vrm?.expressionManager?.setValue(name, value); } catch { /* the model has no such expression */ }
 }
 
 function tick() {
@@ -248,23 +347,9 @@ function tick() {
       // A Mixamo motion moves the body; the face below stays the stage's.
       mixer.update(delta);
     } else {
-      const chest = vrm.humanoid?.getNormalizedBoneNode('chest') || vrm.humanoid?.getNormalizedBoneNode('spine');
-      if (chest) chest.rotation.x = Math.sin(time * 1.6) * 0.012;
-      const head = vrm.humanoid?.getNormalizedBoneNode('head');
-      if (head) head.rotation.y = Math.sin(time * 0.5) * 0.05;
-      const arm = (name, z) => { const bone = vrm.humanoid?.getNormalizedBoneNode(name); if (bone) { bone.rotation.set(0, 0, z); } };
-      arm('leftUpperArm', -1.2);
-      arm('rightUpperArm', 1.2);
+      idlePose(time);
     }
-    // Blinks every few seconds.
-    nextBlink -= delta;
-    const blink = nextBlink < 0 ? Math.max(0, 1 - Math.abs(nextBlink + 0.08) / 0.08) : 0;
-    if (nextBlink < -0.16) nextBlink = 2 + Math.random() * 3;
-    setExpression('blink', blink);
-    for (const name of Object.keys(MOODS)) setExpression(name, name === mood ? 0.8 : 0);
-    // The mouth while a reply streams in.
-    const talking = performance.now() < talkUntil;
-    setExpression('aa', talking ? (Math.sin(time * 18) * 0.5 + 0.5) * 0.7 : 0);
+    facePose(delta, time);
     vrm.update(delta);
   }
   renderer.render(scene, camera);
@@ -274,9 +359,9 @@ window.chrome?.webview?.addEventListener('message', (event) => {
   const message = event.data || {};
   if (message.type === 'load') load(message.url);
   else if (message.type === 'mood') mood = expressionOf(message.key);
-  else if (message.type === 'talk') talkUntil = performance.now() + 1200;
+  else if (message.type === 'talk') talkUntil = performance.now() + 450;
   else if (message.type === 'view') { view = { ...view, ...message.view }; frame(); }
-  else if (message.type === 'clear') { current = ''; clips.clear(); action = null; playing = null; mixer = null; if (vrm) { scene.remove(vrm.scene); VRMUtils.deepDispose(vrm.scene); vrm = null; } }
+  else if (message.type === 'clear') { current = ''; clips.clear(); action = null; playing = null; mixer = null; fit = null; if (vrm) { scene.remove(vrm.scene); VRMUtils.deepDispose(vrm.scene); vrm = null; } renderer.domElement.classList.remove('swap'); }
   else if (message.type === 'motions') {
     const list = Array.isArray(message.list) ? message.list : [];
     const names = new Set(list.map((entry) => entry.name));

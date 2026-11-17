@@ -59,6 +59,9 @@ public sealed partial class App : Application
     /// <summary>This computer's WNS channel as the signed-in server knows it.</summary>
     private string? pushChannel;
     private PcAgentHost pc = null!;
+    private const string ConsentTitle = "Mimi ขออนุญาตบนเครื่องนี้";
+    /// <summary>Questions the agent took back (nobody answered in time): no dialog for them, no answer to send.</summary>
+    private readonly HashSet<string> cancelledConsents = [];
     private ConnectViewModel connect = null!;
     private ChatListViewModel chatList = null!;
     private ChatViewModel chat = null!;
@@ -87,6 +90,8 @@ public sealed partial class App : Application
     /// <summary>The window, for the file pickers of the pages.</summary>
     internal nint WindowHandle => window.Handle;
     internal MimiSession Session { get; private set; } = null!;
+    /// <summary>The chat on screen, or null when another page is showing.</summary>
+    internal long? OpenChatId => window.CurrentPage == Page.Chat && chat.ChatId != 0 ? chat.ChatId : null;
     internal Images Images { get; private set; } = null!;
     internal UpdateInfo? PendingUpdate { get; private set; }
     internal string PcStatus => Config.PcAgent.Enabled ? (current is null ? "รอเข้าสู่ระบบ" : pc.Status) : "ปิด";
@@ -159,8 +164,15 @@ public sealed partial class App : Application
         pc = new PcAgentHost(PcLaunch);
         pc.StatusChanged += _ => ui.Post(RefreshTray);
         pc.Consent += request => ui.Post(() => AskConsent(request));
+        pc.ConsentCancelled += id =>
+        {
+            // From the agent's reader thread, not the UI thread: the UI thread is the one stuck inside the box.
+            lock (cancelledConsents) cancelledConsents.Add(id);
+            Win32.DismissAsk(ConsentTitle);
+        };
 
         window = new MainWindow(this);
+        Session.AttentionChanged += () => ui.Post(window.RefreshAttention);
         connect = new ConnectViewModel(Session.Api) { CanUseLocal = localLaunch is not null };
         connect.Done += signedIn => ui.Post(() => OnSignedIn(signedIn));
         chatList = new ChatListViewModel(Session);
@@ -173,7 +185,11 @@ public sealed partial class App : Application
         stageData = new StageData(Session);
         chat.PropertyChanged += (_, e) =>
         {
-            if (e.PropertyName == nameof(ChatViewModel.Title)) window.SetTitle(chat.Title);
+            if (e.PropertyName == nameof(ChatViewModel.Title))
+            {
+                window.SetTitle(chat.Title);
+                window.RefreshAttention();
+            }
         };
         chat.Sound += Sounds.Play;
         chat.SpeakRequested += (text, style) =>
@@ -214,7 +230,7 @@ public sealed partial class App : Application
             (Page.MimiSettings, Catalog.SettingsTabs, "MimiSettingsPage"),
         })
         {
-            var view = new ManagePage(Session, lookups, () => window.Handle, tabs, id) { ModelCache = Path.Combine(folders.Cache, "models") };
+            var view = new ManagePage(Session, lookups, () => window.Handle, tabs, id, menu: page == Page.MimiSettings) { ModelCache = Path.Combine(folders.Cache, "models") };
             managed[page] = view;
             window.AddPage(page, view);
         }
@@ -241,13 +257,19 @@ public sealed partial class App : Application
                 if (window.CurrentPage is Page.Chats) ShowSetup();
             }
         };
-        // Settings as the web has it: the account first, the look of the app, and this computer under "แอปและระบบ".
-        managed[Page.MimiSettings].AddSection("profile", SettingsSections.Account(this));
-        managed[Page.MimiSettings].AddSection("look", SettingsSections.Appearance(this));
-        managed[Page.MimiSettings].AddSection("app", settingsView);
-        managed[Page.MimiSettings].AddSection("app", SettingsSections.Credits());
+        // Settings as the web has it: a menu of nine cards. The native parts sit on their pages: the account card on
+        // the account page, the look of the app on "หน้าตาและภาษา", this computer on the system page.
+        var settings = managed[Page.MimiSettings];
+        settings.AddSection("account", SettingsSections.Account(this));
+        settings.AddSection("appearance", SettingsSections.Appearance(this));
+        settings.AddSectionBelow("defaults", SettingsSections.HubShortcut(this));
+        settings.AddSection("system", settingsView);
+        settings.MenuLead = () => $"แก้แล้วกดบันทึก · แอป v{Version}{(Session.Server is null ? "" : $" · เซิร์ฟเวอร์ API {Session.CoreApi}")}";
+        settings.MenuActions = (() => _ = SettingsSections.ShowCredits(this), ShowSetup);
         Session.Raw += (type, json) =>
         {
+            // The language is the account's too (mimi.lang): English on the phone is English here.
+            if (type is "welcome" or "ui" && Session.UiValue("mimi.lang") is { Length: > 0 } language) Loc.Set(language);
             // The theme is the account's (mimi.theme, shared by its devices).
             if (type is "welcome" or "ui" && Session.UiValue("mimi.theme") is "light" or "dark" && Session.UiValue("mimi.theme") != Config.Theme)
             {
@@ -600,6 +622,9 @@ public sealed partial class App : Application
                 ShowManage(Page.Workflows);
                 managed[Page.Workflows].Refresh();
                 break;
+            case Page.MimiSettings when managed[Page.MimiSettings].Back():
+                // from a page of the settings to the list of cards
+                break;
             default:
                 ShowChats();
                 break;
@@ -779,8 +804,18 @@ public sealed partial class App : Application
         window.Show(Page.Inbox);
     }
 
-    /// <summary>Settings, at a tab: profile (the account), look, memory or app (this computer, providers…).</summary>
-    internal void ShowSettings(string tab = "profile")
+    /// <summary>Where dialogs of the settings (Credits) are shown.</summary>
+    internal Microsoft.UI.Xaml.XamlRoot? DialogRoot => window.DialogRoot;
+
+    /// <summary>The Hub at one of its tabs (models, skills, nodes, triggers, accounts…).</summary>
+    internal void ShowHub(string tab)
+    {
+        ShowManage(Page.Hub);
+        managed[Page.Hub].SelectKey(tab);
+    }
+
+    /// <summary>Settings: the menu of cards, or straight to one page (account, profile, prefs, appearance, memory, providers, defaults, system, backup).</summary>
+    internal void ShowSettings(string tab = "")
     {
         if (current is null) return;
         if (window.CurrentPage == Page.Chat) chat.Close();
@@ -941,11 +976,20 @@ public sealed partial class App : Application
     /// <summary>The PC agent asks before it changes something on this computer.</summary>
     private void AskConsent(ConsentRequest request)
     {
+        bool Cancelled()
+        {
+            lock (cancelledConsents) return cancelledConsents.Remove(request.Id);
+        }
+        // It timed out while another question was on screen: the agent already counted it as "no".
+        if (Cancelled()) return;
+        var who = request.Agent.Length > 0 ? $"\nจาก agent: {request.Agent}" : "";
         var allow = Win32.Ask(
-            "Mimi ขออนุญาตบนเครื่องนี้",
-            $"{(request.Summary.Length > 0 ? request.Summary : $"Mimi ขอใช้ {request.Tool} บนเครื่องนี้")}\n\nเครื่องมือ: {request.Tool} ({(request.Risk.Length > 0 ? request.Risk : "write")})\n" +
-            "คำขอนี้มาจาก Mimi บนเซิร์ฟเวอร์ และจะทำบนเครื่องนี้เท่านั้น อ่านรายละเอียดก่อนกดอนุญาต (Yes = อนุญาต)",
+            ConsentTitle,
+            $"{(request.Summary.Length > 0 ? request.Summary : $"Mimi ขอใช้ {request.Tool} บนเครื่องนี้")}\n\nเครื่องมือ: {request.Tool} ({(request.Risk.Length > 0 ? request.Risk : "write")}){who}\n" +
+            "คำขอนี้มาจาก Mimi บนเซิร์ฟเวอร์ และจะทำบนเครื่องนี้เท่านั้น อ่านรายละเอียดก่อนกดอนุญาต (Yes = อนุญาต · ไม่ตอบภายใน 5 นาทีจะถือว่าไม่อนุญาต)",
             defaultNo: false);
+        // Taken down because nobody answered: the agent stopped waiting, so there is nothing to answer.
+        if (Cancelled()) return;
         pc.Answer(request.Id, allow);
     }
 
@@ -1085,7 +1129,7 @@ public sealed partial class App : Application
             items.Add(new TrayItem("ตั้งค่า", () => ui.Post(() =>
             {
                 ShowWindow();
-                ShowSettings("app");
+                ShowSettings("system");
             })));
             items.Add(new TrayItem("เปิดเบราว์เซอร์ของ Mimi", () => ui.Post(OpenAgentBrowser)));
             items.Add(new TrayItem("Workspace", () => ui.Post(ShowWorkspace)));

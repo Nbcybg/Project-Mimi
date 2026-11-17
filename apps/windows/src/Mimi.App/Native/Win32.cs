@@ -136,6 +136,22 @@ internal static partial class Win32
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     public static extern int MessageBoxW(nint hWnd, string text, string caption, uint type);
 
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern nint FindWindowW(string? className, string windowName);
+
+
+    /// <summary>
+    /// Answers "No" to the open message box with this title, from any thread (a question nobody answered in time
+    /// must not stay on screen; PostMessage is safe to call while the box holds the UI thread).
+    /// </summary>
+    public static void DismissAsk(string title)
+    {
+        const uint WM_COMMAND = 0x0111;
+        const int IDNO = 7;
+        var box = FindWindowW(null, title);
+        if (box != 0) PostMessageW(box, WM_COMMAND, IDNO, 0);
+    }
+
     [DllImport("user32.dll")]
     public static extern bool GetLastInputInfo(ref LASTINPUTINFO info);
 

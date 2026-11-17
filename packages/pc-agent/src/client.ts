@@ -51,6 +51,22 @@ export class PcAgent {
     this.tools = new Map(offered.map((tool) => [tool.name, tool]));
     this.consent =
       options.consent === false ? null : options.consent instanceof LocalConsent ? options.consent : new LocalConsent();
+    // A question waiting on this computer's screen is reported to the core, which tells the phone.
+    this.consent?.setObserver({
+      pending: (request, timeoutMs) =>
+        this.send({
+          type: 'consent-pending',
+          id: request.id,
+          tool: request.tool,
+          risk: request.risk,
+          summary: request.summary,
+          agent: request.agent ?? '',
+          thread: request.thread ?? '',
+          ...(request.taskId ? { taskId: request.taskId } : {}),
+          timeoutMs,
+        }),
+      resolved: (request, outcome) => this.send({ type: 'consent-resolved', id: request.id, outcome }),
+    });
   }
 
   /** The tools this PC offers the core. */
@@ -144,9 +160,18 @@ export class PcAgent {
       risk: localRisk,
       summary: tool.summarize(parsed.data),
       traceId: request.traceId,
+      agent: request.agent,
+      thread: request.thread,
       ...(request.taskId ? { taskId: request.taskId } : {}),
     });
-    if (allowed === false) return respond(false, 'The user denied this action on this computer.');
+    if (allowed === false) {
+      return respond(
+        false,
+        this.consent?.outcomeOf(request.id) === 'timeout'
+          ? 'Nobody answered the permission question on this computer in time, so the action was not run. Ask the user to be at the PC, then try again.'
+          : 'The user denied this action on this computer.',
+      );
+    }
 
     try {
       const output = await tool.execute(parsed.data, {

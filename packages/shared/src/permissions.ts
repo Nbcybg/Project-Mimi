@@ -16,6 +16,8 @@ export interface PermissionRequest {
   noGrant?: boolean;
   /** When the tool asked (UTC ISO-8601), so the client can show the session it belongs to. */
   createdAt: string;
+  /** The chat the question was asked in, when the server knows it (set when it is listed to a client). */
+  chatId?: number;
 }
 
 export type PermissionDecision =
@@ -27,6 +29,17 @@ export type PermissionDecision =
  * task (trace), in this chat session, or until the user removes it (stored on the machine).
  */
 export type PermissionScope = 'once' | 'task' | 'session' | 'always';
+
+/**
+ * How one agent treats every tool that would otherwise need the user's answer:
+ * - ask:   the normal risk policy (the default)
+ * - allow: run without asking (a tool that always asks, e.g. a vault secret, still does)
+ * - deny:  never run it; read-only tools still work
+ * - plan:  ask as usual, but the agent must say what it is about to do before it calls the tool
+ * A per-tool allow / ask / deny in the agent's `permissions` beats this.
+ */
+export type AgentPermissionMode = 'ask' | 'allow' | 'deny' | 'plan';
+export const AGENT_PERMISSION_MODES: readonly AgentPermissionMode[] = ['ask', 'allow', 'deny', 'plan'];
 
 /**
  * Tools that are one family for "allow for this task". Approving the organizer also

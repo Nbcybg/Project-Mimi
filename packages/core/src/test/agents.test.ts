@@ -113,12 +113,14 @@ test('the app starts with no agents; they are created, edited, renamed and delet
     avatar: null,
     portrait: null,
     sprites: {},
+    permissionMode: 'ask',
     character: 'sprite',
     idleMotion: null,
     model: null,
     motions: [],
   });
   const source = fs.readFileSync(agentFile('mimi'), 'utf8');
+  assert.ok(!source.includes('permission_mode'), 'the default mode is not written to the file');
   for (const line of ['model: lab/chat-cheap', 'vision_model: lab/eyes', 'transcript_model: lab/ears', 'small_model: lab/chat-cheap']) {
     assert.ok(source.includes(line), line);
   }
@@ -129,6 +131,17 @@ test('the app starts with no agents; they are created, edited, renamed and delet
   };
   assert.deepEqual([route('chat'), route('vision'), route('transcript'), route('summarize')], ['lab/chat-cheap', 'lab/eyes', 'lab/ears', 'lab/chat-cheap']);
   assert.equal((await client.ask({ type: 'settings-get' }, 'settings')).settings.ready, true);
+
+  // The permission mode (ask / allow / deny / plan) is saved with the agent and read back.
+  for (const mode of ['plan', 'deny', 'allow'] as const) {
+    const saved = await client.ask({ type: 'agent-save', renameFrom: 'mimi', agent: draft({ name: 'Mimi', models, tools: ['read_memory', 'create_trigger'], permissionMode: mode }) }, 'agents');
+    assert.equal(saved.agents[0]?.permissionMode, mode);
+    assert.equal(server.core.agents.get('mimi').permissionMode, mode);
+    assert.ok(fs.readFileSync(agentFile('mimi'), 'utf8').includes(`permission_mode: ${mode}`));
+  }
+  // Leaving it out keeps what the agent had; "ask" goes back to the default.
+  assert.equal((await client.ask({ type: 'agent-save', renameFrom: 'mimi', agent: draft({ name: 'Mimi', models, tools: ['read_memory', 'create_trigger'] }) }, 'agents')).agents[0]?.permissionMode, 'allow');
+  assert.equal((await client.ask({ type: 'agent-save', renameFrom: 'mimi', agent: draft({ name: 'Mimi', models, tools: ['read_memory', 'create_trigger'], permissionMode: 'ask' }) }, 'agents')).agents[0]?.permissionMode, 'ask');
 
   // A second agent that leaves capabilities empty inherits the defaults set in the app.
   await client.ask({ type: 'settings-save', defaults: { vision_model: 'lab/eyes', transcript_model: '' } }, 'settings');

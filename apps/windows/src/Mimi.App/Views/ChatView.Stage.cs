@@ -7,6 +7,7 @@ using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Mimi.App.Controls;
 using Mimi.App.Services;
+using Mimi.Core;
 using Mimi.Core.Desktop;
 using Mimi.Core.Hub;
 using Mimi.Core.Protocol;
@@ -409,11 +410,15 @@ public sealed partial class ChatView
             else Paint();
         });
         if (stage is not null) stage.Changed += StageChanged;
+        // The model finished loading (or could not): the position sliders are the camera's now, or the picture's again.
+        void ThreeDChanged() => DispatcherQueue.TryEnqueue(() => { if (tab == "look") Paint(); });
+        if (stageView is not null) stageView.ThreeDChanged += ThreeDChanged;
         flyout.Closed += (_, _) =>
         {
             railPeek = null;
             railRepaint = null;
             if (stage is not null) stage.Changed -= StageChanged;
+            if (stageView is not null) stageView.ThreeDChanged -= ThreeDChanged;
         };
         // The header's button, or the glass one on the character screen.
         flyout.ShowAt(sender as FrameworkElement ?? RailButton);
@@ -428,7 +433,7 @@ public sealed partial class ChatView
         if (chat is null) return;
         panel.Children.Add(Ui.Row(6,
             Ui.Button("ค้นหาในแชต", () => App.Instance?.ShowSearch(), "ghost", "rail-search"),
-            Ui.Button("+ session ใหม่", () => ViewModel.NewSession(), "ghost", "rail-new-session")));
+            Ui.Button(Loc.T("+ session ใหม่"), () => ViewModel.NewSession(), "ghost", "rail-new-session")));
 
         panel.Children.Add(Ui.Section("Session"));
         var choices = ViewModel.SessionChoices;
@@ -481,7 +486,7 @@ public sealed partial class ChatView
         foreach (var (key, label) in StatusKeys)
         {
             grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            var caption = Ui.Hint(label);
+            var caption = Ui.Hint(Loc.T(label));
             caption.VerticalAlignment = VerticalAlignment.Center;
             Grid.SetRow(caption, rowIndex);
             grid.Children.Add(caption);
@@ -625,7 +630,7 @@ public sealed partial class ChatView
         }, "chat-theme"));
         if (DirectAgent() is not null)
         {
-            panel.Children.Add(Ui.Section("ตัวละคร"));
+            panel.Children.Add(Ui.Section(Loc.T("ตัวละคร")));
             panel.Children.Add(Ui.Seg<bool>([(true, "แสดง"), (false, "ซ่อน")], CharacterOn, on =>
             {
                 EditLook().Character = on;
@@ -634,24 +639,46 @@ public sealed partial class ChatView
             if (CharacterOn)
             {
                 panel.Children.Add(Ui.Section("แชตบนตัวละคร"));
-                panel.Children.Add(Ui.Seg<int>([(0, "ไม่แสดง"), (1, "2 ข้อความล่าสุด"), (2, "ทั้งหมด")], look.Bubbles ?? 2, level =>
+                panel.Children.Add(Ui.Seg<int>([(0, "ไม่แสดง"), (1, "2 ข้อความล่าสุด"), (2, Loc.T("ทั้งหมด"))], look.Bubbles ?? 2, level =>
                 {
                     EditLook().Bubbles = level;
                     Changed();
                 }, "chat-bubbles"));
-                panel.Children.Add(Ui.Section("ตำแหน่งตัวละคร"));
-                // The web's ranges: size 0.1–10× and slide ±300% of the stage.
-                panel.Children.Add(Slider("ขนาด", look.Zoom * 100, 10, 1000, value => EditLook().Zoom = value / 100, "chat-zoom", "×"));
-                panel.Children.Add(Slider("เลื่อนซ้าย/ขวา", look.X, -300, 300, value => EditLook().X = value, "chat-x"));
-                panel.Children.Add(Slider("เลื่อนขึ้น/ลง", look.Y, -300, 300, value => EditLook().Y = value, "chat-y"));
-                panel.Children.Add(Ui.Button("รีเซ็ตขนาด/ตำแหน่ง", () =>
+                // The web's ranges: size/zoom 0.1–10× and slide ±300%; the 3D camera also turns ±180° and tilts ±89°.
+                if (stageView?.ThreeD == true)
                 {
-                    var edited = EditLook();
-                    edited.Zoom = 1;
-                    edited.X = 0;
-                    edited.Y = 0;
-                    Changed();
-                }, "ghost", "chat-view-reset"));
+                    panel.Children.Add(Ui.Section(Loc.T("ตำแหน่งตัวละคร (3D)")));
+                    panel.Children.Add(Slider(Loc.T("หมุน"), look.CameraYaw, -180, 180, value => EditLook().CameraYaw = value, "chat-yaw", "°"));
+                    panel.Children.Add(Slider(Loc.T("ก้ม / เงย"), look.CameraPitch, -89, 89, value => EditLook().CameraPitch = value, "chat-pitch", "°"));
+                    panel.Children.Add(Slider(Loc.T("ซูม"), look.CameraZoom * 100, 10, 1000, value => EditLook().CameraZoom = value / 100, "chat-zoom", "×"));
+                    panel.Children.Add(Slider(Loc.T("ซ้าย - ขวา"), look.CameraX, -300, 300, value => EditLook().CameraX = value, "chat-x"));
+                    panel.Children.Add(Slider(Loc.T("ลง - ขึ้น"), look.CameraY, -300, 300, value => EditLook().CameraY = value, "chat-y"));
+                    panel.Children.Add(Ui.Button(Loc.T("รีเซ็ตตำแหน่ง"), () =>
+                    {
+                        var edited = EditLook();
+                        edited.CameraYaw = 0;
+                        edited.CameraPitch = 0;
+                        edited.CameraZoom = 1;
+                        edited.CameraX = 0;
+                        edited.CameraY = 0;
+                        Changed();
+                    }, "ghost", "chat-view-reset"));
+                }
+                else
+                {
+                    panel.Children.Add(Ui.Section(Loc.T("ตำแหน่งตัวละคร (2D)")));
+                    panel.Children.Add(Slider(Loc.T("ขยาย"), look.Zoom * 100, 10, 1000, value => EditLook().Zoom = value / 100, "chat-zoom", "×"));
+                    panel.Children.Add(Slider(Loc.T("ซ้าย - ขวา"), look.X, -300, 300, value => EditLook().X = value, "chat-x"));
+                    panel.Children.Add(Slider(Loc.T("ลง - ขึ้น"), look.Y, -300, 300, value => EditLook().Y = value, "chat-y"));
+                    panel.Children.Add(Ui.Button(Loc.T("รีเซ็ตตำแหน่ง"), () =>
+                    {
+                        var edited = EditLook();
+                        edited.Zoom = 1;
+                        edited.X = 0;
+                        edited.Y = 0;
+                        Changed();
+                    }, "ghost", "chat-view-reset"));
+                }
             }
         }
         BackgroundPanel(panel, Changed);
@@ -692,7 +719,12 @@ public sealed partial class ChatView
         return slider;
     }
 
-    private static string Show(double value, string unit) => unit == "×" ? $"{value / 100:0.00}×" : $"{Math.Round(value)}%";
+    private static string Show(double value, string unit) => unit switch
+    {
+        "×" => $"{value / 100:0.00}×",
+        "°" => $"{Math.Round(value)}°",
+        _ => $"{Math.Round(value)}%",
+    };
 
     /// <summary>The chat's own background, created on first use, set to <paramref name="kind"/>.</summary>
     private JsonObject EditBackground(string kind)
@@ -712,7 +744,7 @@ public sealed partial class ChatView
         panel.Children.Add(Ui.Hint("เลือกพื้นหลังของแชตนี้ — รูปที่อัปโหลดและสีจะแสดงด้านหลังตัวละคร"));
         panel.Children.Add(BackgroundPreview(look.Background, current));
         var kinds = new List<(string, string)> { ("default", "ตามแอป"), ("none", "ไม่ใช้"), ("solid", "สีเดียว"), ("gradient", "ไล่สี"), ("preset", "รูปในแอป"), ("upload", "อัปโหลด") };
-        // Six labels never fit one row of the panel: three per row keeps every choice readable.
+        // Thai labels never fit three to a row of a 330 px panel: two per row (the web's .seg.bgtabs) keeps every choice readable.
         panel.Children.Add(Ui.Seg<string>(kinds, current, kind =>
         {
             if (kind == "default")
@@ -729,7 +761,7 @@ public sealed partial class ChatView
                 }
             }
             changed();
-        }, "chat-bg", columns: 3));
+        }, "chat-bg", columns: 2));
         var background = look.Background;
         if (background is null) return;
         BackgroundKind(panel, current, background, changed);
@@ -739,7 +771,20 @@ public sealed partial class ChatView
 
     private FrameworkElement BackgroundPreview(JsonObject? background, string current)
     {
-        var preview = new Border { Height = 150, CornerRadius = new CornerRadius(10), Background = Theme.Brush("Raised") };
+        // 16:9 at whatever width the panel has (the web's aspect-ratio), framed like the other cards.
+        var preview = new Border
+        {
+            Height = 160,
+            CornerRadius = new CornerRadius(12),
+            BorderBrush = Theme.Brush("Line"),
+            BorderThickness = new Thickness(1),
+            Background = Theme.Brush("Raised"),
+        };
+        preview.SizeChanged += (_, size) =>
+        {
+            var height = Math.Round(size.NewSize.Width * 9 / 16);
+            if (height > 0 && Math.Abs(preview.Height - height) > 0.5) preview.Height = height;
+        };
         var caption = new TextBlock
         {
             HorizontalAlignment = HorizontalAlignment.Center,
@@ -820,23 +865,14 @@ public sealed partial class ChatView
         switch (current)
         {
             case "solid":
-                panel.Children.Add(ColorBox("สี", background.Str("color"), value =>
+                panel.Children.Add(Ui.Field("สีพื้นหลัง", Swatch(background.Str("color"), value =>
                 {
                     EditBackground("solid")["color"] = value;
                     changed();
-                }));
+                })));
                 break;
             case "gradient":
-                panel.Children.Add(ColorBox("จากสี", background.Str("from"), value =>
-                {
-                    EditBackground("gradient")["from"] = value;
-                    changed();
-                }));
-                panel.Children.Add(ColorBox("ไปสี", background.Str("to"), value =>
-                {
-                    EditBackground("gradient")["to"] = value;
-                    changed();
-                }));
+                GradientEditor(panel, background, changed);
                 break;
             case "preset":
                 PresetGrid(panel, background, changed);
@@ -847,107 +883,193 @@ public sealed partial class ChatView
         }
     }
 
+    /// <summary>The web's three-column row: start colour, end colour, angle (.bgedit.grid3).</summary>
+    private void GradientEditor(StackPanel panel, JsonObject background, Action changed)
+    {
+        var angle = background["angle"] is JsonValue value && value.TryGetValue<double>(out var degrees) ? degrees : 135;
+        var box = new NumberBox
+        {
+            Value = Math.Clamp(angle, 0, 360),
+            Minimum = 0,
+            Maximum = 360,
+            SmallChange = 5,
+            SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Hidden,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            MinWidth = 0,
+        };
+        box.ValueChanged += (_, args) =>
+        {
+            if (double.IsNaN(args.NewValue) || Math.Abs(args.NewValue - args.OldValue) < 0.01) return;
+            EditBackground("gradient")["angle"] = Math.Round(Math.Clamp(args.NewValue, 0, 360));
+            changed();
+        };
+        var row = new Grid { ColumnSpacing = 8 };
+        for (var column = 0; column < 3; column++) row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        var from = Ui.Field("สีเริ่ม", Swatch(background.Str("from"), color =>
+        {
+            EditBackground("gradient")["from"] = color;
+            changed();
+        }));
+        var to = Ui.Field("สีจบ", Swatch(background.Str("to"), color =>
+        {
+            EditBackground("gradient")["to"] = color;
+            changed();
+        }));
+        var degreesField = Ui.Field("องศา", box);
+        Grid.SetColumn(to, 1);
+        Grid.SetColumn(degreesField, 2);
+        row.Children.Add(from);
+        row.Children.Add(to);
+        row.Children.Add(degreesField);
+        panel.Children.Add(row);
+    }
+
+    /// <summary>
+    /// A colour as a full-width swatch with its hex (the web's input[type=color], 32 px high); a click opens the picker
+    /// in a flyout instead of leaving a ring wheel bigger than the panel in the middle of it.
+    /// </summary>
+    private static FrameworkElement Swatch(string value, Action<string> set)
+    {
+        var color = Theme.Parse(value) ?? Microsoft.UI.Colors.Black;
+        var hex = new TextBlock { FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Cascadia Mono, Consolas"), FontSize = 11, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+        var fill = new SolidColorBrush(color);
+        void Show(Windows.UI.Color shown)
+        {
+            fill.Color = shown;
+            hex.Text = $"#{shown.R:x2}{shown.G:x2}{shown.B:x2}";
+            // Black text on a light swatch, white on a dark one.
+            hex.Foreground = new SolidColorBrush((0.299 * shown.R + 0.587 * shown.G + 0.114 * shown.B) > 150 ? Microsoft.UI.Colors.Black : Microsoft.UI.Colors.White);
+        }
+        Show(color);
+        var picker = new ColorPicker
+        {
+            Color = color,
+            IsAlphaEnabled = false,
+            IsMoreButtonVisible = false,
+            ColorSpectrumShape = ColorSpectrumShape.Box,
+            IsColorSliderVisible = true,
+            IsColorChannelTextInputVisible = false,
+            IsHexInputVisible = true,
+        };
+        picker.ColorChanged += (_, args) =>
+        {
+            Show(args.NewColor);
+            set($"#{args.NewColor.R:x2}{args.NewColor.G:x2}{args.NewColor.B:x2}");
+        };
+        var button = new Button
+        {
+            Content = hex,
+            Background = fill,
+            BorderBrush = Theme.Brush("Line"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(8),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            Height = 32,
+            Padding = new Thickness(4, 0, 4, 0),
+            Flyout = new Flyout { Content = picker },
+        };
+        return button;
+    }
+
+    /// <summary>The web's two-column grid (.bgpresets): every tile the same width, a 16:9 picture over its name.</summary>
+    private static Grid TileGrid(IReadOnlyList<FrameworkElement> tiles)
+    {
+        var grid = new Grid { ColumnSpacing = 6, RowSpacing = 6 };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        for (var index = 0; index < tiles.Count; index++)
+        {
+            if (index % 2 == 0) grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            Grid.SetRow(tiles[index], index / 2);
+            Grid.SetColumn(tiles[index], index % 2);
+            grid.Children.Add(tiles[index]);
+        }
+        return grid;
+    }
+
+    /// <summary>One picture tile: the picture at 16:9 across the tile's width, its name under it, the chosen one outlined.</summary>
+    private static Button PictureTile(Image image, string label, bool chosen, Action pick)
+    {
+        var frame = new Border { CornerRadius = new CornerRadius(7), Child = image, Background = Theme.Brush("Bg"), Height = 64 };
+        frame.SizeChanged += (_, size) =>
+        {
+            var height = Math.Round(size.NewSize.Width * 9 / 16);
+            if (height > 0 && Math.Abs(frame.Height - height) > 0.5) frame.Height = height;
+        };
+        image.Stretch = Stretch.UniformToFill;
+        var body = new StackPanel { Spacing = 4 };
+        body.Children.Add(frame);
+        body.Children.Add(new TextBlock
+        {
+            Text = label,
+            FontSize = 11.5,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            Foreground = Theme.Brush("Ink2"),
+            TextTrimming = TextTrimming.CharacterEllipsis,
+        });
+        var tile = new Button
+        {
+            Content = body,
+            Padding = new Thickness(4),
+            CornerRadius = new CornerRadius(10),
+            BorderThickness = new Thickness(chosen ? 2 : 1),
+            BorderBrush = chosen ? Theme.Brush("Accent") : Theme.Brush("Line"),
+            Background = Theme.Brush("Panel"),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+        };
+        tile.Click += (_, _) => pick();
+        return tile;
+    }
+
     private void PresetGrid(StackPanel panel, JsonObject background, Action changed)
     {
         var current = background.Str("preset");
-        var grid = new WrapPanel { HorizontalSpacing = 8, VerticalSpacing = 8 };
+        var tiles = new List<FrameworkElement>();
         foreach (var (id, label) in StageData.Presets)
         {
-            var image = new Image { Width = 128, Height = 72, Stretch = Stretch.UniformToFill };
+            var image = new Image();
             if (File.Exists(StageData.PresetFile(id))) image.Source = new BitmapImage(new Uri(StageData.PresetFile(id)));
-            var tile = new Button
+            var preset = id;
+            tiles.Add(PictureTile(image, label, current == id, () =>
             {
-                Tag = id,
-                Padding = new Thickness(4),
-                CornerRadius = new CornerRadius(10),
-                BorderThickness = new Thickness(current == id ? 2 : 1),
-                BorderBrush = current == id ? Theme.Brush("Accent") : Theme.Brush("Line"),
-                Background = Theme.Brush("Raised"),
-                HorizontalContentAlignment = HorizontalAlignment.Stretch,
-            };
-            var body = new StackPanel { Spacing = 4 };
-            body.Children.Add(new Border { Width = 128, Height = 72, CornerRadius = new CornerRadius(8), Child = image });
-            body.Children.Add(new TextBlock { Text = label, FontSize = 11, HorizontalAlignment = HorizontalAlignment.Center, Foreground = Theme.Brush("Ink2") });
-            tile.Content = body;
-            tile.Click += (_, _) =>
-            {
-                EditBackground("preset")["preset"] = id;
+                EditBackground("preset")["preset"] = preset;
                 changed();
-            };
-            grid.Children.Add(tile);
+            }));
         }
-        panel.Children.Add(grid);
+        panel.Children.Add(TileGrid(tiles));
     }
 
     private void UploadGrid(StackPanel panel, JsonObject background, Action changed)
     {
         var current = background.Str("upload");
         var scenes = stage?.Scenes.Where(scene => scene.S("image").Length > 0).ToList() ?? [];
-        if (scenes.Count == 0) panel.Children.Add(Ui.Hint("ยังไม่มีรูปที่อัปโหลดสำหรับแชต — กดปุ่มด้านล่างเพื่อเพิ่ม"));
-        else
-        {
-            var grid = new WrapPanel { HorizontalSpacing = 8, VerticalSpacing = 8 };
-            foreach (var scene in scenes)
-            {
-                var id = scene.S("id");
-                var image = new Image { Width = 128, Height = 72, Stretch = Stretch.UniformToFill };
-                _ = LoadBackgroundImage(image, $"/api/background-image/{Uri.EscapeDataString(id)}?v={Uri.EscapeDataString(scene.S("image"))}");
-                var tile = new Button
-                {
-                    Tag = id,
-                    Padding = new Thickness(4),
-                    CornerRadius = new CornerRadius(10),
-                    BorderThickness = new Thickness(current == id ? 2 : 1),
-                    BorderBrush = current == id ? Theme.Brush("Accent") : Theme.Brush("Line"),
-                    Background = Theme.Brush("Raised"),
-                    HorizontalContentAlignment = HorizontalAlignment.Stretch,
-                };
-                var body = new StackPanel { Spacing = 4 };
-                body.Children.Add(new Border { Width = 128, Height = 72, CornerRadius = new CornerRadius(8), Child = image });
-                body.Children.Add(new TextBlock
-                {
-                    Text = scene.S("name") is { Length: > 0 } shown ? shown : id,
-                    FontSize = 11,
-                    HorizontalAlignment = HorizontalAlignment.Center,
-                    Foreground = Theme.Brush("Ink2"),
-                    TextTrimming = TextTrimming.CharacterEllipsis,
-                    MaxWidth = 128,
-                });
-                tile.Content = body;
-                tile.Click += (_, _) =>
-                {
-                    EditBackground("upload")["upload"] = id;
-                    changed();
-                };
-                grid.Children.Add(tile);
-            }
-            panel.Children.Add(grid);
-        }
         panel.Children.Add(Ui.Button("อัปโหลดรูปจากเครื่อง…", () => _ = UploadBackground(changed), id: "chat-bg-upload"));
         panel.Children.Add(Ui.Hint("PNG, JPEG, WebP หรือ GIF ไม่เกิน 12 MB"));
+        if (scenes.Count == 0)
+        {
+            panel.Children.Add(Ui.Hint("ยังไม่มีรูปที่อัปโหลดในแชตนี้"));
+            return;
+        }
+        var tiles = new List<FrameworkElement>();
+        foreach (var scene in scenes)
+        {
+            var id = scene.S("id");
+            var image = new Image();
+            _ = LoadBackgroundImage(image, $"/api/background-image/{Uri.EscapeDataString(id)}?v={Uri.EscapeDataString(scene.S("image"))}");
+            tiles.Add(PictureTile(image, scene.S("name") is { Length: > 0 } shown ? shown : id, current == id, () =>
+            {
+                EditBackground("upload")["upload"] = id;
+                changed();
+            }));
+        }
+        panel.Children.Add(TileGrid(tiles));
     }
 
     private async Task LoadBackgroundImage(Image image, string path)
     {
         var bitmap = await (app?.Images.Get(path) ?? Task.FromResult<BitmapImage?>(null));
         if (bitmap is not null) image.Source = bitmap;
-    }
-
-    private static FrameworkElement ColorBox(string label, string value, Action<string> set)
-    {
-        var picker = new ColorPicker
-        {
-            Color = Theme.Parse(value) ?? Microsoft.UI.Colors.Black,
-            IsAlphaEnabled = false,
-            IsMoreButtonVisible = false,
-            ColorSpectrumShape = ColorSpectrumShape.Ring,
-            IsColorSliderVisible = true,
-            IsColorChannelTextInputVisible = false,
-            IsHexInputVisible = true,
-        };
-        picker.ColorChanged += (_, args) => set($"#{args.NewColor.R:x2}{args.NewColor.G:x2}{args.NewColor.B:x2}");
-        // The ring picker is bigger than the panel: shrink it to fit instead of overflowing the frame.
-        var box = new Viewbox { Child = picker, StretchDirection = StretchDirection.DownOnly, MaxWidth = 300, MaxHeight = 320, HorizontalAlignment = HorizontalAlignment.Left };
-        return Ui.Field(label, box);
     }
 }

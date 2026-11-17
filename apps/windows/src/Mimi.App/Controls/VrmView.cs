@@ -186,9 +186,10 @@ internal sealed partial class VrmView : Grid
 
     public void Talk() => Post(new JsonObject { ["type"] = "talk" });
 
-    public void View(double zoom, double x, double y)
+    /// <summary>The camera: turn and tilt in degrees, zoom as a factor, slide as percent of the figure's height.</summary>
+    public void View(double zoom, double x, double y, double yaw = 0, double pitch = 0)
     {
-        view = new JsonObject { ["zoom"] = zoom, ["x"] = x, ["y"] = y };
+        view = new JsonObject { ["zoom"] = zoom, ["x"] = x, ["y"] = y, ["yaw"] = yaw, ["pitch"] = pitch };
         Post(new JsonObject { ["type"] = "view", ["view"] = view.DeepClone() });
     }
 }

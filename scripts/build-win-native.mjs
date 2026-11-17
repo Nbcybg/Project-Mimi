@@ -15,7 +15,8 @@ import { signWindows } from './signing.mjs';
 // Needs the .NET 10 SDK (DOTNET, else dotnet on PATH). Nothing is signed unless WIN_CSC_* is set (signing.mjs).
 
 const ROOT = path.resolve(import.meta.dirname, '..');
-const OUT = path.join(ROOT, 'dist', 'win-native');
+// MIMI_WIN_OUT: build somewhere else when the app in dist/win-native is running (its files are locked).
+const OUT = process.env.MIMI_WIN_OUT ? path.resolve(process.env.MIMI_WIN_OUT) : path.join(ROOT, 'dist', 'win-native');
 const STAGE = path.join(OUT, 'Mimi');
 const PROJECT = path.join(ROOT, 'apps', 'windows', 'src', 'Mimi.App', 'Mimi.App.csproj');
 const ROOT_PACKAGE = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));

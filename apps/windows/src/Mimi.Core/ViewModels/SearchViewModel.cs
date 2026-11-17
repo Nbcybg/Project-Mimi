@@ -63,8 +63,8 @@ public sealed partial class SearchViewModel : ObservableObject
         foreach (var hit in results.Hits)
         {
             var chat = session.Chats.FirstOrDefault(entry => entry.Id == hit.ChatId);
-            var who = hit.Role == "user" ? "คุณ" : session.AgentName(hit.Agent);
-            var title = chat is not null ? session.ChatTitle(chat) : hit.ChatTitle.Length > 0 ? hit.ChatTitle : "แชต";
+            var who = hit.Role == "user" ? Loc.T("คุณ") : session.AgentName(hit.Agent);
+            var title = chat is not null ? session.ChatTitle(chat) : hit.ChatTitle.Length > 0 ? hit.ChatTitle : Loc.T("แชต");
             Results.Add(new SearchRow(hit.ChatId, hit.SessionId, hit.MessageId, title == who ? title : $"{title} · {who}",
                 MessageFormat.Highlight(hit.Snippet.Replace("**", ""), results.Query), ChatListViewModel.When(hit.CreatedAt, now)));
         }

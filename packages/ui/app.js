@@ -348,6 +348,10 @@
     /** True while staged files are being uploaded on send. */
     sending: false,
     pendingPerms: new Map(),
+    /** Questions the PC agent put on the computer's own screen and still waits on (shown in every chat). */
+    pcConsents: new Map(),
+    /** True once this core has sent a `chat-ack`: from then on a missing one means the message did not arrive. */
+    ackSeen: false,
     highlight: null,
     booted: false,
   };
@@ -563,6 +567,7 @@
         renderChatList();
       });
       if (kind === 'group' && groups.length > 0) tab.append(el('small', '', ` ${groups.length}`));
+      if (state.chats.some((chat) => chat.kind === kind && pendingPermsIn(chat.id).length > 0)) tab.append(el('span', 'bang', '!'));
       if (unread > 0) tab.append(el('span', 'unread', String(unread)));
       seg.append(tab);
     }
@@ -591,6 +596,12 @@
       if (chat.kind === 'group') titleLine.append(el('small', 'count', ` ${chat.agents.length} คน`));
       middle.append(titleLine, el('div', `p${busy ? ' busy' : ''}`, busy ? active : chat.preview.replace(/[*`]/g, '') || fallback));
       const right = el('div', 'r');
+      const asking = pendingPermsIn(chat.id).length;
+      if (asking > 0) {
+        row.classList.add('asking');
+        right.append(el('span', 'bang', '!'));
+        middle.querySelector('.p').textContent = `! รออนุญาต${asking > 1 ? ` ${asking} รายการ` : ''}`;
+      }
       if (chat.unread && !(state.chat && state.chat.id === chat.id)) right.append(el('span', 'unread', 'ใหม่'));
       if (chat.lastMessageAt) right.append(el('span', '', fmtDay(chat.lastMessageAt)));
       row.append(
@@ -620,17 +631,23 @@
       }
     }
     if (nodes.length === 0) nodes.push(el('div', 'empty', state.agents.length ? 'ยังไม่มีแชตตัวต่อตัว' : 'ยังไม่มี agent — ไปที่แท็บ Agent เพื่อสร้างตัวแรก'));
-    $('chat-list').replaceChildren(seg, ...nodes);
+    const waiting = [...state.pcConsents.values()].map(pcConsentRow);
+    $('chat-list').replaceChildren(seg, ...waiting, ...nodes);
+    syncConsentClock();
     updateUnreadBadge();
   }
   /** A count on the chat-list buttons, so replies in another chat are visible while this one is open. */
   function updateUnreadBadge() {
     const count = state.chats.filter((chat) => chat.unread && !(state.chat && state.chat.id === chat.id)).length;
-    const label = count > 9 ? '9+' : String(count);
+    // A question waiting for the user in another chat outranks a count of new messages.
+    const asking = state.chats.some((chat) => !(state.chat && state.chat.id === chat.id) && pendingPermsIn(chat.id).length > 0);
+    const label = asking ? '!' : count > 9 ? '9+' : String(count);
     for (const node of [$('back'), $('nav')?.querySelector('[data-view="chat"]')]) {
       if (!node) continue;
-      if (count > 0) node.dataset.unread = label;
+      if (count > 0 || asking) node.dataset.unread = label;
       else delete node.dataset.unread;
+      if (asking) node.dataset.ask = '1';
+      else delete node.dataset.ask;
     }
   }
 
@@ -853,6 +870,9 @@
     const node = el('div', 'gmsg');
     node.dataset.agent = agent;
     node.style.setProperty('--c', colorOf(agent));
+    // In a one-to-one chat another agent can speak (it was delegated work): the face and name stay
+    // visible for it, even where the chat's own agent is shown without them (the solo look).
+    if (state.chat && state.chat.kind === 'direct' && state.chat.agents[0] !== agent) node.classList.add('guest');
     const right = el('div');
     right.style.minWidth = '0';
     const name = el('div', 'nm', nameOf(agent));
@@ -1076,6 +1096,7 @@
     // Only the local placeholder is pending: a stored echo carries the same clientId,
     // and marking it pending made renderPendingEchoes remove the real message.
     if (message.pendingStatus) row.dataset.pending = '1';
+    if (message.pendingFailed) row.classList.add('failed');
     row.dataset.role = 'user';
     const actions = el('div', 'acts');
     if (typeof message.id === 'number') {
@@ -1095,7 +1116,17 @@
       renderText(bubble, message.text);
       column.append(bubble);
     }
-    if (message.pendingStatus) column.append(el('div', 'note pending-status', message.pendingStatus));
+    if (message.pendingStatus) {
+      const status = el('div', `note pending-status${message.pendingFailed ? ' bad' : ''}`);
+      status.append(el('span', `pend-mark${message.pendingAcked ? ' acked' : ''}`, message.pendingFailed ? '⚠' : message.pendingAcked ? '✓' : '◷'), message.pendingStatus);
+      const pending = state.pendingEchoes.find((entry) => entry.clientId === message.clientId);
+      if (message.pendingFailed && pending) {
+        const acts = el('span', 'pend-acts');
+        acts.append(button('btn', 'ส่งใหม่', () => retryPending(pending)), button('btn ghost', 'ลบ', () => discardPending(pending)));
+        status.append(acts);
+      }
+      column.append(status);
+    }
     column.append(metaRow(message));
     window.MimiHooks?.chat?.decorate?.(column, message);
     row.append(actions, column);
@@ -1189,7 +1220,7 @@
     let block = null;
     for (const message of history.messages) block = appendStored(logInner, message, block);
     pruneConfirmed(history.messages);
-    for (const request of state.pendingPerms.values()) permissionCard(request);
+    for (const request of state.pendingPerms.values()) if (request.chatId === undefined || request.chatId === state.chat.id) permissionCard(request);
     const target = state.highlight && logInner.querySelector(`[data-id="${state.highlight}"]`);
     if (target) {
       target.scrollIntoView({ block: 'center' });
@@ -1303,17 +1334,140 @@
       live.body.append(box);
     }
     for (const request of liveView.pendingPermissions) {
-      state.pendingPerms.set(request.id, request);
+      state.pendingPerms.set(request.id, { ...request, chatId });
       permissionCard(request);
     }
+    refreshPermUi();
     state.typingByChat.set(chatId, liveView.agent);
   }
 
+  /** Open questions in one chat (the server tells which chat each belongs to). */
+  function pendingPermsIn(chatId) {
+    return [...state.pendingPerms.values()].filter((request) => request.chatId === chatId);
+  }
+  /** The "!" markers: chat list, the back button and the bar above the message box all follow the open questions. */
+  function refreshPermUi() {
+    renderChatList();
+    renderPermAlert();
+  }
+  /**
+   * The bars above the message box: every question still waiting for the user, from any chat (a card
+   * names the agent and the chat, so there is no need to be in the right chat to know it is waiting),
+   * plus every question the PC agent put on the computer's own screen.
+   */
+  function permAlertNode() {
+    if (!permAlertNode.node) {
+      const node = el('div', 'perm-alerts');
+      node.hidden = true;
+      $('box').before(node);
+      permAlertNode.node = node;
+    }
+    return permAlertNode.node;
+  }
+  /** Where a question came from: the agent, and the chat (and session, when it is the one on screen). */
+  function askedWhere(request) {
+    const chat = request.chatId === undefined ? null : state.chats.find((item) => item.id === request.chatId);
+    const parts = [nameOf(request.agent) || 'Mimi'];
+    if (chat && !(chat.kind === 'direct' && chat.agents[0] === request.agent)) parts.push(chatTitle(chat));
+    if (state.chat && request.chatId === state.chat.id && state.session) parts.push(state.session.title || `session #${state.session.id}`);
+    return parts.join(' · ');
+  }
+  function goToPermission(request) {
+    if (state.chat && request.chatId === state.chat.id) {
+      const shown = cards.get(request.id);
+      if (shown && shown.node && shown.node.isConnected) {
+        shown.node.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        shown.node.animate([{ outline: '2px solid #e1b96c' }, { outline: '2px solid transparent' }], { duration: 1800 });
+      } else {
+        // The card is not on screen (the log was rebuilt): ask for the chat again, which draws it.
+        send({ type: 'chat-open', chatId: state.chat.id, sessionId: state.latest ? undefined : state.session && state.session.id });
+      }
+    } else if (request.chatId !== undefined) {
+      openChat(request.chatId);
+    }
+  }
+  const clockText = (ms) => {
+    const left = Math.max(0, Math.ceil(ms / 1000));
+    return `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+  };
+  /** One bar for a question the PC agent is waiting on at its own screen. */
+  function pcConsentRow(view) {
+    const node = el('button', 'perm-alert pc');
+    node.type = 'button';
+    const left = el('span', 'perm-alert-clock');
+    const update = () => {
+      const ms = new Date(view.expiresAt).getTime() - Date.now();
+      left.textContent = ms > 0 ? `เหลือ ${clockText(ms)}` : 'หมดเวลา';
+    };
+    update();
+    left.dataset.expires = view.expiresAt;
+    node.append(
+      el('span', 'bang', '💻'),
+      el('span', 'perm-alert-t', `${askedWhere(view)} รออนุญาตที่หน้าจอ ${view.pcName || 'PC'} — ${view.summary || view.tool}`),
+      left,
+    );
+    node.title = 'ต้องกดอนุญาตที่หน้าจอเครื่อง PC เอง (มือถืออนุญาตแทนไม่ได้) · ถ้าไม่มีใครตอบจะถือว่าไม่อนุญาต';
+    node.onclick = () => {
+      if (view.chatId !== undefined && !(state.chat && state.chat.id === view.chatId)) openChat(view.chatId);
+    };
+    return node;
+  }
+  function permRow(request) {
+    const node = el('button', 'perm-alert');
+    node.type = 'button';
+    node.append(el('span', 'bang', '!'), el('span', 'perm-alert-t', `${askedWhere(request)} รออนุญาต — ${state.chat && request.chatId === state.chat.id ? 'แตะเพื่อไปที่การ์ด' : 'แตะเพื่อเปิดแชต'}`));
+    node.onclick = () => goToPermission(request);
+    return node;
+  }
+  /** Every open question as bars; at most three, then a line that says how many more there are. */
+  function permAlertRows() {
+    const rows = [...[...state.pcConsents.values()].map(pcConsentRow), ...[...state.pendingPerms.values()].map(permRow)];
+    if (rows.length <= 3) return rows;
+    const more = el('div', 'perm-alert-more', `และอีก ${rows.length - 3} รายการที่รออยู่`);
+    return [...rows.slice(0, 3), more];
+  }
+  function renderPermAlert() {
+    const node = permAlertNode();
+    const rows = permAlertRows();
+    node.hidden = rows.length === 0;
+    node.replaceChildren(...rows);
+    syncConsentClock();
+  }
+  /** The countdown of a question on the PC's screen ticks once a second while any is open. */
+  let consentClock = null;
+  function syncConsentClock() {
+    if (state.pcConsents.size === 0) {
+      if (consentClock) clearInterval(consentClock);
+      consentClock = null;
+      return;
+    }
+    if (consentClock) return;
+    consentClock = setInterval(() => {
+      for (const node of document.querySelectorAll('.perm-alert-clock[data-expires]')) {
+        const ms = new Date(node.dataset.expires).getTime() - Date.now();
+        node.textContent = ms > 0 ? `เหลือ ${clockText(ms)}` : 'หมดเวลา';
+      }
+    }, 1000);
+  }
+  /** The PC agent is waiting at its own screen (or stopped waiting). */
+  function takePcConsent(view) {
+    state.pcConsents.set(view.id, view);
+    refreshPermUi();
+    window.MimiHooks?.notify?.chatSound('ask');
+  }
+  function dropPcConsent(id) {
+    if (state.pcConsents.delete(id)) refreshPermUi();
+  }
+
   function permissionCard(request) {
-    if (cards.has(request.id)) return;
+    // A card whose node left the page (the live bubble was replaced by the stored one) is drawn again.
+    const known = cards.get(request.id);
+    if (known && known.node && known.node.isConnected) return;
     const card = el('div', 'perm');
+    const title = el('div', 'ttl');
+    title.append(el('span', 'bang', '!'), `${nameOf(request.agent)} ขออนุญาตทำสิ่งนี้`);
     card.append(
-      el('div', 'ttl', `${nameOf(request.agent)} ขออนุญาตทำสิ่งนี้`),
+      title,
       el('div', 'perm-summary', request.summary || `ใช้เครื่องมือ ${request.tool}`),
       el(
         'div',
@@ -1339,7 +1493,7 @@
       row.append(allowTask, allowOnce, allowSession, allowAlways, deny, verdict);
     }
     card.append(row);
-    cards.set(request.id, { allowTask, allowOnce, allowSession, allowAlways, deny, verdict });
+    cards.set(request.id, { node: card, allowTask, allowOnce, allowSession, allowAlways, deny, verdict });
     if (live) {
       const stick = pinned();
       live.body.append(card);
@@ -1347,11 +1501,14 @@
     } else {
       add(card);
     }
+    renderPermAlert();
   }
   function resolveCard(requestId, decision) {
     state.pendingPerms.delete(requestId);
+    refreshPermUi();
     const card = cards.get(requestId);
     if (!card) return;
+    if (card.node) card.node.classList.add('settled');
     for (const control of [card.allowTask, card.allowOnce, card.allowSession, card.allowAlways, card.deny]) {
       if (control) control.disabled = true;
     }
@@ -1491,6 +1648,16 @@
       if (pinned()) scrollDown();
     });
   }
+  /** A question for the user in a chat that is not on screen still has to be counted ("!" on that chat). */
+  function trackPermission(event, chatId) {
+    if (event.type === 'agent-activity') return trackPermission(event.event, chatId);
+    if (event.type === 'permission-request') {
+      state.pendingPerms.set(event.request.id, { ...event.request, chatId });
+      refreshPermUi();
+    } else if (event.type === 'permission-decision') {
+      if (state.pendingPerms.delete(event.requestId)) refreshPermUi();
+    }
+  }
   /** `sub` is set when the event comes from an agent (or skill) working for the one that is answering. */
   function handleEvent(event, sub, chatId) {
     switch (event.type) {
@@ -1572,9 +1739,12 @@
       }
       case 'permission-request':
         // Remembered even while the user is in another chat, so the card is there when they return.
-        state.pendingPerms.set(event.request.id, event.request);
+        state.pendingPerms.set(event.request.id, { ...event.request, chatId });
         think(false);
+        // What the agent says after the question starts a new bubble below the card, not above it.
+        if (live) live.bubble = null;
         permissionCard(event.request);
+        refreshPermUi();
         window.MimiHooks?.notify?.chatSound('ask');
         break;
       case 'permission-decision':
@@ -1850,6 +2020,7 @@
     const busyHere = Boolean(chat && state.busyChats.has(chat.id));
     $('stop').hidden = !busyHere;
     $('box').classList.toggle('busy', busyHere);
+    renderPermAlert();
     markEmpty();
     renderHints();
   }
@@ -2506,16 +2677,59 @@
     return [...new Set(pending.entries.map((entry) => entry.url).filter(Boolean))];
   }
   function releasePending(pending, revoke = true) {
+    clearTimeout(pending.ackTimer);
     if (revoke) for (const url of pendingUrls(pending)) URL.revokeObjectURL(url);
     state.pendingEchoes = state.pendingEchoes.filter((entry) => entry !== pending);
     const row = logInner.querySelector(`[data-id="${pending.clientId}"]`);
     if (row) row.remove();
     messageStore.delete(pending.clientId);
   }
-  function setPendingStatus(pending, text) {
+  /** What the placeholder bubble says about your message: on its way, received by the core, or not sent. */
+  function setPendingStatus(pending, text, failed = false) {
     pending.message.pendingStatus = text;
-    const row = logInner.querySelector(`[data-id="${pending.clientId}"] .pending-status`);
-    if (row) row.textContent = text;
+    pending.message.pendingFailed = failed;
+    pending.message.pendingAcked = Boolean(pending.acked) && !failed;
+    const row = logInner.querySelector(`[data-id="${pending.clientId}"]`);
+    if (row) row.replaceWith(userRow(pending.message));
+  }
+  /** The message did not (or may not) have reached the core: say so, with a way to send it again. */
+  function failPending(pending, text) {
+    clearTimeout(pending.ackTimer);
+    if (!state.pendingEchoes.includes(pending)) return;
+    setPendingStatus(pending, text, true);
+  }
+  /** Sends the stored `chat-send` and waits for the core to say it arrived (`chat-ack`). */
+  function transmit(pending) {
+    const attachments = pending.entries.filter((entry) => entry.id).map((entry) => entry.id);
+    pending.acked = false;
+    pending.sent = true;
+    send({
+      type: 'chat-send',
+      chatId: pending.chatId,
+      text: pending.text,
+      attachments,
+      clientId: pending.clientId,
+      ...(pending.reply ? { replyTo: pending.reply.id } : {}),
+    });
+    clearTimeout(pending.ackTimer);
+    pending.ackTimer = setTimeout(() => {
+      if (!state.pendingEchoes.includes(pending) || pending.acked) return;
+      // A core that acknowledges sends (this one) stayed silent: the connection is not carrying messages.
+      if (state.ackSeen || !socket || socket.readyState !== WebSocket.OPEN) {
+        failPending(pending, 'ยังไม่ไปถึง Mimi — เน็ตอาจไม่เสถียร');
+      }
+    }, 12_000);
+  }
+  function retryPending(pending) {
+    if (!socket || socket.readyState !== WebSocket.OPEN) return toast('ยังไม่ได้เชื่อมต่อ', 'รอให้ต่อเน็ตได้ก่อน แล้วกด "ส่งใหม่"', true);
+    setPendingStatus(pending, 'กำลังส่งใหม่…');
+    transmit(pending);
+  }
+  /** Not sent and not wanted: the words and files go back into the message box. */
+  function discardPending(pending) {
+    const { entries, text, chatId } = pending;
+    releasePending(pending, false);
+    if (state.chat && state.chat.id === chatId) restoreEntries(entries, text);
   }
   function createPending(chatId, text, entries, reply) {
     const clientId = `pending-${Date.now().toString(36)}-${++echoSeq}`;
@@ -2621,14 +2835,7 @@
       return ['ยังไม่ได้เชื่อมต่อ'];
     }
     setPendingStatus(pending, 'กำลังส่ง…');
-    send({
-      type: 'chat-send',
-      chatId: pending.chatId,
-      text: pending.text,
-      attachments,
-      clientId: pending.clientId,
-      ...(pending.reply ? { replyTo: pending.reply.id } : {}),
-    });
+    transmit(pending);
     return [];
   }
   function restoreEntries(entries, text) {
@@ -3814,7 +4021,29 @@
     const tools = toolGrid ? null : checkList(toolItems(), agent ? agent.tools : [], describeTool);
     form.append(toolGrid ? toolBox : tools);
     form.append(el('h4', '', 'Agent permissions'));
-    form.append(el('p', 'hint', 'Per tool or preset: default follows the risk policy. "allow" never asks, "ask" always asks, "deny" always refuses.'));
+    // How this agent treats every tool that would otherwise ask (a per-tool choice below beats it).
+    const MODES = [
+      ['ask', 'ถามก่อน', 'ปกติ: งานที่แก้ไขอะไรหรือมีผลข้างเคียงจะขออนุญาตก่อนทุกครั้ง'],
+      ['allow', 'ไม่ต้องถาม ทำเลย', 'ทำทุกอย่างโดยไม่ขออนุญาต (เครื่องมือที่ต้องยืนยันเสมอ เช่น กรอกรหัสลับ ยังถามอยู่)'],
+      ['deny', 'ไม่ให้ทำเลย', 'ไม่ให้ทำอะไรที่มีผลข้างเคียงเลย อ่านข้อมูลอย่างเดียวได้'],
+      ['plan', 'บอกก่อนว่าจะทำอะไร แล้วถึงขออนุญาต', 'agent ต้องบอกว่าจะทำอะไรในแชตก่อนเรียกเครื่องมือ แล้วจึงขออนุญาตตามปกติ'],
+    ];
+    const modeBox = el('div', 'permmodes');
+    const currentMode = agent && agent.permissionMode ? agent.permissionMode : 'ask';
+    for (const [value, label, hint] of MODES) {
+      const row = el('label', 'permmode');
+      const radio = el('input');
+      radio.type = 'radio';
+      radio.name = 'permission-mode';
+      radio.value = value;
+      radio.checked = value === currentMode;
+      const text = el('span', 'permmode-t');
+      text.append(el('b', '', label), el('small', '', hint));
+      row.append(radio, text);
+      modeBox.append(row);
+    }
+    form.append(modeBox);
+    form.append(el('p', 'hint', 'Per tool or preset: default follows the mode above. "allow" never asks, "ask" always asks, "deny" always refuses; a choice here beats the mode.'));
     const permissionRows = new Map();
     const permissionCells = new Map();
     const toolsForPolicy = () => (toolGrid ? toolGrid.names() : picked(tools));
@@ -3896,6 +4125,7 @@
             tools: toolGrid ? toolGrid.names() : picked(tools),
             lazyTools: lazyTools.checked,
             permissions: permissionPolicy,
+            permissionMode: (modeBox.querySelector('input:checked') || {}).value || 'ask',
             skills: picked(skills),
             canMessage: picked(peers),
             budgets: { maxRounds: Number(rounds.value) || 12, maxTokens: Number(tokens.value) || 200000 },
@@ -4909,7 +5139,7 @@
     const profileHook = window.MimiHooks && window.MimiHooks.profile;
 
     if (section === null) {
-      const head = settingsHead('ตั้งค่า', `เลือกหัวข้อที่จะตั้งค่า · แก้แล้วบันทึกให้เอง${state.version ? ` · Mimi v${state.version}` : ''}`);
+      const head = settingsHead('ตั้งค่า', `เลือกหัวข้อที่จะตั้งค่า · แก้แล้วบันทึกให้เอง${window.MimiShell?.version ? ` · แอป v${window.MimiShell.version}` : ''}${state.version ? ` · core v${state.version}` : ''}`);
       const creditsButton = button('btn ghost', 'Credits', creditsDialog, 'ดูเครดิตของ Mimi และทีมงาน');
       creditsButton.style.marginLeft = 'auto';
       const setupButton = button('btn ghost', 'ตัวช่วยตั้งค่า', () => window.MimiHooks?.setup?.open?.(), 'เปิดตัวช่วยตั้งค่าเริ่มต้นอีกครั้ง');
@@ -5345,6 +5575,10 @@
   // ---------- messages from the core ----------
   function setPc(online, name) {
     state.pcOnline = Boolean(online);
+    if (!online && state.pcConsents.size > 0) {
+      state.pcConsents.clear();
+      refreshPermUi();
+    }
     $('pc-dot').classList.toggle('on', Boolean(online));
     $('pc').textContent = online ? `PC agent: ${name || 'online'}` : 'PC agent: ไม่ได้เชื่อมต่อ';
   }
@@ -5423,11 +5657,13 @@
         state.handoffByChat.clear();
         state.subByChat.clear();
         state.pendingPerms = new Map(message.pendingPermissions.map((request) => [request.id, request]));
+        state.pcConsents = new Map((message.pcConsents || []).map((view) => [view.id, view]));
         state.booted = false;
         state.gotAgents = state.gotChats = state.gotOverseer = false;
         for (const type of ['overseer-get', 'agents-list', 'settings-get', 'chats-list', 'skills-list', 'tools-list', 'workflows-list', 'secrets-list', 'mail-watch', 'calendar-sync']) send({ type });
         reportPresence(true);
         if (state.chat) send({ type: 'chat-open', chatId: state.chat.id, sessionId: state.latest ? undefined : state.session && state.session.id });
+        openNotifiedChat();
         break;
       case 'ui':
         takeUi(message.values || {}, false);
@@ -5526,6 +5762,16 @@
         if (!$('rail').hidden) renderRail();
         break;
       }
+      case 'chat-ack': {
+        state.ackSeen = true;
+        const pending = state.pendingEchoes.find((entry) => entry.clientId === message.clientId);
+        if (pending) {
+          clearTimeout(pending.ackTimer);
+          pending.acked = true;
+          setPendingStatus(pending, 'ส่งถึง Mimi แล้ว');
+        }
+        break;
+      }
       case 'chat-message': {
         if (!showing(message.chatId, message.sessionId)) {
           confirmEcho(message.message, message.chatId);
@@ -5547,6 +5793,7 @@
         break;
       }
       case 'chat-event':
+        trackPermission(message.event, message.chatId);
         if (showing(message.chatId, message.sessionId)) handleEvent(message.event, null, message.chatId);
         break;
       case 'chat-transcribing':
@@ -5650,6 +5897,12 @@
         }
         break;
       }
+      case 'pc-consent':
+        takePcConsent(message.request);
+        break;
+      case 'pc-consent-done':
+        dropPcConsent(message.id);
+        break;
       case 'pc-status':
         setPc(message.online, message.name);
         window.MimiHooks?.setup?.refresh?.();
@@ -6004,6 +6257,11 @@
     };
     socket.onclose = (event) => {
       setConn(false);
+      // Messages sent on this connection that the core never confirmed may be lost: show that instead of
+      // leaving them looking sent. (If one did arrive, the chat history after reconnecting removes the warning.)
+      for (const pending of [...state.pendingEchoes]) {
+        if (pending.sent && !pending.acked) failPending(pending, 'ส่งไม่สำเร็จ — การเชื่อมต่อหลุด');
+      }
       if (event.code === 4003) {
         for (const store of [localStorage, sessionStorage]) {
           store.removeItem(TOKEN_KEY);
@@ -6024,7 +6282,20 @@
    * After the screen was off or the app sat in the background, the socket can be dead
    * without the browser having noticed yet: ask, and reconnect right away if it does not answer.
    */
+  /** A tapped notification (Android) names the chat it is about: open it. */
+  function openNotifiedChat() {
+    try {
+      const id = Number(window.MimiAndroid?.takePendingChat?.() || 0);
+      if (id > 0) {
+        setView('chat');
+        openChat(id);
+      }
+    } catch {
+      // not in the Android app
+    }
+  }
   function wake() {
+    openNotifiedChat();
     if (!token()) return;
     if (socket && socket.readyState === WebSocket.OPEN) {
       // Ask before judging: window focus also comes back when the notification shade closes or a
@@ -6170,6 +6441,15 @@
     }, PING_EVERY_MS);
   }
   startPing();
+  /** The app's version on the first page (the sign-in), when a shell (Tauri) tells it. */
+  function showGateVersion() {
+    const version = window.MimiShell?.version;
+    const node = $('gate-version');
+    if (!node || !version || String(version).includes('__')) return;
+    node.textContent = `แอป Mimi เวอร์ชัน ${version}`;
+    node.hidden = false;
+  }
+  showGateVersion();
   function setGateMode(accounts) {
     accountsMode = accounts;
     $('gate-title').textContent = accounts ? 'เข้าสู่ระบบ Mimi' : 'เชื่อมต่อ Mimi';

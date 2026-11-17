@@ -106,7 +106,14 @@ public sealed class LookTests
             look.Theme = "dark";
             look.Background = new JsonObject { ["type"] = "preset", ["preset"] = "floral" };
             look.Zoom = 1.4;
+            // The 3D camera is kept apart from the 2D picture's size and slide.
+            look.CameraYaw = 35;
+            look.CameraPitch = -10;
+            look.CameraZoom = 1.6;
+            look.CameraX = 12;
             config.Look(7, create: true); // left as the app: not written
+            var cameraOnly = config.Look(8, create: true);
+            cameraOnly.CameraYaw = 90; // a camera alone is a look worth keeping
             config.Write(file);
 
             var read = AppConfig.Read(file, dir.FullName);
@@ -115,6 +122,15 @@ public sealed class LookTests
             Assert.Equal("dark", read.Look(42).Theme);
             Assert.Equal("floral", read.Look(42).Background!["preset"]!.GetValue<string>());
             Assert.Equal(1.4, read.Look(42).Zoom);
+            Assert.Equal(35, read.Look(42).CameraYaw);
+            Assert.Equal(-10, read.Look(42).CameraPitch);
+            Assert.Equal(1.6, read.Look(42).CameraZoom);
+            Assert.Equal(12, read.Look(42).CameraX);
+            Assert.Equal(0, read.Look(42).CameraY);
+            Assert.Equal(1, read.Look(99).CameraZoom);
+            Assert.False(read.Look(8).IsEmpty);
+            Assert.Equal(90, read.Look(8).CameraYaw);
+            Assert.Equal(1, read.Look(8).Zoom);
             Assert.False(read.Looks.ContainsKey("7"));
             Assert.True(read.Look(99).IsEmpty);
             read.ForgetLook(42);

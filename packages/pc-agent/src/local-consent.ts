@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { type RiskLevel, toolFamily } from '@mimi/shared';
+import { type PcConsentOutcome, type RiskLevel, toolFamily } from '@mimi/shared';
 
 export interface ConsentRequest {
   id: string;
@@ -8,17 +8,35 @@ export interface ConsentRequest {
   summary: string;
   traceId: string;
   taskId?: string;
+  /** The agent that asked and the session it works in, so the dialog can say who is asking. */
+  agent?: string;
+  thread?: string;
 }
 
-/** Puts one question on the user's own screen. Returning false refuses the action. */
+/**
+ * Puts one question on the user's own screen. Returning false refuses the action. The signal
+ * fires when nobody answered in time: the prompt closes its dialog and stops waiting.
+ */
 export interface ConsentPrompt {
-  ask(request: ConsentRequest): Promise<boolean>;
+  ask(request: ConsentRequest, signal?: AbortSignal): Promise<boolean>;
 }
+
+/** Hears when a question goes up on this screen and how it ended (the core tells the phone). */
+export interface ConsentObserver {
+  pending?(request: ConsentRequest, timeoutMs: number): void;
+  resolved?(request: ConsentRequest, outcome: PcConsentOutcome): void;
+}
+
+/** Nobody at the screen for this long = no. The dialog stays up no longer than that. */
+export const DEFAULT_CONSENT_TIMEOUT_MS = 5 * 60_000;
 
 export interface LocalConsentOptions {
   prompt?: ConsentPrompt;
   /** How long one approval covers a task, in milliseconds. */
   ttlMs?: number;
+  /** How long to wait for an answer at the screen before refusing, in milliseconds. */
+  timeoutMs?: number;
+  observer?: ConsentObserver;
   now?: () => number;
 }
 
@@ -32,6 +50,8 @@ export interface LocalConsentOptions {
 export class LocalConsent {
   private readonly prompt: ConsentPrompt;
   private readonly ttlMs: number;
+  private readonly timeoutMs: number;
+  private observer: ConsentObserver | undefined;
   private readonly now: () => number;
   private readonly grants = new Map<string, number>();
   /** One dialog at a time, so two quick tool calls cannot stack OS windows. */
@@ -40,7 +60,45 @@ export class LocalConsent {
   constructor(options: LocalConsentOptions = {}) {
     this.prompt = options.prompt ?? osConsentPrompt();
     this.ttlMs = options.ttlMs ?? 30 * 60_000;
+    this.timeoutMs = options.timeoutMs && options.timeoutMs > 0 ? options.timeoutMs : DEFAULT_CONSENT_TIMEOUT_MS;
+    this.observer = options.observer;
     this.now = options.now ?? Date.now;
+  }
+
+  /** Where "a question is waiting" and "it ended" are reported (the PC agent's link to the core). */
+  setObserver(observer: ConsentObserver | undefined): void {
+    this.observer = observer;
+  }
+
+  /** Puts the question up, and takes it down again when the time is up. */
+  private async ask(request: ConsentRequest): Promise<PcConsentOutcome> {
+    const controller = new AbortController();
+    let timer: NodeJS.Timeout | undefined;
+    const timedOut = new Promise<'timeout'>((resolve) => {
+      timer = setTimeout(() => resolve('timeout'), this.timeoutMs);
+    });
+    try {
+      this.observer?.pending?.(request, this.timeoutMs);
+    } catch {
+      // telling the core is a courtesy; the question still goes up
+    }
+    let outcome: PcConsentOutcome;
+    try {
+      const answered = this.prompt.ask(request, controller.signal).then(
+        (allowed): PcConsentOutcome => (allowed ? 'allowed' : 'denied'),
+        (): PcConsentOutcome => 'denied',
+      );
+      outcome = await Promise.race([answered, timedOut]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+    if (outcome === 'timeout') controller.abort();
+    try {
+      this.observer?.resolved?.(request, outcome);
+    } catch {
+      // see above
+    }
+    return outcome;
   }
 
   private key(request: ConsentRequest): string | null {
@@ -59,24 +117,34 @@ export class LocalConsent {
     return true;
   }
 
+  private readonly lastOutcome = new Map<string, PcConsentOutcome>();
+
+  /** How the question about this call ended, so the refusal can say "nobody answered" instead of "denied". */
+  outcomeOf(id: string): PcConsentOutcome | undefined {
+    return this.lastOutcome.get(id);
+  }
+
   async allow(request: ConsentRequest): Promise<boolean> {
     if (request.risk === 'read') return true;
     if (this.granted(request)) return true;
 
-    let resolveAnswer: (allowed: boolean) => void = () => {};
-    const answer = new Promise<boolean>((resolve) => {
+    let resolveAnswer: (outcome: PcConsentOutcome) => void = () => {};
+    const answer = new Promise<PcConsentOutcome>((resolve) => {
       resolveAnswer = resolve;
     });
     this.queue = this.queue
       .then(async () => {
         try {
-          resolveAnswer(await this.prompt.ask(request));
+          resolveAnswer(await this.ask(request));
         } catch {
-          resolveAnswer(false);
+          resolveAnswer('denied');
         }
       })
-      .catch(() => resolveAnswer(false));
-    const allowed = await answer;
+      .catch(() => resolveAnswer('denied'));
+    const outcome = await answer;
+    const allowed = outcome === 'allowed';
+    this.lastOutcome.set(request.id, outcome);
+    if (this.lastOutcome.size > 50) this.lastOutcome.delete(this.lastOutcome.keys().next().value as string);
     const key = this.key(request);
     if (allowed && key) this.grants.set(key, this.now() + this.ttlMs);
     return allowed;
@@ -121,17 +189,24 @@ export class LineReader {
     for (const waiter of this.waiting.splice(0)) waiter(undefined);
   }
 
-  /** The next line, or undefined on end of stream or timeout. */
-  next(timeoutMs = 0): Promise<string | undefined> {
+  /** The next line, or undefined on end of stream, timeout or abort (an aborted wait must not eat a later line). */
+  next(timeoutMs = 0, signal?: AbortSignal): Promise<string | undefined> {
     const queued = this.lines.shift();
     if (queued !== undefined) return Promise.resolve(queued);
-    if (this.ended) return Promise.resolve(undefined);
+    if (this.ended || signal?.aborted) return Promise.resolve(undefined);
     return new Promise((resolve) => {
       let timer: NodeJS.Timeout | undefined;
       const settle = (line: string | undefined) => {
         if (timer) clearTimeout(timer);
+        signal?.removeEventListener('abort', onAbort);
         resolve(line);
       };
+      const onAbort = () => {
+        const at = this.waiting.indexOf(settle);
+        if (at >= 0) this.waiting.splice(at, 1);
+        settle(undefined);
+      };
+      signal?.addEventListener('abort', onAbort, { once: true });
       this.waiting.push(settle);
       if (timeoutMs > 0) {
         timer = setTimeout(() => {
@@ -156,10 +231,13 @@ export class StdioConsentPrompt implements ConsentPrompt {
     this.timeoutMs = timeoutMs;
   }
 
-  async ask(request: ConsentRequest): Promise<boolean> {
+  async ask(request: ConsentRequest, signal?: AbortSignal): Promise<boolean> {
     this.write(`@@mimi-consent@@${JSON.stringify(request)}\n`);
+    // On timeout the desktop app is told to take the dialog down, so no stale question stays on screen.
+    const cancel = () => this.write(`@@mimi-consent-cancel@@${JSON.stringify({ id: request.id })}\n`);
+    signal?.addEventListener('abort', cancel, { once: true });
     while (true) {
-      const line = await this.lines.next(this.timeoutMs);
+      const line = await this.lines.next(this.timeoutMs, signal);
       if (line === undefined) return false;
       let reply: { type?: string; id?: string; allow?: boolean };
       try {
@@ -172,9 +250,10 @@ export class StdioConsentPrompt implements ConsentPrompt {
   }
 }
 
-function run(file: string, args: string[], env: NodeJS.ProcessEnv, timeoutMs = 15 * 60_000): Promise<string> {
+function run(file: string, args: string[], env: NodeJS.ProcessEnv, signal?: AbortSignal, timeoutMs = 15 * 60_000): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile(file, args, { env, timeout: timeoutMs, windowsHide: true, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
+    // The signal kills the dialog's process: a question nobody answered in time disappears from the screen.
+    execFile(file, args, { env, timeout: timeoutMs, windowsHide: true, maxBuffer: 1024 * 1024, ...(signal ? { signal } : {}) }, (error, stdout, stderr) => {
       if (error) reject(new Error(stderr.trim() || error.message));
       else resolve(stdout);
     });
@@ -182,13 +261,14 @@ function run(file: string, args: string[], env: NodeJS.ProcessEnv, timeoutMs = 1
 }
 
 function question(request: ConsentRequest): string {
-  return `Mimi ขอทำสิ่งนี้บนเครื่องนี้:\n\n${request.summary}\n\nเครื่องมือ: ${request.tool} (${request.risk})`;
+  const who = request.agent ? `\nจาก agent: ${request.agent}` : '';
+  return `Mimi ขอทำสิ่งนี้บนเครื่องนี้:\n\n${request.summary}\n\nเครื่องมือ: ${request.tool} (${request.risk})${who}`;
 }
 
 /** The native dialog used when the PC agent was not started by the desktop app. */
 export function osConsentPrompt(platform: NodeJS.Platform = process.platform): ConsentPrompt {
   return {
-    async ask(request) {
+    async ask(request, signal) {
       const title = 'Mimi ขออนุญาต';
       const text = question(request);
       if (platform === 'win32') {
@@ -201,7 +281,7 @@ export function osConsentPrompt(platform: NodeJS.Platform = process.platform): C
           ...process.env,
           MIMI_CONSENT_TEXT: text,
           MIMI_CONSENT_TITLE: title,
-        });
+        }, signal);
         return /allow/i.test(answer);
       }
       if (platform === 'darwin') {
@@ -218,15 +298,15 @@ export function osConsentPrompt(platform: NodeJS.Platform = process.platform): C
           ...process.env,
           MIMI_CONSENT_TEXT: text,
           MIMI_CONSENT_TITLE: title,
-        });
+        }, signal);
         return /allow/i.test(answer);
       }
       try {
-        await run('zenity', ['--question', '--title', title, '--text', text, '--ok-label', 'อนุญาต', '--cancel-label', 'ไม่อนุญาต'], process.env);
+        await run('zenity', ['--question', '--title', title, '--text', text, '--ok-label', 'อนุญาต', '--cancel-label', 'ไม่อนุญาต'], process.env, signal);
         return true;
       } catch {
         try {
-          await run('kdialog', ['--title', title, '--yesno', text, '--yes-label', 'อนุญาต', '--no-label', 'ไม่อนุญาต'], process.env);
+          await run('kdialog', ['--title', title, '--yesno', text, '--yes-label', 'อนุญาต', '--no-label', 'ไม่อนุญาต'], process.env, signal);
           return true;
         } catch {
           return false;

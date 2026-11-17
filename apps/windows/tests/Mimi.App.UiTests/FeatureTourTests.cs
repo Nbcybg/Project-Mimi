@@ -53,15 +53,19 @@ public sealed partial class SignInChatMusicTests
 
             // Settings → หน้าตา: light, then back to dark.
             ById(window, "SettingsButton").AsButton().Invoke();
-            Press(ById(window, "tab-look"));
+            Press(ById(window, "setcard-appearance"));
             Press(ById(window, "theme-light"));
             Thread.Sleep(600);
             Shot(window, "tour-settings-light");
             Press(ById(window, "theme-dark"));
             Thread.Sleep(400);
-            Press(ById(window, "tab-app"));
+            ById(window, "BackButton").AsButton().Invoke();
+            Press(ById(window, "setcard-system"));
             Thread.Sleep(600);
             Shot(window, "tour-settings-app");
+            // Back from the page to the menu of cards, and from the menu to the chat list.
+            ById(window, "BackButton").AsButton().Invoke();
+            ById(window, "setcard-account");
 
             // A chat: its own look (light theme, large text) through the ข้อมูล panel.
             ById(window, "BackButton").AsButton().Invoke();

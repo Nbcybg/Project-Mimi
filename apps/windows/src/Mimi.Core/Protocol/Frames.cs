@@ -31,7 +31,8 @@ public abstract record ServerFrame
         IReadOnlyList<PermissionRequest> PendingPermissions,
         string? Version,
         int Api,
-        int MinClientApi) : ServerFrame;
+        int MinClientApi,
+        IReadOnlyList<PcConsentView>? PcConsents = null) : ServerFrame;
     public sealed record Pong : ServerFrame;
     public sealed record Chats(IReadOnlyList<ChatView> List) : ServerFrame;
     public sealed record Agents(IReadOnlyList<AgentView> List, string? DefaultAgent) : ServerFrame;
@@ -60,6 +61,10 @@ public abstract record ServerFrame
     public sealed record Error(string Message, string? Code, long? ChatId, string? ClientId, string? RequestType) : ServerFrame;
     public sealed record SecurityAlert(string At) : ServerFrame;
     public sealed record PcStatus(bool Online, string? Name) : ServerFrame;
+    /// <summary>The PC agent waits for someone to answer a question at its own screen (shown in every chat).</summary>
+    public sealed record PcConsent(PcConsentView Request) : ServerFrame;
+    /// <summary>That question ended: <paramref name="Outcome"/> is allowed, denied, timeout (nobody answered) or gone (the PC agent left).</summary>
+    public sealed record PcConsentDone(string Id, string Outcome) : ServerFrame;
     /// <summary>How full a session is (the header meter): tokens sent, the window, cache share, cost.</summary>
     public sealed record SessionContext(long ChatId, long SessionId, long UsedTokens, long WindowTokens, double? CacheHitPct, double CostUsd, long ConversationTokens, long MaxTokens) : ServerFrame;
     /// <summary>Screen settings shared by the user's devices that changed (null = removed).</summary>
@@ -186,7 +191,8 @@ public static class FrameParser
             List<PermissionRequest>(json, "pendingPermissions"),
             Str(json, "version"),
             (int)(Long(json, "api") ?? 0),
-            (int)(Long(json, "minClientApi") ?? 0)),
+            (int)(Long(json, "minClientApi") ?? 0),
+            List<PcConsentView>(json, "pcConsents")),
         "pong" => new ServerFrame.Pong(),
         "chats" => new ServerFrame.Chats(List<ChatView>(json, "chats")),
         "agents" => new ServerFrame.Agents(List<AgentView>(json, "agents"), Str(json, "defaultAgent")),
@@ -222,6 +228,8 @@ public static class FrameParser
         "error" => new ServerFrame.Error(Str(json, "message") ?? "", Str(json, "code"), Long(json, "chatId"), Str(json, "clientId"), Str(json, "requestType")),
         "security-alert" => new ServerFrame.SecurityAlert(Str(json, "at") ?? ""),
         "pc-status" => new ServerFrame.PcStatus(Bool(json, "online"), Str(json, "name")),
+        "pc-consent" => Decode<PcConsentView>(json, "request") is { } waiting ? new ServerFrame.PcConsent(waiting) : new ServerFrame.Unknown(type),
+        "pc-consent-done" => new ServerFrame.PcConsentDone(Str(json, "id") ?? "", Str(json, "outcome") ?? ""),
         "session-context" => ParseContext(json),
         "ui" => new ServerFrame.Ui(Decode<Dictionary<string, string?>>(json, "values") ?? []),
         "message-marks" => new ServerFrame.MessageMarks(

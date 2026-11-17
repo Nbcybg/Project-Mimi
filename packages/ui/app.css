@@ -9,11 +9,16 @@
   --scroll-thumb: #4b3844; --act-ink: #d6b98c;
   --chip-bg: rgba(27,20,25,.86); --chip-line: rgba(255,255,255,.18); --chip-ink: #fff;
   --figure-tx-bg: rgba(20,17,21,.9); --figure-tx-line: rgba(255,255,255,.1); --figure-user-bg: rgba(59,39,51,.94);
-  --solo-input-bg: rgba(28,20,26,.62); --solo-user-bg: #ece8e1; --solo-user-ink: #1f1c18; --solo-user-act: #6d5a3c;
+  --solo-input-bg: rgba(255,255,255,.07); --solo-user-bg: #ece8e1; --solo-user-ink: #1f1c18; --solo-user-act: #6d5a3c;
   --solo-tx-bg: rgba(20,22,28,.8); --solo-tx-line: rgba(255,255,255,.1); --solo-time: rgba(255,255,255,.58);
   --solo-fade-rgb: 14,15,19;
-  --glass: rgba(255,255,255,.16); --glass-line: rgba(255,255,255,.3); --glass-ink: #fff;
-  --glass-bg: rgba(24,20,25,.84); --glass-focus: rgba(24,20,25,.94); --glass-panel: rgba(20,22,28,.45);
+  --glass: rgba(255,255,255,.08); --glass-line: rgba(255,255,255,.28); --glass-ink: #fff;
+  --glass-bg: rgba(255,255,255,.1); --glass-focus: rgba(16,16,20,.5); --glass-panel: rgba(255,255,255,.07);
+  /* Smoked glass: the backdrop itself is blurred and dimmed, nothing is painted over it. */
+  --glass-blur: blur(22px) saturate(1.7) brightness(.78); --glass-blur-soft: blur(16px) saturate(1.5) brightness(.88);
+  --glass-shadow: inset 0 1px 0 rgba(255,255,255,.34), inset 0 -1px 0 rgba(255,255,255,.05), 0 6px 18px rgba(0,0,0,.18);
+  /* Cards inside a message (content-visibility clips their backdrop): a see-through fill, no blur. */
+  --glass-card: rgba(22,20,26,.68);
   --ui: "Segoe UI", "Leelawadee UI", "Noto Sans Thai", system-ui, sans-serif;
   --mono: "Cascadia Code", "Cascadia Mono", Consolas, ui-monospace, monospace;
 }
@@ -28,11 +33,14 @@
   --scroll-thumb: #d5b5c2; --act-ink: #8c5b3f;
   --chip-bg: rgba(255,250,252,.9); --chip-line: rgba(120,70,90,.2); --chip-ink: #3d2533;
   --figure-tx-bg: rgba(255,250,252,.92); --figure-tx-line: rgba(203,107,138,.2); --figure-user-bg: rgba(246,223,232,.95);
-  --solo-input-bg: rgba(255,250,252,.78); --solo-user-bg: #cb6b8a; --solo-user-ink: #fff; --solo-user-act: #ffe1ea;
+  --solo-input-bg: rgba(255,255,255,.3); --solo-user-bg: #cb6b8a; --solo-user-ink: #fff; --solo-user-act: #ffe1ea;
   --solo-tx-bg: rgba(255,250,252,.9); --solo-tx-line: rgba(203,107,138,.24); --solo-time: rgba(61,37,51,.55);
   --solo-fade-rgb: 248,235,240;
-  --glass: rgba(255,255,255,.55); --glass-line: rgba(120,70,90,.22); --glass-ink: #3d2533;
-  --glass-bg: rgba(255,250,252,.9); --glass-focus: rgba(255,250,252,.96); --glass-panel: rgba(255,250,252,.72);
+  --glass: rgba(255,255,255,.26); --glass-line: rgba(255,255,255,.55); --glass-ink: #3d2533;
+  --glass-bg: rgba(255,255,255,.34); --glass-focus: rgba(255,255,255,.72); --glass-panel: rgba(255,255,255,.3);
+  --glass-blur: blur(22px) saturate(1.7) brightness(1.08); --glass-blur-soft: blur(16px) saturate(1.5) brightness(1.05);
+  --glass-shadow: inset 0 1px 0 rgba(255,255,255,.8), inset 0 -1px 0 rgba(255,255,255,.2), 0 6px 18px rgba(80,40,60,.14);
+  --glass-card: rgba(255,255,255,.8);
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); font: 14px/1.5 var(--ui); overflow: hidden; }
@@ -720,6 +728,7 @@ html[data-mode="mobile"] #input { font-size: max(16px, var(--chat-fs)); }
 #gate form { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 22px; width: min(420px, 100%); display: flex; flex-direction: column; gap: 10px; }
 #gate p { margin: 0; color: var(--muted); font-size: 13px; }
 #gate [hidden] { display: none; }
+#gate .gate-version { text-align: center; font-size: 12px; opacity: .8; margin-top: 2px; }
 .welcome { margin: auto; text-align: center; color: var(--muted); max-width: 420px; padding: 40px 20px; }
 .welcome b { display: block; color: var(--ink); font-size: 17px; margin-bottom: 6px; }
 
@@ -860,7 +869,7 @@ html[data-mode="mobile"] #input { font-size: max(16px, var(--chat-fs)); }
 .solo .stage .figure { left: 0; right: 0; width: 100%; height: 94%; z-index: 2; opacity: 1; }
 .solo .stage .figure img.fig { object-position: bottom center; opacity: 1; }
 .solo .stage .fade { position: absolute; inset: auto 0 0 0; height: 62%; z-index: 1; pointer-events: none;
-  background: linear-gradient(180deg, rgba(var(--solo-fade-rgb),0) 0%, rgba(var(--solo-fade-rgb),.22) 50%, rgba(var(--solo-fade-rgb),.6) 100%); }
+  background: linear-gradient(180deg, rgba(var(--solo-fade-rgb),0) 0%, rgba(var(--solo-fade-rgb),.06) 55%, rgba(var(--solo-fade-rgb),.2) 100%); }
 .solo .log { padding: 12px 0 10px; display: flex; flex-direction: column; }
 .solo .log.fade-top {
   /* older messages fade out towards the top, but only once the view is scrolled down */
@@ -869,6 +878,10 @@ html[data-mode="mobile"] #input { font-size: max(16px, var(--chat-fs)); }
 .solo .gmsg { display: block; }
 .solo .gmsg > .av, .solo .gmsg .nm { display: none; }
 .solo .gmsg .body { margin-top: 0; gap: 6px; }
+/* Another agent speaking in this chat (delegated work): its face and name stay, so it is clear who says what. */
+.solo .gmsg.guest { display: grid; }
+.solo .gmsg.guest > .av { display: grid; width: 28px; height: 28px; font-size: 11px; }
+.solo .gmsg.guest .nm { display: flex; }
 .solo .mrow .time { color: var(--solo-time); }
 .solo .tx { background: var(--solo-tx-bg); border: 1px solid var(--solo-tx-line); border-radius: 16px; padding: 10px 14px; max-width: min(680px, 86%);
   box-shadow: 0 6px 20px rgba(0,0,0,.28); }
@@ -1463,7 +1476,7 @@ html[data-mode="mobile"] #app.solo .composer { padding-bottom: calc(12px + env(s
    the glyph / rim colour says what a button is doing (send = accent, stop and recording = red). */
 html[data-mode="mobile"] #app.solo .box :is(#attach, #mic, #send, #stop, #emoji),
 html[data-mode="mobile"] #app.solo :is(#back, #toggle-rail, .jump-bottom) {
-  background: linear-gradient(150deg, rgba(255,255,255,.26), rgba(255,255,255,.07)), var(--glass);
+  background: linear-gradient(150deg, rgba(255,255,255,.16), rgba(255,255,255,0) 55%), var(--glass);
   border: 1px solid var(--glass-line); color: var(--glass-ink);
   -webkit-backdrop-filter: blur(18px) saturate(1.6); backdrop-filter: blur(18px) saturate(1.6);
   box-shadow: inset 0 1px 0 rgba(255,255,255,.4), inset 0 -1px 0 rgba(255,255,255,.06), 0 6px 18px rgba(0,0,0,.22);
@@ -1471,7 +1484,7 @@ html[data-mode="mobile"] #app.solo :is(#back, #toggle-rail, .jump-bottom) {
 }
 html[data-mode="mobile"] #app.solo .box :is(#attach, #mic, #send, #stop, #emoji):is(:hover, :focus-visible, :active),
 html[data-mode="mobile"] #app.solo :is(#back, #toggle-rail, .jump-bottom):is(:hover, :focus-visible, :active) {
-  background: linear-gradient(150deg, rgba(255,255,255,.26), rgba(255,255,255,.07)), var(--glass);
+  background: linear-gradient(150deg, rgba(255,255,255,.16), rgba(255,255,255,0) 55%), var(--glass);
   color: var(--glass-ink);
 }
 html[data-mode="mobile"] #app.solo .box :is(#attach, #mic, #send, #stop, #emoji):active,
@@ -1482,7 +1495,7 @@ html[data-mode="mobile"] #app.solo .box #stop { color: var(--bad); border-color:
 html[data-mode="mobile"] #app.solo .box #mic.rec { color: var(--bad); border-color: rgba(238,128,121,.55); }
 html[data-mode="mobile"] #app.solo .jump-bottom.has-new { color: var(--accent-text); border-color: rgba(var(--accent-rgb), .55); }
 html[data-mode="mobile"] #app.solo :is(.msgbar, .reactpick) {
-  background: linear-gradient(150deg, rgba(255,255,255,.2), rgba(255,255,255,.05)), var(--glass-panel);
+  background: linear-gradient(150deg, rgba(255,255,255,.14), rgba(255,255,255,0) 55%), var(--glass-panel);
   border: 1px solid var(--glass-line); -webkit-backdrop-filter: blur(18px) saturate(1.5); backdrop-filter: blur(18px) saturate(1.5);
 }
 
@@ -1495,3 +1508,133 @@ html[data-mode="mobile"] .solo .log { padding-bottom: calc(var(--composer-h, 96p
 html[data-mode="mobile"] .solo .jump-bottom { bottom: calc(var(--composer-h, 96px) + 12px + var(--kb)); }
 html[data-mode="mobile"] #app:not(.solo) #view-chat { padding-bottom: var(--kb); }
 .page { padding-bottom: calc(40px + env(safe-area-inset-bottom) + var(--kb)); }
+
+/* ====================================================================
+   Real glass on the character screen: the controls blur and dim what is behind them
+   (backdrop-filter) instead of covering it with a coloured fill. Tokens: --glass*, above.
+   ==================================================================== */
+html[data-mode="mobile"] #app.solo .box :is(#attach, #mic, #send, #stop, #emoji),
+html[data-mode="mobile"] #app.solo :is(#back, #toggle-rail, .jump-bottom) {
+  -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur);
+  box-shadow: var(--glass-shadow);
+}
+html[data-mode="mobile"] #app.solo .box #stop { box-shadow: var(--glass-shadow), 0 0 0 3px rgba(238,128,121,.16); }
+html[data-mode="mobile"] .solo #input {
+  background: var(--solo-input-bg); border: 1px solid var(--glass-line);
+  -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); box-shadow: var(--glass-shadow);
+}
+html[data-mode="mobile"] .solo #input::placeholder { opacity: .8; }
+html[data-mode="mobile"] .solo .pinbar,
+html[data-mode="mobile"] .solo .staged,
+html[data-mode="mobile"] #app.solo :is(.msgbar, .reactpick),
+html[data-mode="mobile"] .rail,
+html[data-mode="mobile"] .rail-top,
+.attach-quick {
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur);
+}
+html[data-mode="mobile"] .rail-top { box-shadow: none; }
+html[data-mode="mobile"] .rail { border-color: var(--glass-line); box-shadow: var(--glass-shadow), 0 18px 50px rgba(0,0,0,.35); }
+.attach-quick .aq-dot { background: var(--glass); border-color: var(--glass-line); }
+/* While typing the keyboard owns the compositor: drop the blur, keep it see-through and neutral. */
+html[data-mode="mobile"] .solo:has(#input:focus) #mic,
+html[data-mode="mobile"] .solo:has(#input:focus) #attach,
+html[data-mode="mobile"] .solo:has(#input:focus) #back,
+html[data-mode="mobile"] .solo:has(#input:focus) #toggle-rail,
+html[data-mode="mobile"] .solo:has(#input:focus) #input,
+html[data-mode="mobile"] .solo:has(#input:focus) .typing-chip,
+html[data-mode="mobile"] .solo:has(#input:focus) .pinbar {
+  -webkit-backdrop-filter: none; backdrop-filter: none;
+  background: var(--glass-focus);
+}
+.typing-chip { background: var(--glass-bg); border-color: var(--glass-line); color: var(--glass-ink); -webkit-backdrop-filter: var(--glass-blur-soft); backdrop-filter: var(--glass-blur-soft); }
+.solo .composer .box { -webkit-backdrop-filter: var(--glass-blur-soft); backdrop-filter: var(--glass-blur-soft); }
+html:not([data-mode="mobile"]) .solo .box,
+html[data-mode="mobile"] #app:not(.solo) #view-chat:has(.stage.has-bg) .box {
+  -webkit-backdrop-filter: var(--glass-blur-soft); backdrop-filter: var(--glass-blur-soft); box-shadow: var(--glass-shadow);
+}
+
+/* ====================================================================
+   Stop beside send: while a reply is coming and something is typed, both buttons show,
+   stop on the left of send (on the character screen they used to sit on the same spot).
+   ==================================================================== */
+html[data-mode="mobile"] .solo .box.busy:not(.empty) .line #input { padding-right: 106px; }
+html[data-mode="mobile"] .solo .box.busy:not(.empty) .line #stop { margin: 0 0 4px -100px; }
+html[data-mode="mobile"] .solo .box.busy:not(.empty) .line #send { margin: 0 4px 4px 0; }
+
+/* ====================================================================
+   "!" — a question waits for the user
+   ==================================================================== */
+.bang { display: inline-grid; place-items: center; flex: none; width: 17px; height: 17px; border-radius: 50%; background: var(--warn); color: #1d1608; font: 800 11px/1 var(--ui); }
+.perm .ttl { display: flex; align-items: center; gap: 7px; }
+.perm-alert { display: flex; align-items: center; gap: 9px; width: 100%; margin: 0 0 8px; padding: 9px 12px; border-radius: 14px; text-align: left;
+  border: 2px solid #b8861a; background: #f2c14e; color: #2a1d05; font-size: 13px; font-weight: 700; animation: perm-alert-pulse 1.8s ease-in-out infinite; }
+.perm-alert[hidden] { display: none; }
+.perm-alerts { display: flex; flex-direction: column; gap: 6px; margin: 0 0 8px; }
+.perm-alerts[hidden] { display: none; }
+.perm-alerts .perm-alert { margin: 0; }
+.perm-alert-more { text-align: center; font-size: 12px; color: var(--muted); }
+.perm-alert.pc { background: #9ad1ff; border-color: #2f7fb8; color: #07263b; }
+.perm-alert.pc .bang { background: none; color: inherit; font-size: 15px; }
+.perm-alert-clock { margin-left: auto; flex: none; font-variant-numeric: tabular-nums; font-size: 12px; opacity: .85; }
+#chat-list > .perm-alert { margin: 0 12px 8px; width: calc(100% - 24px); }
+.perm-alert .bang { width: 20px; height: 20px; font-size: 13px; background: #2a1d05; color: #f2c14e; }
+.perm-alert-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@keyframes perm-alert-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(225,185,108,.0); } 50% { box-shadow: 0 0 0 4px rgba(225,185,108,.22); } }
+@media (prefers-reduced-motion: reduce) { .perm-alert { animation: none; } }
+html[data-mode="mobile"] .solo .perm-alerts { margin: 0 12px 8px; }
+html[data-mode="mobile"] .solo .perm-alert { margin: 0; width: 100%; }
+.chat.asking { box-shadow: inset 3px 0 0 var(--warn); }
+.chat.asking .p { color: var(--warn); font-weight: 600; }
+.chat .r .bang { margin-left: auto; }
+.seg.chatkind .bang { margin-left: 5px; width: 15px; height: 15px; font-size: 10px; }
+#back[data-ask]::after, .nav button[data-view="chat"][data-ask]::after { background: var(--warn); color: #1d1608; }
+/* data-bubbles hides old messages: never the one that holds an open question */
+#app[data-bubbles="1"] #log-inner > .gmsg:has(.perm:not(.settled)) { display: block; }
+#app[data-bubbles="0"] .gmsg .body > .perm:not(.settled) { display: block; }
+
+/* ====================================================================
+   A message that is not (yet) at the core
+   ==================================================================== */
+.row-user[data-pending="1"] .col .user { opacity: .72; }
+.row-user.failed .col .user { opacity: 1; outline: 1.5px solid var(--bad); outline-offset: 1px; }
+.note.pending-status { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.note.pending-status.bad { color: var(--bad); font-weight: 600; }
+.pend-mark { font-size: 12px; line-height: 1; }
+.pending-status:not(.bad) .pend-mark:not(.acked) { display: inline-block; animation: pend-spin 1.6s linear infinite; }
+@keyframes pend-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .pending-status .pend-mark { animation: none !important; } }
+.pend-acts { display: inline-flex; gap: 6px; }
+.pend-acts .btn { padding: 2px 11px; font-size: 12px; }
+
+/* ====================================================================
+   Agent settings: the permission mode
+   ==================================================================== */
+.permmodes { display: grid; gap: 6px; margin: 6px 0 10px; }
+.permmode { display: flex; align-items: flex-start; gap: 10px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); cursor: pointer; }
+.permmode:has(input:checked) { border-color: rgba(var(--accent-rgb), .6); background: var(--accent-soft); }
+.permmode input { margin: 3px 0 0; flex: none; accent-color: var(--accent); }
+.permmode-t { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.permmode-t b { font-size: 13.5px; font-weight: 600; }
+.permmode-t small { color: var(--muted); font-size: 12px; line-height: 1.4; }
+
+/* The question card is a solid colour in every layout, so it cannot be mistaken for a chat bubble. */
+.perm { background: #f2c14e; border: 2px solid #b8861a; color: #2a1d05; box-shadow: 0 6px 20px rgba(0,0,0,.3); }
+.perm .ttl { color: #2a1d05; font-weight: 700; }
+.perm .bang { background: #2a1d05; color: #f2c14e; }
+.perm-summary { color: #2a1d05; font-weight: 500; }
+.perm .faint, .perm .muted, .perm-details summary { color: #5a4310; }
+.perm .kv { background: rgba(42,29,5,.12); color: #2a1d05; }
+.perm .btn { background: rgba(255,255,255,.55); border-color: #b8861a; color: #2a1d05; }
+.perm .btn.pri { background: #2a1d05; border-color: #2a1d05; color: #f2c14e; }
+.perm .btn:disabled { opacity: .5; }
+.perm.settled { background: #cfc7b6; border-color: #9b9484; color: #3a362c; box-shadow: none; opacity: 1; }
+.perm.settled .ttl, .perm.settled .perm-summary { color: #3a362c; }
+.perm.settled .bang { background: #5d584b; color: #cfc7b6; }
+html[data-mode="mobile"] .solo .note.pending-status {
+  display: inline-flex; padding: 3px 10px; border-radius: 14px; border: 1px solid var(--glass-line);
+  background: var(--glass-card); color: var(--glass-ink);
+}
+html[data-mode="mobile"] .solo .note.pending-status.bad { color: #ffb3ba; border-color: rgba(255,120,130,.6); }
+[data-theme="light"] .solo .note.pending-status.bad { color: var(--bad); }
+html[data-mode="mobile"] .solo .row-user .col { align-items: flex-end; }

@@ -80,6 +80,9 @@ export function createChatApi(context: ChatApiContext) {
   const { core, config, appSettings, broadcast } = context;
   const { chats } = core;
   const messages = core.deps.messages;
+  /** clientId -> until when a repeat of the same `chat-send` is ignored (see 'chat-send'). */
+  const seenSends = new Map<string, number>();
+  const SEEN_SEND_TTL_MS = 15 * 60_000;
 
   const sessionView = (session: Session): SessionView => ({
     id: session.id,
@@ -465,6 +468,19 @@ export function createChatApi(context: ChatApiContext) {
         const replyTo = message.replyTo === undefined ? undefined : Number(message.replyTo);
         const clientId = typeof message.clientId === 'string' && /^[\w.:-]{1,120}$/.test(message.clientId) ? message.clientId : undefined;
         const forward = message.forward ? { from: String(message.forward.from), chat: String(message.forward.chat) } : undefined;
+        if (clientId) {
+          // A phone on a bad network sends again when it is not sure the first one arrived. The same
+          // clientId is the same message: say it arrived and show the stored chat instead of storing it twice.
+          const now = Date.now();
+          for (const [known, until] of seenSends) if (until < now) seenSends.delete(known);
+          if (seenSends.has(clientId)) {
+            reply({ type: 'chat-ack', chatId, clientId, duplicate: true });
+            reply(historyMessage(chatId));
+            return true;
+          }
+          seenSends.set(clientId, now + SEEN_SEND_TTL_MS);
+          reply({ type: 'chat-ack', chatId, clientId });
+        }
         // A workflow with a chat trigger may take the message; then the agent stays quiet.
         const triggered = !forward ? core.chatTriggers(chatId, text, attachments) : null;
         if (triggered?.consumed) {

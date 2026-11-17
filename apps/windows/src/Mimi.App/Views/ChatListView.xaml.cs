@@ -2,6 +2,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Mimi.App.Services;
+using Mimi.Core;
 using Mimi.Core.ViewModels;
 
 namespace Mimi.App.Views;
@@ -34,11 +35,21 @@ public sealed partial class ChatListView : UserControl
                 BorderThickness = new Thickness(0),
             };
             AutomationProperties.SetAutomationId(button, $"nav-{key}");
+            button.Tag = label;
             button.Click += (_, _) => Navigate?.Invoke(key);
             Grid.SetColumn(button, i % 4);
             Grid.SetRow(button, i / 4);
             Nav.Children.Add(button);
         }
+        // The words of this screen follow the app's language, also when it changes while the screen is up.
+        void Words()
+        {
+            foreach (var button in Nav.Children.OfType<Button>()) button.Content = Loc.T((string)button.Tag);
+            ChatsTitle.Text = Loc.T("แชต");
+            DirectTabButton.Content = Loc.T("ตัวต่อตัว");
+        }
+        Words();
+        Loc.Changed += () => DispatcherQueue.TryEnqueue(Words);
     }
 
     public ChatListViewModel ViewModel { get; }

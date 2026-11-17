@@ -22,6 +22,8 @@
   }
   window.MimiShell = Object.freeze({
     platform: 'tauri',
+    // The app's own version (Cargo.toml / tauri.conf.json), shown on the first page and in Settings.
+    version: '__VERSION__',
     openAtLogin: function () {
       return command('open_at_login');
     },

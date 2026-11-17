@@ -15,6 +15,7 @@
   button:disabled { opacity: .6; }
   #error { color: var(--bad); min-height: 1.5em; }
   code { color: var(--text); }
+  .ver { text-align: center; font-size: 12px; opacity: .8; margin-top: 4px; }
 </style>
 </head>
 <body>
@@ -25,6 +26,7 @@
   <input id="url" type="url" inputmode="url" autocomplete="url" autocapitalize="none" spellcheck="false" placeholder="https://" value="__CORE__" required>
   <p id="error"></p>
   <button id="go" type="submit">เชื่อมต่อ</button>
+  <p class="ver">แอป Mimi เวอร์ชัน __VERSION__</p>
 </form>
 <script>
   'use strict';

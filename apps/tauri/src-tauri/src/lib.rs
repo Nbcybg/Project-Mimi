@@ -219,7 +219,9 @@ pub fn run() {
                 }
                 "/" | "" | "/index.html" => {
                     let current = for_protocol.read().unwrap().clone().unwrap_or_default();
-                    let html = CONNECT_PAGE.replace("__CORE__", &escape_html(&current));
+                    let html = CONNECT_PAGE
+                        .replace("__CORE__", &escape_html(&current))
+                        .replace("__VERSION__", env!("CARGO_PKG_VERSION"));
                     page(200, "text/html; charset=utf-8", html.into_bytes())
                 }
                 _ => page(404, "text/plain; charset=utf-8", b"not found".to_vec()),
@@ -246,7 +248,7 @@ pub fn run() {
 
             // Runs before the page's own scripts on every page (src/shell.js): defines MimiShell,
             // forgets an old sign-in after the person picked a server, explains a failed connection.
-            let script = SHELL_SCRIPT.replace("__CONNECT__", CONNECT_URL);
+            let script = SHELL_SCRIPT.replace("__CONNECT__", CONNECT_URL).replace("__VERSION__", env!("CARGO_PKG_VERSION"));
 
             let builder = WebviewWindowBuilder::new(app, "main", url)
                 .title("Mimi")

@@ -13,6 +13,7 @@ using Microsoft.Web.WebView2.Core;
 using Mimi.App.Controls;
 using Mimi.App.Native;
 using Mimi.App.Services;
+using Mimi.Core;
 using Mimi.Core.Desktop;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Graphics;
@@ -431,7 +432,7 @@ internal sealed partial class Workspace : Window
         }
         tools.Children.Add(Ui.Button("ล้าง", () => ink.Children.Clear(), "ghost"));
         if (sendToChat is not null) tools.Children.Add(Ui.Button("ส่งเข้าแชต", () => _ = SendDrawing(), "ghost", "AnnotateSend", "แนบภาพนี้ในแชตที่เปิดอยู่ แล้วพิมพ์ข้อความประกอบ"));
-        tools.Children.Add(Ui.Button("คัดลอก", () => _ = CopyDrawing(), "ghost", "AnnotateCopy"));
+        tools.Children.Add(Ui.Button(Loc.T("คัดลอก"), () => _ = CopyDrawing(), "ghost", "AnnotateCopy"));
         tools.Children.Add(Ui.Button("บันทึก PNG", () => _ = SaveDrawing(), "ghost"));
         tools.Children.Add(Ui.Button("ปิด", () => annotate.Visibility = Visibility.Collapsed, "pri"));
         annotate.Children.Add(tools);

@@ -17,7 +17,7 @@
         </Button>
 
         <Grid Grid.Row="1" ColumnDefinitions="*,Auto" Padding="16,0,12,4">
-            <TextBlock Text="แชต" Style="{StaticResource MimiSectionTitle}" VerticalAlignment="Center" Margin="0" />
+            <TextBlock x:Name="ChatsTitle" Text="แชต" Style="{StaticResource MimiSectionTitle}" VerticalAlignment="Center" Margin="0" />
             <DropDownButton Grid.Column="1" AutomationProperties.AutomationId="NewChatButton" AutomationProperties.Name="แชตใหม่" IsEnabled="{x:Bind ViewModel.HasAgents, Mode=OneWay}"
                             Padding="10,2" CornerRadius="8" FontSize="12" Background="{StaticResource MimiAccentSoftBrush}" BorderBrush="{StaticResource MimiAccentBrush}"
                             Foreground="{StaticResource MimiAccentTextBrush}" Content="+ ใหม่">
@@ -45,7 +45,7 @@
         <!-- ตัวต่อตัว / กลุ่ม: the web's segmented tabs. -->
         <Border Grid.Row="2" Margin="12,2,12,6" Padding="3" CornerRadius="10" BorderBrush="{StaticResource MimiLineBrush}" BorderThickness="1" Background="{StaticResource MimiBgBrush}">
             <Grid ColumnDefinitions="*,*" ColumnSpacing="3">
-                <ToggleButton AutomationProperties.AutomationId="DirectTab" Content="ตัวต่อตัว" HorizontalAlignment="Stretch" CornerRadius="8" FontSize="12.5" Padding="0,4" BorderThickness="0"
+                <ToggleButton x:Name="DirectTabButton" AutomationProperties.AutomationId="DirectTab" Content="ตัวต่อตัว" HorizontalAlignment="Stretch" CornerRadius="8" FontSize="12.5" Padding="0,4" BorderThickness="0"
                               IsChecked="{x:Bind ViewModel.ShowingDirect, Mode=OneWay}" Command="{x:Bind ViewModel.ShowDirectCommand}" />
                 <ToggleButton Grid.Column="1" AutomationProperties.AutomationId="GroupTab" Content="กลุ่ม" HorizontalAlignment="Stretch" CornerRadius="8" FontSize="12.5" Padding="0,4" BorderThickness="0"
                               IsChecked="{x:Bind ViewModel.ShowingGroups, Mode=OneWay}" Command="{x:Bind ViewModel.ShowGroupsCommand}" />

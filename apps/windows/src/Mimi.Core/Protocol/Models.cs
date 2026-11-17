@@ -152,7 +152,25 @@ public sealed record PermissionRequest(
     string Summary = "",
     long TimeoutMs = 0,
     bool NoGrant = false,
-    string CreatedAt = "");
+    string CreatedAt = "",
+    /// <summary>The chat it belongs to; the core adds it when it lists the questions still open on connect.</summary>
+    long? ChatId = null);
+
+/// <summary>
+/// A question the PC agent put on the computer's own screen and still waits on (protocol.ts PcConsentView). Only someone
+/// at that screen can answer it; the app shows it in every chat so nobody wonders why the PC is quiet.
+/// </summary>
+public sealed record PcConsentView(
+    string Id,
+    string Tool = "",
+    string Risk = "",
+    string Summary = "",
+    string Agent = "",
+    long? ChatId = null,
+    long? SessionId = null,
+    string? PcName = null,
+    string AskedAt = "",
+    string ExpiresAt = "");
 
 public sealed record LiveTool(string Id, string Name, string Arg = "", string? Risk = null, bool? Ok = null, string Output = "");
 

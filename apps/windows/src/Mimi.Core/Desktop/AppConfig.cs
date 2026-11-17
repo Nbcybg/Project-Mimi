@@ -54,8 +54,20 @@ public sealed class ChatLook
     public double Zoom { get; set; } = 1;
     public double X { get; set; }
     public double Y { get; set; }
+    /// <summary>
+    /// Where the 3D character's camera is (the web keeps it apart from the 2D picture: mimi.view.*.3d): turn and tilt
+    /// in degrees, zoom as a factor, slide as percent of the figure's height. Zoom/X/Y above are the 2D picture's.
+    /// </summary>
+    public double CameraYaw { get; set; }
+    public double CameraPitch { get; set; }
+    public double CameraZoom { get; set; } = 1;
+    public double CameraX { get; set; }
+    public double CameraY { get; set; }
 
-    public bool IsEmpty => Theme is null && TextSize is null && Character is null && Bubbles is null && Background is null && BackgroundRules is not { Count: > 0 } && Zoom == 1 && X == 0 && Y == 0;
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool IsCameraDefault => CameraYaw == 0 && CameraPitch == 0 && CameraZoom == 1 && CameraX == 0 && CameraY == 0;
+
+    public bool IsEmpty => Theme is null && TextSize is null && Character is null && Bubbles is null && Background is null && BackgroundRules is not { Count: > 0 } && Zoom == 1 && X == 0 && Y == 0 && IsCameraDefault;
 }
 
 /// <summary>

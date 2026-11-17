@@ -219,3 +219,22 @@ test('stopping the caller withdraws the permission prompt', async () => {
   assert.deepEqual(await decision, { allow: false, reason: 'denied' });
   assert.equal(aborted, true);
 });
+
+test('an agent permission mode decides what happens to tools that would ask', () => {
+  const gate = new PermissionGate(new FakeBroker(true));
+  const base = { agent: 'mimi' } as const;
+  // ask / plan: the normal policy (plan only changes what the agent says before calling).
+  assert.equal(gate.modeFor('run_shell', 'shell', 't', { ...base, mode: 'ask' }), 'ask');
+  assert.equal(gate.modeFor('run_shell', 'shell', 't', { ...base, mode: 'plan' }), 'ask');
+  // allow: nothing asks, except a tool that always asks and a per-tool "ask".
+  assert.equal(gate.modeFor('run_shell', 'shell', 't', { ...base, mode: 'allow' }), 'auto');
+  assert.equal(gate.modeFor('write_file', 'write', 't', { ...base, mode: 'allow', overrides: { write_file: 'ask' } }), 'ask');
+  assert.equal(gate.modeFor('write_file', 'write', 't', { ...base, mode: 'allow', overrides: { write_file: 'deny' } }), 'deny');
+  assert.equal(gate.modeFor('browser_fill_secret', 'write', 't', { ...base, mode: 'allow' }), 'ask');
+  // deny: side effects are refused even if the user granted them earlier; reads still run.
+  gate.grant('t', 'run_shell', { scope: 'always', agent: 'mimi' });
+  assert.equal(gate.modeFor('run_shell', 'shell', 't', { ...base, mode: 'ask' }), 'auto');
+  assert.equal(gate.modeFor('run_shell', 'shell', 't', { ...base, mode: 'deny' }), 'deny');
+  assert.equal(gate.modeFor('read_file', 'read', 't', { ...base, mode: 'deny' }), 'auto');
+  assert.equal(gate.modeFor('run_shell', 'shell', 't', { ...base, mode: 'deny', overrides: { run_shell: 'allow' } }), 'auto');
+});

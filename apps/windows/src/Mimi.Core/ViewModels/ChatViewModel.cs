@@ -167,14 +167,14 @@ public sealed partial class ChatViewModel : ObservableObject
 
     public bool HasInfo => Info.Length > 0;
     public bool HasReply => Replying is not null;
-    public string ReplyLabel => Replying is { } reply ? $"ตอบกลับ {reply.Who}: {(reply.Text.Length > 0 ? MessageFormat.Preview(reply.Text, 120) : "(ไฟล์)")}" : "";
+    public string ReplyLabel => Replying is { } reply ? $"{Loc.T("ตอบกลับ")} {reply.Who}: {(reply.Text.Length > 0 ? MessageFormat.Preview(reply.Text, 120) : Loc.T("(ไฟล์)"))}" : "";
     public bool HasPins => Pins.Count > 0;
     public bool ManyPins => Pins.Count > 1;
     public string PinLabel => Pins.Count > 1 ? $"📌 ปักหมุด {Math.Min(pinIndex, Pins.Count - 1) + 1}/{Pins.Count}" : "📌 ปักหมุด";
     public string PinText => Pins.Count == 0 ? "" : PinPreview(Pins[Math.Min(pinIndex, Pins.Count - 1)]);
 
     public string PinPreview(PinView pin) =>
-        $"{(pin.Role == "user" ? "คุณ" : session.AgentName(pin.Agent))}: {(pin.Text.Length > 0 ? MessageFormat.Preview(Speech.Parse(pin.Text).Text, 120) : "(ไฟล์)")}";
+        $"{(pin.Role == "user" ? Loc.T("คุณ") : session.AgentName(pin.Agent))}: {(pin.Text.Length > 0 ? MessageFormat.Preview(Speech.Parse(pin.Text).Text, 120) : Loc.T("(ไฟล์)"))}";
 
     /// <summary>The other chats a message can be forwarded to.</summary>
     public IReadOnlyList<(long Id, string Title)> ForwardTargets =>
@@ -370,7 +370,7 @@ public sealed partial class ChatViewModel : ObservableObject
                 Time(message.CreatedAt),
                 message.Approval,
                 message.ReplyTo is { } quote
-                    ? $"{(quote.Role == "user" ? "คุณ" : session.AgentName(quote.Agent))}: {(quote.Text.Length > 0 ? MessageFormat.Preview(Speech.Parse(quote.Text).Text, 140) : "(ไฟล์)")}"
+                    ? $"{(quote.Role == "user" ? Loc.T("คุณ") : session.AgentName(quote.Agent))}: {(quote.Text.Length > 0 ? MessageFormat.Preview(Speech.Parse(quote.Text).Text, 140) : Loc.T("(ไฟล์)"))}"
                     : null,
                 message.ForwardedFrom is { } from ? $"↪ ส่งต่อจาก {from.From}{(from.Chat.Length > 0 ? $" · {from.Chat}" : "")}" : null,
                 message.ReactionList,
@@ -421,7 +421,7 @@ public sealed partial class ChatViewModel : ObservableObject
         if (jumpTo is { } target && timeline.Loaded) Jump(target);
     }
 
-    private string Who(ChatMessageView message) => message.Role == "user" ? "คุณ" : session.AgentName(message.Agent);
+    private string Who(ChatMessageView message) => message.Role == "user" ? Loc.T("คุณ") : session.AgentName(message.Agent);
 
     /// <summary>The whole turn ended: the stored answer replaces the streaming one, and the pending row goes.</summary>
     private string PendingStatus(PendingMessage pending) =>

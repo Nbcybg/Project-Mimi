@@ -3,7 +3,7 @@ import type { AgentEvent, UsageSnapshot } from './events.ts';
 import type { MessageRole } from './messages.ts';
 import type { ConnectorConnectionInput, ConnectorConnectionView, OAuthAccountInput, OAuthAccountView } from './oauth.ts';
 import type { ConnectorImportReportView, ConnectorView } from './connectors.ts';
-import type { PermissionDecision, PermissionRequest, PermissionScope } from './permissions.ts';
+import type { AgentPermissionMode, PermissionDecision, PermissionRequest, PermissionScope } from './permissions.ts';
 import type { SpeechStyle } from './speech.ts';
 import type { CustomToolSpec, McpServerSpec, McpServerView, ToolPreset, ToolSettingField } from './tools.ts';
 
@@ -465,6 +465,8 @@ export interface AgentView {
   lazyTools?: boolean;
   /** Per-agent permission policy: tool name -> allow / ask / deny. */
   permissions?: Record<string, 'allow' | 'ask' | 'deny'>;
+  /** What this agent does with a tool that would need approval: ask (default), allow, deny, or plan (say first, then ask). */
+  permissionMode?: AgentPermissionMode;
   /** Agents this one may message. */
   canMessage: string[];
   budgets: { maxRounds: number; maxTokens: number };
@@ -945,6 +947,26 @@ export type ClientMessage =
   | { type: 'calendar-calendars'; account: string }
   | { type: 'calendar-set'; account: string; calendarId: string };
 
+/** How a question on the PC's own screen ended. "gone" = the PC agent disconnected before anyone answered. */
+export type PcConsentOutcome = 'allowed' | 'denied' | 'timeout' | 'gone';
+
+/** A question the PC agent is waiting on, as clients show it (in every chat, not only the one it came from). */
+export interface PcConsentView {
+  id: string;
+  tool: string;
+  risk: string;
+  summary: string;
+  agent: string;
+  /** The chat and session the agent was working in, when the core could tell. */
+  chatId?: number;
+  sessionId?: number;
+  /** How this PC shows up in Mimi. */
+  pcName?: string;
+  askedAt: string;
+  /** When the PC gives up and refuses. */
+  expiresAt: string;
+}
+
 /** Sent by the PC agent. */
 export type PcMessage =
   | {
@@ -957,7 +979,25 @@ export type PcMessage =
       /** True when this machine asks locally before every non-read PC action. */
       consent?: boolean;
     }
-  | { type: 'tool-result'; id: string; ok: boolean; output: string };
+  | { type: 'tool-result'; id: string; ok: boolean; output: string }
+  /**
+   * The PC agent put a question on this computer's own screen and is waiting for someone to
+   * answer it there. The core tells every client, so a phone does not wonder why the PC is quiet.
+   */
+  | {
+      type: 'consent-pending';
+      /** The id of the tool call the question is about. */
+      id: string;
+      tool: string;
+      risk: string;
+      summary: string;
+      agent: string;
+      thread: string;
+      taskId?: string;
+      /** How long the PC waits before it says no on its own. */
+      timeoutMs: number;
+    }
+  | { type: 'consent-resolved'; id: string; outcome: PcConsentOutcome };
 
 /** Sent by the core to UI clients. */
 export type ServerMessage =
@@ -967,6 +1007,8 @@ export type ServerMessage =
       /** Empty when no agent exists yet. */
       defaultAgent: string;
       pcOnline: boolean;
+      /** Questions the PC agent is still waiting on at its own screen. */
+      pcConsents?: PcConsentView[];
       busy: boolean;
       /** The chat a turn is running in right now, if any. */
       busyChat?: number | null;
@@ -991,6 +1033,9 @@ export type ServerMessage =
   | { type: 'notification'; notification: Notification }
   | { type: 'triggers'; triggers: TriggerInfo[] }
   | { type: 'pc-status'; online: boolean; name?: string }
+  /** The PC agent is waiting for an answer on the computer itself; shown in every chat. */
+  | { type: 'pc-consent'; request: PcConsentView }
+  | { type: 'pc-consent-done'; id: string; outcome: PcConsentOutcome }
   | { type: 'settings'; settings: SettingsView; saved?: boolean }
   | { type: 'google-auth-url'; url: string }
   | { type: 'microsoft-auth-url'; url: string }
@@ -1054,6 +1099,8 @@ export type ServerMessage =
   | { type: 'chat-session'; chatId: number; session: SessionView; started: boolean }
   | { type: 'session-context'; chatId: number; sessionId: number; context: SessionContextView }
   | { type: 'chat-message'; chatId: number; sessionId: number; message: ChatMessageView }
+  /** The core received a `chat-send` (by its clientId). `duplicate` = it had already received this one, so nothing new was stored. */
+  | { type: 'chat-ack'; chatId: number; clientId: string; duplicate?: boolean }
   | { type: 'chat-event'; chatId: number; sessionId: number; agent: string; event: AgentEvent }
   /**
    * A turn ended: the messages it stored after the user's message (replies, tool steps), with

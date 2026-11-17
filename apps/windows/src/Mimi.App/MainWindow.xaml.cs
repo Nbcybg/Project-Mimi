@@ -2,8 +2,10 @@ using Microsoft.UI;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
+using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Mimi.App.Views;
+using Mimi.Core;
 using Mimi.Core.Desktop;
 using Mimi.Core.Net;
 using Windows.Graphics;
@@ -150,7 +152,7 @@ public sealed partial class MainWindow : Window
         {
             Page.Chats => "Mimi",
             Page.Settings => "ตั้งค่า",
-            Page.Search => "ค้นหา",
+            Page.Search => Loc.T("ค้นหา"),
             Page.Inbox => "การแจ้งเตือน",
             Page.Agents => "Agent",
             Page.Hub => "Hub",
@@ -160,6 +162,7 @@ public sealed partial class MainWindow : Window
             Page.WorkflowEditor => "Workflow",
             _ => "Mimi",
         };
+        RefreshAttention();
     }
 
     /// <summary>
@@ -179,7 +182,7 @@ public sealed partial class MainWindow : Window
 
     public void SetTitle(string title)
     {
-        if (CurrentPage == Page.Chat) TitleText.Text = title.Length > 0 ? title : "แชต";
+        if (CurrentPage == Page.Chat) TitleText.Text = title.Length > 0 ? title : Loc.T("แชต");
     }
 
     /// <summary>The connection dot and the line under the header.</summary>
@@ -201,6 +204,115 @@ public sealed partial class MainWindow : Window
         Offline.Visibility = text.Length > 0 && CurrentPage != Page.Connect ? Visibility.Visible : Visibility.Collapsed;
     }
 
+    private Microsoft.UI.Xaml.DispatcherTimer? attentionClock;
+
+    /// <summary>
+    /// The bars under the header: every question still waiting for the user, whatever chat it came from (it names the agent and
+    /// the chat, so it need not be hidden from the other chats), and the PC agent's questions at the computer's own screen
+    /// with the time left (nobody answering in time counts as "no").
+    /// </summary>
+    public void RefreshAttention()
+    {
+        var items = app.Session.Attention.Items;
+        Attention.Children.Clear();
+        if (items.Count == 0 || CurrentPage == Page.Connect)
+        {
+            Attention.Visibility = Visibility.Collapsed;
+            attentionClock?.Stop();
+            return;
+        }
+        var clocks = new List<(TextBlock Text, DateTimeOffset Until)>();
+        foreach (var item in items.Take(3)) Attention.Children.Add(AttentionRow(item, clocks));
+        if (items.Count > 3)
+        {
+            Attention.Children.Add(new TextBlock
+            {
+                Text = $"และอีก {items.Count - 3} รายการที่รออยู่",
+                FontSize = 12,
+                Foreground = Services.Theme.Brush("Muted"),
+                HorizontalAlignment = HorizontalAlignment.Center,
+            });
+        }
+        Attention.Visibility = Visibility.Visible;
+        if (clocks.Count == 0)
+        {
+            attentionClock?.Stop();
+            return;
+        }
+        void Tick()
+        {
+            foreach (var (text, until) in clocks) text.Text = Left(until);
+        }
+        Tick();
+        if (attentionClock is null)
+        {
+            attentionClock = new Microsoft.UI.Xaml.DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        }
+        // One timer, re-pointed at the clocks that are on screen now.
+        attentionClock.Tick -= OnAttentionTick;
+        attentionTick = Tick;
+        attentionClock.Tick += OnAttentionTick;
+        attentionClock.Start();
+    }
+
+    private Action? attentionTick;
+
+    private void OnAttentionTick(object? sender, object e) => attentionTick?.Invoke();
+
+    private static string Left(DateTimeOffset until)
+    {
+        var left = until - DateTimeOffset.Now;
+        return left <= TimeSpan.Zero ? "หมดเวลา" : $"เหลือ {(int)left.TotalMinutes}:{left.Seconds:00}";
+    }
+
+    private FrameworkElement AttentionRow(Mimi.Core.Chat.AttentionItem item, List<(TextBlock Text, DateTimeOffset Until)> clocks)
+    {
+        var session = app.Session;
+        var chat = item.ChatId is { } id ? session.Chats.FirstOrDefault(known => known.Id == id) : null;
+        var who = item.Agent.Length > 0 ? session.AgentName(item.Agent) : "Mimi";
+        // A direct chat is named after its agent already; a group (or any other chat) adds its title.
+        var where = chat is not null && !(chat.Kind == "direct" && chat.AgentNames.Count == 1 && chat.AgentNames[0] == item.Agent) ? $"{who} · {session.ChatTitle(chat)}" : who;
+        var open = app.OpenChatId;
+        var inThisChat = item.ChatId is { } chatId && open == chatId;
+        var text = item.AtPc
+            ? $"{where} รออนุญาตที่หน้าจอ {item.PcName ?? "PC"} — {item.Summary}"
+            : $"{where} รออนุญาต — {(inThisChat ? "ดูการ์ดในแชตนี้" : item.ChatId is null ? item.Summary : "แตะเพื่อเปิดแชต")}";
+        var ink = new Microsoft.UI.Xaml.Media.SolidColorBrush(Windows.UI.Color.FromArgb(0xFF, 0x2A, 0x1D, 0x05));
+        var grid = new Grid { ColumnSpacing = 8 };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        var mark = new TextBlock { Text = item.AtPc ? "\uD83D\uDCBB" : "!", FontWeight = Microsoft.UI.Text.FontWeights.Bold, FontSize = 14, Foreground = ink, VerticalAlignment = VerticalAlignment.Center };
+        var label = new TextBlock { Text = text, FontSize = 12.5, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, Foreground = ink, TextTrimming = TextTrimming.CharacterEllipsis, TextWrapping = TextWrapping.NoWrap, VerticalAlignment = VerticalAlignment.Center };
+        Grid.SetColumn(label, 1);
+        grid.Children.Add(mark);
+        grid.Children.Add(label);
+        if (item.ExpiresAt is { } until)
+        {
+            var clock = new TextBlock { FontSize = 12, Foreground = ink, Opacity = .85, VerticalAlignment = VerticalAlignment.Center };
+            Grid.SetColumn(clock, 2);
+            grid.Children.Add(clock);
+            clocks.Add((clock, until));
+        }
+        var row = new Button
+        {
+            Content = grid,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            Padding = new Thickness(10, 7, 10, 7),
+            CornerRadius = new CornerRadius(12),
+            Background = Services.Theme.Brush(item.AtPc ? "Info" : "Warn"),
+            BorderThickness = new Thickness(0),
+        };
+        if (item.AtPc) ToolTipService.SetToolTip(row, "ต้องกดอนุญาตที่หน้าจอเครื่อง PC เอง (มือถืออนุญาตแทนไม่ได้) · ถ้าไม่มีใครตอบจะถือว่าไม่อนุญาต");
+        AutomationProperties.SetAutomationId(row, item.AtPc ? $"attention-pc-{item.Id}" : $"attention-{item.Id}");
+        row.Click += (_, _) =>
+        {
+            if (item.ChatId is { } target && open != target) app.OpenChat(target);
+        };
+        return row;
+    }
+
     /// <summary>The unread count on the bell.</summary>
     public void InboxUnread(int unread, string badge)
     {
@@ -214,7 +326,7 @@ public sealed partial class MainWindow : Window
     private void OnWorkflows(object sender, RoutedEventArgs e) => app.ShowManage(Page.Workflows);
     private void OnOverseer(object sender, RoutedEventArgs e) => app.ShowManage(Page.Overseer);
     private void OnMimiSettings(object sender, RoutedEventArgs e) => app.ShowManage(Page.MimiSettings);
-    private void OnAppSettings(object sender, RoutedEventArgs e) => app.ShowSettings("app");
+    private void OnAppSettings(object sender, RoutedEventArgs e) => app.ShowSettings("system");
     private void OnOverseerChat(object sender, RoutedEventArgs e) => _ = app.ChatWithOverseer();
     private void OnSearch(object sender, RoutedEventArgs e) => app.ShowSearch();
     private void OnInbox(object sender, RoutedEventArgs e) => app.ShowInbox();
@@ -226,6 +338,9 @@ public sealed partial class MainWindow : Window
     }
 
     private void OnBack(object sender, RoutedEventArgs e) => app.Back();
+
+    /// <summary>Where a dialog opened from a page of the window is shown.</summary>
+    internal XamlRoot? DialogRoot => Root.XamlRoot;
     private void OnWorkspace(object sender, RoutedEventArgs e) => app.ShowWorkspace();
     private void OnSetup(object sender, RoutedEventArgs e) => app.ShowSetup();
 

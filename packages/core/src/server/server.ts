@@ -24,7 +24,7 @@ import type {
   WorkflowNode,
   WorkflowView,
 } from '@mimi/shared';
-import { API_VERSION, CLOSE_CLIENT_TOO_OLD, MIN_CLIENT_API, NODE_TYPES, type PermissionScope } from '@mimi/shared';
+import { API_VERSION, CLOSE_CLIENT_TOO_OLD, MIN_CLIENT_API, NODE_TYPES, AGENT_PERMISSION_MODES, type AgentPermissionMode, type PcConsentOutcome, type PcConsentView, type PermissionScope } from '@mimi/shared';
 import { WebSocket, WebSocketServer } from 'ws';
 import { deleteAgent, saveAgent, withoutRetiredTools } from '../agents/loader.ts';
 import { classifyError } from '../errors.ts';
@@ -77,7 +77,7 @@ import { resolveAllowedPath } from '@mimi/pc-agent';
 import { toTriggerInfo } from '../scheduler/triggers.ts';
 import { createChatApi } from './chat-api.ts';
 import { handleHttpApi, type WebhookReply } from './http-api.ts';
-import { PcHub } from './pc-hub.ts';
+import { type PendingConsent, PcHub } from './pc-hub.ts';
 import { WsBroker } from './ws-broker.ts';
 import { agentPresets } from '../agents/presets.ts';
 import { QuickTunnel } from '../app/tunnel.ts';
@@ -250,7 +250,7 @@ export async function startServer(
   const agentsMessage = (saved?: string): ServerMessage => ({
     type: 'agents',
     agents: core.agents.names().map((name) => {
-      const { displayName, description, intro, systemPrompt, models, tools, lazyTools, permissions, skills, canMessage, budgets, character, idleMotion } =
+      const { displayName, description, intro, systemPrompt, models, tools, lazyTools, permissions, permissionMode, skills, canMessage, budgets, character, idleMotion } =
         core.agents.get(name);
       return {
         name,
@@ -262,6 +262,7 @@ export async function startServer(
         tools,
         ...(lazyTools ? { lazyTools: true } : {}),
         permissions,
+        permissionMode: permissionMode ?? 'ask',
         skills,
         canMessage,
         budgets,
@@ -370,6 +371,9 @@ export async function startServer(
       }
     }
     const lazyTools = view.lazyTools === undefined ? Boolean(current?.lazyTools) : view.lazyTools === true;
+    const permissionMode: AgentPermissionMode = AGENT_PERMISSION_MODES.includes(view.permissionMode as AgentPermissionMode)
+      ? (view.permissionMode as AgentPermissionMode)
+      : (current?.permissionMode ?? 'ask');
     saveAgent(config.agentsDir, {
       name,
       displayName: String(view.displayName ?? '').trim(),
@@ -380,6 +384,7 @@ export async function startServer(
       tools,
       ...(lazyTools ? { lazyTools: true } : {}),
       permissions,
+      ...(permissionMode !== 'ask' ? { permissionMode } : {}),
       skills,
       canMessage,
       character,
@@ -946,13 +951,88 @@ export async function startServer(
    * another chat or in the background: keep it in the notification inbox and push it, like an
    * approval that comes from a workflow.
    */
+  const APPROVAL_REMINDER_MS = 20_000;
+  /** Which chat each open question belongs to, so a client that connects later can badge that chat. */
+  const requestChats = new Map<string, number>();
   const permissionAsked = (chatId: number, request: PermissionRequest) => {
-    if (watching(chatId)) return;
-    const name = core.agents.names().includes(request.agent) ? core.agents.get(request.agent).displayName || request.agent : request.agent;
-    const chat = core.chats.getChat(chatId);
-    const title = chat && chat.kind === 'group' ? `${name} · ${chat.title}` : name;
-    const body = request.summary || `ขออนุญาตใช้ ${request.tool}`;
-    core.notify({ kind: 'approval', title: `ขออนุญาต: ${title}`, body: body.length > 300 ? `${body.slice(0, 300)}…` : body, agent: request.agent, chatId });
+    requestChats.set(request.id, chatId);
+    const tell = () => {
+      const name = core.agents.names().includes(request.agent) ? core.agents.get(request.agent).displayName || request.agent : request.agent;
+      const chat = core.chats.getChat(chatId);
+      const title = chat && chat.kind === 'group' ? `${name} · ${chat.title}` : name;
+      const body = request.summary || `ขออนุญาตใช้ ${request.tool}`;
+      core.notify({ kind: 'approval', title: `ขออนุญาต: ${title}`, body: body.length > 300 ? `${body.slice(0, 300)}…` : body, agent: request.agent, chatId });
+    };
+    if (!watching(chatId)) return tell();
+    // Someone "is watching" — but a phone whose screen went off or whose app moved to the
+    // background freezes its page and never says it left, so this chat still counts as watched.
+    // If nobody has answered after a while, tell them anyway.
+    const timer = setTimeout(() => {
+      if (broker.pending().some((entry) => entry.id === request.id)) tell();
+    }, APPROVAL_REMINDER_MS);
+    timer.unref?.();
+  };
+  /**
+   * The PC agent put a question on the computer's own screen and waits for someone to answer it there.
+   * A phone that started the job would otherwise see nothing: every client shows it (in every chat,
+   * with the agent and session named) and the phone is pushed, like any other approval.
+   */
+  const agentName = (agent: string) => (core.agents.names().includes(agent) ? core.agents.get(agent).displayName || agent : agent);
+  const consentView = (entry: PendingConsent): PcConsentView => {
+    const session = entry.thread ? core.chats.sessionByThread(entry.thread) : undefined;
+    return {
+      id: entry.id,
+      tool: entry.tool,
+      risk: entry.risk,
+      summary: entry.summary,
+      agent: entry.agent,
+      ...(session ? { chatId: session.chatId, sessionId: session.id } : {}),
+      ...(pc.name ? { pcName: pc.name } : {}),
+      askedAt: new Date(entry.askedAt).toISOString(),
+      expiresAt: new Date(entry.expiresAt).toISOString(),
+    };
+  };
+  const consentLine = (view: PcConsentView) => {
+    const chat = view.chatId === undefined ? undefined : core.chats.getChat(view.chatId);
+    const where = chat ? (chat.kind === 'group' ? `${agentName(view.agent)} · ${chat.title}` : agentName(view.agent)) : agentName(view.agent) || 'Mimi';
+    return { where, chat };
+  };
+  pc.onConsent = (event) => {
+    const view = consentView(event.request);
+    if (event.kind === 'done') {
+      broadcast({ type: 'pc-consent-done', id: view.id, outcome: event.outcome });
+      if (event.outcome === 'timeout') {
+        const { where } = consentLine(view);
+        core.notify({
+          kind: 'info',
+          title: `หมดเวลารออนุญาตบนเครื่อง PC: ${where}`,
+          body: `ไม่มีใครตอบที่หน้าจอ PC จึงไม่ได้ทำ: ${view.summary || view.tool}`,
+          agent: view.agent,
+          ...(view.chatId !== undefined ? { chatId: view.chatId } : {}),
+        });
+      }
+      return;
+    }
+    broadcast({ type: 'pc-consent', request: view });
+    const tell = () => {
+      const { where } = consentLine(view);
+      const minutes = Math.max(1, Math.round((event.request.expiresAt - event.request.askedAt) / 60_000));
+      const body = `${view.summary || `ขอใช้ ${view.tool}`} — กดอนุญาตที่หน้าจอ ${view.pcName || 'PC'} (รอได้ ${minutes} นาที แล้วจะถือว่าไม่อนุญาต)`;
+      core.notify({
+        kind: 'approval',
+        title: `รออนุญาตบนเครื่อง PC: ${where}`,
+        body: body.length > 300 ? `${body.slice(0, 300)}…` : body,
+        agent: view.agent,
+        ...(view.chatId !== undefined ? { chatId: view.chatId } : {}),
+      });
+    };
+    // Same rule as a chat approval: someone looking at that very chat sees the banner; if they do not
+    // answer in a while (a phone with the screen off still counts as watching), tell them anyway.
+    if (view.chatId === undefined || !watching(view.chatId)) return tell();
+    const timer = setTimeout(() => {
+      if (pc.pendingConsents().some((entry) => entry.id === view.id)) tell();
+    }, APPROVAL_REMINDER_MS);
+    timer.unref?.();
   };
   /** Permission requests also arrive inside a sub-agent's activity. */
   const permissionsIn = (chatId: number, event: AgentEvent) => {
@@ -1004,6 +1084,7 @@ export async function startServer(
         permissionsIn(chatId, event);
         break;
       case 'permission-decision':
+        requestChats.delete(event.requestId);
         if (live) live.perms.delete(event.requestId);
         break;
       case 'run-finish':
@@ -1011,6 +1092,7 @@ export async function startServer(
         break;
       case 'agent-activity':
         permissionsIn(chatId, event);
+        for (const decided of decisionsIn(event)) requestChats.delete(decided.requestId);
         break;
     }
   };
@@ -1027,7 +1109,7 @@ export async function startServer(
       usage: live.usage,
       tools: [...live.tools.values()],
       attachments: live.attachments,
-      pendingPermissions: [...live.perms.values()],
+      pendingPermissions: [...live.perms.values()].map((request) => ({ ...request, chatId })),
     };
   };
 
@@ -2397,10 +2479,14 @@ export async function startServer(
             agents: core.agents.list(),
             defaultAgent: core.defaultAgentName() ?? '',
             pcOnline: pc.online,
+            pcConsents: pc.pendingConsents().map(consentView),
             busy: busy(),
             busyChat: busyChatIds()[0] ?? null,
             busyChats: busyChatIds(),
-            pendingPermissions: broker.pending(),
+            pendingPermissions: broker.pending().map((request) => {
+              const chatId = requestChats.get(request.id);
+              return chatId === undefined ? request : { ...request, chatId };
+            }),
             ui: appSettings.ui,
             version: APP_VERSION,
             api: API_VERSION,
@@ -2413,6 +2499,12 @@ export async function startServer(
 
       if (role === 'pc') {
         if (message.type === 'tool-result') pc.handleResult(message as Extract<PcMessage, { type: 'tool-result' }>);
+        else if (message.type === 'consent-pending') pc.consentPending(message as Extract<PcMessage, { type: 'consent-pending' }>);
+        else if (message.type === 'consent-resolved') {
+          const done = message as Extract<PcMessage, { type: 'consent-resolved' }>;
+          const outcome: PcConsentOutcome = done.outcome === 'allowed' || done.outcome === 'timeout' ? done.outcome : 'denied';
+          pc.consentEnded(String(done.id), outcome);
+        }
         return;
       }
       try {

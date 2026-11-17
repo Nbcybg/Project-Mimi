@@ -866,7 +866,7 @@ public static class Catalog
         _ => [JsonDocument.Parse("""{"name":"account"}""").RootElement.Clone()],
         _ => "account",
         _ => "2FA และรหัสผ่าน",
-        _ => "เลือก \"ทำ…\" ด้านบน",
+        _ => "ใช้ปุ่มด้านบน",
         Fields: [],
         Actions:
         [
@@ -894,12 +894,21 @@ public static class Catalog
         new("packs", "แพ็ก", Packs.Lead, [Packs]),
     ];
 
+    /// <summary>
+    /// The settings as the web's menu of cards (app.js SETTINGS_PAGES), one page each — same names, same words.
+    /// The native parts (the account card, the look of the app, this computer) are added to the pages by the app.
+    /// </summary>
     public static readonly IReadOnlyList<PageTab> SettingsTabs =
     [
-        new("profile", "โปรไฟล์ของฉัน", "ข้อมูลของคุณ งบประมาณ การแจ้งเตือน และการสำรองข้อมูล", [Profile, Preferences, PushDevices, Backups, GatewayAccount]),
-        new("look", "หน้าตา", "ธีม ขนาดข้อความ ตัวละคร และเสียงของแอป", []),
-        new("memory", "ความจำ", Memory.Lead, [Memory]),
-        new("app", "แอปและระบบ", "ผู้ให้บริการโมเดล โมเดลเริ่มต้น พื้นที่เก็บข้อมูล session อัตโนมัติ และโฟลเดอร์", [Providers, General, Grants, Tunnel]),
+        new("account", "บัญชีและเซิร์ฟเวอร์", "ออกจากระบบ รหัสผ่าน เซิร์ฟเวอร์ที่ใช้ และเริ่มพร้อมเครื่อง", [GatewayAccount]),
+        new("profile", "โปรไฟล์ของฉัน", "ข้อมูลของคุณที่ agent ทุกตัวใช้ร่วมกัน", [Profile]),
+        new("prefs", "งบประมาณและการแจ้งเตือน", "วงเงินใช้จ่าย และเรื่องที่ให้ Mimi แจ้งเตือน", [Preferences, PushDevices]),
+        new("appearance", "หน้าตาและภาษา", "ธีมสว่าง/มืด ตัวละคร เสียง และภาษาของแอป", []),
+        new("memory", "ความจำ", "สิ่งที่ Mimi จำเกี่ยวกับคุณ — ใช้ร่วมกันทุก agent", [Memory]),
+        new("providers", "ผู้ให้บริการโมเดล", "เชื่อมต่อ Claude, ChatGPT, API key และจัดการรายชื่อโมเดล", [Providers]),
+        new("defaults", "โมเดลเริ่มต้นและระบบ", "โมเดลเริ่มต้น session อัตโนมัติ เขตเวลา และโฟลเดอร์ที่อนุญาต", [General, Grants]),
+        new("system", "พื้นที่เก็บข้อมูลและการเชื่อมต่อ", "เครื่องนี้ (แอป Windows) ทันเนล เบราว์เซอร์ และ Workspace", [Tunnel]),
+        new("backup", "สำรอง / กู้คืนข้อมูล", "สำเนาข้อมูลของ Mimi ไว้กู้คืนภายหลัง", [Backups]),
     ];
 
     public static readonly PageTab AgentPage = new("agents", "Agent", Agents.Lead, [Agents, AgentPresets]);

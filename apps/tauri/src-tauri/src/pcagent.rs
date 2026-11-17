@@ -6,7 +6,9 @@
 //!   * the token goes to its stdin, never to the environment (other programs of this OS account
 //!     could read that); its stdin stays open, because closing it stops the agent;
 //!   * it asks before it changes anything: it prints a `@@mimi-consent@@{json}` line, this shell
-//!     shows a dialog and answers with a `consent-response` line on its stdin;
+//!     shows a dialog and answers with a `consent-response` line on its stdin; when nobody answered
+//!     in time it prints `@@mimi-consent-cancel@@{"id"}` and the dialog is taken down (the agent
+//!     already counted that as "no", and the core told the phone that a question was waiting);
 //!   * if it stops by itself it is started again (2 s, doubling up to 60 s).
 //!
 //! What it may touch is chosen in the tray menu and kept in pc-agent.json: off until the person
@@ -21,6 +23,7 @@
 //! The agent's code: MIMI_PC_AGENT_ENTRY, else agent/pc-agent/src/main.ts next to this program,
 //! else packages/pc-agent/src/main.ts of the source tree above it (a development run).
 
+use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -35,6 +38,8 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 const CONFIG_FILE: &str = "pc-agent.json";
 const CONSENT_PREFIX: &str = "@@mimi-consent@@";
+const CONSENT_CANCEL_PREFIX: &str = "@@mimi-consent-cancel@@";
+const CONSENT_TITLE: &str = "Mimi ขออนุญาตบนเครื่องนี้";
 /// First folder names under the home that stay out of reach (keychains, app data, SSH keys).
 const FORBIDDEN_FIRST: [&str; 5] = ["Library", ".ssh", ".gnupg", "AppData", ".mimi"];
 
@@ -90,6 +95,8 @@ pub struct PcAgent {
     items: Mutex<Option<Items>>,
     /// One consent dialog at a time.
     consent: Mutex<()>,
+    /// Questions the agent gave up on (nobody answered in time): their dialog is closed and no answer is sent.
+    cancelled: Mutex<HashSet<String>>,
 }
 
 // ---------- checks ----------
@@ -197,6 +204,7 @@ impl PcAgent {
             home,
             items: Mutex::new(None),
             consent: Mutex::new(()),
+            cancelled: Mutex::new(HashSet::new()),
         }
     }
 
@@ -446,6 +454,13 @@ fn on_line(app: &AppHandle, generation: u64, stdin: &Arc<Mutex<Option<ChildStdin
     if !current(app, generation) {
         return;
     }
+    if let Some(json) = line.strip_prefix(CONSENT_CANCEL_PREFIX) {
+        if let Some(id) = serde_json::from_str::<serde_json::Value>(json).ok().and_then(|v| v.get("id").and_then(|id| id.as_str()).map(str::to_owned)) {
+            agent(app).cancelled.lock().unwrap().insert(id);
+            close_consent_dialog();
+        }
+        return;
+    }
     if let Some(json) = line.strip_prefix(CONSENT_PREFIX) {
         if let Ok(request) = serde_json::from_str::<serde_json::Value>(json) {
             if let Some(id) = request.get("id").and_then(|v| v.as_str()) {
@@ -477,25 +492,59 @@ fn ask_consent(app: &AppHandle, stdin: &Arc<Mutex<Option<ChildStdin>>>, id: Stri
         let risk = text("risk");
         if risk.is_empty() { "write".to_owned() } else { risk }
     };
+    let who = text("agent");
     let message = format!(
-        "{}\n\nเครื่องมือ: {tool} ({risk})\nคำขอนี้มาจาก Mimi บนเซิร์ฟเวอร์ และจะทำบนเครื่องนี้เท่านั้น อ่านรายละเอียดก่อนกดอนุญาต",
-        if summary.is_empty() { format!("Mimi ขอใช้ {tool} บนเครื่องนี้") } else { summary }
+        "{}\n\nเครื่องมือ: {tool} ({risk}){}\nคำขอนี้มาจาก Mimi บนเซิร์ฟเวอร์ และจะทำบนเครื่องนี้เท่านั้น อ่านรายละเอียดก่อนกดอนุญาต (ไม่ตอบภายใน 5 นาทีจะถือว่าไม่อนุญาต)",
+        if summary.is_empty() { format!("Mimi ขอใช้ {tool} บนเครื่องนี้") } else { summary },
+        if who.is_empty() { String::new() } else { format!("\nจาก agent: {who}") }
     );
     let allow = {
         let agent = agent(app);
         let _one_at_a_time = agent.consent.lock().unwrap();
+        // It timed out while waiting its turn: the agent already refused, so no dialog for it.
+        if agent.cancelled.lock().unwrap().remove(&id) {
+            return;
+        }
         app.dialog()
             .message(message)
-            .title("Mimi ขออนุญาตบนเครื่องนี้")
+            .title(CONSENT_TITLE)
             .kind(MessageDialogKind::Warning)
             .buttons(MessageDialogButtons::OkCancelCustom("อนุญาต".into(), "ไม่อนุญาต".into()))
             .blocking_show()
     };
+    // Taken down because nobody answered in time: the agent no longer waits for this answer.
+    if agent(app).cancelled.lock().unwrap().remove(&id) {
+        return;
+    }
     if let Some(stdin) = stdin.lock().unwrap().as_mut() {
         let _ = writeln!(stdin, "{}", serde_json::json!({ "type": "consent-response", "id": id, "allow": allow }));
         let _ = stdin.flush();
     }
 }
+
+/// Takes the open consent dialog off the screen (Windows: asks its window to close). Elsewhere the
+/// dialog stays until clicked, but its answer is dropped, so a late click does nothing.
+#[cfg(windows)]
+fn close_consent_dialog() {
+    use std::ffi::c_void;
+    #[link(name = "user32")]
+    extern "system" {
+        fn FindWindowW(class: *const u16, title: *const u16) -> *mut c_void;
+        fn PostMessageW(window: *mut c_void, message: u32, w: usize, l: isize) -> i32;
+    }
+    const WM_CLOSE: u32 = 0x0010;
+    let title: Vec<u16> = CONSENT_TITLE.encode_utf16().chain(std::iter::once(0)).collect();
+    // SAFETY: both calls take plain values; a window that is already gone just makes them do nothing.
+    unsafe {
+        let window = FindWindowW(std::ptr::null(), title.as_ptr());
+        if !window.is_null() {
+            PostMessageW(window, WM_CLOSE, 0, 0);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn close_consent_dialog() {}
 
 // ---------- the page's side (shell.js) ----------
 

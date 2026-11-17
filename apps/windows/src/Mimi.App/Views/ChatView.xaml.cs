@@ -3,6 +3,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Mimi.App.Audio;
+using Mimi.Core;
 using Mimi.Core.Protocol;
 using Mimi.Core.ViewModels;
 using Windows.ApplicationModel.DataTransfer;
@@ -65,6 +66,15 @@ public sealed partial class ChatView : UserControl
         this.window = window;
         InitializeComponent();
         SetUpComposer();
+        // The words of the chat screen follow the app's language, also when it changes while the chat is open.
+        void Words()
+        {
+            CharacterButton.Content = Loc.T("ตัวละคร");
+            RailButton.Content = Loc.T("ข้อมูล");
+            Composer.PlaceholderText = Loc.T("พิมพ์ข้อความ…");
+        }
+        Words();
+        Loc.Changed += () => DispatcherQueue.TryEnqueue(Words);
         viewModel.Grew += () => DispatcherQueue.TryEnqueue(ScrollDown);
         // The web's emoji panel (feature-chat.js EMOJIS).
         EmojiGrid.ItemsSource = new[]
@@ -326,7 +336,7 @@ public sealed partial class ChatView : UserControl
         }));
         var forward = new MenuFlyoutSubItem { Text = "↪ ส่งต่อ" };
         foreach (var (id, title) in ViewModel.ForwardTargets) forward.Items.Add(Item(title, () => ViewModel.Forward(message.Id, id)));
-        if (forward.Items.Count == 0) forward.Items.Add(new MenuFlyoutItem { Text = "ไม่มีแชตอื่นให้ส่งต่อ", IsEnabled = false });
+        if (forward.Items.Count == 0) forward.Items.Add(new MenuFlyoutItem { Text = Loc.T("ไม่มีแชตอื่นให้ส่งต่อ"), IsEnabled = false });
         menu.Items.Add(forward);
         if (message.HasText) menu.Items.Add(Item("⧉ คัดลอกข้อความ", () => Copy(ViewModel.TextOf(message.Id))));
         if (!message.IsUser && message.HasText) menu.Items.Add(Item("🔊 อ่านออกเสียง", () => ViewModel.Speak(message.Id)));
@@ -344,7 +354,7 @@ public sealed partial class ChatView : UserControl
         var package = new DataPackage();
         package.SetText(text);
         Clipboard.SetContent(package);
-        ViewModel.Info = "คัดลอกแล้ว";
+        ViewModel.Info = Loc.T("คัดลอกแล้ว");
     }
 
     private async Task AskRewind(long id)
@@ -414,7 +424,7 @@ public sealed partial class ChatView : UserControl
                 flyout.Hide();
                 ViewModel.GoTo(pin);
             };
-            var unpin = new Button { Content = "เลิกปักหมุด", FontSize = 12 };
+            var unpin = new Button { Content = Loc.T("เลิกปักหมุด"), FontSize = 12 };
             unpin.Click += (_, _) =>
             {
                 flyout.Hide();

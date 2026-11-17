@@ -22,8 +22,10 @@ import { pcInternalTools as mcpInternalTools } from './tools/mcp-session.ts';
 
 export { PcAgent, type PcAgentOptions } from './client.ts';
 export {
+  type ConsentObserver,
   type ConsentPrompt,
   type ConsentRequest,
+  DEFAULT_CONSENT_TIMEOUT_MS,
   LineReader,
   LocalConsent,
   type LocalConsentOptions,

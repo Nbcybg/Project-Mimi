@@ -1,5 +1,8 @@
 # Mimi native clients — สเปก (Phase 0)
 
+> **หมายเหตุ (2026-11-11):** แอป Android ไม่ใช่ native Kotlin แล้ว แต่เป็น Tauri + Rust ครอบ UI เว็บ ดู [`../android.md`](../android.md)
+> ส่วนที่พูดถึง Android/Kotlin ในเอกสารชุดนี้เป็นประวัติ สัญญา API ของ core ยังใช้ได้กับทุก client (Windows/Mac native ก็อ่านจากที่นี่)
+
 แอป Mimi ทุกแพลตฟอร์มจะเป็น **native แท้ ไม่ใช้ WebView** (Android: Kotlin + Jetpack Compose, Mac/iOS: SwiftUI, Windows: WinUI 3)
 คุยกับ core ผ่าน HTTP + WebSocket เท่านั้น เอกสารในโฟลเดอร์นี้คือสัญญาระหว่างแอปกับเซิร์ฟเวอร์ — เขียนจากโค้ดจริง `0.8.1-prototype`
 (อ้างอิง `ไฟล์:บรรทัด`) และทดสอบกับ core + gateway ที่รันในเครื่องด้วยข้อมูลทดสอบและ LLM จำลอง (2026-11-02) ไม่ได้เรียก Railway

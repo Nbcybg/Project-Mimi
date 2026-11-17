@@ -822,6 +822,13 @@ export async function createCore(
         return undefined;
       }
     },
+    agentPermissionMode: (name) => {
+      try {
+        return agents.get(name).permissionMode;
+      } catch {
+        return undefined;
+      }
+    },
     execute: async (toolName, input, context) => {
       const definition = toolPool.get(toolName);
       if (!definition) throw new Error(`Unknown PC tool "${toolName}".`);
@@ -861,6 +868,13 @@ export async function createCore(
     agentPermissions: (name) => {
       try {
         return agents.get(name).permissions;
+      } catch {
+        return undefined;
+      }
+    },
+    agentPermissionMode: (name) => {
+      try {
+        return agents.get(name).permissionMode;
       } catch {
         return undefined;
       }
@@ -1107,6 +1121,17 @@ export async function createCore(
     return finish.text.trim() || '(the developer agent returned no text)';
   };
   mesh.attach((input) => runAgent(deps, input));
+  // Delegated work lands in the receiver's own one-to-one chat, like a person messaging a colleague.
+  mesh.attachChats({
+    directThread: (agent) => {
+      if (!agents.names().includes(agent)) return undefined;
+      const chat = chats.directChat(agent);
+      const { session } = chats.currentSession(chat.id, sessionIdleMs(), sessionMaxTokens());
+      chats.touch(session.id);
+      return { thread: session.thread, chatId: chat.id };
+    },
+    changed: (chatId) => listeners.chatChanged?.(chatId),
+  });
 
   /** Runs one workflow step with a configured agent; only the final text comes back. */
   const runWorkflowAgent = async (agentName: string, prompt: string, thread: string, signal?: AbortSignal): Promise<string> => {

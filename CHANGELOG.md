@@ -1,6 +1,74 @@
 # Changelog
 
-## Unreleased
+## 0.8.5 - 2026-11-17
+
+### The PC's own permission question reaches the phone, waits at most 5 minutes, and every chat shows what waits
+
+- **Phone knows when the PC is waiting.** When an agent asks to touch the computer, the PC agent still asks on the
+  PC's own screen (a phone cannot approve for it: the core may be on another machine). Until now nothing told the
+  phone, and nobody ever answered meant waiting up to 15 minutes without a word. The PC agent now reports each
+  question to the core (`consent-pending` / `consent-resolved`); the core tells every client (`pc-consent`,
+  `pc-consent-done`, and `pcConsents` in `welcome` for a client that connects in the middle) and pushes an
+  **approval notification** ("รออนุญาตบนเครื่อง PC: <agent>", naming the tool, the PC and the minutes left). Same
+  rule as a chat approval: if someone is looking at that very chat the push waits 20 s. Additive, no API bump.
+- **Timeout.** A question nobody answers at the PC is refused after 5 minutes (`MIMI_CONSENT_TIMEOUT_MS`), the
+  dialog is taken down (`@@mimi-consent-cancel@@` to the desktop app: the C# app closes its box, the Tauri app closes
+  its dialog on Windows) and the agent is told "nobody answered in time" instead of "the user denied". The inbox gets
+  an info note. The dialog also names the agent that asked.
+- **Every chat shows what waits.** The bar above the message box listed only the open chat's questions. It now lists
+  every open permission question of every chat (agent · chat, tap to open that chat) plus the PC's questions with a
+  countdown, in the web UI/Android (`packages/ui`) and in the WinUI app (a bar under the header on every page,
+  `AttentionBoard`). The chat list shows the PC's questions too.
+- **WinUI chat settings → ฉากหลัง tidied** to match the web: 2-column mode buttons, a 16:9 preview, a colour swatch
+  that opens the picker in a flyout (the ring wheel no longer overflows the panel), start/end colour and angle on one
+  row, preset and uploaded pictures in an even 2-column grid.
+
+### Android app: approvals, send state, agent permission mode, glass, stop button
+
+- **Permission card and bar are a solid amber**, in every layout (settled cards turn solid grey), so they cannot be
+  mistaken for a chat bubble. **The first page shows the app version** (connect page and sign-in; Settings shows app
+  and core versions). The Tauri app version is now 0.1.0 (`Cargo.toml`, `tauri.conf.json`).
+
+- **Permission cards no longer vanish.** A card whose bubble was replaced by the stored message (the chat reloads
+  when a turn ends or a notification arrives) was never drawn again. Cards are redrawn, text after a question now
+  starts a new bubble below it, and the compact "bubbles" levels no longer hide the message that holds an open
+  question. Every chat with an open question gets a **"!"** in the chat list, on the chat tabs, on the back button
+  and as a bar above the message box ("! รออนุญาต — แตะเพื่อไปที่การ์ด"). The core tells each client which chat a
+  question belongs to (`PermissionRequest.chatId`).
+- **Approval notifications.** The Android shell now tells the page when the app leaves the screen
+  (`__mimiSetVisible`); a WebView used to keep saying "visible", so the core thought the chat was being read and sent
+  nothing. As a second net the core notifies after 20 s if a question is still unanswered although a client "watches"
+  that chat. Tapping a notification opens its chat (`MimiAndroid.takePendingChat`).
+- **Agent permission mode** (Agent → สิทธิ์และงบ, `permission_mode` in `agent.md`): `ask` (default), `allow` (do not
+  ask; a tool that always asks still does), `deny` (never do anything with side effects; reads still work) and `plan`
+  (say what you are about to do, then ask). A per-tool allow / ask / deny still wins.
+- **Message send state.** Your message shows ◷ sending, ✓ received by the core (`chat-ack`) or ⚠ not sent with
+  "ส่งใหม่ / ลบ". A send the core did not confirm within 12 s, or one on a connection that dropped, is marked as not
+  sent. The core ignores a repeat of the same `clientId` (15 min), so resending cannot post twice.
+- **Glass.** Controls on the character screen now blur and dim the backdrop (`backdrop-filter`) instead of painting a
+  coloured fill over it; the dark wash behind the character is much lighter.
+- **Stop beside send.** With text typed while a reply is coming, stop sits on the left of send instead of under it.
+
+### Android is Tauri + Rust; the Kotlin app is removed
+
+The Android app is the Tauri 2 + Rust shell in `apps/tauri` around `packages/ui`. The native Kotlin + Compose app in
+`android/` is retired and removed from `main` (kept at git tag `kotlin-android-final`, commit `8a0f917`). New page
+`docs/android.md` says what the Android app is, where to change what, and how to build the APK on Windows. The release
+workflow no longer builds an Android APK (there is no Tauri job yet), `.gitignore` and the README / hosting / admin docs
+no longer point at `android/`; the Kotlin-only `scripts/android-icons.mjs` is removed too. Older documents that mention `android/` (`docs/native/`, prompts, `HANDOFF.md`) stay as history, with a note.
+
+### Delegated work happens in the receiver's own chat
+
+When an agent hands work to another with `send_to` / `send_agents` (delegate), the exchange now looks like two
+people messaging: the sender's task appears as a bubble from the sender in the receiver's one-to-one chat, the
+receiver answers there as a bubble of its own, and the sender reports back to the user in its chat. Before, the
+receiver worked in a hidden `mesh:<id>` thread the user could not open. The receiver sees the sender's message as
+`[sender]: ...` plus a private note saying it is from an agent, not the user; the "new" mark and the chat list
+update as for any new message. If the receiver's chat is in use at that moment (the sender's own chat, another
+delegation to the same agent), that exchange keeps using a hidden thread so two runs never write into one
+conversation. Turn it off with `mesh.in_chat: false`. Handoff mode is unchanged.
+In a one-to-one chat shown with the character (solo look), the face and name were hidden for every speaker; an agent
+other than the chat's own now keeps its avatar and name (`.gmsg.guest`), so it is clear who says what.
 
 ### Any agent can write a skill (`skill_create`)
 

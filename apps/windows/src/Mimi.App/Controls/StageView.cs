@@ -95,8 +95,15 @@ internal sealed partial class StageView : Grid
     }
 
     private bool solo;
+    private bool wasThreeD;
 
     public event Action? Changed;
+
+    /// <summary>The 3D model is on screen (the chat's placement sliders are the camera's then, not the picture's).</summary>
+    public bool ThreeD => vrm.State == "ready" && vrm.Visibility == Visibility.Visible;
+
+    /// <summary>The stage switched between the 3D model and a 2D picture.</summary>
+    public event Action? ThreeDChanged;
 
     private void PaintShade()
     {
@@ -224,8 +231,14 @@ internal sealed partial class StageView : Grid
         zoomScale.ScaleX = zoomScale.ScaleY = Math.Clamp(look.Zoom, 0.1, 10);
         // On the holder: the picture itself has an opacity transition, which rules out a render transform on it.
         figureBox.RenderTransform = new TranslateTransform { X = look.X / 100 * ActualWidth, Y = -look.Y / 100 * height };
-        vrm.View(look.Zoom, look.X, look.Y);
-        var threeD = vrm.State == "ready" && vrm.Visibility == Visibility.Visible;
+        // The 3D camera has its own turn, tilt, zoom and slide (the web keeps 2D and 3D placement apart).
+        vrm.View(look.CameraZoom, look.CameraX, look.CameraY, look.CameraYaw, look.CameraPitch);
+        var threeD = ThreeD;
+        if (threeD != wasThreeD)
+        {
+            wasThreeD = threeD;
+            ThreeDChanged?.Invoke();
+        }
         figure.Visibility = threeD ? Visibility.Collapsed : Visibility.Visible;
         // .solo .fade is the bottom 62% only.
         shade.VerticalAlignment = solo ? VerticalAlignment.Bottom : VerticalAlignment.Stretch;

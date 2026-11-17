@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { PcMessage, PcRequest } from '@mimi/shared';
+import type { PcConsentOutcome, PcMessage, PcRequest } from '@mimi/shared';
 import { PC_OFFLINE, type PcLink } from '../tools/executor.ts';
 import type { ToolContext } from '../tools/registry.ts';
 
@@ -11,6 +11,17 @@ export interface PcSocket {
 
 type Hello = Extract<PcMessage, { type: 'hello' }>;
 type Result = Extract<PcMessage, { type: 'tool-result' }>;
+export type ConsentPending = Extract<PcMessage, { type: 'consent-pending' }>;
+export type ConsentResolved = Extract<PcMessage, { type: 'consent-resolved' }>;
+
+/** A question the PC agent is waiting on at its own screen. */
+export interface PendingConsent extends ConsentPending {
+  askedAt: number;
+  expiresAt: number;
+}
+
+/** Slack on top of the PC's own timeout before the core stops listing a question that never ended. */
+const CONSENT_GRACE_MS = 15_000;
 
 const EXEC_TIMEOUT_MS = 15 * 60 * 1000;
 
@@ -24,9 +35,50 @@ export class PcHub implements PcLink {
   private hello: Hello | null = null;
   private readonly calls = new Map<string, { resolve: (output: string) => void; reject: (error: Error) => void }>();
   private readonly onStatus: (online: boolean, name?: string) => void;
+  private readonly consents = new Map<string, { entry: PendingConsent; timer: NodeJS.Timeout }>();
+  /** Told when a question goes up on the PC's screen and when it ends (the server tells every client). */
+  onConsent: (event: { kind: 'pending'; request: PendingConsent } | { kind: 'done'; request: PendingConsent; outcome: PcConsentOutcome }) => void = () => {};
 
   constructor(onStatus: (online: boolean, name?: string) => void = () => {}) {
     this.onStatus = onStatus;
+  }
+
+  /** Questions still waiting at the PC's screen, oldest first. */
+  pendingConsents(): PendingConsent[] {
+    return [...this.consents.values()].map((item) => item.entry);
+  }
+
+  /** The PC agent put a question on its screen. */
+  consentPending(message: ConsentPending): void {
+    if (typeof message.id !== 'string' || message.id.length === 0) return;
+    this.consentEnded(message.id, 'denied', false);
+    if (this.consents.size >= 20) return; // a runaway agent must not fill the phone with banners
+    const timeoutMs = Number.isFinite(message.timeoutMs) && message.timeoutMs > 0 ? message.timeoutMs : 5 * 60_000;
+    const askedAt = Date.now();
+    const entry: PendingConsent = {
+      ...message,
+      tool: String(message.tool ?? ''),
+      risk: String(message.risk ?? ''),
+      summary: String(message.summary ?? '').slice(0, 600),
+      agent: String(message.agent ?? ''),
+      thread: String(message.thread ?? ''),
+      timeoutMs,
+      askedAt,
+      expiresAt: askedAt + timeoutMs,
+    };
+    const timer = setTimeout(() => this.consentEnded(entry.id, 'timeout'), timeoutMs + CONSENT_GRACE_MS);
+    timer.unref?.();
+    this.consents.set(entry.id, { entry, timer });
+    this.onConsent({ kind: 'pending', request: entry });
+  }
+
+  /** The question was answered, timed out, or its call ended; the phone stops showing it. */
+  consentEnded(id: string, outcome: PcConsentOutcome, tell = true): void {
+    const found = this.consents.get(id);
+    if (!found) return;
+    clearTimeout(found.timer);
+    this.consents.delete(id);
+    if (tell) this.onConsent({ kind: 'done', request: found.entry, outcome });
   }
 
   get online(): boolean {
@@ -55,11 +107,13 @@ export class PcHub implements PcLink {
     this.socket = null;
     this.hello = null;
     this.failAll(new Error(PC_OFFLINE));
+    for (const id of [...this.consents.keys()]) this.consentEnded(id, 'gone');
     this.onStatus(false);
   }
 
   private drop(socket: PcSocket, reason: string): void {
     this.failAll(new Error(`PC agent ${reason}`));
+    for (const id of [...this.consents.keys()]) this.consentEnded(id, 'gone');
     socket.close();
   }
 
@@ -110,6 +164,8 @@ export class PcHub implements PcLink {
 
   /** Delivers a tool result from the PC agent to whoever is waiting for it. */
   handleResult(result: Result): void {
+    // A result means the call is over, whatever happened to the question about it.
+    this.consentEnded(result.id, result.ok ? 'allowed' : 'denied');
     const call = this.calls.get(result.id);
     if (!call) return;
     if (result.ok) call.resolve(result.output);

@@ -129,6 +129,13 @@ test('chats over the socket: create, send with a file, search, go back', async (
   );
   assert.ok(app.inbox.some((message) => message.type === 'busy' && message.chatId === chatId));
   await app.ask(null, 'busy', (reply) => reply.chatId === null);
+  // The core says it received the message; the same clientId sent again (a phone unsure it arrived)
+  // is acknowledged as a duplicate and stored only once.
+  assert.ok(app.inbox.some((message) => message.type === 'chat-ack' && message.clientId === 'pending-test-1' && !message.duplicate));
+  const stored = (await app.ask({ type: 'chat-open', chatId }, 'chat-history')).messages.filter((entry) => entry.role === 'user').length;
+  const again = await app.ask({ type: 'chat-send', chatId, text: 'จำรายการนี้ไว้', attachments: [file.id], clientId: 'pending-test-1' }, 'chat-ack');
+  assert.equal(again.duplicate, true);
+  assert.equal((await app.ask({ type: 'chat-open', chatId }, 'chat-history')).messages.filter((entry) => entry.role === 'user').length, stored);
 
   await app.finished({ type: 'chat-send', chatId, text: 'ข้อความที่สอง' });
   await app.ask(null, 'busy', (reply) => reply.chatId === null);

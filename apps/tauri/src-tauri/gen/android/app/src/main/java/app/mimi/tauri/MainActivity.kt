@@ -1,6 +1,7 @@
 package app.mimi.tauri
 
 import android.Manifest
+import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.view.ViewGroup
@@ -24,6 +25,10 @@ import androidx.core.view.WindowInsetsCompat
  *   - window.__mimiKeyboard(px)  how far the keyboard overlaps the page (the web view is not resized)
  *   - window.MimiAndroid.signedIn(token)   sign-in / sign-out: starts / stops NotifyService, which
  *                                keeps the notifications coming while the app is in the background
+ *   - window.__mimiSetVisible(b) tells the page whether the app is on screen: a WebView keeps saying
+ *                                "visible" after the app left, so the core would think the chat is still
+ *                                being read and send no notification (approvals included)
+ *   - window.MimiAndroid.takePendingChat()  the chat a tapped notification wants opened (0 = none)
  * It also keeps the page out from under the status bar and navigation bar (edge-to-edge is
  * enforced from Android 15; the UI only reserves space where it uses env(safe-area-inset-*)).
  * The microphone, camera and file pickers of the page are handled by the WebView client of the
@@ -31,6 +36,8 @@ import androidx.core.view.WindowInsetsCompat
  */
 class MainActivity : TauriActivity() {
   private var web: WebView? = null
+  /** The chat of the notification that opened (or brought forward) the app; the page takes it once. */
+  private var pendingChat = 0
 
   // The default Back handling only walks the WebView history; the UI has its own (see above).
   override val handleBackNavigation: Boolean = false
@@ -38,6 +45,7 @@ class MainActivity : TauriActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
+    pendingChat = intent?.getIntExtra("mimi_chat", 0) ?: 0
 
     val content = findViewById<ViewGroup>(android.R.id.content)
     // The colour of the bars' background: the UI's dark theme (<meta name="theme-color">).
@@ -77,9 +85,25 @@ class MainActivity : TauriActivity() {
     )
   }
 
+  override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    setIntent(intent)
+    val chat = intent.getIntExtra("mimi_chat", 0)
+    if (chat > 0) {
+      pendingChat = chat
+      // onResume follows and wakes the page, which takes the chat.
+    }
+  }
+
   override fun onResume() {
     super.onResume()
+    web?.evaluateJavascript("(function(){try{window.__mimiSetVisible&&window.__mimiSetVisible(true)}catch(e){}})()", null)
     web?.evaluateJavascript("(function(){try{window.__mimiWake&&window.__mimiWake()}catch(e){}})()", null)
+  }
+
+  override fun onStop() {
+    super.onStop()
+    web?.evaluateJavascript("(function(){try{window.__mimiSetVisible&&window.__mimiSetVisible(false)}catch(e){}})()", null)
   }
 
   /** What packages/ui (and the shell's own script) call as window.MimiAndroid. */
@@ -119,6 +143,14 @@ class MainActivity : TauriActivity() {
 
     @JavascriptInterface
     fun refreshWidget() {}
+
+    /** The chat id a tapped notification asked for, once; 0 when there is none. */
+    @JavascriptInterface
+    fun takePendingChat(): Int {
+      val chat = pendingChat
+      pendingChat = 0
+      return chat
+    }
 
     @JavascriptInterface
     fun requestNotifications() {

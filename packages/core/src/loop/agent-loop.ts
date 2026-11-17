@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type {
   AgentEvent,
+  AgentPermissionMode,
   MeshContext,
   MessageRole,
   RunFinishReason,
@@ -85,6 +86,8 @@ export interface AgentLoopDeps {
   gate: PermissionGate;
   /** The agent's own allow / ask / deny policy, read at call time so edits apply next turn. */
   agentPermissions?: (agent: string) => Record<string, 'allow' | 'ask' | 'deny'> | undefined;
+  /** The agent's default for tools that need approval: ask, allow, deny or plan. */
+  agentPermissionMode?: (agent: string) => AgentPermissionMode | undefined;
   allowedDirs: string[];
   /** Approved project roots for shell commands; empty means any allowed folder. */
   projectRoots?: string[];
@@ -249,6 +252,7 @@ async function* runToolCall(
       thread: context.thread,
       agent: context.agent,
       overrides: deps.agentPermissions?.(context.agent) ?? {},
+      mode: deps.agentPermissionMode?.(context.agent),
     };
     const mode = deps.gate.modeFor(definition.name, definition.risk, context.traceId, modeOptions);
     if (mode === 'deny') {

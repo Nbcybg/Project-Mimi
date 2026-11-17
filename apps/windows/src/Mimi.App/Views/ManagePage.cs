@@ -33,11 +33,38 @@ public sealed partial class ManagePage : UserControl
     private readonly Dictionary<string, List<FrameworkElement>> extras = [];
     private PageTab current;
     private bool dialogOpen;
+    // Menu mode (Settings, as the web's): a list of cards, one per tab; a card opens its page, Back returns to the list.
+    private readonly bool menu;
+    private bool inMenu = true;
+    private FrameworkElement? menuView;
+
+    /// <summary>The line under the menu's title (versions of the app and the server); asked each time the menu is drawn.</summary>
+    public Func<string>? MenuLead { get; set; }
+
+    /// <summary>The menu's two buttons: Credits and the setup wizard (the web's settings head).</summary>
+    public (Action Credits, Action Setup)? MenuActions { get; set; }
+
+    /// <summary>Menu mode: one step back (from a page to the list). False when there is no step left, so the window goes on.</summary>
+    public bool Back()
+    {
+        if (!menu || inMenu) return false;
+        ShowMenu();
+        return true;
+    }
 
     /// <summary>A native section shown above the lists of a tab (account, this computer, the look of the app).</summary>
     public void AddSection(string tabKey, FrameworkElement section)
     {
         if (!extras.TryGetValue(tabKey, out var list)) extras[tabKey] = list = [];
+        list.Add(section);
+    }
+
+    private readonly Dictionary<string, List<FrameworkElement>> extrasBelow = [];
+
+    /// <summary>A native section shown under the lists of a tab (the web puts the link to the Hub's accounts last).</summary>
+    public void AddSectionBelow(string tabKey, FrameworkElement section)
+    {
+        if (!extrasBelow.TryGetValue(tabKey, out var list)) extrasBelow[tabKey] = list = [];
         list.Add(section);
     }
 
@@ -50,25 +77,35 @@ public sealed partial class ManagePage : UserControl
     /// <summary>Asks the open tab's lists again.</summary>
     public void Refresh() => Reload();
 
-    /// <summary>Opens a tab by its key.</summary>
+    /// <summary>Opens a tab by its key (menu mode: an empty key is the list of cards).</summary>
     public void SelectKey(string key)
     {
-        if (tabs.FirstOrDefault(tab => tab.Key == key) is { } tab) current = tab;
+        if (menu && key.Length == 0)
+        {
+            ShowMenu();
+            return;
+        }
+        if (tabs.FirstOrDefault(tab => tab.Key == key) is { } tab)
+        {
+            current = tab;
+            inMenu = false;
+        }
         Showing();
     }
 
-    public ManagePage(MimiSession session, Lookups lookups, Func<nint> window, IReadOnlyList<PageTab> tabs, string id)
+    public ManagePage(MimiSession session, Lookups lookups, Func<nint> window, IReadOnlyList<PageTab> tabs, string id, bool menu = false)
     {
         this.session = session;
         this.lookups = lookups;
         this.window = window;
         this.tabs = tabs;
+        this.menu = menu;
         current = tabs[0];
         AutomationProperties.SetAutomationId(this, id);
         var root = new Grid();
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-        if (tabs.Count > 1)
+        if (tabs.Count > 1 && !menu)
         {
             foreach (var tab in tabs)
             {
@@ -100,11 +137,63 @@ public sealed partial class ManagePage : UserControl
     private static Brush Brush(string key) => (Brush)Application.Current.Resources[key];
 
     /// <summary>The page came on screen: show the tab and ask for its lists.</summary>
-    public void Showing() => Select(current);
+    public void Showing()
+    {
+        if (menu && inMenu) ShowMenu();
+        else Select(current);
+    }
+
+    /// <summary>The list of cards (menu mode): one per tab, with what is in it.</summary>
+    private void ShowMenu()
+    {
+        inMenu = true;
+        lookups.Refresh();
+        var stack = new StackPanel { Spacing = 8, Padding = new Thickness(12, 8, 12, 24) };
+        var lead = MenuLead?.Invoke() ?? "";
+        stack.Children.Add(new TextBlock { Text = $"เลือกหัวข้อที่จะตั้งค่า{(lead.Length > 0 ? $" · {lead}" : "")}", FontSize = 12, Foreground = Brush("MimiMutedBrush"), TextWrapping = TextWrapping.Wrap });
+        if (MenuActions is { } actions)
+        {
+            stack.Children.Add(Ui.Row(6,
+                Ui.Button("Credits", actions.Credits, "ghost", "settings-credits", "ดูเครดิตของ Mimi และทีมงาน"),
+                Ui.Button("ตัวช่วยตั้งค่า", actions.Setup, "ghost", "settings-setup", "เปิดตัวช่วยตั้งค่าเริ่มต้นอีกครั้ง")));
+        }
+        foreach (var tab in tabs)
+        {
+            var text = new StackPanel { Spacing = 2 };
+            text.Children.Add(new TextBlock { Text = tab.Label, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 15, Foreground = Brush("MimiInkBrush"), TextWrapping = TextWrapping.Wrap });
+            text.Children.Add(new TextBlock { Text = tab.Lead, FontSize = 12, Foreground = Brush("MimiMutedBrush"), TextWrapping = TextWrapping.Wrap });
+            var row = new Grid { ColumnSpacing = 8 };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            row.Children.Add(text);
+            var chevron = new TextBlock { Text = "›", FontSize = 22, Foreground = Brush("MimiFaintBrush"), VerticalAlignment = VerticalAlignment.Center };
+            Grid.SetColumn(chevron, 1);
+            row.Children.Add(chevron);
+            var card = new Button
+            {
+                Content = row,
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                HorizontalContentAlignment = HorizontalAlignment.Stretch,
+                Padding = new Thickness(14, 10, 12, 10),
+                CornerRadius = new CornerRadius(12),
+                Background = Brush("MimiPanelBrush"),
+                BorderBrush = Brush("MimiLineBrush"),
+                BorderThickness = new Thickness(1),
+                Tag = tab,
+            };
+            AutomationProperties.SetAutomationId(card, $"setcard-{tab.Key}");
+            AutomationProperties.SetName(card, tab.Label);
+            card.Click += (_, _) => Select(tab);
+            stack.Children.Add(card);
+        }
+        menuView = new ScrollViewer { Content = stack, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+        body.Content = menuView;
+    }
 
     public void Select(PageTab tab)
     {
         current = tab;
+        inMenu = false;
         lookups.Refresh();
         foreach (var button in tabBar.Children.OfType<ToggleButton>()) button.IsChecked = ReferenceEquals(button.Tag, tab);
         if (!built.TryGetValue(tab.Key, out var page))
@@ -126,7 +215,16 @@ public sealed partial class ManagePage : UserControl
     private (FrameworkElement, List<EntityList>) Build(PageTab tab)
     {
         var stack = new StackPanel { Spacing = 18, Padding = new Thickness(12, 6, 12, 24) };
-        if (tabs.Count > 1 || tab.Lists.Count > 1) stack.Children.Add(new TextBlock { Text = tab.Lead, FontSize = 12, Foreground = Brush("MimiMutedBrush"), TextWrapping = TextWrapping.Wrap });
+        if (menu)
+        {
+            // A page of the menu: its name and what it is for, as the web's settings head.
+            var title = new StackPanel { Spacing = 2 };
+            title.Children.Add(new TextBlock { Text = tab.Label, FontSize = 20, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, Foreground = Brush("MimiInkBrush"), TextWrapping = TextWrapping.Wrap });
+            title.Children.Add(new TextBlock { Text = tab.Lead, FontSize = 12, Foreground = Brush("MimiMutedBrush"), TextWrapping = TextWrapping.Wrap });
+            AutomationProperties.SetAutomationId(title, "page-title");
+            stack.Children.Add(title);
+        }
+        else if (tabs.Count > 1 || tab.Lists.Count > 1) stack.Children.Add(new TextBlock { Text = tab.Lead, FontSize = 12, Foreground = Brush("MimiMutedBrush"), TextWrapping = TextWrapping.Wrap });
         if (extras.TryGetValue(tab.Key, out var sections))
         {
             foreach (var section in sections) stack.Children.Add(section);
@@ -134,9 +232,15 @@ public sealed partial class ManagePage : UserControl
         var lists = new List<EntityList>();
         foreach (var def in tab.Lists)
         {
+            // 2FA and the password belong to the accounts gateway: a core opened with its token has neither (the web shows them only then).
+            if (def.Key == "account" && session.Username.Length == 0) continue;
             var list = new EntityList(session, def);
             lists.Add(list);
-            stack.Children.Add(ListView(list, showLead: tab.Lists.Count > 1 || tabs.Count == 1));
+            stack.Children.Add(ListView(list, showLead: menu ? tab.Lists.Count > 1 : tab.Lists.Count > 1 || tabs.Count == 1));
+        }
+        if (extrasBelow.TryGetValue(tab.Key, out var below))
+        {
+            foreach (var section in below) stack.Children.Add(section);
         }
         return (new ScrollViewer { Content = stack, VerticalScrollBarVisibility = ScrollBarVisibility.Auto }, lists);
     }
@@ -162,19 +266,6 @@ public sealed partial class ManagePage : UserControl
             tools.Children.Add(add);
         }
         var pageActions = def.Actions?.Where(action => !action.ForItem).ToList() ?? [];
-        if (pageActions.Count > 0)
-        {
-            var more = new DropDownButton { Content = "ทำ…" };
-            var menu = new MenuFlyout();
-            foreach (var action in pageActions)
-            {
-                var entry = new MenuFlyoutItem { Text = action.Label };
-                entry.Click += (_, _) => Safe(list, Run(list, action, default));
-                menu.Items.Add(entry);
-            }
-            more.Flyout = menu;
-            tools.Children.Add(more);
-        }
         var refresh = new Button { Content = "", FontFamily = new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets"), Padding = new Thickness(8, 5, 8, 5) };
         ToolTipService.SetToolTip(refresh, "โหลดใหม่");
         AutomationProperties.SetName(refresh, $"โหลด {def.Label} ใหม่");
@@ -182,6 +273,19 @@ public sealed partial class ManagePage : UserControl
         tools.Children.Add(refresh);
         panel.Children.Add(head);
         if (showLead && def.Lead.Length > 0) panel.Children.Add(new TextBlock { Text = def.Lead, FontSize = 12, Foreground = Brush("MimiMutedBrush"), TextWrapping = TextWrapping.Wrap });
+        // What can be done with the page as a whole: each its own named button (the web's), never a menu that only says "do…".
+        if (pageActions.Count > 0)
+        {
+            var bar = new WrapPanel { HorizontalSpacing = 6, VerticalSpacing = 6 };
+            foreach (var action in pageActions)
+            {
+                var button = new Button { Content = action.Label, Style = (Style)Application.Current.Resources["MimiGhostButton"] };
+                AutomationProperties.SetAutomationId(button, $"action-{def.Key}-{pageActions.IndexOf(action)}");
+                button.Click += (_, _) => Safe(list, Run(list, action, default));
+                bar.Children.Add(button);
+            }
+            panel.Children.Add(bar);
+        }
 
         var error = new TextBlock { FontSize = 12, Foreground = Brush("MimiBadBrush"), TextWrapping = TextWrapping.Wrap, Visibility = Visibility.Collapsed };
         var note = new TextBlock { FontSize = 12, Foreground = Brush("MimiOkBrush"), TextWrapping = TextWrapping.Wrap, Visibility = Visibility.Collapsed };
@@ -193,9 +297,75 @@ public sealed partial class ManagePage : UserControl
         var empty = new TextBlock { Text = "ยังไม่มีรายการ", FontSize = 12, Foreground = Brush("MimiFaintBrush"), Visibility = Visibility.Collapsed };
         panel.Children.Add(empty);
 
+        // One object (profile, budget, defaults): its form sits in the page, as the web's, instead of behind a row.
+        var inlineForm = def.Single && def.Save is not null && def.Fields is { Count: > 0 };
+        var inlineHost = new StackPanel { Spacing = 10 };
+        panel.Children.Add(inlineHost);
+        JsonForm? openForm = null;
+        var dirty = false;
+
+        void PaintInline()
+        {
+            // A form the person is typing in is never rebuilt under their hands; it is replaced once saved.
+            if (dirty && openForm is not null) return;
+            inlineHost.Children.Clear();
+            openForm = null;
+            if (list.Rows.FirstOrDefault() is not { } row) return;
+            // No lookups.Refresh() here: it asks the server for the settings, whose answer draws this form again — an endless loop.
+            // The page asked for the lookups once when it was opened (Select).
+            var edited = row.Item.Obj();
+            var form = new JsonForm(edited, def.Fields, lookups);
+            openForm = form;
+            var save = new Button { Content = "บันทึก", Style = (Style)Application.Current.Resources["AccentButtonStyle"], IsEnabled = false };
+            AutomationProperties.SetAutomationId(save, $"save-{def.Key}");
+            // Marked only after the form has drawn itself: building it sets values that are not the person's edits.
+            form.Loaded += (_, _) => DispatcherQueue.TryEnqueue(() =>
+            {
+                form.Edited += () =>
+                {
+                    dirty = true;
+                    save.IsEnabled = true;
+                };
+            });
+            save.Click += (_, _) =>
+            {
+                if (form.Problems.Count > 0)
+                {
+                    list.Error = $"แก้ JSON ก่อน: {string.Join(", ", form.Problems)}";
+                    return;
+                }
+                dirty = false;
+                save.IsEnabled = false;
+                list.Save(edited, row.Id);
+                list.Note = "กำลังบันทึก…";
+            };
+            inlineHost.Children.Add(form);
+            var bar = new WrapPanel { HorizontalSpacing = 6, VerticalSpacing = 6 };
+            bar.Children.Add(save);
+            foreach (var action in def.Actions?.Where(action => action.ForItem && (action.When?.Invoke(row.Item) ?? true)) ?? [])
+            {
+                var button = new Button { Content = action.Label, Style = (Style)Application.Current.Resources["MimiGhostButton"] };
+                button.Click += (_, _) => Safe(list, Run(list, action, row.Item));
+                bar.Children.Add(button);
+            }
+            inlineHost.Children.Add(bar);
+        }
+
         void Paint()
         {
+            if (inlineForm)
+            {
+                PaintInline();
+                empty.Visibility = list.Empty ? Visibility.Visible : Visibility.Collapsed;
+                return;
+            }
             rows.Items.Clear();
+            // A list that is only its buttons (the gateway account's 2FA and password) has nothing to open.
+            if (def.Fields is { Count: 0 } && def.Save is null && def.Delete is null)
+            {
+                empty.Visibility = Visibility.Collapsed;
+                return;
+            }
             foreach (var row in list.Rows) rows.Items.Add(RowButton(list, row));
             empty.Visibility = list.Empty ? Visibility.Visible : Visibility.Collapsed;
         }
